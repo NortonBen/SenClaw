@@ -403,7 +403,10 @@ fn test_form_request_round_trip_via_web() {
     assert_eq!(agent_id, "main");
     assert!(submitted);
     assert_eq!(delivered["env"], serde_json::json!("prod"));
-    assert_eq!(resolved_cb.lock().unwrap().as_deref(), Some(request_id.as_str()));
+    assert_eq!(
+        resolved_cb.lock().unwrap().as_deref(),
+        Some(request_id.as_str())
+    );
 }
 
 #[test]

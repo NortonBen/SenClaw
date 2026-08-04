@@ -103,9 +103,7 @@ pub fn sync_groups_from_config(
         // silently update zero rows.
         if let Ok(all) = db.list_groups() {
             for conflict in all.iter().filter(|g| {
-                g.folder == entry.folder
-                    && g.jid != entry.jid
-                    && !is_dynamic_system_jid(&g.jid)
+                g.folder == entry.folder && g.jid != entry.jid && !is_dynamic_system_jid(&g.jid)
             }) {
                 let _ = db.delete_group(&conflict.jid);
             }

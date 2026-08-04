@@ -86,10 +86,7 @@ impl super::Db {
 
     /// Load all activity entries for a set of task IDs (e.g. all tasks in an
     /// active parent). Ordered by id ASC (chronological).
-    pub fn get_dispatch_activity(
-        &self,
-        task_ids: &[&str],
-    ) -> Result<Vec<StoredDispatchActivity>> {
+    pub fn get_dispatch_activity(&self, task_ids: &[&str]) -> Result<Vec<StoredDispatchActivity>> {
         if task_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -159,20 +156,44 @@ mod tests {
     fn insert_and_query() {
         let db = test_db();
         db.insert_dispatch_activity(
-            "d-001", "", "tool",
-            Some("Read"), Some("src/main.rs"), Some("100 lines"),
-            None, Some(true), None, "2026-06-05T10:00:00Z",
-        ).unwrap();
+            "d-001",
+            "",
+            "tool",
+            Some("Read"),
+            Some("src/main.rs"),
+            Some("100 lines"),
+            None,
+            Some(true),
+            None,
+            "2026-06-05T10:00:00Z",
+        )
+        .unwrap();
         db.insert_dispatch_activity(
-            "d-001", "", "message",
-            None, None, None,
-            None, None, Some("Analyzing the file..."), "2026-06-05T10:00:01Z",
-        ).unwrap();
+            "d-001",
+            "",
+            "message",
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("Analyzing the file..."),
+            "2026-06-05T10:00:01Z",
+        )
+        .unwrap();
         db.insert_dispatch_activity(
-            "d-002", "", "tool",
-            Some("Bash"), Some("cargo test"), None,
-            None, Some(true), None, "2026-06-05T10:00:02Z",
-        ).unwrap();
+            "d-002",
+            "",
+            "tool",
+            Some("Bash"),
+            Some("cargo test"),
+            None,
+            None,
+            Some(true),
+            None,
+            "2026-06-05T10:00:02Z",
+        )
+        .unwrap();
 
         let rows = db.get_dispatch_activity(&["d-001"]).unwrap();
         assert_eq!(rows.len(), 2);
@@ -196,10 +217,18 @@ mod tests {
         // Insert more than MAX_ENTRIES_PER_TASK (500) and verify trim
         for i in 0..510 {
             db.insert_dispatch_activity(
-                "d-trim", "", "tool",
-                Some("Read"), Some(&format!("file-{i}.rs")), None,
-                None, Some(true), None, &format!("2026-06-05T10:{:02}:{:02}Z", i / 60, i % 60),
-            ).unwrap();
+                "d-trim",
+                "",
+                "tool",
+                Some("Read"),
+                Some(&format!("file-{i}.rs")),
+                None,
+                None,
+                Some(true),
+                None,
+                &format!("2026-06-05T10:{:02}:{:02}Z", i / 60, i % 60),
+            )
+            .unwrap();
         }
         let rows = db.get_dispatch_activity(&["d-trim"]).unwrap();
         assert_eq!(rows.len(), 500, "should be trimmed to 500");

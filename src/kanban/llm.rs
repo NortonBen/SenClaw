@@ -90,7 +90,10 @@ struct CardsRoot {
 }
 
 /// Ask the LLM to design a whole board (columns + cards) for `goal`.
-pub async fn generate_board(goal: &str, instruction: Option<&str>) -> Result<GeneratedBoard, String> {
+pub async fn generate_board(
+    goal: &str,
+    instruction: Option<&str>,
+) -> Result<GeneratedBoard, String> {
     let mut prompt = format!("Project goal: {goal}\n");
     if let Some(i) = instruction {
         if !i.trim().is_empty() {
@@ -101,12 +104,18 @@ pub async fn generate_board(goal: &str, instruction: Option<&str>) -> Result<Gen
 
     let (text, model) = bridge_llm(BOARD_SYSTEM, &prompt, 3000).await?;
     let root: BoardRoot = parse_json(&text).ok_or_else(|| {
-        format!("could not parse board JSON from model output:\n{}", truncate(&text, 400))
+        format!(
+            "could not parse board JSON from model output:\n{}",
+            truncate(&text, 400)
+        )
     })?;
     if root.columns.is_empty() {
         return Err("model returned an empty board".into());
     }
-    Ok(GeneratedBoard { columns: root.columns, model })
+    Ok(GeneratedBoard {
+        columns: root.columns,
+        model,
+    })
 }
 
 /// A generated card list parsed from the LLM.
@@ -126,7 +135,10 @@ optional short array of tags. Aim for 8-16 cards. Write in the same language as 
 
 /// Ask the LLM for the task cards only (used when the board's columns come from
 /// a template instead of being AI-generated).
-pub async fn generate_cards(goal: &str, instruction: Option<&str>) -> Result<GeneratedCards, String> {
+pub async fn generate_cards(
+    goal: &str,
+    instruction: Option<&str>,
+) -> Result<GeneratedCards, String> {
     let mut prompt = format!("Project goal: {goal}\n");
     if let Some(i) = instruction {
         if !i.trim().is_empty() {
@@ -136,12 +148,18 @@ pub async fn generate_cards(goal: &str, instruction: Option<&str>) -> Result<Gen
     prompt.push_str("\nReturn the JSON now.");
     let (text, model) = bridge_llm(CARDS_SYSTEM, &prompt, 2600).await?;
     let root: CardsRoot = parse_json(&text).ok_or_else(|| {
-        format!("could not parse cards JSON from model output:\n{}", truncate(&text, 400))
+        format!(
+            "could not parse cards JSON from model output:\n{}",
+            truncate(&text, 400)
+        )
     })?;
     if root.cards.is_empty() {
         return Err("model returned no cards".into());
     }
-    Ok(GeneratedCards { cards: root.cards, model })
+    Ok(GeneratedCards {
+        cards: root.cards,
+        model,
+    })
 }
 
 /// Ask the LLM to break `card_title` into subtask cards.
@@ -169,12 +187,18 @@ pub async fn breakdown_card(
 
     let (text, model) = bridge_llm(BREAKDOWN_SYSTEM, &prompt, 1600).await?;
     let root: CardsRoot = parse_json(&text).ok_or_else(|| {
-        format!("could not parse subtask JSON from model output:\n{}", truncate(&text, 400))
+        format!(
+            "could not parse subtask JSON from model output:\n{}",
+            truncate(&text, 400)
+        )
     })?;
     if root.cards.is_empty() {
         return Err("model returned no subtasks".into());
     }
-    Ok(GeneratedCards { cards: root.cards, model })
+    Ok(GeneratedCards {
+        cards: root.cards,
+        model,
+    })
 }
 
 /// Parse a `T` out of possibly-fenced / chatty / truncated model output.
@@ -317,7 +341,10 @@ pub async fn list_models() -> Result<Value, String> {
 }
 
 pub async fn set_active_model(id: &str) -> Result<(), String> {
-    client().set_active_model(id).await.map_err(|e| e.to_string())
+    client()
+        .set_active_model(id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// The app's single gateway to SenClaw services. Every LLM call goes through the
@@ -331,7 +358,11 @@ fn client() -> SpaceClient {
 }
 
 /// One-shot completion on SenClaw's active LLM via the SDK open API.
-pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(String, String), String> {
+pub async fn bridge_llm(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String), String> {
     client()
         .llm_request(system, user, max_tokens)
         .await

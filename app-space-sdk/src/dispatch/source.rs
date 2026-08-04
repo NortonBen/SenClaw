@@ -1,7 +1,7 @@
 //! The `DispatchSource` trait (what the engine drives) and `HttpDispatchSource`
 //! (the client that adapts a remote Space App's REST dispatch contract into it).
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use std::time::Duration;
 
@@ -83,7 +83,9 @@ impl DispatchSource for HttpDispatchSource {
     async fn heartbeat(&self, item_id: &str) -> Result<()> {
         self.http
             .post(self.url("heartbeat"))
-            .json(&ItemIdRequest { item_id: item_id.to_string() })
+            .json(&ItemIdRequest {
+                item_id: item_id.to_string(),
+            })
             .timeout(Duration::from_secs(10))
             .send()
             .await
@@ -113,7 +115,10 @@ impl DispatchSource for HttpDispatchSource {
     async fn finalize(&self, item_id: &str, outcome: Outcome) -> Result<()> {
         self.http
             .post(self.url("finalize"))
-            .json(&FinalizeRequest { item_id: item_id.to_string(), outcome })
+            .json(&FinalizeRequest {
+                item_id: item_id.to_string(),
+                outcome,
+            })
             .timeout(Duration::from_secs(15))
             .send()
             .await
@@ -134,7 +139,10 @@ pub struct LocalDispatchSource {
 
 impl LocalDispatchSource {
     pub fn new(id: impl Into<String>, provider: std::sync::Arc<dyn DispatchProvider>) -> Self {
-        Self { id: id.into(), provider }
+        Self {
+            id: id.into(),
+            provider,
+        }
     }
 }
 

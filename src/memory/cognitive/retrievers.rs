@@ -634,15 +634,10 @@ mod tests {
     async fn hybrid_retriever_merges_vector_and_fts() {
         let (embedder, _) = fixture().await;
         let r = CognitiveRetriever::new(embedder);
-        let hits = r
-            .search(&SearchQuery::hybrid("compiler", 5))
-            .await
-            .unwrap();
+        let hits = r.search(&SearchQuery::hybrid("compiler", 5)).await.unwrap();
         assert!(!hits.is_empty(), "expected hybrid hits");
         // Scores stay sorted descending after the merge.
-        assert!(hits
-            .windows(2)
-            .all(|w| w[0].score >= w[1].score - 1e-6));
+        assert!(hits.windows(2).all(|w| w[0].score >= w[1].score - 1e-6));
     }
 
     #[tokio::test]
@@ -682,18 +677,21 @@ mod tests {
 
         // FTS recall works at zero embedding cost.
         let fts = r.search(&SearchQuery::fts("compiler", 5)).await.unwrap();
-        assert!(!fts.is_empty(), "FTS must find 'compiler' without an embedder");
+        assert!(
+            !fts.is_empty(),
+            "FTS must find 'compiler' without an embedder"
+        );
 
         // Hybrid degrades to its FTS half (vector half is empty).
-        let hybrid = r
-            .search(&SearchQuery::hybrid("compiler", 5))
-            .await
-            .unwrap();
+        let hybrid = r.search(&SearchQuery::hybrid("compiler", 5)).await.unwrap();
         assert!(!hybrid.is_empty(), "hybrid should fall back to FTS results");
 
         // Pure vector modes return empty — no vectors were written.
         let chunks = r.search(&SearchQuery::chunks("compiler", 5)).await.unwrap();
-        assert!(chunks.is_empty(), "vector search must be empty in FTS-only mode");
+        assert!(
+            chunks.is_empty(),
+            "vector search must be empty in FTS-only mode"
+        );
     }
 
     #[tokio::test]

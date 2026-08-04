@@ -84,10 +84,7 @@ where
 pub fn get_engine_store() -> Option<EngineStore> {
     // `with` PANICS when called outside a `run_with_engine` scope (task-local
     // not set) — `try_with` is the "outside = None" contract this fn promises.
-    ENGINE_STORE
-        .try_with(|store| store.clone())
-        .ok()
-        .flatten()
+    ENGINE_STORE.try_with(|store| store.clone()).ok().flatten()
 }
 
 /// Helper: Get current event bus if in engine context.

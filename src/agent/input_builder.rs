@@ -88,8 +88,7 @@ const AT_PATH_IMAGE_REGEX: &str = r"(?:^|\s)@(/[^\s'<>]+\.(?:png|jpe?g|gif|webp)
 /// Regex for detecting inline base64 `data:` image URLs embedded in text.
 /// Lets channels that can only carry text (e.g. the mobile app relay) attach
 /// images by appending a data URL to the message body.
-const DATA_IMAGE_REGEX: &str =
-    r"(data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)";
+const DATA_IMAGE_REGEX: &str = r"(data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+)";
 
 /// Load image as base64 data URI for Anthropic API.
 ///

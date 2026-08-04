@@ -100,9 +100,10 @@ pub fn dir_is_vits_model(dir: &std::path::Path) -> bool {
     // Accept the inference class and the finetuning wrapper
     // ("VitsModelForPreTraining", used by ylacombe/finetune-hf-vits — same
     // inference tensors plus a discriminator our loader simply ignores).
-    v["architectures"]
-        .as_array()
-        .is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|s| s.starts_with("VitsModel"))))
+    v["architectures"].as_array().is_some_and(|a| {
+        a.iter()
+            .any(|x| x.as_str().is_some_and(|s| s.starts_with("VitsModel")))
+    })
 }
 
 impl TtsBackend for MmsVitsBackend {
@@ -254,8 +255,7 @@ mod native {
                     // mlx_native's unload, that must not run concurrently with
                     // another thread's MLX work. try-lock: skip when busy, the
                     // next pass retries.
-                    let Some(_g) = crate::local_model::mlx_native::mlx_serial_try_lock()
-                    else {
+                    let Some(_g) = crate::local_model::mlx_native::mlx_serial_try_lock() else {
                         continue;
                     };
                     let mut cache = CACHE.lock().unwrap_or_else(|p| p.into_inner());
@@ -308,7 +308,14 @@ mod native {
                 .map_err(|e| TtsError::Internal(format!("loading MMS-VITS: {e:#}")))?;
             let tokenizer = VitsTokenizer::load(dir)
                 .map_err(|e| TtsError::Internal(format!("loading tokenizer: {e:#}")))?;
-            cache.insert(dir.to_path_buf(), CacheEntry { model, tokenizer, last_used: Instant::now() });
+            cache.insert(
+                dir.to_path_buf(),
+                CacheEntry {
+                    model,
+                    tokenizer,
+                    last_used: Instant::now(),
+                },
+            );
         }
         let entry = cache.get_mut(dir).expect("just inserted");
         entry.last_used = Instant::now();
@@ -429,7 +436,11 @@ mod tests {
             .expect("native synthesis");
         assert!(&wav[0..4] == b"RIFF" && &wav[8..12] == b"WAVE");
         // ≥ 0.5 s of 16 kHz PCM16 audio.
-        assert!(wav.len() > 16_000, "wav suspiciously small: {} bytes", wav.len());
+        assert!(
+            wav.len() > 16_000,
+            "wav suspiciously small: {} bytes",
+            wav.len()
+        );
     }
 
     #[test]

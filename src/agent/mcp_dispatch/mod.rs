@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use app_space_sdk::dispatch::{Capacity, DispatchSource, McpServerSpec, Outcome, WorkItem, Workspace};
+use app_space_sdk::dispatch::{
+    Capacity, DispatchSource, McpServerSpec, Outcome, WorkItem, Workspace,
+};
 
 use crate::agent::isolated_runner::{run_one_shot, McpInject, OneShotOptions};
 use crate::agent::persona_registry::PersonaRegistry;
@@ -50,7 +52,12 @@ impl MCPDispatcher {
         personas: Arc<Mutex<PersonaRegistry>>,
         cfg: DispatcherConfig,
     ) -> Arc<Self> {
-        Arc::new(Self { sources, personas, cfg, active: AtomicUsize::new(0) })
+        Arc::new(Self {
+            sources,
+            personas,
+            cfg,
+            active: AtomicUsize::new(0),
+        })
     }
 
     /// Spawn the poll loop. The spawned task holds an `Arc<Self>`, so the loop
@@ -82,11 +89,17 @@ impl MCPDispatcher {
             if let Err(e) = src.reclaim().await {
                 tracing::warn!("[mcp-dispatch] {} reclaim: {e}", src.id());
             }
-            let free = self.cfg.max_concurrent.saturating_sub(self.active.load(Ordering::SeqCst));
+            let free = self
+                .cfg
+                .max_concurrent
+                .saturating_sub(self.active.load(Ordering::SeqCst));
             if free == 0 {
                 continue;
             }
-            let cap = Capacity { total: free, per_assignee: self.cfg.per_assignee };
+            let cap = Capacity {
+                total: free,
+                per_assignee: self.cfg.per_assignee,
+            };
             let items = match src.poll_ready(cap).await {
                 Ok(v) => v,
                 Err(e) => {
@@ -107,7 +120,12 @@ impl MCPDispatcher {
     }
 
     async fn run_item(&self, src: Arc<dyn DispatchSource>, item: WorkItem) {
-        tracing::info!("[mcp-dispatch] {} → run {} (assignee={:?})", src.id(), item.id, item.assignee);
+        tracing::info!(
+            "[mcp-dispatch] {} → run {} (assignee={:?})",
+            src.id(),
+            item.id,
+            item.assignee
+        );
         // Extend the lease while the worker runs.
         let hb = {
             let src = Arc::clone(&src);
@@ -148,9 +166,14 @@ impl MCPDispatcher {
 
         let working_dir = match self.resolve_workspace(item) {
             Ok(d) => d,
-            Err(e) => return Outcome::Failed { error: format!("workspace: {e}") },
+            Err(e) => {
+                return Outcome::Failed {
+                    error: format!("workspace: {e}"),
+                }
+            }
         };
-        let timeout = Duration::from_secs(item.timeout_secs.unwrap_or(self.cfg.default_timeout_secs));
+        let timeout =
+            Duration::from_secs(item.timeout_secs.unwrap_or(self.cfg.default_timeout_secs));
 
         let opts = OneShotOptions {
             prompt: item.prompt.clone(),
@@ -165,9 +188,9 @@ impl MCPDispatcher {
 
         match run_one_shot(opts).await {
             Ok(r) if r.timed_out => Outcome::TimedOut,
-            Ok(r) if r.errored || r.aborted => {
-                Outcome::Failed { error: r.error_message.unwrap_or_else(|| "agent error".into()) }
-            }
+            Ok(r) if r.errored || r.aborted => Outcome::Failed {
+                error: r.error_message.unwrap_or_else(|| "agent error".into()),
+            },
             Ok(r) => {
                 let summary = r
                     .text
@@ -181,7 +204,9 @@ impl MCPDispatcher {
                     metadata: serde_json::json!({ "turns": r.turn_count, "secs": r.duration.as_secs() }),
                 }
             }
-            Err(e) => Outcome::Failed { error: e.to_string() },
+            Err(e) => Outcome::Failed {
+                error: e.to_string(),
+            },
         }
     }
 
@@ -218,8 +243,15 @@ impl MCPDispatcher {
             Workspace::Dir { path } => Ok(path.clone()),
             Workspace::Worktree { repo, .. } => Ok(repo.clone()),
             Workspace::Scratch => {
-                let safe: String = item.id.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
-                let dir = self.cfg.workdir_root.join(if safe.is_empty() { "item" } else { &safe });
+                let safe: String = item
+                    .id
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
+                let dir = self
+                    .cfg
+                    .workdir_root
+                    .join(if safe.is_empty() { "item" } else { &safe });
                 std::fs::create_dir_all(&dir)?;
                 Ok(dir.to_string_lossy().to_string())
             }

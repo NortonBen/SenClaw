@@ -74,7 +74,9 @@ pub(crate) async fn run_qr_login(
             }
             "scaned" => {
                 if !scanned_printed {
-                    crate::safe_println!("\n[WeChatChannel] QR scanned, please confirm in WeChat...");
+                    crate::safe_println!(
+                        "\n[WeChatChannel] QR scanned, please confirm in WeChat..."
+                    );
                     scanned_printed = true;
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;

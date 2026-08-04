@@ -78,7 +78,8 @@ mod tests {
 
     #[test]
     fn handles_interfaces_and_generics() {
-        let src = "interface P { n: number }\nfunction id<T>(v: T): T { return v; }\nid<P>({ n: 5 }).n";
+        let src =
+            "interface P { n: number }\nfunction id<T>(v: T): T { return v; }\nid<P>({ n: 5 }).n";
         let js = transpile_ts(src).unwrap();
         assert!(!js.contains("interface"), "interface not removed: {js}");
         assert!(js.contains("function id"), "got: {js}");

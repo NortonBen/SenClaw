@@ -231,8 +231,9 @@ mod tests {
     #[test]
     fn inserts_triggers_before_closing_delimiter() {
         let raw = "---\nname: crm-lookup\ndescription: Look up a customer\n---\n\n# Body\ntext\n";
-        let out = inject_triggers_frontmatter(&raw, &trigs(&["tìm khách hàng", "look up customer"]))
-            .expect("should inject");
+        let out =
+            inject_triggers_frontmatter(&raw, &trigs(&["tìm khách hàng", "look up customer"]))
+                .expect("should inject");
         assert_eq!(
             out,
             "---\nname: crm-lookup\ndescription: Look up a customer\ntriggers:\n  - \"tìm khách hàng\"\n  - \"look up customer\"\n---\n\n# Body\ntext\n"

@@ -12,9 +12,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::gateway::group_manager::{
-    read_memory_md, read_soul_md, write_memory_md, write_soul_md,
-};
+use crate::gateway::group_manager::{read_memory_md, read_soul_md, write_memory_md, write_soul_md};
 
 use super::core::{AppError, UiState};
 

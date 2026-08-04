@@ -57,7 +57,11 @@ pub fn phonemize_with_emotions(pipeline: &SeaPipeline, text: &str) -> String {
     }
     let mut out = String::new();
     for (is_tag, part) in split_emotion_parts(text) {
-        let token = if is_tag { emotion_tag_token(&part) } else { None };
+        let token = if is_tag {
+            emotion_tag_token(&part)
+        } else {
+            None
+        };
         match token {
             Some(tok) => {
                 if out.is_empty() {
@@ -97,17 +101,36 @@ mod tests {
 
     #[test]
     fn emotion_tags_resolve() {
-        assert_eq!(emotion_tag_token("[cười]").as_deref(), Some("<|emotion_1|>"));
-        assert_eq!(emotion_tag_token("[Thở dài]").as_deref(), Some("<|emotion_2|>"));
-        assert_eq!(emotion_tag_token("[clear throat]").as_deref(), Some("<|emotion_3|>"));
-        assert_eq!(emotion_tag_token("<|emotion_2|>").as_deref(), Some("<|emotion_2|>"));
+        assert_eq!(
+            emotion_tag_token("[cười]").as_deref(),
+            Some("<|emotion_1|>")
+        );
+        assert_eq!(
+            emotion_tag_token("[Thở dài]").as_deref(),
+            Some("<|emotion_2|>")
+        );
+        assert_eq!(
+            emotion_tag_token("[clear throat]").as_deref(),
+            Some("<|emotion_3|>")
+        );
+        assert_eq!(
+            emotion_tag_token("<|emotion_2|>").as_deref(),
+            Some("<|emotion_2|>")
+        );
         assert_eq!(emotion_tag_token("[ghi chú]"), None);
     }
 
     #[test]
     fn split_alternates_fragments_and_tags() {
         let parts = split_emotion_parts("xin chào [cười] nhé <|emotion_2|>.");
-        let tags: Vec<_> = parts.iter().filter(|(t, _)| *t).map(|(_, s)| s.clone()).collect();
-        assert_eq!(tags, vec!["[cười]".to_string(), "<|emotion_2|>".to_string()]);
+        let tags: Vec<_> = parts
+            .iter()
+            .filter(|(t, _)| *t)
+            .map(|(_, s)| s.clone())
+            .collect();
+        assert_eq!(
+            tags,
+            vec!["[cười]".to_string(), "<|emotion_2|>".to_string()]
+        );
     }
 }

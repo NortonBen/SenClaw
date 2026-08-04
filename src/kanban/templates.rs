@@ -92,7 +92,8 @@ pub fn builtins() -> Vec<ColumnTemplate> {
             id: "simple".into(),
             name: "Simple (classic)".into(),
             description: "To Do → In Progress → Done. No dispatcher automation \
-                          (no Ready column).".into(),
+                          (no Ready column)."
+                .into(),
             builtin: true,
             columns: vec![
                 col("To Do", "todo", "#64748b", None),
@@ -111,7 +112,11 @@ fn slugify(name: &str) -> String {
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect();
     let s = s.trim_matches('-').to_string();
-    if s.is_empty() { "template".into() } else { s }
+    if s.is_empty() {
+        "template".into()
+    } else {
+        s
+    }
 }
 
 impl Db {
@@ -119,8 +124,9 @@ impl Db {
     pub fn list_templates(&self) -> Result<Vec<ColumnTemplate>> {
         let mut out = builtins();
         let customs: Vec<ColumnTemplate> = self.with_conn(|c| {
-            let mut stmt =
-                c.prepare("SELECT id, name, description, columns_json FROM column_templates ORDER BY name")?;
+            let mut stmt = c.prepare(
+                "SELECT id, name, description, columns_json FROM column_templates ORDER BY name",
+            )?;
             let rows = stmt
                 .query_map([], |r| {
                     Ok((
@@ -132,9 +138,15 @@ impl Db {
                 })?
                 .filter_map(|r| r.ok())
                 .filter_map(|(id, name, description, cols)| {
-                    serde_json::from_str::<Vec<TemplateColumn>>(&cols).ok().map(|columns| {
-                        ColumnTemplate { id, name, description, builtin: false, columns }
-                    })
+                    serde_json::from_str::<Vec<TemplateColumn>>(&cols)
+                        .ok()
+                        .map(|columns| ColumnTemplate {
+                            id,
+                            name,
+                            description,
+                            builtin: false,
+                            columns,
+                        })
                 })
                 .collect();
             Ok(rows)
@@ -148,7 +160,12 @@ impl Db {
     }
 
     /// Create/overwrite a CUSTOM template (builtin ids are refused). Returns the id.
-    pub fn save_template(&self, name: &str, description: &str, columns: &[TemplateColumn]) -> Result<String> {
+    pub fn save_template(
+        &self,
+        name: &str,
+        description: &str,
+        columns: &[TemplateColumn],
+    ) -> Result<String> {
         if name.trim().is_empty() {
             return Err(anyhow!("template name is required"));
         }
@@ -201,7 +218,15 @@ impl Db {
                 c.execute(
                     "INSERT INTO columns(board_id, title, role, color, wip_limit, ord, created_at)
                      VALUES(?1,?2,?3,?4,?5,?6,?7)",
-                    params![board_id, tc.title, tc.role, tc.color, tc.wip_limit, i as i64, now],
+                    params![
+                        board_id,
+                        tc.title,
+                        tc.role,
+                        tc.color,
+                        tc.wip_limit,
+                        i as i64,
+                        now
+                    ],
                 )?;
             }
             Ok(())

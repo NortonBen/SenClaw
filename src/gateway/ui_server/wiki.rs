@@ -163,10 +163,7 @@ pub(crate) async fn wiki_upload(
                     .to_string();
             }
             Some("file") => {
-                let filename = field
-                    .file_name()
-                    .unwrap_or("document.txt")
-                    .to_string();
+                let filename = field.file_name().unwrap_or("document.txt").to_string();
                 let content_type = field.content_type().unwrap_or("").to_string();
                 let bytes = field
                     .bytes()
@@ -181,7 +178,10 @@ pub(crate) async fn wiki_upload(
     }
 
     if files.is_empty() {
-        return Err(AppError(StatusCode::BAD_REQUEST, "No files uploaded".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "No files uploaded".into(),
+        ));
     }
     if folder.is_empty() {
         folder = "inbox".to_string();
@@ -199,10 +199,7 @@ pub(crate) async fn wiki_upload(
                 let slug = slugify_filename(&filename);
                 let path = format!("{folder}/{slug}.md");
                 let source = format!("upload:{filename}");
-                match wm
-                    .write_file(&path, &text, Some(&source), None, None)
-                    .await
-                {
+                match wm.write_file(&path, &text, Some(&source), None, None).await {
                     Ok(()) => created.push(path),
                     Err(e) => skipped.push(serde_json::json!({
                         "file": filename, "reason": e.to_string(),

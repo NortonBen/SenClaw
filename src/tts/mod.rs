@@ -141,10 +141,7 @@ pub fn select_backend(model_id: &str) -> Option<Box<dyn TtsBackend>> {
 /// `VitsModel` architecture (community MMS finetunes, e.g.
 /// `dvd1503/mms-tts-vie-finetuned`) routes to the native VITS backend instead
 /// of the ZipVoice default.
-pub fn select_backend_for(
-    model_id: &str,
-    model_dir: Option<&Path>,
-) -> Option<Box<dyn TtsBackend>> {
+pub fn select_backend_for(model_id: &str, model_dir: Option<&Path>) -> Option<Box<dyn TtsBackend>> {
     match model_id {
         "macos-speech" => Some(Box::new(macos::MacosSpeech::VIETNAMESE)),
         "macos-speech-en" => Some(Box::new(macos::MacosSpeech::ENGLISH)),
@@ -154,9 +151,7 @@ pub fn select_backend_for(
             mms_vits::MmsVitsBackend::for_model_id(id).map(|b| Box::new(b) as Box<dyn TtsBackend>)
         }
         // VieNeu-TTS v3 Turbo (ONNX sidecar, 48 kHz Vietnamese).
-        id if id.starts_with("pnnbao-ump/VieNeu-TTS") => {
-            Some(Box::new(vieneu::VieNeuBackend))
-        }
+        id if id.starts_with("pnnbao-ump/VieNeu-TTS") => Some(Box::new(vieneu::VieNeuBackend)),
         id if model_dir.is_some_and(mms_vits::dir_is_vits_model) => {
             Some(Box::new(mms_vits::MmsVitsBackend::for_custom(id)))
         }
@@ -348,15 +343,9 @@ mod tests {
     #[cfg(all(target_os = "macos", not(feature = "local-mlx-tts")))]
     #[test]
     fn mms_vits_fallback_is_distinct_from_zipvoice_reason() {
-        let outcome = synthesize_with_fallback(
-            "facebook/mms-tts-vie",
-            None,
-            "Xin chào.",
-            "vi",
-            None,
-            1.0,
-        )
-        .expect("fallback should succeed via macos-speech");
+        let outcome =
+            synthesize_with_fallback("facebook/mms-tts-vie", None, "Xin chào.", "vi", None, 1.0)
+                .expect("fallback should succeed via macos-speech");
         assert_eq!(outcome.used_backend, "macos-speech");
         let reason = outcome.fallback_reason.expect("must explain fallback");
         let lower = reason.to_lowercase();

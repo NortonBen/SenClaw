@@ -154,7 +154,9 @@ pub async fn consolidate_summary(
     content.push_str(summary);
     content.push('\n');
     std::fs::write(&path, content)?;
-    tracing::info!("[consolidate] saved verbatim summary '{slug}' (FTS-only, not indexed in MEMORY.md)");
+    tracing::info!(
+        "[consolidate] saved verbatim summary '{slug}' (FTS-only, not indexed in MEMORY.md)"
+    );
     Ok(1)
 }
 
@@ -206,9 +208,15 @@ mod tests {
             r#"{"memories":[{"name":"user-prefers-vi","description":"User prefers Vietnamese replies","type":"user","body":"**Why:** asked twice.\n**How to apply:** reply in Vietnamese."}]}"#
                 .into(),
         );
-        let n = consolidate_summary(&base, "g1", "long summary text", Some(Arc::new(llm)), "2026-07-03")
-            .await
-            .unwrap();
+        let n = consolidate_summary(
+            &base,
+            "g1",
+            "long summary text",
+            Some(Arc::new(llm)),
+            "2026-07-03",
+        )
+        .await
+        .unwrap();
         assert_eq!(n, 1);
         let file = std::fs::read_to_string(base.join("memory/user-prefers-vi.md")).unwrap();
         assert!(file.contains("type: user"));
@@ -233,12 +241,18 @@ mod tests {
     #[tokio::test]
     async fn llm_failure_falls_back_to_verbatim_without_index() {
         let base = tmp_base("fallback");
-        let n = consolidate_summary(&base, "g1", "the summary", Some(Arc::new(FailLlm)), "2026-07-03")
-            .await
-            .unwrap();
+        let n = consolidate_summary(
+            &base,
+            "g1",
+            "the summary",
+            Some(Arc::new(FailLlm)),
+            "2026-07-03",
+        )
+        .await
+        .unwrap();
         assert_eq!(n, 1);
-        let file =
-            std::fs::read_to_string(base.join("memory/conversation-summary-2026-07-03.md")).unwrap();
+        let file = std::fs::read_to_string(base.join("memory/conversation-summary-2026-07-03.md"))
+            .unwrap();
         assert!(file.contains("the summary"));
         assert!(file.contains("node_type: conversation_summary"));
         // Verbatim fallback must NOT create/pollute MEMORY.md.
@@ -254,7 +268,9 @@ mod tests {
             .unwrap();
         assert_eq!(n, 1);
         // File exists but MEMORY.md is not created.
-        assert!(base.join("memory/conversation-summary-2026-07-03.md").exists());
+        assert!(base
+            .join("memory/conversation-summary-2026-07-03.md")
+            .exists());
         assert!(!base.join("MEMORY.md").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -262,7 +278,9 @@ mod tests {
     #[tokio::test]
     async fn empty_summary_is_noop() {
         let base = tmp_base("noop");
-        let n = consolidate_summary(&base, "g1", "  ", None, "2026-07-03").await.unwrap();
+        let n = consolidate_summary(&base, "g1", "  ", None, "2026-07-03")
+            .await
+            .unwrap();
         assert_eq!(n, 0);
         assert!(!base.exists());
         let _ = std::fs::remove_dir_all(&base);

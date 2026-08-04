@@ -143,9 +143,9 @@ pub(crate) async fn chat_history(
     if q.jid.is_empty() {
         return Err(AppError(StatusCode::BAD_REQUEST, "jid required".into()));
     }
-    let db = s.db.as_ref().ok_or_else(|| {
-        AppError(StatusCode::SERVICE_UNAVAILABLE, "db unavailable".into())
-    })?;
+    let db =
+        s.db.as_ref()
+            .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "db unavailable".into()))?;
     let limit = q.limit.unwrap_or(200).min(1000);
     let after_ms = q.after_ts.unwrap_or(-1);
     let messages = db

@@ -105,7 +105,10 @@ pub fn load_arrays(
     let dir = dir.as_ref();
     let mut by_shard: BTreeMap<String, HashSet<String>> = BTreeMap::new();
     for (tensor, shard) in &index.weight_map {
-        by_shard.entry(shard.clone()).or_default().insert(tensor.clone());
+        by_shard
+            .entry(shard.clone())
+            .or_default()
+            .insert(tensor.clone());
     }
 
     let mut out: HashMap<String, mlx_rs::Array> = HashMap::new();

@@ -135,7 +135,8 @@ pub(crate) fn row_to_task(row: &Row<'_>) -> Result<ScheduledTask> {
         schedule_value: row.get("schedule_value")?,
         context_mode: ContextMode::parse(&row.get::<_, String>("context_mode")?),
         agent_mode: crate::types::AgentMode::parse(
-            &row.get::<_, Option<String>>("agent_mode")?.unwrap_or_default(),
+            &row.get::<_, Option<String>>("agent_mode")?
+                .unwrap_or_default(),
         ),
         script_command: row.get("script_path")?,
         next_run: row.get("next_run")?,
@@ -145,4 +146,3 @@ pub(crate) fn row_to_task(row: &Row<'_>) -> Result<ScheduledTask> {
         created_at: row.get("created_at")?,
     })
 }
-

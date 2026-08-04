@@ -32,7 +32,10 @@ impl KanbanDispatchProvider {
     pub fn http(db: Arc<Db>, base_url: impl Into<String>) -> Self {
         Self {
             db,
-            worker_mcp: McpServerSpec::Http { name: "senclaw-kanban".into(), url: base_url.into() },
+            worker_mcp: McpServerSpec::Http {
+                name: "senclaw-kanban".into(),
+                url: base_url.into(),
+            },
         }
     }
 
@@ -53,7 +56,9 @@ reason 'review-required: …' and attach details via `kanban_comment`.",
 #[async_trait]
 impl DispatchProvider for KanbanDispatchProvider {
     async fn claim_ready(&self, cap: Capacity) -> anyhow::Result<Vec<WorkItem>> {
-        let claimed = self.db.dispatch_claim(cap.total, cap.per_assignee, LEASE_SECS, now())?;
+        let claimed = self
+            .db
+            .dispatch_claim(cap.total, cap.per_assignee, LEASE_SECS, now())?;
         let items = claimed
             .into_iter()
             .map(|c| {
@@ -125,11 +130,14 @@ impl DispatchProvider for KanbanDispatchProvider {
                     if let Some(done) = self.db.column_by_role(board_id, "done")? {
                         self.db.move_card(id, done, 0, now())?;
                         let body = if summary.trim().is_empty() {
-                            "auto-closed: agent returned without calling kanban_complete".to_string()
+                            "auto-closed: agent returned without calling kanban_complete"
+                                .to_string()
                         } else {
                             summary
                         };
-                        let _ = self.db.add_comment(id, "dispatcher", &body, "complete", now());
+                        let _ = self
+                            .db
+                            .add_comment(id, "dispatcher", &body, "complete", now());
                     }
                 }
             }
@@ -137,7 +145,11 @@ impl DispatchProvider for KanbanDispatchProvider {
                 if role != "blocked" {
                     if let Some(bl) = self.db.column_by_role(board_id, "blocked")? {
                         self.db.move_card(id, bl, 0, now())?;
-                        let body = if reason.trim().is_empty() { "blocked".to_string() } else { reason };
+                        let body = if reason.trim().is_empty() {
+                            "blocked".to_string()
+                        } else {
+                            reason
+                        };
                         let _ = self.db.add_comment(id, "dispatcher", &body, "block", now());
                     }
                 }
@@ -146,7 +158,13 @@ impl DispatchProvider for KanbanDispatchProvider {
                 if role != "blocked" && role != "done" {
                     if let Some(bl) = self.db.column_by_role(board_id, "blocked")? {
                         self.db.move_card(id, bl, 0, now())?;
-                        let _ = self.db.add_comment(id, "dispatcher", &format!("gave_up: {error}"), "block", now());
+                        let _ = self.db.add_comment(
+                            id,
+                            "dispatcher",
+                            &format!("gave_up: {error}"),
+                            "block",
+                            now(),
+                        );
                     }
                 }
             }
@@ -154,7 +172,13 @@ impl DispatchProvider for KanbanDispatchProvider {
                 if role != "blocked" && role != "done" {
                     if let Some(bl) = self.db.column_by_role(board_id, "blocked")? {
                         self.db.move_card(id, bl, 0, now())?;
-                        let _ = self.db.add_comment(id, "dispatcher", "gave_up: run timed out", "block", now());
+                        let _ = self.db.add_comment(
+                            id,
+                            "dispatcher",
+                            "gave_up: run timed out",
+                            "block",
+                            now(),
+                        );
                     }
                 }
             }

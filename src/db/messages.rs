@@ -210,9 +210,8 @@ impl super::Db {
     /// group_messages. Powers the sidebar "recent activity" sort.
     pub fn last_activity_per_group(&self) -> Result<std::collections::HashMap<String, i64>> {
         self.with_conn(|c| {
-            let mut stmt = c.prepare(
-                "SELECT chat_jid, MAX(timestamp) FROM group_messages GROUP BY chat_jid",
-            )?;
+            let mut stmt =
+                c.prepare("SELECT chat_jid, MAX(timestamp) FROM group_messages GROUP BY chat_jid")?;
             let rows: Vec<(String, Option<String>)> = stmt
                 .query_map([], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
@@ -392,7 +391,10 @@ mod tests {
         // Local-format timestamp parses to a real epoch (exact value depends
         // on the host timezone — just require presence and sanity).
         let web_ms = *map.get("web:x:abc").expect("web chat present");
-        assert!(web_ms > 1_700_000_000_000, "epoch ms expected, got {web_ms}");
+        assert!(
+            web_ms > 1_700_000_000_000,
+            "epoch ms expected, got {web_ms}"
+        );
     }
 
     #[test]
@@ -411,7 +413,9 @@ mod tests {
         // No cursor (−1): everything, oldest → newest, with parsed epoch ms.
         let all = db.get_group_messages_after_ms(jid, -1, 100).unwrap();
         assert_eq!(
-            all.iter().map(|(m, _)| m.message_id.as_str()).collect::<Vec<_>>(),
+            all.iter()
+                .map(|(m, _)| m.message_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["m1", "m2", "m3"]
         );
         assert!(all.windows(2).all(|w| w[0].1 <= w[1].1));
@@ -427,7 +431,10 @@ mod tests {
         // Limit keeps the NEWEST rows.
         let capped = db.get_group_messages_after_ms(jid, -1, 2).unwrap();
         assert_eq!(
-            capped.iter().map(|(m, _)| m.message_id.as_str()).collect::<Vec<_>>(),
+            capped
+                .iter()
+                .map(|(m, _)| m.message_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["m2", "m3"]
         );
     }

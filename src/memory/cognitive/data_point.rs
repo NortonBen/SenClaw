@@ -167,7 +167,10 @@ impl DataPoint {
     /// cognee's `uuid5`-keyed `EntityType` nodes.
     pub fn entity_type(name: impl Into<String>, now: i64) -> Self {
         let name = name.into();
-        let id = Uuid::new_v5(&Uuid::NAMESPACE_OID, format!("entity_type:{name}").as_bytes());
+        let id = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!("entity_type:{name}").as_bytes(),
+        );
         Self {
             id,
             kind: NodeKind::EntityType,

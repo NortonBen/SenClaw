@@ -120,7 +120,10 @@ mod tests {
         assert_eq!(t.normalize("Xin chào!"), "xin chào");
         let ids = t.encode("Xin, chào!").unwrap();
         // ", " collapses to the surviving space between words.
-        assert_eq!(ids, vec![0, 1, 0, 30, 0, 90, 0, 84, 0, 13, 0, 85, 0, 35, 0, 31, 0]);
+        assert_eq!(
+            ids,
+            vec![0, 1, 0, 30, 0, 90, 0, 84, 0, 13, 0, 85, 0, 35, 0, 31, 0]
+        );
     }
 
     #[test]

@@ -37,9 +37,8 @@ pub struct PermissionBridge {
         Mutex<Option<Box<dyn Fn(&str, &str, &str, &str) + Send + Sync>>>,
     pub(crate) on_ask_question_resolved:
         Mutex<Option<Box<dyn Fn(&str, &str, HashMap<String, String>) + Send + Sync>>>,
-    pub(crate) on_form_resolved: Mutex<
-        Option<Box<dyn Fn(&str, &str, HashMap<String, serde_json::Value>) + Send + Sync>>,
-    >,
+    pub(crate) on_form_resolved:
+        Mutex<Option<Box<dyn Fn(&str, &str, HashMap<String, serde_json::Value>) + Send + Sync>>>,
     /// Fired when user selects "allow" (never ask again) for a tool.
     /// Signature: `(group_jid, tool_name)` — used to persist the approval to DB.
     pub(crate) on_tool_allowed: Mutex<Option<Box<dyn Fn(&str, &str) + Send + Sync>>>,
@@ -158,12 +157,14 @@ impl PermissionBridge {
                 // tool name against whichever applies.
                 let stripped = server.strip_prefix("senclaw-").unwrap_or(server);
                 let candidates = [
-                    format!("mcp__{server}__"),                    // original (may have hyphens)
+                    format!("mcp__{server}__"), // original (may have hyphens)
                     format!("mcp__{}__", server.replace('-', "_")), // normalized
-                    format!("mcp__{stripped}__"),                  // senclaw- stripped, hyphens
+                    format!("mcp__{stripped}__"), // senclaw- stripped, hyphens
                     format!("mcp__{}__", stripped.replace('-', "_")), // stripped + normalized
                 ];
-                let Some(prefix) = candidates.iter().find(|p| tool_name.starts_with(p.as_str()))
+                let Some(prefix) = candidates
+                    .iter()
+                    .find(|p| tool_name.starts_with(p.as_str()))
                 else {
                     return false;
                 };

@@ -64,8 +64,8 @@ impl WikiManager {
         )?;
 
         {
-            let mut stmt = conn
-                .prepare("INSERT INTO docs(path, title, body, tags) VALUES (?1, ?2, ?3, ?4)")?;
+            let mut stmt =
+                conn.prepare("INSERT INTO docs(path, title, body, tags) VALUES (?1, ?2, ?3, ?4)")?;
             for (rel_path, content) in &files {
                 let (fm, body) = Self::parse_frontmatter(content);
                 let title = Self::extract_title(content, rel_path);
@@ -156,7 +156,10 @@ mod tests {
     #[test]
     fn matches_body_content() {
         let (mgr, tmp) = mgr_with(&[
-            ("notes/meeting.md", "# Sync\n\nDiscussed the new client onboarding flow."),
+            (
+                "notes/meeting.md",
+                "# Sync\n\nDiscussed the new client onboarding flow.",
+            ),
             ("notes/other.md", "# Other\n\nUnrelated content here."),
         ]);
         let res = mgr.search("client", None, None).unwrap();
@@ -168,9 +171,10 @@ mod tests {
 
     #[test]
     fn prefix_and_title_match() {
-        let (mgr, tmp) = mgr_with(&[
-            ("client-guide.md", "# Client Guide\n\nHow to handle accounts."),
-        ]);
+        let (mgr, tmp) = mgr_with(&[(
+            "client-guide.md",
+            "# Client Guide\n\nHow to handle accounts.",
+        )]);
         // Prefix: "clien" should still match "client".
         assert_eq!(mgr.search("clien", None, None).unwrap().len(), 1);
         // Filename match.

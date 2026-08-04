@@ -152,7 +152,8 @@ impl McpBackgroundServer {
             TaskIdParams,
         >,
     ) -> String {
-        self.set_status(&p.task_id, BackgroundTaskStatus::Paused).content
+        self.set_status(&p.task_id, BackgroundTaskStatus::Paused)
+            .content
     }
 
     #[rmcp::tool(
@@ -265,7 +266,10 @@ impl McpBackgroundServer {
         }
 
         // Guard 4 — quota.
-        match self.db.count_background_tasks_by_owner(&self.owner_id, false) {
+        match self
+            .db
+            .count_background_tasks_by_owner(&self.owner_id, false)
+        {
             Ok(n) if n >= cfg.max_tasks_per_owner => {
                 return ToolResult::err(format!(
                     "you already have {n} background tasks (max {})",
@@ -446,15 +450,15 @@ impl McpBackgroundServer {
 
     fn delete(&self, id: &str) -> ToolResult {
         match self.db.get_background_task(id) {
-            Ok(Some(t)) if t.owner_kind != BackgroundOwnerKind::User => ToolResult::err(match t
-                .owner_kind
-            {
-                BackgroundOwnerKind::App => format!(
-                    "task belongs to app '{}' — uninstall the app to remove it",
-                    t.owner_id
-                ),
-                _ => "task is core upkeep — pause it instead of deleting".into(),
-            }),
+            Ok(Some(t)) if t.owner_kind != BackgroundOwnerKind::User => {
+                ToolResult::err(match t.owner_kind {
+                    BackgroundOwnerKind::App => format!(
+                        "task belongs to app '{}' — uninstall the app to remove it",
+                        t.owner_id
+                    ),
+                    _ => "task is core upkeep — pause it instead of deleting".into(),
+                })
+            }
             Ok(Some(_)) => match self.db.delete_background_task(id) {
                 Ok(()) => ToolResult::ok(format!("task {id} deleted")),
                 Err(e) => ToolResult::err(format!("delete: {e}")),
@@ -483,10 +487,7 @@ impl McpBackgroundServer {
             ));
         };
         let now = (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-        match self
-            .db
-            .advance_background_next_run(id, Some(&now), status)
-        {
+        match self.db.advance_background_next_run(id, Some(&now), status) {
             Ok(()) => ToolResult::ok(format!(
                 "task {id} will run on the next scheduler tick (within a few seconds)"
             )),
@@ -598,8 +599,7 @@ pub async fn run_stdio_server() -> Result<()> {
         .try_init();
 
     let db_path = std::env::var("SENCLAW_DB_PATH").context("SENCLAW_DB_PATH not set")?;
-    let owner_id =
-        std::env::var("SENCLAW_GROUP_FOLDER").context("SENCLAW_GROUP_FOLDER not set")?;
+    let owner_id = std::env::var("SENCLAW_GROUP_FOLDER").context("SENCLAW_GROUP_FOLDER not set")?;
     let chat_jid = std::env::var("SENCLAW_CHAT_JID").context("SENCLAW_CHAT_JID not set")?;
 
     let mut config = crate::config::Config::from_env();
@@ -630,7 +630,10 @@ mod tests {
 
     #[test]
     fn derive_title_skips_leading_blank_lines() {
-        assert_eq!(derive_title("\n\n  Rà khách quá hạn  \n"), "Rà khách quá hạn");
+        assert_eq!(
+            derive_title("\n\n  Rà khách quá hạn  \n"),
+            "Rà khách quá hạn"
+        );
     }
 
     #[test]

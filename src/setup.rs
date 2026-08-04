@@ -102,7 +102,9 @@ pub fn run_setup_if_needed(config_path: &Path) {
     crate::safe_println!("\n=== SenClaw Setup ===\n");
 
     if first_time {
-        crate::safe_println!("No permission policy found. Default policy: all agents require approval.");
+        crate::safe_println!(
+            "No permission policy found. Default policy: all agents require approval."
+        );
         match ask_yes_no(
             "Configure permission policy now? (Will auto-skip after 2 minutes of inactivity)",
             SETUP_TIMEOUT_SECS,

@@ -8,11 +8,11 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::gateway::command_dispatcher::dispatch_command;
-use crate::gateway::plugin_command::dispatch_plugin_command;
 use crate::gateway::group_manager::{
     delete_feishu_app, delete_qq_app, delete_telegram_bot, get_feishu_apps, save_feishu_app,
     save_qq_app, save_telegram_bot, GroupBindingUpdate,
 };
+use crate::gateway::plugin_command::dispatch_plugin_command;
 use crate::types::{GroupBinding, TaskStatus};
 use crate::util::local_time::local_iso_string_now;
 
@@ -193,9 +193,7 @@ pub(crate) async fn handle_subscribe(
             // receives dispatch:update / agent:todos).
             if state.group_manager.get(&state.db, &jid).is_some() {
                 client.is_admin = true;
-                tracing::info!(
-                    "[WsGateway] client #{client_idx} subscribed to {jid} (admin)"
-                );
+                tracing::info!("[WsGateway] client #{client_idx} subscribed to {jid} (admin)");
             }
         }
     }
@@ -231,7 +229,9 @@ pub(crate) async fn handle_subscribe(
                             .and_then(|v| v.as_array())
                             .into_iter()
                             .flatten()
-                            .filter_map(|t| t.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                            .filter_map(|t| {
+                                t.get("id").and_then(|v| v.as_str()).map(|s| s.to_string())
+                            })
                     })
                     .collect();
                 if !task_ids.is_empty() {
@@ -246,16 +246,19 @@ pub(crate) async fn handle_subscribe(
                                 .as_deref()
                                 .and_then(|s| serde_json::from_str(s).ok())
                                 .unwrap_or(serde_json::Value::Null);
-                            by_task.entry(&row.task_id).or_default().push(serde_json::json!({
-                                "entryType": row.entry_type,
-                                "toolName": row.tool_name,
-                                "title": row.title,
-                                "summary": row.summary,
-                                "content": content,
-                                "ok": row.ok,
-                                "text": row.text,
-                                "ts": row.ts,
-                            }));
+                            by_task
+                                .entry(&row.task_id)
+                                .or_default()
+                                .push(serde_json::json!({
+                                    "entryType": row.entry_type,
+                                    "toolName": row.tool_name,
+                                    "title": row.title,
+                                    "summary": row.summary,
+                                    "content": content,
+                                    "ok": row.ok,
+                                    "text": row.text,
+                                    "ts": row.ts,
+                                }));
                         }
                         for (tid, entries) in by_task {
                             send_json(
@@ -456,8 +459,8 @@ pub(crate) async fn handle_subscribe(
             for w in &widget_msgs {
                 // Parse widget_json back to a JSON value; fall back to an empty
                 // object so a malformed row can't crash the replay.
-                let widget: serde_json::Value = serde_json::from_str(&w.widget_json)
-                    .unwrap_or_else(|_| serde_json::json!({}));
+                let widget: serde_json::Value =
+                    serde_json::from_str(&w.widget_json).unwrap_or_else(|_| serde_json::json!({}));
                 history.push(serde_json::json!({
                     "id": w.id,
                     "role": "widget",
@@ -1060,9 +1063,7 @@ pub(crate) async fn handle_message_send(
         }
 
         // `/app ...` Space App update commands (self-HTTP to the daemon).
-        if let Some(output) =
-            crate::gateway::plugin_command::dispatch_app_command(&text).await
-        {
+        if let Some(output) = crate::gateway::plugin_command::dispatch_app_command(&text).await {
             send_json(
                 sender,
                 &serde_json::json!({
@@ -1194,12 +1195,10 @@ pub(crate) async fn handle_message_send(
     // members + dispatch instructions every turn.
     let effective_text = if group.group_type == "cowork" {
         if let Some(team_id) = group_jid.strip_prefix("cowork:") {
-            crate::gateway::ui_server::cowork_runtime::on_user_message(
-                &state.db,
-                team_id,
-                &text,
-            );
-            match crate::gateway::ui_server::cowork_runtime::team_context_preamble(&state.db, team_id) {
+            crate::gateway::ui_server::cowork_runtime::on_user_message(&state.db, team_id, &text);
+            match crate::gateway::ui_server::cowork_runtime::team_context_preamble(
+                &state.db, team_id,
+            ) {
                 Some(preamble) => format!("{preamble}{text}"),
                 None => text.clone(),
             }
@@ -2046,9 +2045,7 @@ pub(crate) async fn handle_agent_mode(
         );
         return;
     }
-    tracing::info!(
-        "[WsGateway] agent:mode client #{client_idx} jid={group_jid} mode={mode}"
-    );
+    tracing::info!("[WsGateway] agent:mode client #{client_idx} jid={group_jid} mode={mode}");
     state.api.set_agent_mode(&group_jid, &mode);
     // Broadcast to all authenticated clients so every tab reflects the new mode.
     broadcast_to_all_inner(
@@ -2121,7 +2118,7 @@ pub(crate) async fn handle_agent_control(
         // After stopping, push an empty history:load so the frontend clears its local list.
         "stop_and_clear" => {
             let api = state.api.clone();
-            let db  = state.db.clone();
+            let db = state.db.clone();
             let jid = group_jid.clone();
             let sender_clone = sender.clone();
             tokio::spawn(async move {
@@ -2164,4 +2161,3 @@ pub(crate) async fn handle_agent_control(
         }
     }
 }
-

@@ -65,9 +65,9 @@ fn detect_format(filename: &str, content_type: &str, data: &[u8]) -> Format {
         "txt" | "text" | "md" | "markdown" | "json" | "csv" | "tsv" | "log" | "yaml" | "yml"
         | "xml" | "ndjson" | "jsonl" => return Format::Text,
         // Well-known binary formats: fail loudly instead of sniffing.
-        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "zip" | "gz" | "tar"
-        | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "mp3" | "mp4" | "wav"
-        | "ogg" | "avi" | "mov" | "exe" | "bin" | "so" | "dylib" | "dll" => {
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "zip" | "gz" | "tar" | "png"
+        | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "mp3" | "mp4" | "wav" | "ogg"
+        | "avi" | "mov" | "exe" | "bin" | "so" | "dylib" | "dll" => {
             return Format::Unsupported(ext)
         }
         _ => {}

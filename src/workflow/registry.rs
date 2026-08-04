@@ -220,7 +220,10 @@ fn normalize_step(
             seq.iter()
                 .map(|v| match v.as_str() {
                     Some(s) => s.to_string(),
-                    None => serde_yaml::to_string(v).unwrap_or_default().trim().to_string(),
+                    None => serde_yaml::to_string(v)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
                 })
                 .collect()
         })
@@ -261,7 +264,10 @@ fn normalize_step(
     Ok(step)
 }
 
-fn normalize_observe(raw: Option<&serde_yaml::Value>, step_id: &str) -> Result<Option<ObserveSpec>> {
+fn normalize_observe(
+    raw: Option<&serde_yaml::Value>,
+    step_id: &str,
+) -> Result<Option<ObserveSpec>> {
     let Some(raw) = raw else {
         return Ok(None);
     };
@@ -301,15 +307,17 @@ fn normalize_inputs(raw: Option<&serde_yaml::Value>) -> Result<Vec<WorkflowInput
             if !r.is_mapping() {
                 bail!("inputs[{i}] is not a mapping");
             }
-            let name =
-                str_field(r, "name").ok_or_else(|| anyhow!("inputs[{i}] missing name"))?;
+            let name = str_field(r, "name").ok_or_else(|| anyhow!("inputs[{i}] missing name"))?;
             Ok(WorkflowInput {
                 name,
                 required: r.get("required").and_then(|v| v.as_bool()) == Some(true),
                 // Allow non-string YAML scalars (e.g. `default: 3`) as defaults.
                 default: r.get("default").map(|v| match v.as_str() {
                     Some(s) => s.to_string(),
-                    None => serde_yaml::to_string(v).unwrap_or_default().trim().to_string(),
+                    None => serde_yaml::to_string(v)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
                 }),
                 description: str_field(r, "description"),
             })
@@ -348,9 +356,7 @@ fn infer_dependencies(steps: &mut [WorkflowStep], ids: &HashSet<String>) -> Resu
         if s.kind == StepKind::Script {
             if let Some(run) = &s.run {
                 for id in ids {
-                    if id != &s.id
-                        && run.contains(&format!("WF_STEP_{}_RESULT", env_segment(id)))
-                    {
+                    if id != &s.id && run.contains(&format!("WF_STEP_{}_RESULT", env_segment(id))) {
                         deps.insert(id.clone());
                     }
                 }

@@ -40,7 +40,6 @@
 use std::{collections::HashMap, path::Path};
 
 use mlx_rs::{
-    Array,
     builder::Builder,
     error::Exception,
     macros::{ModuleParameters, Quantizable},
@@ -48,6 +47,7 @@ use mlx_rs::{
     nn,
     ops::indexing::IndexOp,
     quantization::MaybeQuantized,
+    Array,
 };
 use serde::Deserialize;
 use tokenizers::Tokenizer;
@@ -56,15 +56,15 @@ use super::super::{
     cache::{KeyValueCache, KvFetchResult},
     error::Error,
     utils::{
-        AttentionMask, create_attention_mask,
-        rope::{FloatOrString, RopeVariant, initialize_rope},
-        scaled_dot_product_attention,
+        create_attention_mask,
+        rope::{initialize_rope, FloatOrString, RopeVariant},
+        scaled_dot_product_attention, AttentionMask,
     },
 };
 // Reuse the data-only input carriers from qwen3 (same as llama does); they are
 // generic over `C: KeyValueCache` so the engine drives every transformer arch
 // through identical call sites.
-pub use super::qwen3::{AttentionInput, ModelInput, sample};
+pub use super::qwen3::{sample, AttentionInput, ModelInput};
 
 fn default_total_ut_steps() -> i32 {
     4
@@ -283,9 +283,15 @@ pub struct Mlp {
 
 impl Mlp {
     pub fn new(dim: i32, hidden_dim: i32) -> Result<Self, Exception> {
-        let gate_proj = nn::LinearBuilder::new(dim, hidden_dim).bias(false).build()?;
-        let down_proj = nn::LinearBuilder::new(hidden_dim, dim).bias(false).build()?;
-        let up_proj = nn::LinearBuilder::new(dim, hidden_dim).bias(false).build()?;
+        let gate_proj = nn::LinearBuilder::new(dim, hidden_dim)
+            .bias(false)
+            .build()?;
+        let down_proj = nn::LinearBuilder::new(hidden_dim, dim)
+            .bias(false)
+            .build()?;
+        let up_proj = nn::LinearBuilder::new(dim, hidden_dim)
+            .bias(false)
+            .build()?;
         Ok(Self {
             gate_proj: MaybeQuantized::Original(gate_proj),
             down_proj: MaybeQuantized::Original(down_proj),
@@ -382,7 +388,9 @@ where
         let h = x.add(self.input_layernorm_2.forward(&attn_out)?)?;
 
         // MLP sublayer (pre- + post-norm around mlp).
-        let mlp_out = self.mlp.forward(&self.post_attention_layernorm.forward(&h)?)?;
+        let mlp_out = self
+            .mlp
+            .forward(&self.post_attention_layernorm.forward(&h)?)?;
         h.add(self.post_attention_layernorm_2.forward(&mlp_out)?)
     }
 
@@ -651,8 +659,7 @@ impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
             tool_call: None,
             channel: None,
             quote: None,
-            tool_call_format:
-                crate::local_model::stream_parser::ToolCallFormat::QwenJsonOrXml,
+            tool_call_format: crate::local_model::stream_parser::ToolCallFormat::QwenJsonOrXml,
         }
     }
 

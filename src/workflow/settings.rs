@@ -121,10 +121,13 @@ mod tests {
     fn save_load_roundtrip_and_clamp() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("workflow-settings.json");
-        WorkflowSettings { llm_parallel: 0, agent_retries: 99 }
-            .clamped()
-            .save(&path)
-            .unwrap();
+        WorkflowSettings {
+            llm_parallel: 0,
+            agent_retries: 99,
+        }
+        .clamped()
+        .save(&path)
+        .unwrap();
         let s = WorkflowSettings::load(&path);
         assert_eq!(s.llm_parallel, 1); // clamped up
         assert_eq!(s.agent_retries, 5); // clamped down
@@ -133,7 +136,10 @@ mod tests {
     #[test]
     fn live_settings_apply_and_snapshot() {
         let live = LiveWorkflowSettings::default();
-        live.apply(&WorkflowSettings { llm_parallel: 3, agent_retries: 2 });
+        live.apply(&WorkflowSettings {
+            llm_parallel: 3,
+            agent_retries: 2,
+        });
         let snap = live.snapshot();
         assert_eq!(snap.llm_parallel, 3);
         assert_eq!(snap.agent_retries, 2);

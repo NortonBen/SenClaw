@@ -325,7 +325,10 @@ fn content_error_is_terminal_immediately() {
         })
         .unwrap();
 
-    bridge.mark_task_error("d1", "Virtual agent setup error: persona \"x\" not available");
+    bridge.mark_task_error(
+        "d1",
+        "Virtual agent setup error: persona \"x\" not available",
+    );
     let parents = bridge.get_parents();
     assert_eq!(parents[0].tasks[0].status, DispatchTaskStatus::Error);
     assert_eq!(parents[0].tasks[0].retry_count, 0);

@@ -55,7 +55,9 @@ fn yaml_scalar(s: &str) -> String {
         || s.contains(':')
         || s.contains('#')
         || s.contains('"')
-        || s.starts_with(['-', '?', '*', '&', '!', '[', ']', '{', '}', '>', '|', '\'', '@', '`'])
+        || s.starts_with([
+            '-', '?', '*', '&', '!', '[', ']', '{', '}', '>', '|', '\'', '@', '`',
+        ])
         || s.starts_with(char::is_whitespace)
         || s.ends_with(char::is_whitespace);
     if needs_quote {
@@ -116,7 +118,10 @@ pub fn save(
     let mut content = String::new();
     content.push_str("---\n");
     content.push_str(&format!("name: {slug}\n"));
-    content.push_str(&format!("description: {}\n", yaml_scalar(description.trim())));
+    content.push_str(&format!(
+        "description: {}\n",
+        yaml_scalar(description.trim())
+    ));
     content.push_str("metadata:\n");
     content.push_str("  node_type: memory\n");
     content.push_str(&format!("  type: {mem_type}\n"));
@@ -160,8 +165,7 @@ fn update_index(base: &Path, slug: &str, title: &str, description: &str) -> Resu
     let new_line = format!("- [{title}]({link}) — {description}");
     write_index(base, |bullets| {
         bullets.retain(|b| {
-            !b.contains(&format!("]({link})"))
-                && !b.contains("memory/conversation-summary-")
+            !b.contains(&format!("]({link})")) && !b.contains("memory/conversation-summary-")
         });
         bullets.insert(0, new_line.clone());
     })
@@ -279,7 +283,9 @@ pub fn read_meta(path: &Path) -> Option<MemoryMeta> {
 fn unquote(s: &str) -> String {
     let s = s.trim();
     if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        s[1..s.len() - 1].replace("\\\"", "\"").replace("\\\\", "\\")
+        s[1..s.len() - 1]
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
     } else {
         s.to_string()
     }
@@ -402,7 +408,10 @@ mod tests {
         let index = fs::read_to_string(base.join("MEMORY.md")).unwrap();
         let third = index.find("memory/third.md").unwrap();
         let first = index.find("memory/first.md").unwrap();
-        assert!(third < first, "newest (third) must come before oldest (first)");
+        assert!(
+            third < first,
+            "newest (third) must come before oldest (first)"
+        );
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -447,9 +456,23 @@ mod tests {
         .unwrap();
 
         // Save a real curated memory — should prune the summary entry.
-        save(&base, "real-thing", "hook", "body", "project", None, "g", "2026-07-13", false).unwrap();
+        save(
+            &base,
+            "real-thing",
+            "hook",
+            "body",
+            "project",
+            None,
+            "g",
+            "2026-07-13",
+            false,
+        )
+        .unwrap();
         let index = fs::read_to_string(base.join("MEMORY.md")).unwrap();
-        assert!(!index.contains("conversation-summary"), "summary entry should be pruned");
+        assert!(
+            !index.contains("conversation-summary"),
+            "summary entry should be pruned"
+        );
         assert!(index.contains("real-thing.md"));
 
         let _ = fs::remove_dir_all(&base);

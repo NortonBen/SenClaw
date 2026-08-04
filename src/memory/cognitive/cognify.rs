@@ -849,7 +849,11 @@ mod tests {
                 .to_string();
         let pipe = build_pipeline(vec![canned]);
         let report = pipe
-            .cognify("Ada invented the compiler.", "doc", &CognifyOptions::default())
+            .cognify(
+                "Ada invented the compiler.",
+                "doc",
+                &CognifyOptions::default(),
+            )
             .await
             .unwrap();
         assert_eq!(report.entities_added, 2);

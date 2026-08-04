@@ -25,9 +25,7 @@ use tokio_util::sync::CancellationToken;
 /// A native job: given a cancellation token, do the work and return a one-line
 /// summary for the run record.
 pub type NativeJobFn = std::sync::Arc<
-    dyn Fn(CancellationToken) -> Pin<Box<dyn Future<Output = Result<String>> + Send>>
-        + Send
-        + Sync,
+    dyn Fn(CancellationToken) -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync,
 >;
 
 /// Registry of native job bodies, keyed by the `native_job` column.

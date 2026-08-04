@@ -665,7 +665,10 @@ pub fn format_search_results(results: &[SearchResult]) -> String {
             r.score
         ));
         let summary = if r.text.len() > 200 {
-            format!("{}...", crate::util::text::truncate_on_char_boundary(&r.text, 200))
+            format!(
+                "{}...",
+                crate::util::text::truncate_on_char_boundary(&r.text, 200)
+            )
         } else {
             r.text.clone()
         };

@@ -269,14 +269,22 @@ pub(crate) async fn create_team(
         if slug.trim().is_empty() {
             return false;
         }
-        if db.get_agent_by_folder(slug).map(|o| o.is_some()).unwrap_or(false) {
+        if db
+            .get_agent_by_folder(slug)
+            .map(|o| o.is_some())
+            .unwrap_or(false)
+        {
             return true;
         }
         // Try to seed from persona file.
         let core_prompt = s
             .persona_registry
             .as_ref()
-            .and_then(|r| r.lock().ok().and_then(|g| g.get(slug).map(|p| p.system_prompt.clone())))
+            .and_then(|r| {
+                r.lock()
+                    .ok()
+                    .and_then(|g| g.get(slug).map(|p| p.system_prompt.clone()))
+            })
             .unwrap_or_default();
         let now = local_iso_string_now();
         if db
@@ -296,7 +304,10 @@ pub(crate) async fn create_team(
     if !ensure_agent(&body.manager_folder) {
         return Err(AppError(
             StatusCode::BAD_REQUEST,
-            format!("manager not found and no persona named {}", body.manager_folder),
+            format!(
+                "manager not found and no persona named {}",
+                body.manager_folder
+            ),
         ));
     }
 
@@ -354,7 +365,12 @@ pub(crate) async fn create_team(
     };
     s.group_manager
         .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "group_manager not wired".into()))?
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "group_manager not wired".into(),
+            )
+        })?
         .register(&db, &s.config, &binding);
 
     Ok(Json(to_view(team)))
@@ -464,9 +480,15 @@ pub(crate) async fn create_template(
         id: Uuid::new_v4().to_string(),
         name: body.name.trim().to_string(),
         description: body.description.unwrap_or_default(),
-        icon: body.icon.filter(|i| !i.trim().is_empty()).unwrap_or_else(|| "🧩".into()),
+        icon: body
+            .icon
+            .filter(|i| !i.trim().is_empty())
+            .unwrap_or_else(|| "🧩".into()),
         manager_folder: body.manager_folder.trim().to_string(),
-        manager_role: body.manager_role.filter(|r| !r.trim().is_empty()).unwrap_or_else(|| "lead".into()),
+        manager_role: body
+            .manager_role
+            .filter(|r| !r.trim().is_empty())
+            .unwrap_or_else(|| "lead".into()),
         members: body.members,
         settings: body.settings.unwrap_or_default(),
         created_at: now.clone(),
@@ -492,9 +514,15 @@ pub(crate) async fn update_template(
         id,
         name: body.name.trim().to_string(),
         description: body.description.unwrap_or_default(),
-        icon: body.icon.filter(|i| !i.trim().is_empty()).unwrap_or(existing.icon),
+        icon: body
+            .icon
+            .filter(|i| !i.trim().is_empty())
+            .unwrap_or(existing.icon),
         manager_folder: body.manager_folder.trim().to_string(),
-        manager_role: body.manager_role.filter(|r| !r.trim().is_empty()).unwrap_or(existing.manager_role),
+        manager_role: body
+            .manager_role
+            .filter(|r| !r.trim().is_empty())
+            .unwrap_or(existing.manager_role),
         members: body.members,
         settings: body.settings.unwrap_or_default(),
         created_at: existing.created_at,
@@ -546,7 +574,10 @@ pub(crate) async fn save_team_as_template(
             .filter(|n| !n.trim().is_empty())
             .unwrap_or_else(|| format!("{} (template)", team.name)),
         description: body.description.unwrap_or_default(),
-        icon: body.icon.filter(|i| !i.trim().is_empty()).unwrap_or_else(|| "🧩".into()),
+        icon: body
+            .icon
+            .filter(|i| !i.trim().is_empty())
+            .unwrap_or_else(|| "🧩".into()),
         manager_folder: team.manager_folder,
         manager_role: "lead".into(),
         members: team.members,
@@ -602,8 +633,14 @@ pub(crate) async fn update_team(
     };
     let settings = body.settings.unwrap_or(team.settings);
 
-    db.update_cowork_team(&id, &name, &manager_folder, workspace_dir.as_deref(), &settings)
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    db.update_cowork_team(
+        &id,
+        &name,
+        &manager_folder,
+        workspace_dir.as_deref(),
+        &settings,
+    )
+    .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
 
     // Keep the materialised chat group's name/folder in sync.
     if let Some(gm) = s.group_manager.as_ref() {
@@ -648,13 +685,18 @@ pub(crate) struct PersonaView {
 pub(crate) async fn list_personas(
     State(s): State<Arc<UiState>>,
 ) -> Result<Json<Vec<PersonaView>>, AppError> {
-    let reg = s
-        .persona_registry
-        .as_ref()
-        .ok_or_else(|| AppError(StatusCode::SERVICE_UNAVAILABLE, "persona_registry not wired".into()))?;
-    let guard = reg
-        .lock()
-        .map_err(|_| AppError(StatusCode::INTERNAL_SERVER_ERROR, "persona_registry poisoned".into()))?;
+    let reg = s.persona_registry.as_ref().ok_or_else(|| {
+        AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "persona_registry not wired".into(),
+        )
+    })?;
+    let guard = reg.lock().map_err(|_| {
+        AppError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "persona_registry poisoned".into(),
+        )
+    })?;
     let personas = guard
         .list()
         .into_iter()
@@ -738,13 +780,22 @@ pub(crate) async fn create_from_template(
         let core_prompt = s
             .persona_registry
             .as_ref()
-            .and_then(|r| r.lock().ok().and_then(|g| g.get(slug).map(|p| p.system_prompt.clone())))
+            .and_then(|r| {
+                r.lock()
+                    .ok()
+                    .and_then(|g| g.get(slug).map(|p| p.system_prompt.clone()))
+            })
             .unwrap_or_default();
         let now = local_iso_string_now();
         // Use the agent_manager via UiState's existing path if available;
         // otherwise insert directly.
         db.insert_agent(slug, slug, false, None, None, &core_prompt, None, &now)
-            .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("agent create {slug}: {e}")))?;
+            .map_err(|e| {
+                AppError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("agent create {slug}: {e}"),
+                )
+            })?;
         // Write SOUL.md + scaffold dirs.
         crate::gateway::group_manager::ensure_agent_dirs(&s.config, slug, slug);
         if !core_prompt.trim().is_empty() {
@@ -858,7 +909,10 @@ pub(crate) async fn update_team_member(
     Json(body): Json<UpdateMemberBody>,
 ) -> Result<Json<TeamView>, AppError> {
     if body.folder.trim().is_empty() {
-        return Err(AppError(StatusCode::BAD_REQUEST, "folder is required".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "folder is required".into(),
+        ));
     }
     let db = db(&s)?;
     let mut team = db
@@ -953,12 +1007,11 @@ pub(crate) struct PersonaFileView {
 
 fn persona_file_path(s: &UiState, name: &str) -> Result<std::path::PathBuf, AppError> {
     let slug = name.trim();
-    if slug.is_empty()
-        || slug.contains('/')
-        || slug.contains("..")
-        || slug.contains('\\')
-    {
-        return Err(AppError(StatusCode::BAD_REQUEST, "invalid persona name".into()));
+    if slug.is_empty() || slug.contains('/') || slug.contains("..") || slug.contains('\\') {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "invalid persona name".into(),
+        ));
     }
     Ok(s.config.paths.virtual_agents_dir.join(format!("{slug}.md")))
 }
@@ -973,7 +1026,11 @@ pub(crate) async fn get_persona_file(
         Ok(c) => (c, true),
         Err(_) => (String::new(), false),
     };
-    Ok(Json(PersonaFileView { name, content, exists }))
+    Ok(Json(PersonaFileView {
+        name,
+        content,
+        exists,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1044,7 +1101,10 @@ pub(crate) async fn create_team_task(
     Json(body): Json<CreateTaskBody>,
 ) -> Result<Json<CoworkTeamTask>, AppError> {
     if body.title.trim().is_empty() {
-        return Err(AppError(StatusCode::BAD_REQUEST, "title is required".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "title is required".into(),
+        ));
     }
     let db = db(&s)?;
     // Verify team exists.

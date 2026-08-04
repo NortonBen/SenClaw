@@ -315,10 +315,7 @@ mod tests {
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
         let out = rt
-            .block_on(tool.call(
-                serde_json::json!({ "pattern": "**/*.{ts,tsx,json}" }),
-                &ctx,
-            ))
+            .block_on(tool.call(serde_json::json!({ "pattern": "**/*.{ts,tsx,json}" }), &ctx))
             .unwrap();
         let data = match &out[0] {
             ToolOutput::Result { data, .. } => data,

@@ -114,9 +114,7 @@ pub struct BuiltinAwarePersonaResolver {
 
 impl BuiltinAwarePersonaResolver {
     pub fn new(fs_resolver: Option<FsPersonaResolver>) -> Self {
-        let mut personas: Vec<PersonaInfo> = fs_resolver
-            .map(|r| r.list())
-            .unwrap_or_default();
+        let mut personas: Vec<PersonaInfo> = fs_resolver.map(|r| r.list()).unwrap_or_default();
 
         let existing: std::collections::HashSet<String> =
             personas.iter().map(|p| p.name.to_lowercase()).collect();
@@ -1452,19 +1450,22 @@ mod tests {
         std::fs::write(&path, body).unwrap();
 
         // No FS personas — only builtins
-        let resolver: Box<dyn PersonaResolver> =
-            Box::new(BuiltinAwarePersonaResolver::new(None));
+        let resolver: Box<dyn PersonaResolver> = Box::new(BuiltinAwarePersonaResolver::new(None));
         let server = DispatchServer::new(&path, "test", Some(resolver));
         let state = DispatchState::default();
 
         // persona:researcher prefix
-        let r = server.resolve_agent(&state, "persona:researcher").expect("should resolve");
+        let r = server
+            .resolve_agent(&state, "persona:researcher")
+            .expect("should resolve");
         assert!(r.is_virtual);
         assert_eq!(r.persona_name.as_deref(), Some("researcher"));
         assert_eq!(r.id, "persona:researcher");
 
         // Bare name fallback
-        let r = server.resolve_agent(&state, "creator").expect("bare name should resolve");
+        let r = server
+            .resolve_agent(&state, "creator")
+            .expect("bare name should resolve");
         assert!(r.is_virtual);
         assert_eq!(r.persona_name.as_deref(), Some("creator"));
 
@@ -1472,7 +1473,9 @@ mod tests {
         assert!(server.resolve_agent(&state, "persona:architect").is_some());
 
         // Unknown
-        assert!(server.resolve_agent(&state, "persona:nonexistent").is_none());
+        assert!(server
+            .resolve_agent(&state, "persona:nonexistent")
+            .is_none());
         assert!(server.resolve_agent(&state, "nonexistent").is_none());
     }
 
@@ -1489,7 +1492,12 @@ mod tests {
         let list = resolver.list();
 
         // Should have: custom (FS) + researcher + creator + architect (builtins) = 4
-        assert_eq!(list.len(), 4, "got: {:?}", list.iter().map(|p| &p.name).collect::<Vec<_>>());
+        assert_eq!(
+            list.len(),
+            4,
+            "got: {:?}",
+            list.iter().map(|p| &p.name).collect::<Vec<_>>()
+        );
         assert!(resolver.get("custom").is_some());
         assert!(resolver.get("researcher").is_some());
         assert!(resolver.get("creator").is_some());

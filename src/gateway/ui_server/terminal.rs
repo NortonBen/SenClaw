@@ -25,10 +25,7 @@ pub(crate) struct TerminalQuery {
 }
 
 /// GET /api/ws/terminal?cwd=... — upgrade to a PTY-backed shell session.
-pub(crate) async fn ws_terminal(
-    ws: WebSocketUpgrade,
-    Query(q): Query<TerminalQuery>,
-) -> Response {
+pub(crate) async fn ws_terminal(ws: WebSocketUpgrade, Query(q): Query<TerminalQuery>) -> Response {
     ws.on_upgrade(move |socket| handle(socket, q.cwd))
 }
 

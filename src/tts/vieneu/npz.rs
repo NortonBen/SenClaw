@@ -80,8 +80,7 @@ pub fn parse_npy(bytes: &[u8]) -> Result<NpyArray> {
 
 /// Load every array in an `.npz` (a zip of `.npy` members).
 pub fn load_npz(path: &Path) -> Result<HashMap<String, NpyArray>> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("opening {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut zip = zip::ZipArchive::new(file).context("npz is not a zip")?;
     let mut out = HashMap::new();
     for i in 0..zip.len() {
@@ -148,16 +147,37 @@ mod tests {
 
     #[test]
     fn parses_f4_and_f8_and_i8() {
-        let f4 = npy_v1("<f4", "(2, 2)", &[1.0f32, 2.0, 3.0, 4.0].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+        let f4 = npy_v1(
+            "<f4",
+            "(2, 2)",
+            &[1.0f32, 2.0, 3.0, 4.0]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>(),
+        );
         let a = parse_npy(&f4).unwrap();
         assert_eq!(a.shape, vec![2, 2]);
         assert_eq!(a.row(1), &[3.0, 4.0]);
 
-        let f8 = npy_v1("<f8", "(3,)", &[0.5f64, -1.5, 2.0].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+        let f8 = npy_v1(
+            "<f8",
+            "(3,)",
+            &[0.5f64, -1.5, 2.0]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>(),
+        );
         let b = parse_npy(&f8).unwrap();
         assert_eq!(b.data, vec![0.5, -1.5, 2.0]);
 
-        let i8v = npy_v1("<i8", "(2,)", &[7i64, -3].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+        let i8v = npy_v1(
+            "<i8",
+            "(2,)",
+            &[7i64, -3]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>(),
+        );
         let c = parse_npy(&i8v).unwrap();
         assert_eq!(c.data, vec![7.0, -3.0]);
     }

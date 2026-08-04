@@ -124,8 +124,9 @@ async fn validate(domain: Domain, raw_id: &str) -> Result<ValidateReport, AppErr
             return Ok(ValidateReport {
                 id,
                 supported: false,
-                reason: "model not found on Hugging Face (or it is private) — check the org/repo id"
-                    .into(),
+                reason:
+                    "model not found on Hugging Face (or it is private) — check the org/repo id"
+                        .into(),
                 architecture: None,
                 total_size_bytes: 0,
                 gated: false,
@@ -148,12 +149,16 @@ async fn validate(domain: Domain, raw_id: &str) -> Result<ValidateReport, AppErr
     };
     // `gated` is false | "auto" | "manual"; private repos also 401 on files.
     let gated = !matches!(info.get("gated"), None | Some(Value::Bool(false)));
-    let private = info.get("private").and_then(Value::as_bool).unwrap_or(false);
+    let private = info
+        .get("private")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if gated || private {
         return Ok(ValidateReport {
             id,
             supported: false,
-            reason: "repo is gated/private — the built-in downloader has no Hugging Face login".into(),
+            reason: "repo is gated/private — the built-in downloader has no Hugging Face login"
+                .into(),
             architecture: None,
             total_size_bytes: 0,
             gated: true,
@@ -179,8 +184,7 @@ async fn validate(domain: Domain, raw_id: &str) -> Result<ValidateReport, AppErr
         .collect();
     let total_size_bytes: u64 = files.iter().map(|f| f.1).sum();
     let has_file = |name: &str| files.iter().any(|(p, _)| p == name);
-    let has_safetensors =
-        has_file("model.safetensors") || has_file("model.safetensors.index.json");
+    let has_safetensors = has_file("model.safetensors") || has_file("model.safetensors.index.json");
 
     // 3. config.json (small) — the architecture source of truth.
     let cfg_url = format!("{HF_BASE}/{id}/resolve/main/config.json");
@@ -228,9 +232,7 @@ fn check_tts(
             arch,
         );
     }
-    let is_vits = arch
-        .as_deref()
-        .is_some_and(|a| a.starts_with("VitsModel"));
+    let is_vits = arch.as_deref().is_some_and(|a| a.starts_with("VitsModel"));
     if !is_vits {
         let a = arch.clone().unwrap_or_else(|| "unknown".into());
         return (
@@ -247,8 +249,7 @@ fn check_tts(
     if speakers > 1 || spk_embed > 0 {
         return (
             false,
-            "multi-speaker VITS checkpoints are not supported yet (single-speaker MMS only)"
-                .into(),
+            "multi-speaker VITS checkpoints are not supported yet (single-speaker MMS only)".into(),
             arch,
         );
     }
@@ -327,7 +328,11 @@ fn check_local_llm(cfg: &Value, has_safetensors: bool) -> (bool, String, Option<
         );
     }
     if mt.contains("qwen3_next") {
-        return (false, "Qwen3-Next is not supported by native MLX".into(), arch);
+        return (
+            false,
+            "Qwen3-Next is not supported by native MLX".into(),
+            arch,
+        );
     }
 
     let supported = mt.starts_with("mamba2")
@@ -415,9 +420,21 @@ mod tests {
 
     #[test]
     fn llm_matrix_mirrors_detect_architecture() {
-        for mt in ["qwen3", "qwen3_5", "qwen2", "llama", "gemma2", "gemma3_text",
-                   "gemma4_text", "deepseek_v2", "mamba", "mamba2", "falcon_mamba",
-                   "ouro", "bonsai_q1"] {
+        for mt in [
+            "qwen3",
+            "qwen3_5",
+            "qwen2",
+            "llama",
+            "gemma2",
+            "gemma3_text",
+            "gemma4_text",
+            "deepseek_v2",
+            "mamba",
+            "mamba2",
+            "falcon_mamba",
+            "ouro",
+            "bonsai_q1",
+        ] {
             let cfg = json!({"model_type": mt});
             let (ok, reason, _) = check_local_llm(&cfg, true);
             assert!(ok, "{mt} should be supported: {reason}");

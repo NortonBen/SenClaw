@@ -54,8 +54,19 @@ impl Db {
                   depends_on, result_output, created_at, updated_at, due_at, completed_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
-                    t.id, t.team_id, t.title, t.description, t.status, t.assignee, t.reviewer,
-                    t.priority, deps, t.result_output, t.created_at, t.updated_at, t.due_at,
+                    t.id,
+                    t.team_id,
+                    t.title,
+                    t.description,
+                    t.status,
+                    t.assignee,
+                    t.reviewer,
+                    t.priority,
+                    deps,
+                    t.result_output,
+                    t.created_at,
+                    t.updated_at,
+                    t.due_at,
                     t.completed_at,
                 ],
             )?;

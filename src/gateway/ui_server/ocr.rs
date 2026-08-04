@@ -86,11 +86,9 @@ fn model_dir(state: &UiState, id: &str) -> PathBuf {
 
 fn is_installed(dir: &PathBuf) -> bool {
     let (det, rec, keys) = installed_model_files(dir);
-    [det, rec, keys].iter().all(|p| {
-        std::fs::metadata(p)
-            .map(|m| m.len() > 0)
-            .unwrap_or(false)
-    })
+    [det, rec, keys]
+        .iter()
+        .all(|p| std::fs::metadata(p).map(|m| m.len() > 0).unwrap_or(false))
 }
 
 // ── Download progress (process-global) ───────────────────────────────────────
@@ -224,7 +222,10 @@ pub(crate) async fn ocr_download(
         let downloads = DOWNLOADS.lock().unwrap();
         if let Some(h) = downloads.get(&id) {
             let s = h.state.lock().unwrap();
-            if matches!(s.status, DownloadStatus::Queued | DownloadStatus::Downloading) {
+            if matches!(
+                s.status,
+                DownloadStatus::Queued | DownloadStatus::Downloading
+            ) {
                 return Err(AppError(
                     StatusCode::CONFLICT,
                     format!("download for {id} already in progress"),
@@ -319,7 +320,10 @@ pub(crate) async fn ocr_custom_download(
         let downloads = DOWNLOADS.lock().unwrap();
         if let Some(h) = downloads.get(&id) {
             let s = h.state.lock().unwrap();
-            if matches!(s.status, DownloadStatus::Queued | DownloadStatus::Downloading) {
+            if matches!(
+                s.status,
+                DownloadStatus::Queued | DownloadStatus::Downloading
+            ) {
                 return Err(AppError(
                     StatusCode::CONFLICT,
                     format!("download for {id} already in progress"),
@@ -529,7 +533,9 @@ pub(crate) async fn ocr_recognize(
             format!("model `{model_id}` is not installed"),
         ));
     }
-    let lang = language.or(settings.language).unwrap_or_else(|| "vi".into());
+    let lang = language
+        .or(settings.language)
+        .unwrap_or_else(|| "vi".into());
 
     recognize_impl(dir, bytes, lang).await
 }
@@ -705,6 +711,7 @@ async fn recognize_impl(
 ) -> Result<axum::response::Json<serde_json::Value>, AppError> {
     Err(AppError(
         StatusCode::NOT_IMPLEMENTED,
-        "OCR requires building with `--features ocr-paddle` (or `ocr-paddle-metal` on macOS)".into(),
+        "OCR requires building with `--features ocr-paddle` (or `ocr-paddle-metal` on macOS)"
+            .into(),
     ))
 }

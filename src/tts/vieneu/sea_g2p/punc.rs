@@ -42,8 +42,8 @@ pub fn apply_punc_norm(text: &str) -> String {
 
     if word_count(trimmed) <= SHORT_SENTENCE_MAX_WORDS {
         // Câu siêu ngắn: ép dấu cuối về đúng một `.` bất kể đang là dấu gì.
-        let stripped = trimmed
-            .trim_end_matches(|c: char| is_trailing_punct(c) || c.is_whitespace());
+        let stripped =
+            trimmed.trim_end_matches(|c: char| is_trailing_punct(c) || c.is_whitespace());
         if stripped.is_empty() {
             // Toàn dấu câu -> trả về một dấu `.`.
             return ".".to_string();

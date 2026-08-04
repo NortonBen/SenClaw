@@ -222,9 +222,11 @@ impl Tool for DispatchCreateParentTool {
             Err(e) => return Ok(err_output(&format!("Invalid input: {e}"))),
         };
         let server = self.config.make_server();
-        Ok(tool_result_to_output(
-            server.create_parent(&params.goal, params.tasks, params.timeout_seconds),
-        ))
+        Ok(tool_result_to_output(server.create_parent(
+            &params.goal,
+            params.tasks,
+            params.timeout_seconds,
+        )))
     }
 
     fn gen_tool_result_message(&self, data: &Value, _input: &Value) -> ToolResultMessage {
@@ -236,10 +238,7 @@ impl Tool for DispatchCreateParentTool {
     }
 
     fn get_display_title(&self, input: &Value) -> String {
-        let goal = input
-            .get("goal")
-            .and_then(|v| v.as_str())
-            .unwrap_or("…");
+        let goal = input.get("goal").and_then(|v| v.as_str()).unwrap_or("…");
         let short: String = goal.chars().take(40).collect();
         format!("Dispatch: {short}")
     }
@@ -364,10 +363,7 @@ impl Tool for DispatchCreateParentAndRunTool {
     }
 
     fn get_display_title(&self, input: &Value) -> String {
-        let goal = input
-            .get("goal")
-            .and_then(|v| v.as_str())
-            .unwrap_or("…");
+        let goal = input.get("goal").and_then(|v| v.as_str()).unwrap_or("…");
         let short: String = goal.chars().take(40).collect();
         format!("Dispatch & run: {short}")
     }
@@ -591,8 +587,14 @@ mod tests {
     #[test]
     fn tool_names_are_correct() {
         let cfg = test_config();
-        assert_eq!(DispatchListAgentsTool::new(cfg.clone()).name(), "DispatchListAgents");
-        assert_eq!(DispatchCreateParentTool::new(cfg.clone()).name(), "DispatchCreateParent");
+        assert_eq!(
+            DispatchListAgentsTool::new(cfg.clone()).name(),
+            "DispatchListAgents"
+        );
+        assert_eq!(
+            DispatchCreateParentTool::new(cfg.clone()).name(),
+            "DispatchCreateParent"
+        );
         assert_eq!(
             DispatchCreateParentAndRunTool::new(cfg.clone()).name(),
             "DispatchCreateParentAndRun"
@@ -661,7 +663,10 @@ mod tests {
         let resolver = crate::mcp::dispatch_server::BuiltinAwarePersonaResolver::new(None);
         let list = resolver.list();
         let names: Vec<&str> = list.iter().map(|p| p.name.as_str()).collect();
-        assert!(names.contains(&"researcher"), "missing researcher: {names:?}");
+        assert!(
+            names.contains(&"researcher"),
+            "missing researcher: {names:?}"
+        );
         assert!(names.contains(&"creator"), "missing creator: {names:?}");
         assert!(names.contains(&"architect"), "missing architect: {names:?}");
     }

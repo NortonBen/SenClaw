@@ -347,7 +347,11 @@ pub fn plugin_json_path(dir: &Path) -> Option<PathBuf> {
 /// Find the plugin directory inside a freshly cloned repo. Catalog entries
 /// range from "the repo *is* the plugin" to "the plugin is one of many
 /// directories in a monorepo", so try the cheap guesses before walking.
-pub fn resolve_plugin_dir(repo_root: &Path, plugin_name: &str, subdir: Option<&str>) -> Option<PathBuf> {
+pub fn resolve_plugin_dir(
+    repo_root: &Path,
+    plugin_name: &str,
+    subdir: Option<&str>,
+) -> Option<PathBuf> {
     if let Some(sub) = subdir {
         let explicit = repo_root.join(sub);
         // An explicit path wins even without plugin.json — the catalog said so.
@@ -439,7 +443,12 @@ mod tests {
         }"#;
         let catalog: HubCatalog = serde_json::from_str(raw).unwrap();
         assert_eq!(catalog.plugins.len(), 1);
-        let target = catalog.find("qodo-skills").unwrap().source.git_target().unwrap();
+        let target = catalog
+            .find("qodo-skills")
+            .unwrap()
+            .source
+            .git_target()
+            .unwrap();
         assert_eq!(
             target,
             GitTarget {
@@ -453,15 +462,22 @@ mod tests {
     #[test]
     fn accepts_shorthand_and_git_sources() {
         let shorthand: HubPluginSource = serde_json::from_str(r#""owner/repo""#).unwrap();
-        assert_eq!(shorthand.git_target().unwrap().url, "https://github.com/owner/repo");
+        assert_eq!(
+            shorthand.git_target().unwrap().url,
+            "https://github.com/owner/repo"
+        );
 
         let direct: HubPluginSource =
             serde_json::from_str(r#""https://git.example.com/a/b.git""#).unwrap();
-        assert_eq!(direct.git_target().unwrap().url, "https://git.example.com/a/b.git");
+        assert_eq!(
+            direct.git_target().unwrap().url,
+            "https://git.example.com/a/b.git"
+        );
 
-        let spec: HubPluginSource =
-            serde_json::from_str(r#"{"source":"git","url":"https://x/y.git","path":"pkgs/p","branch":"dev"}"#)
-                .unwrap();
+        let spec: HubPluginSource = serde_json::from_str(
+            r#"{"source":"git","url":"https://x/y.git","path":"pkgs/p","branch":"dev"}"#,
+        )
+        .unwrap();
         let target = spec.git_target().unwrap();
         assert_eq!(target.branch, "dev");
         assert_eq!(target.subdir.as_deref(), Some("pkgs/p"));

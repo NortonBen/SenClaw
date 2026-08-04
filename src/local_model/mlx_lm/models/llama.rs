@@ -25,7 +25,6 @@ use std::{
 };
 
 use mlx_rs::{
-    Array, Dtype,
     builder::Builder,
     error::Exception,
     macros::{ModuleParameters, Quantizable},
@@ -33,6 +32,7 @@ use mlx_rs::{
     nn,
     ops::zeros_dtype,
     quantization::MaybeQuantized,
+    Array, Dtype,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -42,14 +42,14 @@ use super::super::{
     cache::{KeyValueCache, KvFetchResult},
     error::Error,
     utils::{
-        AttentionMask, create_attention_mask,
-        rope::{FloatOrString, RopeVariant, initialize_rope},
-        scaled_dot_product_attention,
+        create_attention_mask,
+        rope::{initialize_rope, FloatOrString, RopeVariant},
+        scaled_dot_product_attention, AttentionMask,
     },
 };
 // Reuse the input types from qwen3 verbatim — they are data carriers, not
 // architecture-specific.
-pub use super::qwen3::{AttentionInput, ModelInput, sample};
+pub use super::qwen3::{sample, AttentionInput, ModelInput};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelArgs {

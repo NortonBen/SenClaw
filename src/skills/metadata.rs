@@ -424,10 +424,17 @@ mod tests {
         // `use: always` (and aliases) → Always; anything else → Trigger.
         let a = parse_skill_metadata("---\nname: s\ndescription: d\nuse: always\n---\n", "f", "f");
         assert_eq!(a.use_mode, SkillUseMode::Always);
-        let t = parse_skill_metadata("---\nname: s\ndescription: d\nuse: trigger\n---\n", "f", "f");
+        let t = parse_skill_metadata(
+            "---\nname: s\ndescription: d\nuse: trigger\n---\n",
+            "f",
+            "f",
+        );
         assert_eq!(t.use_mode, SkillUseMode::Trigger);
-        let alias =
-            parse_skill_metadata("---\nname: s\ndescription: d\nuse-mode: Persistent\n---\n", "f", "f");
+        let alias = parse_skill_metadata(
+            "---\nname: s\ndescription: d\nuse-mode: Persistent\n---\n",
+            "f",
+            "f",
+        );
         assert_eq!(alias.use_mode, SkillUseMode::Always);
     }
 

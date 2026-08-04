@@ -364,11 +364,7 @@ fn extract_app_into(staged: &Path, stage: &Path, new: &Path) -> Result<()> {
     // crate does not, which breaks .app bundles.
     run_tool(
         "ditto",
-        &[
-            "-xk",
-            &staged.to_string_lossy(),
-            &stage.to_string_lossy(),
-        ],
+        &["-xk", &staged.to_string_lossy(), &stage.to_string_lossy()],
     )?;
     let app = stage.join(APP_BUNDLE_NAME);
     if !app.exists() {
@@ -381,8 +377,7 @@ fn extract_app_into(staged: &Path, stage: &Path, new: &Path) -> Result<()> {
 #[cfg(target_os = "windows")]
 fn extract_bundle(staged: &Path, new: &Path, _parent: &Path) -> Result<()> {
     std::fs::create_dir_all(new)?;
-    let file =
-        std::fs::File::open(staged).with_context(|| format!("open {}", staged.display()))?;
+    let file = std::fs::File::open(staged).with_context(|| format!("open {}", staged.display()))?;
     zip::ZipArchive::new(file)?.extract(new)?;
     Ok(())
 }
@@ -392,7 +387,12 @@ fn extract_bundle(staged: &Path, new: &Path, _parent: &Path) -> Result<()> {
     std::fs::create_dir_all(new)?;
     run_tool(
         "tar",
-        &["-xzf", &staged.to_string_lossy(), "-C", &new.to_string_lossy()],
+        &[
+            "-xzf",
+            &staged.to_string_lossy(),
+            "-C",
+            &new.to_string_lossy(),
+        ],
     )?;
     Ok(())
 }
@@ -529,8 +529,7 @@ fn uninstall_desktop() -> Result<()> {
         home().join("Applications/SenClaw Desktop.app"),
     ] {
         if dir.exists() {
-            std::fs::remove_dir_all(&dir)
-                .with_context(|| format!("remove {}", dir.display()))?;
+            std::fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
             println!("Removed {}", dir.display());
             removed = true;
         }
@@ -540,8 +539,7 @@ fn uninstall_desktop() -> Result<()> {
     {
         let dir = windows_desktop_dir();
         if dir.exists() {
-            std::fs::remove_dir_all(&dir)
-                .with_context(|| format!("remove {}", dir.display()))?;
+            std::fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
             println!("Removed {}", dir.display());
             removed = true;
         }
@@ -551,8 +549,7 @@ fn uninstall_desktop() -> Result<()> {
     {
         let dir = linux_desktop_dir();
         if dir.exists() {
-            std::fs::remove_dir_all(&dir)
-                .with_context(|| format!("remove {}", dir.display()))?;
+            std::fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
             println!("Removed {}", dir.display());
             removed = true;
         }
@@ -589,7 +586,12 @@ async fn ensure_web_dist(force: bool, version: Option<String>) -> Result<PathBuf
     // `tar` ships with macOS, Linux, and Windows 10 1803+.
     run_tool(
         "tar",
-        &["-xzf", &tar_path.to_string_lossy(), "-C", &dist.to_string_lossy()],
+        &[
+            "-xzf",
+            &tar_path.to_string_lossy(),
+            "-C",
+            &dist.to_string_lossy(),
+        ],
     )?;
     let _ = std::fs::remove_file(&tar_path);
 
@@ -762,7 +764,10 @@ mod tests {
             Path::new("/Applications/SenClaw Desktop.app.old")
         );
         // And the difference from the buggy version is real:
-        assert_eq!(p.with_extension("new"), Path::new("/Applications/SenClaw Desktop.new"));
+        assert_eq!(
+            p.with_extension("new"),
+            Path::new("/Applications/SenClaw Desktop.new")
+        );
     }
 
     #[test]
@@ -809,7 +814,13 @@ mod tests {
             let tar = dir.join("bundle.tar.gz");
             run_tool(
                 "tar",
-                &["-czf", &tar.to_string_lossy(), "-C", &stage.to_string_lossy(), "."],
+                &[
+                    "-czf",
+                    &tar.to_string_lossy(),
+                    "-C",
+                    &stage.to_string_lossy(),
+                    ".",
+                ],
             )
             .unwrap();
             std::fs::remove_dir_all(&stage).unwrap();
@@ -907,10 +918,23 @@ mod tests {
         };
         std::fs::write(&m, "v1").unwrap();
 
-        assert!(swap_bundle(&staged, &target).is_err(), "garbage must not install");
-        assert_eq!(marker(&target), "v1", "install was damaged by a bad archive");
-        assert!(!with_suffix(&target, "old").exists(), "install left half-moved");
-        assert!(!with_suffix(&target, "new").exists(), ".new debris left behind");
+        assert!(
+            swap_bundle(&staged, &target).is_err(),
+            "garbage must not install"
+        );
+        assert_eq!(
+            marker(&target),
+            "v1",
+            "install was damaged by a bad archive"
+        );
+        assert!(
+            !with_suffix(&target, "old").exists(),
+            "install left half-moved"
+        );
+        assert!(
+            !with_suffix(&target, "new").exists(),
+            ".new debris left behind"
+        );
     }
 
     /// Debris from a previous run that died mid-swap must not block the retry.
@@ -950,9 +974,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let f = tmp.path().join("a.bin");
         std::fs::write(&f, b"hello world").unwrap();
-        let err = verify_sha256(&f, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
-            .unwrap_err()
-            .to_string();
+        let err = verify_sha256(
+            &f,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("checksum mismatch"), "unexpected error: {err}");
     }
 
@@ -960,7 +987,10 @@ mod tests {
 
     #[test]
     fn pid_alive_sees_this_process_and_not_a_bogus_one() {
-        assert!(pid_alive(std::process::id()), "our own pid must read as alive");
+        assert!(
+            pid_alive(std::process::id()),
+            "our own pid must read as alive"
+        );
         // Above the platform pid_max everywhere we ship; nothing can hold it.
         assert!(!pid_alive(4_000_000_000), "bogus pid must read as dead");
     }
@@ -976,7 +1006,11 @@ mod tests {
     #[test]
     fn wait_for_pid_exit_returns_once_the_child_is_gone() {
         let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
-            .args(if cfg!(windows) { vec!["/C", "exit"] } else { vec![] })
+            .args(if cfg!(windows) {
+                vec!["/C", "exit"]
+            } else {
+                vec![]
+            })
             .spawn()
             .unwrap();
         let pid = child.id();

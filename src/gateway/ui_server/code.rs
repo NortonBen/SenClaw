@@ -71,7 +71,9 @@ pub(super) async fn run_code(
         Lang::Bash => super::bash_sandbox::run(code, timeout_ms).await,
         Lang::Js | Lang::Ts => {
             let json = match lang {
-                Lang::Ts => crate::mcp::js_server::eval_ts_to_json(code, timeout_ms, memory_mb).await,
+                Lang::Ts => {
+                    crate::mcp::js_server::eval_ts_to_json(code, timeout_ms, memory_mb).await
+                }
                 _ => crate::mcp::js_server::eval_to_json(code, timeout_ms, memory_mb).await,
             };
             // eval_*_to_json returns a JSON-encoded outcome; forward it verbatim.

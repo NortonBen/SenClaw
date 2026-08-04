@@ -49,8 +49,8 @@ fn parse_input(input: &Value, agent_id: &str) -> std::result::Result<FormRequest
         .unwrap_or("Submit")
         .to_string();
     let fields_val = input.get("fields").ok_or("fields array is required")?;
-    let fields: Vec<FormField> = serde_json::from_value(fields_val.clone())
-        .map_err(|e| format!("Invalid fields: {e}"))?;
+    let fields: Vec<FormField> =
+        serde_json::from_value(fields_val.clone()).map_err(|e| format!("Invalid fields: {e}"))?;
     if fields.is_empty() || fields.len() > 20 {
         return Err("fields must contain 1-20 items".to_string());
     }
@@ -303,10 +303,7 @@ impl Tool for FormUITool {
     }
 }
 
-fn format_response(
-    values: &std::collections::HashMap<String, Value>,
-    submitted: bool,
-) -> String {
+fn format_response(values: &std::collections::HashMap<String, Value>, submitted: bool) -> String {
     if !submitted {
         return "User skipped the form. No values were provided; proceed with sensible defaults or ask again.".to_string();
     }
@@ -373,7 +370,9 @@ mod tests {
             "title": "t",
             "fields": [{"type": "color_picker", "key": "c", "label": "C"}]
         });
-        assert!(parse_input(&bad, "main").unwrap_err().contains("Invalid fields"));
+        assert!(parse_input(&bad, "main")
+            .unwrap_err()
+            .contains("Invalid fields"));
     }
 
     #[test]

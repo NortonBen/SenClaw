@@ -44,9 +44,9 @@ fn main() {
 #[cfg(feature = "local-mlx-whisper")]
 async fn run() -> anyhow::Result<()> {
     use anyhow::{anyhow, Context};
-    use senclaw::tts::synthesize_with_fallback;
     use senclaw::local_model::audio;
     use senclaw::local_model::whisper_transcribe::{word_accuracy, WhisperEngine};
+    use senclaw::tts::synthesize_with_fallback;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Instant;
@@ -149,7 +149,10 @@ async fn run() -> anyhow::Result<()> {
     println!("  voice     : {}", voice.as_deref().unwrap_or("(default)"));
     println!("  speed     : {speed}");
     println!("  iters     : {iters} (per phrase)");
-    println!("  threshold : {:.0}% word recall to pass", threshold * 100.0);
+    println!(
+        "  threshold : {:.0}% word recall to pass",
+        threshold * 100.0
+    );
     println!("  phrases   : {}", phrases.len());
     println!("════════════════════════════════════════════════════════════════");
     println!();
@@ -172,7 +175,10 @@ async fn run() -> anyhow::Result<()> {
     let mut synthesis_ok = true;
 
     for (idx, phrase) in phrases.iter().enumerate() {
-        println!("┌─ phrase {} ────────────────────────────────────────────────", idx + 1);
+        println!(
+            "┌─ phrase {} ────────────────────────────────────────────────",
+            idx + 1
+        );
         println!("│  expected: {phrase}");
 
         // ── 1. Synthesize (with retries to measure stability) ────────────────
@@ -297,7 +303,11 @@ async fn run() -> anyhow::Result<()> {
         );
         println!(
             "│  verdict : {} {}",
-            if recall >= threshold { "✓ PASS" } else { "✗ FAIL" },
+            if recall >= threshold {
+                "✓ PASS"
+            } else {
+                "✗ FAIL"
+            },
             if deterministic {
                 "(stt deterministic)"
             } else {

@@ -213,7 +213,10 @@ impl WorkflowExecutor {
         {
             Ok(r) => r,
             Err(e) => {
-                self.active_workspaces.lock().unwrap().remove(&workspace_key);
+                self.active_workspaces
+                    .lock()
+                    .unwrap()
+                    .remove(&workspace_key);
                 return Err(e);
             }
         };
@@ -247,8 +250,7 @@ impl WorkflowExecutor {
         let snapshot = run.clone();
         let this = Arc::clone(self);
         let def = def.clone();
-        let handle =
-            tokio::spawn(async move { this.execute(run, def, inputs, control).await });
+        let handle = tokio::spawn(async move { this.execute(run, def, inputs, control).await });
         Ok((snapshot, handle))
     }
 
@@ -363,9 +365,9 @@ impl WorkflowExecutor {
                     let sink = Arc::clone(&self);
                     let rid = run.id.clone();
                     let sid = step_id.clone();
-                    crate::agent::isolated_runner::OnActivity(Arc::new(
-                        move |kind, text| sink.push_activity(&rid, &sid, kind, text),
-                    ))
+                    crate::agent::isolated_runner::OnActivity(Arc::new(move |kind, text| {
+                        sink.push_activity(&rid, &sid, kind, text)
+                    }))
                 };
                 join_set.spawn(async move {
                     let res = this
@@ -396,7 +398,12 @@ impl WorkflowExecutor {
                     active_agents = active_agents.saturating_sub(1);
                 }
                 if let Some(sr) = run.steps.iter_mut().find(|s| s.id == step_id) {
-                    apply_result(sr, def.steps[step_defs[&step_id]].observe.as_ref(), res, &run.run_dir);
+                    apply_result(
+                        sr,
+                        def.steps[step_defs[&step_id]].observe.as_ref(),
+                        res,
+                        &run.run_dir,
+                    );
                     if sr.status == StepStatus::Done {
                         step_results.insert(step_id, sr.result.clone());
                     }
@@ -489,9 +496,7 @@ impl WorkflowExecutor {
                         cancel.clone(),
                     )
                     .await;
-                    if !(res.failed && res.retryable)
-                        || attempt >= retries
-                        || cancel.is_cancelled()
+                    if !(res.failed && res.retryable) || attempt >= retries || cancel.is_cancelled()
                     {
                         break res;
                     }
@@ -636,14 +641,16 @@ fn capture_observe(spec: &ObserveSpec, result: &str, run_dir: &str) -> Option<Ob
                     content: None,
                     artifact_path: Some(abs.to_string_lossy().to_string()),
                 }),
-                ObserveAs::Inline => std::fs::read_to_string(&abs).ok().map(|content| {
-                    ObserveOutput {
-                        label: spec.label.clone(),
-                        r#as: spec.r#as,
-                        content: Some(content),
-                        artifact_path: None,
-                    }
-                }),
+                ObserveAs::Inline => {
+                    std::fs::read_to_string(&abs)
+                        .ok()
+                        .map(|content| ObserveOutput {
+                            label: spec.label.clone(),
+                            r#as: spec.r#as,
+                            content: Some(content),
+                            artifact_path: None,
+                        })
+                }
             }
         }
     }
@@ -749,7 +756,9 @@ steps:
         let err = ex.start(&def, HashMap::new(), None).unwrap_err();
         assert!(err.to_string().contains("missing required input"));
         // Workspace slot must be released after the failed start.
-        assert!(ex.start(&def, HashMap::from([("x".into(), "1".into())]), None).is_ok());
+        assert!(ex
+            .start(&def, HashMap::from([("x".into(), "1".into())]), None)
+            .is_ok());
     }
 
     #[tokio::test]

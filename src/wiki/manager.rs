@@ -39,8 +39,7 @@ impl WikiManager {
 
         self.git(&["init"]).await?;
         self.git(&["config", "user.name", "senclaw"]).await?;
-        self.git(&["config", "user.email", "senclaw@local"])
-            .await?;
+        self.git(&["config", "user.email", "senclaw@local"]).await?;
 
         fs::write(self.wiki_dir.join(".gitignore"), ".DS_Store\n*.swp\n")?;
 

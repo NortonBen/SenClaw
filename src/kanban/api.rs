@@ -33,7 +33,10 @@ fn gateway(e: impl std::fmt::Display) -> ApiError {
 }
 
 pub fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 pub fn make_state() -> Arc<AppState> {
@@ -79,7 +82,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/chat/messages", get(session_messages))
         .route("/models", get(models))
         .route("/model-active", post(model_active))
-        .route("/mcp/sse", get(crate::kanban::mcp::mcp_sse).post(crate::kanban::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::kanban::mcp::mcp_sse).post(crate::kanban::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::kanban::mcp::mcp_message))
         .with_state(state)
 }
@@ -118,17 +124,29 @@ async fn create_board(
     State(s): State<Arc<AppState>>,
     Json(b): Json<CreateBoardBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let title = if b.title.trim().is_empty() { "Untitled board" } else { b.title.trim() };
-    let ws = b.workspace_dir.as_deref().map(str::trim).filter(|w| !w.is_empty());
+    let title = if b.title.trim().is_empty() {
+        "Untitled board"
+    } else {
+        b.title.trim()
+    };
+    let ws = b
+        .workspace_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|w| !w.is_empty());
     let id = match b.template_id.as_deref().filter(|t| !t.trim().is_empty()) {
         Some(tid) => {
-            let tpl = s.db.get_template(tid).map_err(bad)?.ok_or_else(|| bad(format!("unknown template: {tid}")))?;
-            s.db.create_board_from_template(title, b.description.trim(), ws, &tpl, now()).map_err(bad)?
+            let tpl =
+                s.db.get_template(tid)
+                    .map_err(bad)?
+                    .ok_or_else(|| bad(format!("unknown template: {tid}")))?;
+            s.db.create_board_from_template(title, b.description.trim(), ws, &tpl, now())
+                .map_err(bad)?
         }
-        None => s
-            .db
-            .create_board(title, b.description.trim(), b.with_defaults, ws, now())
-            .map_err(bad)?,
+        None => {
+            s.db.create_board(title, b.description.trim(), b.with_defaults, ws, now())
+                .map_err(bad)?
+        }
     };
     Ok(Json(json!({ "id": id })))
 }
@@ -152,7 +170,9 @@ async fn save_template(
     State(s): State<Arc<AppState>>,
     Json(b): Json<SaveTemplateBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let id = s.db.save_template(&b.name, &b.description, &b.columns).map_err(bad)?;
+    let id =
+        s.db.save_template(&b.name, &b.description, &b.columns)
+            .map_err(bad)?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -188,7 +208,10 @@ async fn get_board(
     State(s): State<Arc<AppState>>,
     Query(q): Query<BoardQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let meta = s.db.board_meta(q.id).map_err(bad)?.ok_or_else(|| bad("board not found"))?;
+    let meta =
+        s.db.board_meta(q.id)
+            .map_err(bad)?
+            .ok_or_else(|| bad("board not found"))?;
     let columns = s.db.board_full(q.id).map_err(bad)?;
     Ok(Json(json!({ "meta": meta, "columns": columns })))
 }
@@ -205,7 +228,8 @@ async fn rename_board(
     State(s): State<Arc<AppState>>,
     Json(b): Json<RenameBoardBody>,
 ) -> Result<Json<Value>, ApiError> {
-    s.db.rename_board(b.id, b.title.trim(), b.description.trim(), now()).map_err(bad)?;
+    s.db.rename_board(b.id, b.title.trim(), b.description.trim(), now())
+        .map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -248,9 +272,22 @@ async fn add_column(
     State(s): State<Arc<AppState>>,
     Json(b): Json<AddColumnBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let title = if b.title.trim().is_empty() { "New stage" } else { b.title.trim() };
+    let title = if b.title.trim().is_empty() {
+        "New stage"
+    } else {
+        b.title.trim()
+    };
     let role = b.role.as_deref().unwrap_or("custom");
-    let id = s.db.add_column(b.board_id, title, role, b.color.as_deref(), b.wip_limit, now()).map_err(bad)?;
+    let id =
+        s.db.add_column(
+            b.board_id,
+            title,
+            role,
+            b.color.as_deref(),
+            b.wip_limit,
+            now(),
+        )
+        .map_err(bad)?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -270,7 +307,8 @@ async fn update_column(
     Json(b): Json<UpdateColumnBody>,
 ) -> Result<Json<Value>, ApiError> {
     let color = b.color.as_ref().map(|o| o.as_deref());
-    s.db.update_column(b.id, b.title.as_deref(), color, b.wip_limit, now()).map_err(bad)?;
+    s.db.update_column(b.id, b.title.as_deref(), color, b.wip_limit, now())
+        .map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -297,7 +335,8 @@ async fn reorder_columns(
     State(s): State<Arc<AppState>>,
     Json(b): Json<ReorderBody>,
 ) -> Result<Json<Value>, ApiError> {
-    s.db.reorder_columns(b.board_id, &b.ids, now()).map_err(bad)?;
+    s.db.reorder_columns(b.board_id, &b.ids, now())
+        .map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -313,10 +352,15 @@ async fn get_card(
     State(s): State<Arc<AppState>>,
     Query(q): Query<CardIdQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let card = s.db.card_row(q.id).map_err(bad)?.ok_or_else(|| bad("card not found"))?;
+    let card =
+        s.db.card_row(q.id)
+            .map_err(bad)?
+            .ok_or_else(|| bad("card not found"))?;
     let comments = s.db.comments_of_card(q.id).map_err(bad)?;
     let links = s.db.links_of_card(q.id).map_err(bad)?;
-    Ok(Json(json!({ "card": card, "comments": comments, "links": links })))
+    Ok(Json(
+        json!({ "card": card, "comments": comments, "links": links }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -342,11 +386,17 @@ async fn add_card(
     State(s): State<Arc<AppState>>,
     Json(b): Json<AddCardBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let title = if b.title.trim().is_empty() { "New task" } else { b.title.trim() };
-    let labels = b.labels.as_ref().and_then(|v| serde_json::to_string(v).ok());
-    let id = s
-        .db
-        .add_card(
+    let title = if b.title.trim().is_empty() {
+        "New task"
+    } else {
+        b.title.trim()
+    };
+    let labels = b
+        .labels
+        .as_ref()
+        .and_then(|v| serde_json::to_string(v).ok());
+    let id =
+        s.db.add_card(
             b.column_id,
             title,
             b.description.trim(),
@@ -390,20 +440,19 @@ async fn update_card(
     let assignee = b.assignee.as_ref().map(|o| o.as_deref());
     let tenant = b.tenant.as_ref().map(|o| o.as_deref());
     let labels = b.labels.as_ref().map(|o| o.as_deref());
-    s.db
-        .update_card(
-            b.id,
-            b.title.as_deref(),
-            b.description.as_deref(),
-            priority,
-            assignee,
-            tenant,
-            labels,
-            b.due_date,
-            b.done,
-            now(),
-        )
-        .map_err(bad)?;
+    s.db.update_card(
+        b.id,
+        b.title.as_deref(),
+        b.description.as_deref(),
+        priority,
+        assignee,
+        tenant,
+        labels,
+        b.due_date,
+        b.done,
+        now(),
+    )
+    .map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -419,7 +468,8 @@ async fn move_card(
     State(s): State<Arc<AppState>>,
     Json(b): Json<MoveCardBody>,
 ) -> Result<Json<Value>, ApiError> {
-    s.db.move_card(b.id, b.column_id, b.index, now()).map_err(bad)?;
+    s.db.move_card(b.id, b.column_id, b.index, now())
+        .map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -433,7 +483,12 @@ async fn delete_card(
 
 /// Shared helper: move a card into the board's column with the given `role`,
 /// optionally logging a comment. Returns whether a matching column was found.
-fn transition(db: &Db, card_id: i64, role: &str, comment: Option<(&str, &str)>) -> anyhow::Result<bool> {
+fn transition(
+    db: &Db,
+    card_id: i64,
+    role: &str,
+    comment: Option<(&str, &str)>,
+) -> anyhow::Result<bool> {
     let (_t, _d, _col, board_id) = db.card_detail(card_id)?;
     let moved = if let Some(dest) = db.column_by_role(board_id, role)? {
         db.move_card(card_id, dest, 0, now())?;
@@ -465,8 +520,19 @@ async fn complete_card(
     let moved = transition(&s.db, b.card_id, "done", Some(("complete", summary))).map_err(bad)?;
     if !moved {
         // No done column — just flag done.
-        s.db.update_card(b.card_id, None, None, None, None, None, None, None, Some(true), now())
-            .map_err(bad)?;
+        s.db.update_card(
+            b.card_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+            now(),
+        )
+        .map_err(bad)?;
     }
     Ok(Json(json!({ "success": true, "moved": moved })))
 }
@@ -502,7 +568,12 @@ async fn unblock_card(
     let note = b.note.as_deref().unwrap_or("");
     // Prefer the `ready` column, fall back to `todo`.
     let (_t, _d, _c, board_id) = s.db.card_detail(b.card_id).map_err(bad)?;
-    let target = if s.db.column_by_role(board_id, "ready").map_err(bad)?.is_some() {
+    let target = if s
+        .db
+        .column_by_role(board_id, "ready")
+        .map_err(bad)?
+        .is_some()
+    {
         "ready"
     } else {
         "todo"
@@ -527,8 +598,15 @@ async fn add_comment(
     if body.is_empty() {
         return Err(bad("empty comment"));
     }
-    let author = b.author.as_deref().map(str::trim).filter(|a| !a.is_empty()).unwrap_or("Bạn");
-    let id = s.db.add_comment(b.card_id, author, body, "comment", now()).map_err(bad)?;
+    let author = b
+        .author
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .unwrap_or("Bạn");
+    let id =
+        s.db.add_comment(b.card_id, author, body, "comment", now())
+            .map_err(bad)?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -552,7 +630,8 @@ async fn remove_link(
     State(s): State<Arc<AppState>>,
     Json(b): Json<LinkBody>,
 ) -> Result<Json<Value>, ApiError> {
-    s.db.remove_link(b.parent_id, b.child_id, now()).map_err(bad)?;
+    s.db.remove_link(b.parent_id, b.child_id, now())
+        .map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -584,7 +663,11 @@ async fn generate_board(
     if b.goal.trim().is_empty() {
         return Err(bad("goal is required"));
     }
-    let ws = b.workspace_dir.as_deref().map(str::trim).filter(|w| !w.is_empty());
+    let ws = b
+        .workspace_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|w| !w.is_empty());
     let title_owned = b
         .title
         .as_deref()
@@ -610,19 +693,20 @@ async fn generate_board(
                 .map_err(gateway)?;
             let board_id = match b.board_id {
                 Some(id) => id,
-                None => s
-                    .db
-                    .create_board_from_template(&title_owned, b.goal.trim(), ws, &tpl, now())
-                    .map_err(bad)?,
+                None => {
+                    s.db.create_board_from_template(&title_owned, b.goal.trim(), ws, &tpl, now())
+                        .map_err(bad)?
+                }
             };
-            let todo = s
-                .db
-                .column_by_role(board_id, "todo")
-                .map_err(bad)?
-                .or_else(|| s.db.board_full(board_id).ok()?.first().map(|c| c.column.id))
-                .ok_or_else(|| bad("board has no columns"))?;
+            let todo =
+                s.db.column_by_role(board_id, "todo")
+                    .map_err(bad)?
+                    .or_else(|| s.db.board_full(board_id).ok()?.first().map(|c| c.column.id))
+                    .ok_or_else(|| bad("board has no columns"))?;
             let added = s.db.insert_cards(todo, &gen.cards, now()).map_err(bad)?;
-            Ok(Json(json!({ "boardId": board_id, "columns": tpl.columns.len(), "cards": added, "model": gen.model })))
+            Ok(Json(
+                json!({ "boardId": board_id, "columns": tpl.columns.len(), "cards": added, "model": gen.model }),
+            ))
         }
         // Fully AI-generated (columns + cards).
         None => {
@@ -631,10 +715,17 @@ async fn generate_board(
                 .map_err(gateway)?;
             let board_id = match b.board_id {
                 Some(id) => id,
-                None => s.db.create_board(&title_owned, b.goal.trim(), false, ws, now()).map_err(bad)?,
+                None => {
+                    s.db.create_board(&title_owned, b.goal.trim(), false, ws, now())
+                        .map_err(bad)?
+                }
             };
-            let (cols, cards) = s.db.insert_columns(board_id, &gen.columns, now()).map_err(bad)?;
-            Ok(Json(json!({ "boardId": board_id, "columns": cols, "cards": cards, "model": gen.model })))
+            let (cols, cards) =
+                s.db.insert_columns(board_id, &gen.columns, now())
+                    .map_err(bad)?;
+            Ok(Json(
+                json!({ "boardId": board_id, "columns": cols, "cards": cards, "model": gen.model }),
+            ))
         }
     }
 }
@@ -652,10 +743,17 @@ async fn breakdown_card(
 ) -> Result<Json<Value>, ApiError> {
     let (title, description, column_id, board_id) = s.db.card_detail(b.card_id).map_err(bad)?;
     let outline = s.db.board_outline(board_id).ok();
-    let gen = llm::breakdown_card(&title, &description, outline.as_deref(), b.instruction.as_deref())
-        .await
-        .map_err(gateway)?;
-    let added = s.db.insert_cards(column_id, &gen.cards, now()).map_err(bad)?;
+    let gen = llm::breakdown_card(
+        &title,
+        &description,
+        outline.as_deref(),
+        b.instruction.as_deref(),
+    )
+    .await
+    .map_err(gateway)?;
+    let added =
+        s.db.insert_cards(column_id, &gen.cards, now())
+            .map_err(bad)?;
     Ok(Json(json!({ "added": added, "model": gen.model })))
 }
 
@@ -680,15 +778,26 @@ async fn chat(
     let history = s.db.session_messages(b.session_id).map_err(bad)?;
     let mut messages: Vec<llm::ChatMessage> = history
         .into_iter()
-        .map(|m| llm::ChatMessage { role: m.role, content: m.content })
+        .map(|m| llm::ChatMessage {
+            role: m.role,
+            content: m.content,
+        })
         .collect();
-    messages.push(llm::ChatMessage { role: "user".into(), content: content.to_string() });
-    s.db.add_message(b.session_id, "user", content, None, now()).map_err(bad)?;
+    messages.push(llm::ChatMessage {
+        role: "user".into(),
+        content: content.to_string(),
+    });
+    s.db.add_message(b.session_id, "user", content, None, now())
+        .map_err(bad)?;
 
-    let body = ChatBody { messages, board_outline: b.board_outline };
+    let body = ChatBody {
+        messages,
+        board_outline: b.board_outline,
+    };
     match llm::chat(&body).await {
         Ok((text, model)) => {
-            s.db.add_message(b.session_id, "assistant", &text, Some(&model), now()).map_err(bad)?;
+            s.db.add_message(b.session_id, "assistant", &text, Some(&model), now())
+                .map_err(bad)?;
             Ok(Json(json!({ "text": text, "model": model })))
         }
         Err(e) => Err(gateway(e)),
@@ -713,7 +822,12 @@ async fn create_session(
     State(s): State<Arc<AppState>>,
     Json(b): Json<CreateSessionBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let title = b.title.as_deref().map(str::trim).filter(|t| !t.is_empty()).unwrap_or("Hội thoại mới");
+    let title = b
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("Hội thoại mới");
     let id = s.db.create_session(b.board_id, title, now()).map_err(bad)?;
     Ok(Json(json!({ "id": id, "title": title })))
 }
@@ -728,7 +842,11 @@ async fn rename_session(
     State(s): State<Arc<AppState>>,
     Json(b): Json<RenameSessionBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let title = if b.title.trim().is_empty() { "Hội thoại" } else { b.title.trim() };
+    let title = if b.title.trim().is_empty() {
+        "Hội thoại"
+    } else {
+        b.title.trim()
+    };
     s.db.rename_session(b.id, title).map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
@@ -750,7 +868,10 @@ async fn session_messages(
     State(s): State<Arc<AppState>>,
     Query(q): Query<SessionIdQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!(s.db.session_messages(q.session_id).map_err(bad)?)))
+    Ok(Json(json!(s
+        .db
+        .session_messages(q.session_id)
+        .map_err(bad)?)))
 }
 
 // ---- models ----
@@ -770,7 +891,8 @@ async fn model_active(Json(b): Json<ModelActiveBody>) -> Result<Json<Value>, Api
 }
 
 async fn llm_info() -> Json<Value> {
-    let base = std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
+    let base =
+        std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
     let url = format!("{}/api/llm-config", base.trim_end_matches('/'));
     let fetch = reqwest::Client::new()
         .get(&url)
@@ -782,14 +904,19 @@ async fn llm_info() -> Json<Value> {
             Ok(v) => {
                 let active = v.get("activeId").and_then(|x| x.as_str()).unwrap_or("");
                 let cfg = v.get("configs").and_then(|a| a.as_array()).and_then(|a| {
-                    a.iter().find(|c| c.get("id").and_then(|x| x.as_str()) == Some(active))
+                    a.iter()
+                        .find(|c| c.get("id").and_then(|x| x.as_str()) == Some(active))
                 });
-                let model = cfg.and_then(|c| c.get("modelName")).and_then(|x| x.as_str());
+                let model = cfg
+                    .and_then(|c| c.get("modelName"))
+                    .and_then(|x| x.as_str());
                 Json(json!({ "ok": model.is_some(), "daemon": base, "model": model }))
             }
             Err(e) => Json(json!({ "ok": false, "daemon": base, "error": format!("parse: {e}") })),
         },
-        Err(e) => Json(json!({ "ok": false, "daemon": base, "error": format!("Không kết nối daemon: {e}") })),
+        Err(e) => Json(
+            json!({ "ok": false, "daemon": base, "error": format!("Không kết nối daemon: {e}") }),
+        ),
     }
 }
 
@@ -813,5 +940,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let v = Option::<Vec<String>>::deserialize(de)?;
-    Ok(Some(v.map(|arr| serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into()))))
+    Ok(Some(v.map(|arr| {
+        serde_json::to_string(&arr).unwrap_or_else(|_| "[]".into())
+    })))
 }

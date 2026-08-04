@@ -139,7 +139,10 @@ fn run_sandbox(code: &str, timeout_ms: u64, memory_mb: u64) -> EvalOutcome {
 
     if code.len() > MAX_SOURCE_BYTES {
         return EvalOutcome::host_error(
-            format!("source too large ({} bytes, max {MAX_SOURCE_BYTES})", code.len()),
+            format!(
+                "source too large ({} bytes, max {MAX_SOURCE_BYTES})",
+                code.len()
+            ),
             start.elapsed().as_millis(),
         );
     }
@@ -149,7 +152,12 @@ fn run_sandbox(code: &str, timeout_ms: u64, memory_mb: u64) -> EvalOutcome {
 
     let rt = match Runtime::new() {
         Ok(rt) => rt,
-        Err(e) => return EvalOutcome::host_error(format!("runtime init: {e}"), start.elapsed().as_millis()),
+        Err(e) => {
+            return EvalOutcome::host_error(
+                format!("runtime init: {e}"),
+                start.elapsed().as_millis(),
+            )
+        }
     };
     rt.set_memory_limit((memory_mb as usize) * 1024 * 1024);
     rt.set_max_stack_size(2 * 1024 * 1024);
@@ -172,7 +180,12 @@ fn run_sandbox(code: &str, timeout_ms: u64, memory_mb: u64) -> EvalOutcome {
 
     let ctx = match Context::full(&rt) {
         Ok(c) => c,
-        Err(e) => return EvalOutcome::host_error(format!("context init: {e}"), start.elapsed().as_millis()),
+        Err(e) => {
+            return EvalOutcome::host_error(
+                format!("context init: {e}"),
+                start.elapsed().as_millis(),
+            )
+        }
     };
 
     let logs: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
@@ -452,7 +465,11 @@ mod tests {
     fn reports_thrown_errors() {
         let o = run_sandbox("throw new Error('boom')", 2000, 64);
         assert!(!o.ok);
-        assert!(o.error.as_deref().unwrap().contains("boom"), "got {:?}", o.error);
+        assert!(
+            o.error.as_deref().unwrap().contains("boom"),
+            "got {:?}",
+            o.error
+        );
     }
 
     #[test]
@@ -480,8 +497,15 @@ mod tests {
 
     #[test]
     fn no_network_or_fs_globals() {
-        let o = run_sandbox("typeof fetch + ',' + typeof require + ',' + typeof process", 2000, 64);
+        let o = run_sandbox(
+            "typeof fetch + ',' + typeof require + ',' + typeof process",
+            2000,
+            64,
+        );
         assert!(o.ok, "error: {:?}", o.error);
-        assert_eq!(o.result.as_deref(), Some("\"undefined,undefined,undefined\""));
+        assert_eq!(
+            o.result.as_deref(),
+            Some("\"undefined,undefined,undefined\"")
+        );
     }
 }

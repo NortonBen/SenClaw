@@ -68,10 +68,7 @@ fn weight_norm_collapsed(w: &HashMap<String, Array>, prefix: &str) -> Result<Arr
             tensor(w, &format!("{prefix}.parametrizations.weight.original1"))?, // v [out,in,k]
         ),
     };
-    let norm = v
-        .square()?
-        .sum_axes(&[1, 2], true)?
-        .sqrt()?; // [out,1,1]
+    let norm = v.square()?.sum_axes(&[1, 2], true)?.sqrt()?; // [out,1,1]
     v.multiply(g.divide(&norm)?).map_err(Into::into)
 }
 
@@ -95,7 +92,13 @@ impl Conv1d {
     ) -> Result<Self> {
         let weight = tensor(w, &format!("{prefix}.weight"))?.swap_axes(1, 2)?;
         let bias = w.get(&format!("{prefix}.bias")).cloned();
-        Ok(Self { weight, bias, padding, dilation, groups })
+        Ok(Self {
+            weight,
+            bias,
+            padding,
+            dilation,
+            groups,
+        })
     }
 
     /// Load a weight-normed conv (`weight_g`/`weight_v`).
@@ -107,7 +110,13 @@ impl Conv1d {
     ) -> Result<Self> {
         let weight = weight_norm_collapsed(w, prefix)?.swap_axes(1, 2)?;
         let bias = w.get(&format!("{prefix}.bias")).cloned();
-        Ok(Self { weight, bias, padding, dilation, groups: 1 })
+        Ok(Self {
+            weight,
+            bias,
+            padding,
+            dilation,
+            groups: 1,
+        })
     }
 
     fn forward(&self, x: &Array) -> Result<Array> {
@@ -134,7 +143,10 @@ impl Linear {
             weight = weight.reshape(&[s[0], s[1]])?;
         }
         let bias = w.get(&format!("{prefix}.bias")).cloned();
-        Ok(Self { weight_t: weight.swap_axes(0, 1)?, bias })
+        Ok(Self {
+            weight_t: weight.swap_axes(0, 1)?,
+            bias,
+        })
     }
 
     /// Load a weight-normed 1×1 conv.
@@ -143,7 +155,10 @@ impl Linear {
         let s = weight.shape().to_vec();
         let weight = weight.reshape(&[s[0], s[1]])?;
         let bias = w.get(&format!("{prefix}.bias")).cloned();
-        Ok(Self { weight_t: weight.swap_axes(0, 1)?, bias })
+        Ok(Self {
+            weight_t: weight.swap_axes(0, 1)?,
+            bias,
+        })
     }
 
     fn forward(&self, x: &Array) -> Result<Array> {
@@ -301,7 +316,9 @@ impl Attention {
         let rel_v = self.relative_embeddings(&self.emb_rel_v, t)?;
         out = out.add(ops::matmul(&Self::abs_to_rel(&attn)?, &rel_v)?)?;
 
-        let merged = out.swap_axes(0, 1)?.reshape(&[1, t, self.num_heads * self.head_dim])?;
+        let merged = out
+            .swap_axes(0, 1)?
+            .reshape(&[1, t, self.num_heads * self.head_dim])?;
         self.out.forward(&merged)
     }
 }
@@ -326,8 +343,13 @@ impl FeedForward {
 
     fn forward(&self, x: &Array) -> Result<Array> {
         let pad = |a: &Array| -> Result<Array> {
-            ops::pad(a, &[(0, 0), (self.pad_l, self.pad_r), (0, 0)][..], None, None)
-                .map_err(Into::into)
+            ops::pad(
+                a,
+                &[(0, 0), (self.pad_l, self.pad_r), (0, 0)][..],
+                None,
+                None,
+            )
+            .map_err(Into::into)
         };
         let h = self.conv1.forward(&pad(x)?)?;
         let h = ops::maximum(&h, Array::from_f32(0.0))?; // relu (hidden_act)
@@ -421,10 +443,23 @@ impl DdsConv {
                 cfg.hidden_size, // depthwise: groups == channels
             )?);
             pointwise.push(Linear::load(w, &format!("{prefix}.convs_pointwise.{i}"))?);
-            norms_1.push(LayerNorm::load(w, &format!("{prefix}.norms_1.{i}"), F32_LN_EPS)?);
-            norms_2.push(LayerNorm::load(w, &format!("{prefix}.norms_2.{i}"), F32_LN_EPS)?);
+            norms_1.push(LayerNorm::load(
+                w,
+                &format!("{prefix}.norms_1.{i}"),
+                F32_LN_EPS,
+            )?);
+            norms_2.push(LayerNorm::load(
+                w,
+                &format!("{prefix}.norms_2.{i}"),
+                F32_LN_EPS,
+            )?);
         }
-        Ok(Self { dilated, pointwise, norms_1, norms_2 })
+        Ok(Self {
+            dilated,
+            pointwise,
+            norms_1,
+            norms_2,
+        })
     }
 
     fn forward(&self, x: &Array, cond: Option<&Array>) -> Result<Array> {
@@ -485,10 +520,18 @@ impl ConvFlow {
         for i in 0..t {
             let row = &params[i * stride..(i + 1) * stride];
             let widths: Vec<f32> = row[..nb].iter().map(|v| v / self.filter_scale).collect();
-            let heights: Vec<f32> =
-                row[nb..2 * nb].iter().map(|v| v / self.filter_scale).collect();
+            let heights: Vec<f32> = row[nb..2 * nb]
+                .iter()
+                .map(|v| v / self.filter_scale)
+                .collect();
             let derivs = &row[2 * nb..];
-            out.push(rq_spline_inverse(xs[i], &widths, &heights, derivs, self.tail_bound));
+            out.push(rq_spline_inverse(
+                xs[i],
+                &widths,
+                &heights,
+                derivs,
+                self.tail_bound,
+            ));
         }
         let second_new = Array::from_slice(&out, &[1, t as i32, 1]);
         ops::concatenate_axis(&[first, second_new], -1).map_err(Into::into)
@@ -513,13 +556,20 @@ fn rq_spline_inverse(x: f32, un_w: &[f32], un_h: &[f32], un_d: &[f32], tail: f32
     // Bin widths/heights → cumulative knot positions in [-tail, tail].
     let knots = |un: &[f32]| -> (Vec<f32>, Vec<f32>) {
         let p = softmax(un);
-        let sizes: Vec<f32> = p.iter().map(|&v| MIN_BIN + (1.0 - MIN_BIN * k as f32) * v).collect();
+        let sizes: Vec<f32> = p
+            .iter()
+            .map(|&v| MIN_BIN + (1.0 - MIN_BIN * k as f32) * v)
+            .collect();
         let mut cum = Vec::with_capacity(k + 1);
         cum.push(-tail);
         let mut acc = 0.0f32;
         for (i, &s) in sizes.iter().enumerate() {
             acc += s;
-            cum.push(if i == k - 1 { tail } else { 2.0 * tail * acc - tail });
+            cum.push(if i == k - 1 {
+                tail
+            } else {
+                2.0 * tail * acc - tail
+            });
         }
         let widths: Vec<f32> = (0..k).map(|i| cum[i + 1] - cum[i]).collect();
         (cum, widths)
@@ -539,7 +589,11 @@ fn rq_spline_inverse(x: f32, un_w: &[f32], un_h: &[f32], un_d: &[f32], tail: f32
     // Locate the bin (reverse mode buckets on heights).
     let mut bin = 0usize;
     for i in 0..k {
-        let upper = if i == k - 1 { cumh[k] + 1e-6 } else { cumh[i + 1] };
+        let upper = if i == k - 1 {
+            cumh[k] + 1e-6
+        } else {
+            cumh[i + 1]
+        };
         if x >= cumh[i] && x < upper {
             bin = i;
             break;
@@ -578,7 +632,10 @@ impl ElementwiseAffine {
         let translate = ch("translate")?;
         let log_scale = ch("log_scale")?;
         let neg_exp_log_scale = log_scale.negative()?.exp()?;
-        Ok(Self { translate, neg_exp_log_scale })
+        Ok(Self {
+            translate,
+            neg_exp_log_scale,
+        })
     }
 
     fn reverse(&self, x: &Array) -> Result<Array> {
@@ -659,9 +716,16 @@ impl WaveNet {
                 padding,
                 dilation,
             )?);
-            res_skip.push(Linear::load_weight_norm(w, &format!("{prefix}.res_skip_layers.{i}"))?);
+            res_skip.push(Linear::load_weight_norm(
+                w,
+                &format!("{prefix}.res_skip_layers.{i}"),
+            )?);
         }
-        Ok(Self { in_layers, res_skip, hidden: cfg.hidden_size })
+        Ok(Self {
+            in_layers,
+            res_skip,
+            hidden: cfg.hidden_size,
+        })
     }
 
     fn forward(&self, x: &Array) -> Result<Array> {
@@ -782,7 +846,11 @@ impl ResBlock {
                 1,
             )?);
         }
-        Ok(Self { convs1, convs2, slope })
+        Ok(Self {
+            convs1,
+            convs2,
+            slope,
+        })
     }
 
     fn forward(&self, x: &Array) -> Result<Array> {
@@ -810,7 +878,12 @@ impl ConvTranspose1d {
             .swap_axes(0, 1)? // [out, in, k]
             .swap_axes(1, 2)?; // [out, k, in]
         let bias = w.get(&format!("{prefix}.bias")).cloned();
-        Ok(Self { weight, bias, stride, padding })
+        Ok(Self {
+            weight,
+            bias,
+            stride,
+            padding,
+        })
     }
 
     fn forward(&self, x: &Array) -> Result<Array> {
@@ -921,7 +994,9 @@ impl MmsVits {
             ));
         }
         if cfg.num_speakers > 1 || cfg.speaker_embedding_size != 0 {
-            return Err(anyhow!("multi-speaker VITS checkpoints are not supported yet"));
+            return Err(anyhow!(
+                "multi-speaker VITS checkpoints are not supported yet"
+            ));
         }
         let path = dir.join("model.safetensors");
         let weights = Array::load_safetensors(&path)
@@ -969,7 +1044,11 @@ impl MmsVits {
         if ids.is_empty() {
             return Err(anyhow!("empty token sequence"));
         }
-        let speed = if speed.is_finite() && speed > 0.0 { speed } else { 1.0 };
+        let speed = if speed.is_finite() && speed > 0.0 {
+            speed
+        } else {
+            1.0
+        };
         let length_scale = 1.0 / (self.cfg.speaking_rate * speed);
 
         let (hidden, m_p, logs_p) = self.text_encoder.forward(ids)?;
@@ -997,7 +1076,9 @@ impl MmsVits {
         let logs_e = take_axis(&logs_p, &idx_arr, 1)?;
         let noise = match noise_zp {
             Some(n) => n.clone(),
-            None => mlx_rs::random::normal::<f32>(&[1, t_out, self.cfg.flow_size], None, None, None)?,
+            None => {
+                mlx_rs::random::normal::<f32>(&[1, t_out, self.cfg.flow_size], None, None, None)?
+            }
         };
         let z_p = m_e.add(
             noise

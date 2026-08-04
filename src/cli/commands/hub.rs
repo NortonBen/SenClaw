@@ -6,9 +6,7 @@
 //! upload is a wasted minute and a confusing error; a "version 1.0.0 đã tồn tại"
 //! before it starts is actionable.
 
-use crate::marketplace::publish::{
-    self, HubPackage, HUB_FILE, MAX_UPLOAD_BYTES,
-};
+use crate::marketplace::publish::{self, HubPackage, HUB_FILE, MAX_UPLOAD_BYTES};
 use crate::marketplace::registry;
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
@@ -132,8 +130,8 @@ fn read_hub_pkg(dir: &Path) -> Result<HubPackage> {
             dir.display()
         )
     })?;
-    let pkg: HubPackage = serde_json::from_str(&raw)
-        .with_context(|| format!("{} không hợp lệ", path.display()))?;
+    let pkg: HubPackage =
+        serde_json::from_str(&raw).with_context(|| format!("{} không hợp lệ", path.display()))?;
     Ok(pkg)
 }
 
@@ -329,12 +327,29 @@ async fn status(dir: &Path) -> Result<()> {
 
     println!("senclaw/{}", app.id);
     println!("  version:   {}", pkg.version);
-    println!("  platform:  {}", pkg.platform.clone().unwrap_or_else(publish::host_platform));
-    println!("  category:  {}", pkg.category.clone().unwrap_or_else(|| "—".into()));
-    println!("  keywords:  {}", if pkg.keywords.is_empty() { "—".into() } else { pkg.keywords.join(", ") });
+    println!(
+        "  platform:  {}",
+        pkg.platform.clone().unwrap_or_else(publish::host_platform)
+    );
+    println!(
+        "  category:  {}",
+        pkg.category.clone().unwrap_or_else(|| "—".into())
+    );
+    println!(
+        "  keywords:  {}",
+        if pkg.keywords.is_empty() {
+            "—".into()
+        } else {
+            pkg.keywords.join(", ")
+        }
+    );
     if artifact.exists() {
         let bytes = std::fs::read(&artifact)?;
-        println!("  artifact:  {} ({:.2} MB)", artifact.display(), bytes.len() as f64 / 1_048_576.0);
+        println!(
+            "  artifact:  {} ({:.2} MB)",
+            artifact.display(),
+            bytes.len() as f64 / 1_048_576.0
+        );
         println!("  integrity: {}", publish::sha512_integrity(&bytes));
     } else {
         println!("  artifact:  {} (CHƯA CÓ)", artifact.display());
@@ -367,7 +382,11 @@ async fn do_publish(dir: &Path, dry_run: bool, pack: bool, hub: Option<String>) 
     let platform = pkg.platform.clone().unwrap_or_else(publish::host_platform);
 
     println!("senclaw/{}@{}", app.id, pkg.version);
-    println!("  artifact:  {} ({:.2} MB)", artifact.display(), bytes.len() as f64 / 1_048_576.0);
+    println!(
+        "  artifact:  {} ({:.2} MB)",
+        artifact.display(),
+        bytes.len() as f64 / 1_048_576.0
+    );
     println!("  platform:  {platform}");
     println!("  integrity: {}", publish::sha512_integrity(&bytes));
 
@@ -424,7 +443,10 @@ async fn info(slug: &str, hub: Option<String>) -> Result<()> {
     if let Some(d) = &pkg.description {
         println!("  {}", d.lines().next().unwrap_or_default());
     }
-    println!("  kind:   {}", pkg.kind.clone().unwrap_or_else(|| "—".into()));
+    println!(
+        "  kind:   {}",
+        pkg.kind.clone().unwrap_or_else(|| "—".into())
+    );
     if let Some(latest) = pkg.dist_tags.get("latest") {
         println!("  latest: {latest}");
     }
@@ -514,12 +536,17 @@ async fn install(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(180))
         .build()?;
-    let resp = client.post(&url).multipart(form).send().await.with_context(|| {
-        format!(
-            "không gọi được {url} — daemon SenClaw có đang chạy không? \
+    let resp = client
+        .post(&url)
+        .multipart(form)
+        .send()
+        .await
+        .with_context(|| {
+            format!(
+                "không gọi được {url} — daemon SenClaw có đang chạy không? \
              (đặt SENCLAW_UI_PORT nếu dùng cổng khác)"
-        )
-    })?;
+            )
+        })?;
 
     let status = resp.status();
     let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
@@ -549,20 +576,28 @@ async fn fetch_updates() -> Result<Vec<serde_json::Value>> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()?;
-    let resp = client.get(&url).send().await.with_context(|| {
-        format!("không gọi được {url} — daemon SenClaw có đang chạy không?")
-    })?;
+    let resp =
+        client.get(&url).send().await.with_context(|| {
+            format!("không gọi được {url} — daemon SenClaw có đang chạy không?")
+        })?;
     if !resp.status().is_success() {
         bail!("{url} trả về HTTP {}", resp.status());
     }
-    Ok(resp.json::<Vec<serde_json::Value>>().await.unwrap_or_default())
+    Ok(resp
+        .json::<Vec<serde_json::Value>>()
+        .await
+        .unwrap_or_default())
 }
 
 async fn outdated() -> Result<()> {
     let updates = fetch_updates().await?;
     let outdated: Vec<&serde_json::Value> = updates
         .iter()
-        .filter(|u| u.get("hasUpdate").and_then(|v| v.as_bool()).unwrap_or(false))
+        .filter(|u| {
+            u.get("hasUpdate")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        })
         .collect();
 
     if outdated.is_empty() {
@@ -614,7 +649,11 @@ async fn update_one(base: &str, id: &str) -> Result<()> {
             .unwrap_or("(daemon không kèm thông báo)");
         bail!("cập nhật {id} thất bại (HTTP {status}): {msg}");
     }
-    if body.get("updated").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if body
+        .get("updated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         let latest = body.get("latest").and_then(|v| v.as_str()).unwrap_or("?");
         println!("✓ {id} → {latest}");
     } else {
@@ -631,7 +670,11 @@ async fn update(id: Option<&str>, all: bool) -> Result<()> {
             let updates = fetch_updates().await?;
             let ids: Vec<String> = updates
                 .iter()
-                .filter(|u| u.get("hasUpdate").and_then(|v| v.as_bool()).unwrap_or(false))
+                .filter(|u| {
+                    u.get("hasUpdate")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                })
                 .filter_map(|u| u.get("id").and_then(|v| v.as_str()).map(str::to_string))
                 .collect();
             if ids.is_empty() {
@@ -723,7 +766,10 @@ mod tests {
     async fn preflight_fails_when_the_artifact_is_missing() {
         let d = app_dir("demo", "mô tả");
         init(d.path(), "1.0.0").unwrap();
-        let err = preflight(d.path(), "http://127.0.0.1:1").await.unwrap_err().to_string();
+        let err = preflight(d.path(), "http://127.0.0.1:1")
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("--pack"), "{err}");
     }
 
@@ -736,7 +782,10 @@ mod tests {
             vec![0u8; (MAX_UPLOAD_BYTES + 1) as usize],
         )
         .unwrap();
-        let err = preflight(d.path(), "http://127.0.0.1:1").await.unwrap_err().to_string();
+        let err = preflight(d.path(), "http://127.0.0.1:1")
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("vượt giới hạn"), "{err}");
     }
 
@@ -745,7 +794,10 @@ mod tests {
         let d = app_dir("demo", "");
         init(d.path(), "1.0.0").unwrap();
         std::fs::write(d.path().join("demo-app.zip"), b"zip").unwrap();
-        let err = preflight(d.path(), "http://127.0.0.1:1").await.unwrap_err().to_string();
+        let err = preflight(d.path(), "http://127.0.0.1:1")
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("description"), "{err}");
     }
 

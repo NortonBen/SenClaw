@@ -74,11 +74,10 @@ pub(crate) async fn workflows_run_start(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let svc = service(&state)?;
     let inputs = body.map(|Json(b)| b.inputs).unwrap_or_default();
-    let started = tokio::task::spawn_blocking(move || {
-        svc.start_run(&name, inputs, Some("ui".to_string()))
-    })
-    .await
-    .map_err(internal)?;
+    let started =
+        tokio::task::spawn_blocking(move || svc.start_run(&name, inputs, Some("ui".to_string())))
+            .await
+            .map_err(internal)?;
     match started {
         Ok(run_id) => Ok(Json(serde_json::json!({ "runId": run_id }))),
         Err(e) => Err((
@@ -94,7 +93,9 @@ pub(crate) async fn workflows_run_activity(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let svc = service(&state)?;
-    Ok(Json(serde_json::json!({ "entries": svc.run_activity(&id) })))
+    Ok(Json(
+        serde_json::json!({ "entries": svc.run_activity(&id) }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,10 +113,7 @@ pub(crate) async fn workflows_run_rename(
     let svc = service(&state)?;
     match svc.rename_run(&id, &body.label) {
         Ok(()) => Ok(Json(serde_json::json!({ "ok": true }))),
-        Err(e) => Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": e})),
-        )),
+        Err(e) => Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e})))),
     }
 }
 
@@ -212,10 +210,9 @@ pub(crate) async fn workflows_def_update(
     Json(body): Json<DefinitionBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let svc = service(&state)?;
-    let updated =
-        tokio::task::spawn_blocking(move || svc.update_definition(&name, &body.content))
-            .await
-            .map_err(internal)?;
+    let updated = tokio::task::spawn_blocking(move || svc.update_definition(&name, &body.content))
+        .await
+        .map_err(internal)?;
     match updated {
         Ok(new_name) => Ok(Json(serde_json::json!({ "name": new_name }))),
         Err(e) => {
@@ -240,10 +237,7 @@ pub(crate) async fn workflows_def_delete(
         .map_err(internal)?;
     match deleted {
         Ok(()) => Ok(Json(serde_json::json!({ "ok": true }))),
-        Err(e) => Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": e})),
-        )),
+        Err(e) => Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": e})))),
     }
 }
 
@@ -280,10 +274,9 @@ pub(crate) async fn workflows_def_patch(
     Json(patch): Json<crate::workflow::service::DefFieldsPatch>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let svc = service(&state)?;
-    let patched =
-        tokio::task::spawn_blocking(move || svc.edit_definition_fields(&name, &patch))
-            .await
-            .map_err(internal)?;
+    let patched = tokio::task::spawn_blocking(move || svc.edit_definition_fields(&name, &patch))
+        .await
+        .map_err(internal)?;
     match patched {
         Ok(()) => Ok(Json(serde_json::json!({ "ok": true }))),
         Err(e) => {
@@ -304,7 +297,9 @@ pub(crate) async fn workflows_settings_get(
     State(state): State<Arc<UiState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let svc = service(&state)?;
-    Ok(Json(serde_json::to_value(svc.get_settings()).unwrap_or_default()))
+    Ok(Json(
+        serde_json::to_value(svc.get_settings()).unwrap_or_default(),
+    ))
 }
 
 /// PUT /api/workflows/settings — persist + apply live.

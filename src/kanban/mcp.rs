@@ -48,7 +48,9 @@ pub async fn run_stdio_server() -> anyhow::Result<()> {
             }),
             "notifications/initialized" => continue, // notification — no reply
             "ping" => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
-            "tools/list" => json!({ "jsonrpc": "2.0", "id": id, "result": { "tools": tools_list() } }),
+            "tools/list" => {
+                json!({ "jsonrpc": "2.0", "id": id, "result": { "tools": tools_list() } })
+            }
             "tools/call" => {
                 let params = req.params.clone().unwrap_or_default();
                 let name = params["name"].as_str().unwrap_or("").to_string();
@@ -106,7 +108,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "kanban-mcp", "version": "2.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -292,18 +296,23 @@ fn tools_list() -> Value {
 }
 
 fn labels_arg(args: &Value) -> Option<String> {
-    args.get("labels")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            let strs: Vec<String> =
-                a.iter().filter_map(|x| x.as_str().map(String::from)).collect();
-            serde_json::to_string(&strs).unwrap_or_else(|_| "[]".into())
-        })
+    args.get("labels").and_then(|v| v.as_array()).map(|a| {
+        let strs: Vec<String> = a
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect();
+        serde_json::to_string(&strs).unwrap_or_else(|_| "[]".into())
+    })
 }
 
 /// Resolve the destination column for `kanban_create`: explicit id → status role
 /// → `todo` role → the board's first column.
-fn resolve_column(db: &Db, board_id: i64, column_id: Option<i64>, status: Option<&str>) -> anyhow::Result<i64> {
+fn resolve_column(
+    db: &Db,
+    board_id: i64,
+    column_id: Option<i64>,
+    status: Option<&str>,
+) -> anyhow::Result<i64> {
     if let Some(id) = column_id {
         return Ok(id);
     }
@@ -328,7 +337,18 @@ fn transition(db: &Db, card_id: i64, role: &str, kind: &str, body: &str) -> anyh
         db.move_card(card_id, dest, 0, now())?;
         true
     } else if role == "done" {
-        db.update_card(card_id, None, None, None, None, None, None, None, Some(true), now())?;
+        db.update_card(
+            card_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+            now(),
+        )?;
         false
     } else {
         false
@@ -353,7 +373,9 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
             let desc = args["description"].as_str().unwrap_or("");
             let with_defaults = args["with_defaults"].as_bool().unwrap_or(true);
-            let ws = args["workspace_dir"].as_str().filter(|w| !w.trim().is_empty());
+            let ws = args["workspace_dir"]
+                .as_str()
+                .filter(|w| !w.trim().is_empty());
             match db.create_board(title, desc, with_defaults, ws, now()) {
                 Ok(id) => json_result(json!({ "id": id })),
                 Err(e) => error_result(e.to_string()),
@@ -422,7 +444,17 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let assignee = args["assignee"].as_str();
             let tenant = args["tenant"].as_str();
             let labels = labels_arg(args);
-            match db.add_card(column, title, desc, priority, assignee, tenant, labels.as_deref(), None, now()) {
+            match db.add_card(
+                column,
+                title,
+                desc,
+                priority,
+                assignee,
+                tenant,
+                labels.as_deref(),
+                None,
+                now(),
+            ) {
                 Ok(id) => json_result(json!({ "id": id, "column_id": column })),
                 Err(e) => error_result(e.to_string()),
             }
@@ -456,10 +488,23 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let priority = args.get("priority").map(|c| c.as_str());
             let assignee = args.get("assignee").map(|c| c.as_str());
             let tenant = args.get("tenant").map(|c| c.as_str());
-            let labels = args.get("labels").map(|_| labels_arg(args).unwrap_or_else(|| "[]".into()));
+            let labels = args
+                .get("labels")
+                .map(|_| labels_arg(args).unwrap_or_else(|| "[]".into()));
             let labels_ref = labels.as_ref().map(|s| Some(s.as_str()));
             let done = args["done"].as_bool();
-            match db.update_card(id, title, desc, priority, assignee, tenant, labels_ref, None, done, now()) {
+            match db.update_card(
+                id,
+                title,
+                desc,
+                priority,
+                assignee,
+                tenant,
+                labels_ref,
+                None,
+                done,
+                now(),
+            ) {
                 Ok(()) => json_result(json!({ "success": true })),
                 Err(e) => error_result(e.to_string()),
             }
@@ -511,7 +556,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             if body.is_empty() {
                 return error_result("body is required".into());
             }
-            let author = args["author"].as_str().filter(|a| !a.trim().is_empty()).unwrap_or("agent");
+            let author = args["author"]
+                .as_str()
+                .filter(|a| !a.trim().is_empty())
+                .unwrap_or("agent");
             match db.add_comment(card_id, author, body, "comment", now()) {
                 Ok(id) => json_result(json!({ "id": id })),
                 Err(e) => error_result(e.to_string()),
@@ -522,9 +570,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let child = args["child_id"].as_i64().unwrap_or(0);
             let remove = args["remove"].as_bool().unwrap_or(false);
             let res = if remove {
-                db.remove_link(parent, child, now()).map(|_| json!({ "success": true, "removed": true }))
+                db.remove_link(parent, child, now())
+                    .map(|_| json!({ "success": true, "removed": true }))
             } else {
-                db.add_link(parent, child, now()).map(|id| json!({ "id": id }))
+                db.add_link(parent, child, now())
+                    .map(|id| json!({ "id": id }))
             };
             match res {
                 Ok(v) => json_result(v),
@@ -549,8 +599,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                     let board_id = match args["board_id"].as_i64() {
                         Some(id) if id > 0 => id,
                         _ => {
-                            let title =
-                                args["title"].as_str().map(str::trim).filter(|t| !t.is_empty()).unwrap_or(goal);
+                            let title = args["title"]
+                                .as_str()
+                                .map(str::trim)
+                                .filter(|t| !t.is_empty())
+                                .unwrap_or(goal);
                             match db.create_board(title, goal, false, None, now()) {
                                 Ok(id) => id,
                                 Err(e) => return error_result(e.to_string()),
@@ -575,7 +628,14 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             };
             let outline = db.board_outline(board_id).ok();
             let instruction = args["instruction"].as_str();
-            match crate::kanban::llm::breakdown_card(&title, &description, outline.as_deref(), instruction).await {
+            match crate::kanban::llm::breakdown_card(
+                &title,
+                &description,
+                outline.as_deref(),
+                instruction,
+            )
+            .await
+            {
                 Ok(gen) => match db.insert_cards(column_id, &gen.cards, now()) {
                     Ok(added) => json_result(json!({ "added": added, "model": gen.model })),
                     Err(e) => error_result(e.to_string()),

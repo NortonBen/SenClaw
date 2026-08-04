@@ -283,7 +283,11 @@ impl Mla {
         let c = self.kv_a_proj_with_mqa.forward(x)?;
         let compressed_kv = c.index((.., .., 0..self.kv_lora_rank));
         let k_pe = c
-            .index((.., .., self.kv_lora_rank..(self.kv_lora_rank + self.qk_rope_head_dim)))
+            .index((
+                ..,
+                ..,
+                self.kv_lora_rank..(self.kv_lora_rank + self.qk_rope_head_dim),
+            ))
             .reshape(&[B, L, 1, self.qk_rope_head_dim])?
             .transpose_axes(&[0, 2, 1, 3])?; // [B, 1, L, rope]
 
@@ -577,7 +581,10 @@ impl DecoderLayer {
         let (mlp, moe) = if args.is_moe_layer(idx) {
             (None, Some(DeepseekMoe::new(args, group_size, bits)?))
         } else {
-            (Some(Mlp::new(args.hidden_size, args.intermediate_size)?), None)
+            (
+                Some(Mlp::new(args.hidden_size, args.intermediate_size)?),
+                None,
+            )
         };
         let mk_norm = || {
             nn::RmsNormBuilder::new(args.hidden_size)
@@ -600,9 +607,9 @@ impl DecoderLayer {
         cache: Option<&mut KvCache>,
         rope_offset: i32,
     ) -> Result<Array, Exception> {
-        let r = self
-            .self_attn
-            .forward(&self.input_layernorm.forward(x)?, mask, cache, rope_offset)?;
+        let r =
+            self.self_attn
+                .forward(&self.input_layernorm.forward(x)?, mask, cache, rope_offset)?;
         let h = x.add(&r)?;
         let normed = self.post_attention_layernorm.forward(&h)?;
         let r = match (self.moe.as_mut(), self.mlp.as_mut()) {
@@ -848,7 +855,11 @@ mod tests {
                 "original_max_position_embeddings": 4096, "type": "yarn"
             }
         });
-        std::fs::write(dir.join("config.json"), serde_json::to_string(&cfg).unwrap()).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
     }
 
     /// MLA caches K with head-dim `q_head_dim` (192 = nope 128 + rope 64) and V
@@ -892,7 +903,11 @@ mod tests {
         let expect = (192.0_f32).powf(-0.5) * m * m;
         assert!((a.softmax_scale() - expect).abs() < 1e-6);
         // Sanity: ~0.1147 per the DeepSeek reference.
-        assert!((a.softmax_scale() - 0.1147).abs() < 1e-3, "scale {}", a.softmax_scale());
+        assert!(
+            (a.softmax_scale() - 0.1147).abs() < 1e-3,
+            "scale {}",
+            a.softmax_scale()
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

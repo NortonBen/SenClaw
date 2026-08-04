@@ -129,7 +129,10 @@ mod tests {
             .unwrap();
         assert_eq!(out.len(), 1);
         match &out[0] {
-            ToolOutput::Result { data, result_for_assistant } => {
+            ToolOutput::Result {
+                data,
+                result_for_assistant,
+            } => {
                 assert_eq!(data["summary"].as_str().unwrap(), "Đã lưu báo cáo");
                 assert_eq!(data["completed"].as_bool().unwrap(), true);
                 assert!(result_for_assistant.contains("Đã lưu báo cáo"));

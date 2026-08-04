@@ -386,8 +386,18 @@ mod tests {
         let (y_chk, s_chk) =
             gated_delta_update_chunked(&q, &k, &v, &g_log, &beta, &state, 64).unwrap();
 
-        let dy = (&y_seq - &y_chk).abs().unwrap().max(None).unwrap().item::<f32>();
-        let ds = (&s_seq - &s_chk).abs().unwrap().max(None).unwrap().item::<f32>();
+        let dy = (&y_seq - &y_chk)
+            .abs()
+            .unwrap()
+            .max(None)
+            .unwrap()
+            .item::<f32>();
+        let ds = (&s_seq - &s_chk)
+            .abs()
+            .unwrap()
+            .max(None)
+            .unwrap()
+            .item::<f32>();
         assert!(dy < 1e-3, "y max diff {dy} (chunked vs sequential)");
         assert!(ds < 1e-3, "state max diff {ds} (chunked vs sequential)");
     }
@@ -411,8 +421,18 @@ mod tests {
         let (y_chk, s_chk) =
             gated_delta_update_chunked(&q, &k, &v, &g_log, &beta, &state, 64).unwrap();
 
-        let dy = (&y_seq - &y_chk).abs().unwrap().max(None).unwrap().item::<f32>();
-        let ds = (&s_seq - &s_chk).abs().unwrap().max(None).unwrap().item::<f32>();
+        let dy = (&y_seq - &y_chk)
+            .abs()
+            .unwrap()
+            .max(None)
+            .unwrap()
+            .item::<f32>();
+        let ds = (&s_seq - &s_chk)
+            .abs()
+            .unwrap()
+            .max(None)
+            .unwrap()
+            .item::<f32>();
         assert!(dy < 2e-3, "y max diff {dy}");
         assert!(ds < 2e-3, "state max diff {ds}");
     }

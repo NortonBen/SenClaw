@@ -286,9 +286,18 @@ mod tests {
 
     #[test]
     fn slugs_default_to_the_senclaw_scope() {
-        assert_eq!(parse_slug("ai-office").unwrap(), ("senclaw".into(), "ai-office".into()));
-        assert_eq!(parse_slug("acme/thing").unwrap(), ("acme".into(), "thing".into()));
-        assert_eq!(parse_slug("@acme/thing").unwrap(), ("acme".into(), "thing".into()));
+        assert_eq!(
+            parse_slug("ai-office").unwrap(),
+            ("senclaw".into(), "ai-office".into())
+        );
+        assert_eq!(
+            parse_slug("acme/thing").unwrap(),
+            ("acme".into(), "thing".into())
+        );
+        assert_eq!(
+            parse_slug("@acme/thing").unwrap(),
+            ("acme".into(), "thing".into())
+        );
         assert!(parse_slug("a/b/c").is_err());
     }
 

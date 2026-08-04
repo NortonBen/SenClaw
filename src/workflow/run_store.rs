@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use super::types::{sanitize_name, now_iso, RunStatus, StepStatus, WorkflowRun};
+use super::types::{now_iso, sanitize_name, RunStatus, StepStatus, WorkflowRun};
 
 /// Run records retained per workflow (oldest dropped beyond this).
 const PER_WORKFLOW_CAP: usize = 10;

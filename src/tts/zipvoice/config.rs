@@ -118,14 +118,14 @@ mod tests {
         assert_eq!(c.model.feat_dim, 100);
         assert_eq!(c.model.fm_decoder_dim, 512);
         assert_eq!(c.model.text_encoder_dim, 192);
-        assert_eq!(
-            c.model.fm_decoder_downsampling_factor,
-            vec![1, 2, 4, 2, 1]
-        );
+        assert_eq!(c.model.fm_decoder_downsampling_factor, vec![1, 2, 4, 2, 1]);
         assert_eq!(c.model.fm_decoder_num_layers, vec![2, 2, 4, 4, 4]);
         assert_eq!(c.num_fm_stages(), 5);
         // The 5 U-Net stages must agree across all per-stage lists.
-        assert_eq!(c.model.fm_decoder_cnn_module_kernel.len(), c.num_fm_stages());
+        assert_eq!(
+            c.model.fm_decoder_cnn_module_kernel.len(),
+            c.num_fm_stages()
+        );
         assert_eq!(c.model.fm_decoder_num_layers.len(), c.num_fm_stages());
     }
 

@@ -3,10 +3,10 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use anyhow::Result;
 use crate::config::Config;
 use crate::db::Db;
 use crate::types::GroupBinding;
+use anyhow::Result;
 
 use super::config::{remove_group_from_config, save_group_to_config};
 use super::dirs::ensure_agent_dirs;
@@ -235,7 +235,6 @@ fn days_to_ymd(mut days: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-
 pub fn ensure_wechat_admin_group(
     db: &Db,
     gm: &GroupManager,
@@ -298,9 +297,7 @@ pub fn ensure_wechat_admin_group(
     } else {
         "registered"
     };
-    tracing::info!(
-        "[GroupManager] WeChat group {action}: {owner_jid} → agents/{folder}/"
-    );
+    tracing::info!("[GroupManager] WeChat group {action}: {owner_jid} → agents/{folder}/");
 }
 
 /// Auto-register an app-channel JID as a group on first contact, mirroring the

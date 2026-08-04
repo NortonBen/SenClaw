@@ -536,7 +536,8 @@ pub fn load_whisper_model(model_dir: impl AsRef<Path>) -> Result<WhisperModel, E
         if std::env::var("SENCLAW_WHISPER_DEBUG").is_ok() {
             crate::safe_eprintln!(
                 "[whisper-debug] quantize model start group_size={} bits={}",
-                q.group_size, q.bits
+                q.group_size,
+                q.bits
             );
         }
         model = nn::quantize(model, Some(q.group_size), Some(q.bits))?;

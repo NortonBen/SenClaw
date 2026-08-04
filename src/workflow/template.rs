@@ -104,7 +104,10 @@ pub fn build_script_env(
         env.insert(format!("WF_INPUT_{}", env_segment(k)), v.clone());
     }
     for (id, result) in &ctx.step_results {
-        env.insert(format!("WF_STEP_{}_RESULT", env_segment(id)), result.clone());
+        env.insert(
+            format!("WF_STEP_{}_RESULT", env_segment(id)),
+            result.clone(),
+        );
     }
     env
 }

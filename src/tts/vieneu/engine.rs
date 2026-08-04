@@ -116,7 +116,11 @@ impl Sess {
             .commit_from_file(p)
             .map_err(|e| anyhow!("onnx load: {e}"))
             .with_context(|| format!("loading onnx {}", p.display()))?;
-        let out_names = sess.outputs().iter().map(|o| o.name().to_string()).collect();
+        let out_names = sess
+            .outputs()
+            .iter()
+            .map(|o| o.name().to_string())
+            .collect();
         Ok(Self { sess, out_names })
     }
 }

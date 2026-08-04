@@ -95,8 +95,15 @@ impl Db {
                    members_json = ?7, settings_json = ?8, updated_at = ?9 \
                  WHERE id = ?1",
                 params![
-                    t.id, t.name, t.description, t.icon, t.manager_folder, t.manager_role,
-                    members_json, settings_json, t.updated_at,
+                    t.id,
+                    t.name,
+                    t.description,
+                    t.icon,
+                    t.manager_folder,
+                    t.manager_role,
+                    members_json,
+                    settings_json,
+                    t.updated_at,
                 ],
             )?;
             Ok(())

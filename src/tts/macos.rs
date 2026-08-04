@@ -95,10 +95,7 @@ fn synthesize_macos(preset: &MacosSpeech, req: &SynthesisRequest<'_>) -> Result<
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    let tmp = std::env::temp_dir().join(format!(
-        "senclaw-tts-{}-{nonce}.wav",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("senclaw-tts-{}-{nonce}.wav", std::process::id()));
 
     // Voice precedence: explicit request → preset default. We trust the preset
     // to match the catalog row the user picked.
@@ -150,7 +147,12 @@ mod tests {
         b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WAVE"
     }
 
-    fn req<'a>(text: &'a str, lang: &'a str, voice: Option<&'a str>, speed: f32) -> SynthesisRequest<'a> {
+    fn req<'a>(
+        text: &'a str,
+        lang: &'a str,
+        voice: Option<&'a str>,
+        speed: f32,
+    ) -> SynthesisRequest<'a> {
         SynthesisRequest {
             text,
             language: lang,
@@ -163,7 +165,12 @@ mod tests {
     #[test]
     fn macos_speech_produces_valid_wav() {
         let wav = MacosSpeech::VIETNAMESE
-            .synthesize(&req("Xin chào, đây là một kiểm tra.", "vi", Some("Linh"), 1.0))
+            .synthesize(&req(
+                "Xin chào, đây là một kiểm tra.",
+                "vi",
+                Some("Linh"),
+                1.0,
+            ))
             .expect("macos-speech synthesis should succeed");
         assert!(
             wav.len() > 1024,

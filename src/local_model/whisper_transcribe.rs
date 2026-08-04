@@ -329,7 +329,9 @@ fn maybe_set_mlx_memory_limit() {
             let mut _prev: usize = 0;
             unsafe { mlx_sys::mlx_set_memory_limit(&mut _prev, bytes) };
             if whisper_debug_enabled() {
-                crate::safe_eprintln!("[whisper-debug] MLX memory limit set to {mb} MiB (prev={_prev})");
+                crate::safe_eprintln!(
+                    "[whisper-debug] MLX memory limit set to {mb} MiB (prev={_prev})"
+                );
             }
         }
     }

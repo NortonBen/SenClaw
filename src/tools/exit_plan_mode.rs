@@ -64,7 +64,11 @@ impl Tool for ExitPlanModeTool {
         tracing::info!(
             "[ExitPlanMode] agent={} plan_file={} plan_len={}",
             ctx.agent_id,
-            if plan_file_path.is_empty() { "(none)" } else { &plan_file_path },
+            if plan_file_path.is_empty() {
+                "(none)"
+            } else {
+                &plan_file_path
+            },
             plan_content.len()
         );
 

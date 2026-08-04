@@ -66,8 +66,8 @@ impl OcrEngine {
 
     /// Recognize text from an image file on disk.
     pub fn recognize_path(&self, path: &Path) -> Result<OcrResult> {
-        let image = image::open(path)
-            .with_context(|| format!("opening image {}", path.display()))?;
+        let image =
+            image::open(path).with_context(|| format!("opening image {}", path.display()))?;
         self.recognize_image(&image)
     }
 

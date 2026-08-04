@@ -352,7 +352,10 @@ impl MemoryServer {
                 r.score
             ));
             let summary = if r.text.len() > 300 {
-                format!("{}...", crate::util::text::truncate_on_char_boundary(&r.text, 300))
+                format!(
+                    "{}...",
+                    crate::util::text::truncate_on_char_boundary(&r.text, 300)
+                )
             } else {
                 r.text.clone()
             };
@@ -399,7 +402,11 @@ impl MemoryServer {
                 Some(m) => out.push_str(&format!(
                     "[{n}] {} ({}) — {}\n",
                     m.name,
-                    if m.mem_type.is_empty() { "memory" } else { &m.mem_type },
+                    if m.mem_type.is_empty() {
+                        "memory"
+                    } else {
+                        &m.mem_type
+                    },
                     m.description
                 )),
                 None => out.push_str(&format!("[{n}] {}\n", r.path)),

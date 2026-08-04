@@ -53,8 +53,8 @@ fn fold(name: &str) -> String {
 
 impl Voices {
     pub fn load(path: &Path) -> Result<Self> {
-        let s = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let s =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let f: VoicesFile = serde_json::from_str(&s).context("parsing voices_v3_turbo.json")?;
         if f.presets.is_empty() {
             return Err(anyhow!("voices file has no presets"));
@@ -64,11 +64,7 @@ impl Voices {
             .clone()
             .filter(|d| f.presets.contains_key(d))
             .unwrap_or_else(|| f.presets.keys().next().unwrap().clone());
-        let lookup = f
-            .presets
-            .keys()
-            .map(|k| (fold(k), k.clone()))
-            .collect();
+        let lookup = f.presets.keys().map(|k| (fold(k), k.clone())).collect();
         Ok(Self {
             default_voice,
             presets: f.presets,
@@ -88,7 +84,10 @@ impl Voices {
                 .ok_or_else(|| {
                     let mut names: Vec<_> = self.presets.keys().cloned().collect();
                     names.sort();
-                    anyhow!("unknown VieNeu voice `{n}` — available: {}", names.join(", "))
+                    anyhow!(
+                        "unknown VieNeu voice `{n}` — available: {}",
+                        names.join(", ")
+                    )
                 })?,
         };
         Ok((want, &self.presets[want]))
@@ -146,6 +145,10 @@ mod tests {
         assert_eq!(v.get(None).unwrap().0, "Phạm Tuyên");
         assert_eq!(v.get(Some("truc ly")).unwrap().0, "Trúc Ly");
         assert_eq!(v.get(Some("PHAM TUYEN")).unwrap().0, "Phạm Tuyên");
-        assert!(v.get(Some("nobody")).unwrap_err().to_string().contains("available"));
+        assert!(v
+            .get(Some("nobody"))
+            .unwrap_err()
+            .to_string()
+            .contains("available"));
     }
 }

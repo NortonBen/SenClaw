@@ -34,5 +34,7 @@ pub(crate) async fn dispatch_config_set(
         save_dispatch_enabled(path, v)
             .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
-    Ok(Json(serde_json::json!({ "enabled": get_dispatch_enabled(path) })))
+    Ok(Json(
+        serde_json::json!({ "enabled": get_dispatch_enabled(path) }),
+    ))
 }

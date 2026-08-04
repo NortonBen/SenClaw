@@ -458,11 +458,16 @@ mod tests {
     fn writes_triggers_into_frontmatter_and_roundtrips() {
         let triggers = vec![
             "who calls this".to_string(),
-            " find callers ".to_string(), // trimmed
-            "".to_string(),               // dropped
+            " find callers ".to_string(),     // trimmed
+            "".to_string(),                   // dropped
             "ai gọi hàm \"này\"".to_string(), // quote-escaped
         ];
-        let md = build_skill_md("sb-selftest", "Use when auditing callers", "# Body\n\nStep 1.", &triggers);
+        let md = build_skill_md(
+            "sb-selftest",
+            "Use when auditing callers",
+            "# Body\n\nStep 1.",
+            &triggers,
+        );
 
         assert!(md.starts_with("---\nname: sb-selftest\n"));
         assert!(md.contains("triggers:\n"));

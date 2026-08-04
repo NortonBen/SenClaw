@@ -12,7 +12,7 @@ mod provider;
 mod source;
 mod types;
 
-pub use provider::{dispatch_router, DispatchProvider};
+pub use provider::{DispatchProvider, dispatch_router};
 pub use source::{DispatchSource, HttpDispatchSource, LocalDispatchSource};
 pub use types::{
     Capacity, FinalizeRequest, ItemIdRequest, McpServerSpec, Outcome, PollRequest, WorkItem,

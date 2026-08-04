@@ -4,11 +4,11 @@
 
 use async_trait::async_trait;
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::post,
-    Json, Router,
 };
 use std::sync::Arc;
 
@@ -46,7 +46,11 @@ pub fn dispatch_router(provider: Arc<dyn DispatchProvider>) -> Router {
 struct Err500(String);
 impl IntoResponse for Err500 {
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": self.0 }))).into_response()
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": self.0 })),
+        )
+            .into_response()
     }
 }
 
@@ -54,27 +58,35 @@ async fn poll(
     State(p): State<Arc<dyn DispatchProvider>>,
     Json(req): Json<PollRequest>,
 ) -> Result<Json<Vec<WorkItem>>, Err500> {
-    p.claim_ready(req.capacity).await.map(Json).map_err(|e| Err500(e.to_string()))
+    p.claim_ready(req.capacity)
+        .await
+        .map(Json)
+        .map_err(|e| Err500(e.to_string()))
 }
 
 async fn heartbeat(
     State(p): State<Arc<dyn DispatchProvider>>,
     Json(req): Json<ItemIdRequest>,
 ) -> Result<Json<serde_json::Value>, Err500> {
-    p.heartbeat(&req.item_id).await.map_err(|e| Err500(e.to_string()))?;
+    p.heartbeat(&req.item_id)
+        .await
+        .map_err(|e| Err500(e.to_string()))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-async fn reclaim(
-    State(p): State<Arc<dyn DispatchProvider>>,
-) -> Result<Json<Vec<String>>, Err500> {
-    p.reclaim().await.map(Json).map_err(|e| Err500(e.to_string()))
+async fn reclaim(State(p): State<Arc<dyn DispatchProvider>>) -> Result<Json<Vec<String>>, Err500> {
+    p.reclaim()
+        .await
+        .map(Json)
+        .map_err(|e| Err500(e.to_string()))
 }
 
 async fn finalize(
     State(p): State<Arc<dyn DispatchProvider>>,
     Json(req): Json<FinalizeRequest>,
 ) -> Result<Json<serde_json::Value>, Err500> {
-    p.finalize(&req.item_id, req.outcome).await.map_err(|e| Err500(e.to_string()))?;
+    p.finalize(&req.item_id, req.outcome)
+        .await
+        .map_err(|e| Err500(e.to_string()))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }

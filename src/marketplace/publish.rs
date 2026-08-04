@@ -88,10 +88,7 @@ pub fn bump(version: &str, part: &str) -> Result<String> {
         bail!("`{version}` không phải semver hợp lệ (cần dạng X.Y.Z)");
     }
     let core = version.split(['-', '+']).next().unwrap_or_default();
-    let n: Vec<u64> = core
-        .split('.')
-        .map(|p| p.parse().unwrap_or(0))
-        .collect();
+    let n: Vec<u64> = core.split('.').map(|p| p.parse().unwrap_or(0)).collect();
     Ok(match part {
         "major" => format!("{}.0.0", n[0] + 1),
         "minor" => format!("{}.{}.0", n[0], n[1] + 1),
@@ -228,8 +225,8 @@ pub struct PublishOk {
 
 /// `sha512-<base64>`, the same shape the hub stores. Informational only.
 pub fn sha512_integrity(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha512};
     use base64::Engine;
+    use sha2::{Digest, Sha512};
     let digest = Sha512::digest(bytes);
     format!(
         "sha512-{}",
@@ -421,8 +418,7 @@ mod tests {
             platform: Some("darwin-arm64".into()),
             artifact: None,
         };
-        let back: HubPackage =
-            serde_json::from_str(&serde_json::to_string(&pkg).unwrap()).unwrap();
+        let back: HubPackage = serde_json::from_str(&serde_json::to_string(&pkg).unwrap()).unwrap();
         assert_eq!(back.version, "1.0.1");
         assert_eq!(back.permissions.unwrap()["network"][0], "127.0.0.1");
     }

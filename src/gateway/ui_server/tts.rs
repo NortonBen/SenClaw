@@ -586,7 +586,13 @@ pub(crate) async fn tts_synthesize(
         // Strip control chars / non-ASCII so the header value stays valid.
         let ascii: String = reason
             .chars()
-            .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { '?' })
+            .map(|c| {
+                if c.is_ascii_graphic() || c == ' ' {
+                    c
+                } else {
+                    '?'
+                }
+            })
             .collect();
         if let Ok(v) = HeaderValue::from_str(&ascii) {
             builder = builder.header("X-TTS-Fallback", v);
@@ -674,7 +680,9 @@ async fn run_vieneu_download(
     progress.lock().unwrap().status = DownloadStatus::Listing;
     // Resolve the sea-g2p wheel URL (any platform wheel carries the same .bin).
     let pypi: serde_json::Value = client
-        .get(format!("https://pypi.org/pypi/sea-g2p/{SEA_G2P_VERSION}/json"))
+        .get(format!(
+            "https://pypi.org/pypi/sea-g2p/{SEA_G2P_VERSION}/json"
+        ))
         .send()
         .await?
         .error_for_status()?
@@ -701,8 +709,12 @@ async fn run_vieneu_download(
             progress.lock().unwrap().status = DownloadStatus::Cancelled;
             return Ok(());
         }
-        progress.lock().unwrap().current_file =
-            Some(dst.file_name().unwrap_or_default().to_string_lossy().into_owned());
+        progress.lock().unwrap().current_file = Some(
+            dst.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+        );
         if let Some(parent) = dst.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -895,7 +907,11 @@ mod synth_tests {
             1.0,
         )
         .expect("macos-speech synthesis should succeed");
-        assert!(wav.len() > 1024, "wav suspiciously small: {} bytes", wav.len());
+        assert!(
+            wav.len() > 1024,
+            "wav suspiciously small: {} bytes",
+            wav.len()
+        );
         assert!(looks_like_wav(&wav), "output is not a RIFF/WAVE file");
     }
 
@@ -904,10 +920,24 @@ mod synth_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_speech_speed_changes_output_size() {
-        let fast = synthesize_blocking("macos-speech", None, "Một hai ba bốn năm sáu bảy.", "vi", None, 1.5)
-            .expect("fast synth");
-        let slow = synthesize_blocking("macos-speech", None, "Một hai ba bốn năm sáu bảy.", "vi", None, 0.75)
-            .expect("slow synth");
+        let fast = synthesize_blocking(
+            "macos-speech",
+            None,
+            "Một hai ba bốn năm sáu bảy.",
+            "vi",
+            None,
+            1.5,
+        )
+        .expect("fast synth");
+        let slow = synthesize_blocking(
+            "macos-speech",
+            None,
+            "Một hai ba bốn năm sáu bảy.",
+            "vi",
+            None,
+            0.75,
+        )
+        .expect("slow synth");
         // Slower rate ⇒ longer audio ⇒ bigger WAV.
         assert!(
             slow.len() > fast.len(),

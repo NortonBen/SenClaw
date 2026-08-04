@@ -39,11 +39,7 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
 ///
 /// Only message-time triggers are evaluated. Returns true if the rule's
 /// `from`/`messageType` constraints are satisfied (or absent).
-fn trigger_fires_on_user_message(
-    rule: &serde_json::Value,
-    sender: &str,
-    msg_type: &str,
-) -> bool {
+fn trigger_fires_on_user_message(rule: &serde_json::Value, sender: &str, msg_type: &str) -> bool {
     let ttype = rule.get("type").and_then(|v| v.as_str()).unwrap_or("");
     match ttype {
         "message_received" => {
@@ -70,8 +66,12 @@ fn trigger_fires_on_user_message(
 }
 
 fn count_matching_rules(member: &TeamMember, sender: &str, msg_type: &str) -> usize {
-    let Some(raw) = member.triggers.as_deref() else { return 0 };
-    let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(raw) else { return 0 };
+    let Some(raw) = member.triggers.as_deref() else {
+        return 0;
+    };
+    let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(raw) else {
+        return 0;
+    };
     list.iter()
         .filter(|r| trigger_fires_on_user_message(r, sender, msg_type))
         .count()
@@ -99,7 +99,9 @@ pub fn latest_manager_task_id(db: &Arc<Db>, team_id: &str) -> Option<String> {
 /// Transition the manager's pending task to `in_progress` when the agent
 /// starts working. No-op if no pending task or already in_progress.
 pub fn on_agent_processing(db: &Arc<Db>, team_id: &str) {
-    let Some(task_id) = latest_manager_task_id(db, team_id) else { return };
+    let Some(task_id) = latest_manager_task_id(db, team_id) else {
+        return;
+    };
     let now = local_iso_string_now();
     let _ = db.update_cowork_team_task(
         &task_id,
@@ -115,9 +117,7 @@ pub fn on_agent_processing(db: &Arc<Db>, team_id: &str) {
         None,
         &now,
     );
-    tracing::info!(
-        "[cowork_runtime] team={team_id} task={task_id} → in_progress (agent started)"
-    );
+    tracing::info!("[cowork_runtime] team={team_id} task={task_id} → in_progress (agent started)");
 }
 
 /// Classify the agent's reply to decide the task's terminal status.
@@ -166,10 +166,16 @@ fn classify_reply(reply: &str) -> &'static str {
 /// completions become `done`; failures / unanswered questions become
 /// `blocked` so the board surfaces that work is still pending.
 pub fn on_agent_reply(db: &Arc<Db>, team_id: &str, reply: &str) {
-    let Some(task_id) = latest_manager_task_id(db, team_id) else { return };
+    let Some(task_id) = latest_manager_task_id(db, team_id) else {
+        return;
+    };
     let now = local_iso_string_now();
     let status = classify_reply(reply);
-    let completed_at = if status == "done" { Some(now.as_str()) } else { None };
+    let completed_at = if status == "done" {
+        Some(now.as_str())
+    } else {
+        None
+    };
     let _ = db.update_cowork_team_task(
         &task_id,
         None,
@@ -248,11 +254,12 @@ pub fn team_context_preamble(db: &Arc<Db>, team_id: &str) -> Option<String> {
     for m in team.members.iter() {
         let role = m.role.as_deref().unwrap_or("specialist");
         let resp = m.responsibilities.as_deref().unwrap_or("—");
-        s.push_str(&format!(
-            " • `persona:{}` ({role}) — {resp}\n",
-            m.folder
-        ));
-        if let Some(ac) = m.acceptance_criteria.as_deref().filter(|v| !v.trim().is_empty()) {
+        s.push_str(&format!(" • `persona:{}` ({role}) — {resp}\n", m.folder));
+        if let Some(ac) = m
+            .acceptance_criteria
+            .as_deref()
+            .filter(|v| !v.trim().is_empty())
+        {
             s.push_str(&format!("     acceptance: {ac}\n"));
         }
         if let Some(of) = m.output_format.as_deref().filter(|v| !v.trim().is_empty()) {
@@ -453,10 +460,7 @@ pub fn on_dispatch_task_lifecycle(
     };
 
     for team in &teams {
-        let has_member = team
-            .members
-            .iter()
-            .any(|m| m.folder == member_folder);
+        let has_member = team.members.iter().any(|m| m.folder == member_folder);
         if !has_member {
             continue;
         }
@@ -471,7 +475,11 @@ pub fn on_dispatch_task_lifecycle(
             .max_by(|a, b| a.created_at.cmp(&b.created_at));
         let Some(task) = target else { continue };
 
-        let completed_at = if cowork_status == "done" { Some(now.as_str()) } else { None };
+        let completed_at = if cowork_status == "done" {
+            Some(now.as_str())
+        } else {
+            None
+        };
         let result_ref = result.as_deref();
         let _ = db.update_cowork_team_task(
             &task.id,
@@ -489,7 +497,10 @@ pub fn on_dispatch_task_lifecycle(
         );
         tracing::info!(
             "[cowork_runtime] dispatch lifecycle: team={} member={} task={} → {}",
-            team.id, member_folder, task.id, cowork_status
+            team.id,
+            member_folder,
+            task.id,
+            cowork_status
         );
     }
 }

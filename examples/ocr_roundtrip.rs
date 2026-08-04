@@ -133,8 +133,8 @@ fn run() -> anyhow::Result<()> {
             )
         })?,
     };
-    let font_bytes =
-        std::fs::read(&font_file).with_context(|| format!("reading font {}", font_file.display()))?;
+    let font_bytes = std::fs::read(&font_file)
+        .with_context(|| format!("reading font {}", font_file.display()))?;
     let font = FontVec::try_from_vec(font_bytes)
         .map_err(|_| anyhow!("invalid font file: {}", font_file.display()))?;
     let scale = PxScale::from(font_size);
@@ -147,7 +147,10 @@ fn run() -> anyhow::Result<()> {
     println!("  font      : {}", font_file.display());
     println!("  font size : {font_size} px");
     println!("  iters     : {iters} (recognize passes per phrase)");
-    println!("  threshold : {:.0}% word recall to pass", threshold * 100.0);
+    println!(
+        "  threshold : {:.0}% word recall to pass",
+        threshold * 100.0
+    );
     println!("  phrases   : {}", phrases.len());
     println!("  backend   : {}", ocr_backend());
     println!("════════════════════════════════════════════════════════════════");
@@ -168,7 +171,10 @@ fn run() -> anyhow::Result<()> {
     let mut any_failed = false;
 
     for (idx, phrase) in phrases.iter().enumerate() {
-        println!("┌─ phrase {} ────────────────────────────────────────────────", idx + 1);
+        println!(
+            "┌─ phrase {} ────────────────────────────────────────────────",
+            idx + 1
+        );
         println!("│  expected: {phrase}");
 
         // ── 1. Render the phrase to a white PNG with black text ──────────────
@@ -242,7 +248,11 @@ fn run() -> anyhow::Result<()> {
         println!("│  timing  : ocr median {ocr_med:.0} ms");
         println!(
             "│  verdict : {} {}",
-            if recall >= threshold { "✓ PASS" } else { "✗ FAIL" },
+            if recall >= threshold {
+                "✓ PASS"
+            } else {
+                "✗ FAIL"
+            },
             if deterministic {
                 "(deterministic)"
             } else {

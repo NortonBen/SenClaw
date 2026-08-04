@@ -121,10 +121,7 @@ mod native {
     #[cfg(target_os = "macos")]
     fn malloc_purge() {
         extern "C" {
-            fn malloc_zone_pressure_relief(
-                zone: *mut std::ffi::c_void,
-                goal: usize,
-            ) -> usize;
+            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
         }
         unsafe {
             malloc_zone_pressure_relief(std::ptr::null_mut(), 0);

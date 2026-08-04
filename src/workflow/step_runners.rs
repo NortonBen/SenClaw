@@ -236,7 +236,16 @@ pub async fn run_script_step(
     let env = build_script_env(ctx, observe_dir, workflow_dir);
     let timeout = Duration::from_secs(step.timeout.unwrap_or(DEFAULT_STEP_TIMEOUT_SECS));
 
-    match run_shell(&command, &ctx.run_dir, &env, timeout, shell_override, cancel.clone()).await {
+    match run_shell(
+        &command,
+        &ctx.run_dir,
+        &env,
+        timeout,
+        shell_override,
+        cancel.clone(),
+    )
+    .await
+    {
         Ok(stdout) => StepRunResult {
             result: spill_large_result(stdout.trim(), &ctx.run_dir, &step.id),
             ..Default::default()
@@ -249,7 +258,11 @@ pub async fn run_script_step(
                 aborted,
                 // Scripts are deterministic — retrying wouldn't change the outcome.
                 retryable: false,
-                error: Some(if aborted { "cancelled".to_string() } else { e.message }),
+                error: Some(if aborted {
+                    "cancelled".to_string()
+                } else {
+                    e.message
+                }),
                 guidance_snapshot: None,
             }
         }
@@ -563,16 +576,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(200)).await;
             t2.cancel();
         });
-        let res = run_script_step(
-            &step,
-            &def(dir.path()),
-            &c,
-            "/tmp/obs",
-            None,
-            None,
-            token,
-        )
-        .await;
+        let res = run_script_step(&step, &def(dir.path()), &c, "/tmp/obs", None, None, token).await;
         assert!(res.failed && res.aborted);
         assert_eq!(res.error.as_deref(), Some("cancelled"));
     }

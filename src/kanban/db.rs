@@ -278,7 +278,9 @@ impl Db {
         for m in MIGRATIONS {
             let _ = conn.execute(m, []); // ignore "duplicate column" on existing DBs
         }
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -292,7 +294,10 @@ impl Db {
     }
 
     fn touch(c: &Connection, board_id: i64, now: i64) -> Result<()> {
-        c.execute("UPDATE boards SET updated_at=?2 WHERE id=?1", params![board_id, now])?;
+        c.execute(
+            "UPDATE boards SET updated_at=?2 WHERE id=?1",
+            params![board_id, now],
+        )?;
         Ok(())
     }
 
@@ -354,7 +359,13 @@ impl Db {
         })
     }
 
-    pub fn rename_board(&self, board_id: i64, title: &str, description: &str, now: i64) -> Result<()> {
+    pub fn rename_board(
+        &self,
+        board_id: i64,
+        title: &str,
+        description: &str,
+        now: i64,
+    ) -> Result<()> {
         self.with(|c| {
             c.execute(
                 "UPDATE boards SET title=?2, description=?3, updated_at=?4 WHERE id=?1",
@@ -492,17 +503,30 @@ impl Db {
                     .filter(|l| !done.get(&l.0).copied().unwrap_or(false))
                     .count() as i64;
                 // Children of this card (this card is the parent) → progress.
-                let kids: Vec<i64> = links.iter().filter(|l| l.0 == card.id).map(|l| l.1).collect();
+                let kids: Vec<i64> = links
+                    .iter()
+                    .filter(|l| l.0 == card.id)
+                    .map(|l| l.1)
+                    .collect();
                 card.child_total = kids.len() as i64;
-                card.child_done = kids.iter().filter(|id| done.get(id).copied().unwrap_or(false)).count() as i64;
+                card.child_done = kids
+                    .iter()
+                    .filter(|id| done.get(id).copied().unwrap_or(false))
+                    .count() as i64;
             }
             Ok(columns
                 .into_iter()
                 .map(|col| {
-                    let mut cs: Vec<Card> =
-                        cards.iter().filter(|d| d.column_id == col.id).cloned().collect();
+                    let mut cs: Vec<Card> = cards
+                        .iter()
+                        .filter(|d| d.column_id == col.id)
+                        .cloned()
+                        .collect();
                     cs.sort_by_key(|d| (d.ord, d.id));
-                    ColumnWithCards { column: col, cards: cs }
+                    ColumnWithCards {
+                        column: col,
+                        cards: cs,
+                    }
                 })
                 .collect())
         })
@@ -519,15 +543,23 @@ impl Db {
     }
 
     fn board_of_column(c: &Connection, column_id: i64) -> Result<i64> {
-        c.query_row("SELECT board_id FROM columns WHERE id=?1", params![column_id], |r| r.get(0))
-            .optional()?
-            .ok_or_else(|| anyhow!("column {column_id} not found"))
+        c.query_row(
+            "SELECT board_id FROM columns WHERE id=?1",
+            params![column_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("column {column_id} not found"))
     }
 
     fn board_of_card(c: &Connection, card_id: i64) -> Result<i64> {
-        c.query_row("SELECT board_id FROM cards WHERE id=?1", params![card_id], |r| r.get(0))
-            .optional()?
-            .ok_or_else(|| anyhow!("card {card_id} not found"))
+        c.query_row(
+            "SELECT board_id FROM cards WHERE id=?1",
+            params![card_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("card {card_id} not found"))
     }
 
     fn next_column_ord(c: &Connection, board_id: i64) -> Result<i64> {
@@ -597,13 +629,22 @@ impl Db {
         self.with(|c| {
             let board_id = Self::board_of_column(c, column_id)?;
             if let Some(t) = title {
-                c.execute("UPDATE columns SET title=?2 WHERE id=?1", params![column_id, t])?;
+                c.execute(
+                    "UPDATE columns SET title=?2 WHERE id=?1",
+                    params![column_id, t],
+                )?;
             }
             if let Some(col) = color {
-                c.execute("UPDATE columns SET color=?2 WHERE id=?1", params![column_id, col])?;
+                c.execute(
+                    "UPDATE columns SET color=?2 WHERE id=?1",
+                    params![column_id, col],
+                )?;
             }
             if let Some(w) = wip_limit {
-                c.execute("UPDATE columns SET wip_limit=?2 WHERE id=?1", params![column_id, w])?;
+                c.execute(
+                    "UPDATE columns SET wip_limit=?2 WHERE id=?1",
+                    params![column_id, w],
+                )?;
             }
             Self::touch(c, board_id, now)?;
             Ok(())
@@ -696,27 +737,51 @@ impl Db {
                 c.execute("UPDATE cards SET title=?2 WHERE id=?1", params![card_id, t])?;
             }
             if let Some(d) = description {
-                c.execute("UPDATE cards SET description=?2 WHERE id=?1", params![card_id, d])?;
+                c.execute(
+                    "UPDATE cards SET description=?2 WHERE id=?1",
+                    params![card_id, d],
+                )?;
             }
             if let Some(p) = priority {
-                c.execute("UPDATE cards SET priority=?2 WHERE id=?1", params![card_id, p])?;
+                c.execute(
+                    "UPDATE cards SET priority=?2 WHERE id=?1",
+                    params![card_id, p],
+                )?;
             }
             if let Some(a) = assignee {
-                c.execute("UPDATE cards SET assignee=?2 WHERE id=?1", params![card_id, a])?;
+                c.execute(
+                    "UPDATE cards SET assignee=?2 WHERE id=?1",
+                    params![card_id, a],
+                )?;
             }
             if let Some(t) = tenant {
-                c.execute("UPDATE cards SET tenant=?2 WHERE id=?1", params![card_id, t])?;
+                c.execute(
+                    "UPDATE cards SET tenant=?2 WHERE id=?1",
+                    params![card_id, t],
+                )?;
             }
             if let Some(l) = labels {
-                c.execute("UPDATE cards SET labels=?2 WHERE id=?1", params![card_id, l])?;
+                c.execute(
+                    "UPDATE cards SET labels=?2 WHERE id=?1",
+                    params![card_id, l],
+                )?;
             }
             if let Some(dd) = due_date {
-                c.execute("UPDATE cards SET due_date=?2 WHERE id=?1", params![card_id, dd])?;
+                c.execute(
+                    "UPDATE cards SET due_date=?2 WHERE id=?1",
+                    params![card_id, dd],
+                )?;
             }
             if let Some(dn) = done {
-                c.execute("UPDATE cards SET done=?2 WHERE id=?1", params![card_id, dn as i64])?;
+                c.execute(
+                    "UPDATE cards SET done=?2 WHERE id=?1",
+                    params![card_id, dn as i64],
+                )?;
             }
-            c.execute("UPDATE cards SET updated_at=?2 WHERE id=?1", params![card_id, now])?;
+            c.execute(
+                "UPDATE cards SET updated_at=?2 WHERE id=?1",
+                params![card_id, now],
+            )?;
             Self::touch(c, board_id, now)?;
             Ok(())
         })
@@ -752,7 +817,11 @@ impl Db {
             }
             // Moving into a `done` column marks the card done; out of it un-marks.
             let role: Option<String> = c
-                .query_row("SELECT role FROM columns WHERE id=?1", params![new_column], |r| r.get(0))
+                .query_row(
+                    "SELECT role FROM columns WHERE id=?1",
+                    params![new_column],
+                    |r| r.get(0),
+                )
                 .optional()?;
             if role.as_deref() == Some("done") {
                 c.execute("UPDATE cards SET done=1 WHERE id=?1", params![card_id])?;
@@ -767,8 +836,14 @@ impl Db {
     pub fn delete_card(&self, card_id: i64, now: i64) -> Result<()> {
         self.with(|c| {
             let board_id = Self::board_of_card(c, card_id)?;
-            c.execute("DELETE FROM card_comments WHERE card_id=?1", params![card_id])?;
-            c.execute("DELETE FROM card_links WHERE parent_id=?1 OR child_id=?1", params![card_id])?;
+            c.execute(
+                "DELETE FROM card_comments WHERE card_id=?1",
+                params![card_id],
+            )?;
+            c.execute(
+                "DELETE FROM card_links WHERE parent_id=?1 OR child_id=?1",
+                params![card_id],
+            )?;
             c.execute("DELETE FROM cards WHERE id=?1", params![card_id])?;
             Self::touch(c, board_id, now)?;
             Ok(())
@@ -960,7 +1035,14 @@ impl Db {
 
     // ---- comments ----
 
-    pub fn add_comment(&self, card_id: i64, author: &str, body: &str, kind: &str, now: i64) -> Result<i64> {
+    pub fn add_comment(
+        &self,
+        card_id: i64,
+        author: &str,
+        body: &str,
+        kind: &str,
+        now: i64,
+    ) -> Result<i64> {
         self.with(|c| {
             let board_id = Self::board_of_card(c, card_id)?;
             c.execute(
@@ -998,7 +1080,12 @@ impl Db {
 
     /// Insert whole columns (with their cards) into a board. Returns
     /// (columns_added, cards_added).
-    pub fn insert_columns(&self, board_id: i64, cols: &[GenColumn], now: i64) -> Result<(usize, usize)> {
+    pub fn insert_columns(
+        &self,
+        board_id: i64,
+        cols: &[GenColumn],
+        now: i64,
+    ) -> Result<(usize, usize)> {
         self.with(|c| {
             let mut col_n = 0usize;
             let mut card_n = 0usize;
@@ -1073,8 +1160,16 @@ impl Db {
             out.push_str(&format!("## {}\n", col.column.title));
             for card in &col.cards {
                 let done = if card.done { "[x]" } else { "[ ]" };
-                let pri = card.priority.as_deref().map(|p| format!(" ({p})")).unwrap_or_default();
-                let who = card.assignee.as_deref().map(|a| format!(" @{a}")).unwrap_or_default();
+                let pri = card
+                    .priority
+                    .as_deref()
+                    .map(|p| format!(" ({p})"))
+                    .unwrap_or_default();
+                let who = card
+                    .assignee
+                    .as_deref()
+                    .map(|a| format!(" @{a}"))
+                    .unwrap_or_default();
                 out.push_str(&format!("- {done} {}{}{}\n", card.title, pri, who));
             }
             out.push('\n');
@@ -1120,7 +1215,10 @@ impl Db {
 
     pub fn rename_session(&self, id: i64, title: &str) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE chat_sessions SET title=?2 WHERE id=?1", params![id, title])?;
+            c.execute(
+                "UPDATE chat_sessions SET title=?2 WHERE id=?1",
+                params![id, title],
+            )?;
             Ok(())
         })
     }
@@ -1155,7 +1253,14 @@ impl Db {
         })
     }
 
-    pub fn add_message(&self, session_id: i64, role: &str, content: &str, model: Option<&str>, now: i64) -> Result<i64> {
+    pub fn add_message(
+        &self,
+        session_id: i64,
+        role: &str,
+        content: &str,
+        model: Option<&str>,
+        now: i64,
+    ) -> Result<i64> {
         self.with(|c| {
             c.execute(
                 "INSERT INTO chat_messages(session_id, role, content, model, created_at) VALUES(?1,?2,?3,?4,?5)",
@@ -1171,7 +1276,13 @@ impl Db {
     /// Atomically claim up to `total` ready cards across all boards (deps
     /// satisfied, under `per_assignee` in-progress limit), moving each into its
     /// board's `in_progress` column with a lease. Returns the claimed cards.
-    pub fn dispatch_claim(&self, total: usize, per_assignee: usize, lease_secs: i64, now: i64) -> Result<Vec<ClaimedCard>> {
+    pub fn dispatch_claim(
+        &self,
+        total: usize,
+        per_assignee: usize,
+        lease_secs: i64,
+        now: i64,
+    ) -> Result<Vec<ClaimedCard>> {
         let mut out: Vec<ClaimedCard> = Vec::new();
         if total == 0 {
             return Ok(out);
@@ -1189,7 +1300,8 @@ impl Db {
             };
             let inprog_id = inprog.column.id;
             // Current per-assignee load in the in-progress column.
-            let mut load: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            let mut load: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
             for card in &inprog.cards {
                 if let Some(a) = &card.assignee {
                     *load.entry(a.clone()).or_default() += 1;
@@ -1197,7 +1309,11 @@ impl Db {
             }
             // Ready candidates with no open dependency, highest priority first.
             let mut cands: Vec<&Card> = ready.cards.iter().filter(|c| c.open_deps == 0).collect();
-            cands.sort_by(|a, b| prio_rank(&b.priority).cmp(&prio_rank(&a.priority)).then(a.ord.cmp(&b.ord)));
+            cands.sort_by(|a, b| {
+                prio_rank(&b.priority)
+                    .cmp(&prio_rank(&a.priority))
+                    .then(a.ord.cmp(&b.ord))
+            });
             for card in cands {
                 if out.len() >= total {
                     break;
@@ -1264,7 +1380,13 @@ impl Db {
             if let Some(ready) = self.column_by_role(board_id, "ready")? {
                 self.move_card(card_id, ready, 0, now)?;
                 self.clear_claim(card_id)?;
-                let _ = self.add_comment(card_id, "dispatcher", "stale: worker lease expired, returned to Ready", "system", now);
+                let _ = self.add_comment(
+                    card_id,
+                    "dispatcher",
+                    "stale: worker lease expired, returned to Ready",
+                    "system",
+                    now,
+                );
                 ids.push(card_id);
             }
         }
@@ -1355,7 +1477,10 @@ impl Db {
     /// Clear a card's claim/lease (called on finalize).
     pub fn clear_claim(&self, card_id: i64) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE cards SET claimed_by=NULL, lease_until=NULL WHERE id=?1", params![card_id])?;
+            c.execute(
+                "UPDATE cards SET claimed_by=NULL, lease_until=NULL WHERE id=?1",
+                params![card_id],
+            )?;
             Ok(())
         })
     }

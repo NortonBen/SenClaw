@@ -23,7 +23,10 @@ pub enum Workspace {
     /// A persistent absolute path.
     Dir { path: String },
     /// A git worktree for coding tasks.
-    Worktree { repo: String, branch: Option<String> },
+    Worktree {
+        repo: String,
+        branch: Option<String>,
+    },
 }
 
 impl Default for Workspace {

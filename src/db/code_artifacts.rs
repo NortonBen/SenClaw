@@ -155,7 +155,15 @@ mod tests {
         assert_eq!(got.code, "echo $((1+2))");
 
         assert!(db
-            .update_code_artifact("a1", "sum2", "bash", "echo hi", "", &[], "2026-01-02 00:00:00")
+            .update_code_artifact(
+                "a1",
+                "sum2",
+                "bash",
+                "echo hi",
+                "",
+                &[],
+                "2026-01-02 00:00:00"
+            )
             .unwrap());
         assert_eq!(db.get_code_artifact("a1").unwrap().unwrap().name, "sum2");
 

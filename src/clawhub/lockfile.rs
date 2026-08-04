@@ -142,7 +142,7 @@ pub fn extract_zip_to_dir(zip_bytes: &[u8], target_dir: &Path) -> Result<(), any
             }
             let mut out = fs::File::create(&out_path)?;
             std::io::copy(&mut file, &mut out)?;
-            
+
             #[cfg(unix)]
             {
                 if let Some(mode) = file.unix_mode() {

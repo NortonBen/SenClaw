@@ -71,7 +71,10 @@ pub async fn run(code: String, timeout_ms: u64) -> serde_json::Value {
         Ok(p) => p,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&dir);
-            return err_outcome(&format!("locate senclaw bin: {e}"), start.elapsed().as_millis());
+            return err_outcome(
+                &format!("locate senclaw bin: {e}"),
+                start.elapsed().as_millis(),
+            );
         }
     };
 

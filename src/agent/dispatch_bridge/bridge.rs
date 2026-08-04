@@ -9,8 +9,8 @@ use std::time::Duration;
 use super::dag::{build_augmented_prompt, is_ready};
 use super::locks::{acquire_lock, lock_path_for};
 use super::types::{
-    AdminActivityCallback, DispatchParent, DispatchState, DispatchTask,
-    DispatchTaskStatus, FileChange,
+    AdminActivityCallback, DispatchParent, DispatchState, DispatchTask, DispatchTaskStatus,
+    FileChange,
 };
 use super::verification::{verify_parent_checklist, verify_task_checklist};
 use crate::agent::persona_registry::PersonaRegistry;
@@ -1102,7 +1102,8 @@ impl DispatchBridge {
                 workspace.clone()
             };
 
-            let (custom_memory_dir, memory_folder_override): (Option<String>, Option<String>) = (None, None);
+            let (custom_memory_dir, memory_folder_override): (Option<String>, Option<String>) =
+                (None, None);
 
             tokio::spawn(async move {
                 let outcome = pool

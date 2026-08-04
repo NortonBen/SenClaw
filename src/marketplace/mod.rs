@@ -8,9 +8,9 @@
 pub mod app_update;
 pub mod git_sync;
 pub mod hub;
+pub mod manager;
 pub mod publish;
 pub mod registry;
-pub mod manager;
 pub mod types;
 
 pub use hub::DEFAULT_HUB_URL;

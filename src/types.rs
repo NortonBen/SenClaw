@@ -379,7 +379,6 @@ pub struct TaskRunLogInsert {
     pub error: Option<String>,
 }
 
-
 // ===== Background tasks =====
 //
 // Autonomous work SenClaw runs by itself: no chat session, no reply, no user

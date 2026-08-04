@@ -65,7 +65,10 @@ impl BiasNorm {
         let inv_rms = var.rsqrt()?; // var^-0.5
         let clamped = ops::clip(
             &self.log_scale,
-            (Array::from_f32(LOG_SCALE_MIN), Array::from_f32(LOG_SCALE_MAX)),
+            (
+                Array::from_f32(LOG_SCALE_MIN),
+                Array::from_f32(LOG_SCALE_MAX),
+            ),
         )?;
         let scale = clamped.exp()?;
         let scales = inv_rms.multiply(&scale)?;

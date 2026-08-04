@@ -426,8 +426,7 @@ impl BackgroundScheduler {
         if let Err(e) = self.db.insert_background_run(&run) {
             tracing::warn!(task_id = %task.id, error = %e, "[background] synthetic run insert failed");
         }
-        self.events
-            .run_finished(&task.id, &run_id, status, 0, None);
+        self.events.run_finished(&task.id, &run_id, status, 0, None);
     }
 }
 
@@ -561,7 +560,9 @@ mod tests {
             Some(&now.to_rfc3339()),
         );
         let next = plan_next_run(&t, now).unwrap();
-        let next = DateTime::parse_from_rfc3339(&next).unwrap().with_timezone(&Utc);
+        let next = DateTime::parse_from_rfc3339(&next)
+            .unwrap()
+            .with_timezone(&Utc);
         let delta = (next - now).num_seconds();
         assert_eq!(delta, 60, "expected exactly one 60s window, got {delta}s");
     }
@@ -578,7 +579,9 @@ mod tests {
             Some(&stale.to_rfc3339()),
         );
         let next = plan_next_run(&t, now).unwrap();
-        let next = DateTime::parse_from_rfc3339(&next).unwrap().with_timezone(&Utc);
+        let next = DateTime::parse_from_rfc3339(&next)
+            .unwrap()
+            .with_timezone(&Utc);
         assert!(next > now, "next run must be in the future");
         assert!(
             (next - now).num_seconds() <= 300,

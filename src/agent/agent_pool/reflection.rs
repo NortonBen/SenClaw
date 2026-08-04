@@ -203,7 +203,11 @@ mod tests {
         let folder = "test-buffering-folder";
         reflect_push(folder, "User", "SemaClaw deadline khi nào vậy nhỉ?");
         reflect_push(folder, "Assistant", "Theo kế hoạch là tháng 8.");
-        reflect_push(folder, "User", r#"<message sender="an">đồng ý nhé</message>"#);
+        reflect_push(
+            folder,
+            "User",
+            r#"<message sender="an">đồng ý nhé</message>"#,
+        );
 
         let (text, generation) = drain(folder).expect("window exists");
         assert_eq!(generation, 3);
