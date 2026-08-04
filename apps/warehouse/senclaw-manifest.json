@@ -1,0 +1,71 @@
+{
+  "id": "warehouse",
+  "name": "Kho Hàng",
+  "description": "Quản lý kho hàng cục bộ 100%: danh mục sản phẩm (SKU, đơn vị, giá vốn/giá bán, tồn tối thiểu), nhiều kho/chi nhánh, phiếu nhập – xuất – chuyển kho – điều chỉnh kiểm kê (mã NK-/XK-/CK-/DC- tự sinh, nhiều dòng hàng, chặn xuất quá tồn), thẻ kho với số dư luỹ kế, giá vốn bình quân gia quyền, báo cáo nhập-xuất theo tháng, cảnh báo hàng dưới tồn tối thiểu, đối tác nhà cung cấp/khách hàng, phân tích hiệu suất sản phẩm (tự động phân loại tiềm năng / ổn định / bán chậm / tồn đọng không bán được theo tốc độ bán, ngày tồn còn lại, biên lãi) và AI phân tích tồn kho + đánh giá danh mục qua bridge SenClaw. App chỉ GHI SỔ kho — không kết nối sàn TMĐT, không tạo đơn hàng thật.",
+  "icon": "📦",
+  "runtime": {
+    "kind": "server",
+    "start": "./warehouse",
+    "healthPath": "/api/status",
+    "port": 4630
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request"
+    ]
+  },
+  "mcp": {
+    "name": "warehouse-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Warehouse MCP: quản lý kho hàng — sản phẩm (wh_product_*), kho/chi nhánh (wh_warehouse_*), đối tác (wh_partner_*), phiếu nhập/xuất/chuyển/điều chỉnh kiểm kê (wh_move_*), tồn kho + thẻ kho (wh_stock_*), báo cáo nhập-xuất (wh_report_inout), hàng sắp hết (wh_low_stock), dashboard (wh_dashboard), hiệu suất sản phẩm tiềm năng/bán chậm/tồn đọng (wh_product_insight) và AI phân tích (wh_analyze, wh_analyze_products). Toàn bộ là ghi sổ cục bộ — không có tool nào bán hàng hay đặt hàng thật.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "warehouse-manager",
+      "path": "skills/warehouse-manager",
+      "triggers": [
+        "kho hàng",
+        "quản lý kho",
+        "tồn kho",
+        "nhập kho",
+        "xuất kho",
+        "chuyển kho",
+        "kiểm kê",
+        "thẻ kho",
+        "phiếu nhập",
+        "phiếu xuất",
+        "sắp hết hàng",
+        "hết hàng",
+        "tồn tối thiểu",
+        "giá vốn",
+        "nhập xuất tồn",
+        "nhà cung cấp",
+        "sản phẩm tiềm năng",
+        "sản phẩm bán chạy",
+        "hàng tồn đọng",
+        "hàng bán chậm",
+        "hàng ế",
+        "phân tích sản phẩm",
+        "inventory",
+        "stock on hand",
+        "stock card",
+        "warehouse"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "warehouse-keeper",
+      "path": "personas/warehouse-keeper.md",
+      "description": "Thủ kho — ghi sổ nhập/xuất/chuyển kho chính xác bằng tool, theo dõi tồn kho và cảnh báo hàng dưới tồn tối thiểu, kiểm kê và phân tích tồn kho khi được hỏi."
+    }
+  ]
+}
