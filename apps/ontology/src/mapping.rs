@@ -95,23 +95,35 @@ pub struct LiftReport {
 }
 
 fn base_of<'a>(mapping: &'a Mapping, fallback: &'a str) -> &'a str {
-    mapping.base.as_deref().filter(|s| !s.is_empty()).unwrap_or(fallback)
+    mapping
+        .base
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(fallback)
 }
 
 /// Turn a template/absolute string into a full IRI under `base`.
 fn iri_from_template(templ: &str, row: &HashMap<String, String>, base: &str) -> Option<String> {
     let filled = vocab::apply_template(templ, row)?;
-    if filled.starts_with("http://") || filled.starts_with("https://") || filled.starts_with("urn:") {
+    if filled.starts_with("http://") || filled.starts_with("https://") || filled.starts_with("urn:")
+    {
         Some(filled)
     } else {
-        Some(format!("{}{}", base.trim_end_matches('/'), format!("/{}", filled.trim_start_matches('/'))))
+        Some(format!(
+            "{}{}",
+            base.trim_end_matches('/'),
+            format!("/{}", filled.trim_start_matches('/'))
+        ))
     }
 }
 
 fn hashed(base: &str, seg: &str, cols: &[String], row: &HashMap<String, String>) -> Option<String> {
     // Map an absent column to "" (not drop it) so hashing stays positional and
     // stable across ragged rows — otherwise `[a, <missing>]` and `[a]` collide.
-    let parts: Vec<String> = cols.iter().map(|c| row.get(c).cloned().unwrap_or_default()).collect();
+    let parts: Vec<String> = cols
+        .iter()
+        .map(|c| row.get(c).cloned().unwrap_or_default())
+        .collect();
     if parts.is_empty() || parts.iter().all(|p| p.trim().is_empty()) {
         return None;
     }
@@ -120,7 +132,10 @@ fn hashed(base: &str, seg: &str, cols: &[String], row: &HashMap<String, String>)
 }
 
 fn local_name(iri: &str) -> String {
-    iri.rsplit(['#', '/']).next().unwrap_or("entity").to_lowercase()
+    iri.rsplit(['#', '/'])
+        .next()
+        .unwrap_or("entity")
+        .to_lowercase()
 }
 
 /// Build the triples for one triples-map row; returns (subject_iri, [(p,o_term,is_literal_display)]).
@@ -139,7 +154,12 @@ fn row_triples(
             .subject
             .seg
             .clone()
-            .or_else(|| tm.subject.class.as_ref().map(|c| local_name(&vocab::expand(c, prefixes, base))))
+            .or_else(|| {
+                tm.subject
+                    .class
+                    .as_ref()
+                    .map(|c| local_name(&vocab::expand(c, prefixes, base)))
+            })
             .unwrap_or_else(|| "entity".to_string());
         hashed(base, &seg, cols, row)?
     } else {
@@ -177,7 +197,10 @@ fn row_triples(
                     format!("\"{}\"", vocab::escape_literal(val))
                 }
             } else {
-                let dt = obj.datatype.as_ref().map(|d| vocab::expand(d, prefixes, base));
+                let dt = obj
+                    .datatype
+                    .as_ref()
+                    .map(|d| vocab::expand(d, prefixes, base));
                 vocab::literal_term(val, dt.as_deref())
             }
         } else if let Some(t) = &obj.template {
@@ -186,7 +209,10 @@ fn row_triples(
                 None => continue,
             }
         } else if let Some(cols) = &obj.parent_hash {
-            let seg = obj.parent_seg.clone().unwrap_or_else(|| "entity".to_string());
+            let seg = obj
+                .parent_seg
+                .clone()
+                .unwrap_or_else(|| "entity".to_string());
             match hashed(base, &seg, cols, row).and_then(|i| vocab::iri_term(&i)) {
                 Some(x) => x,
                 None => continue,
@@ -230,9 +256,13 @@ pub fn lift(
     let _ = batch_ok;
 
     for tm in &mapping.triples_maps {
-        let table = sources
-            .get(&tm.source)
-            .ok_or_else(|| anyhow!("source '{}' not found for triples-map '{}'", tm.source, tm.name))?;
+        let table = sources.get(&tm.source).ok_or_else(|| {
+            anyhow!(
+                "source '{}' not found for triples-map '{}'",
+                tm.source,
+                tm.name
+            )
+        })?;
         for row in &table.rows {
             let rm = table.row_map(row);
             match row_triples(tm, &rm, &base, &mapping.prefixes) {
@@ -281,9 +311,13 @@ pub fn preview(
     let mut total = 0usize;
     let mut skipped = 0usize;
     'outer: for tm in &mapping.triples_maps {
-        let table = sources
-            .get(&tm.source)
-            .ok_or_else(|| anyhow!("source '{}' not found for triples-map '{}'", tm.source, tm.name))?;
+        let table = sources.get(&tm.source).ok_or_else(|| {
+            anyhow!(
+                "source '{}' not found for triples-map '{}'",
+                tm.source,
+                tm.name
+            )
+        })?;
         for row in table.rows.iter().take(limit) {
             let rm = table.row_map(row);
             match row_triples(tm, &rm, &base, &mapping.prefixes) {
@@ -302,10 +336,19 @@ pub fn preview(
             }
         }
     }
-    Ok(LiftReport { triples: total, subjects: subjects.len(), skipped_rows: skipped, samples })
+    Ok(LiftReport {
+        triples: total,
+        subjects: subjects.len(),
+        skipped_rows: skipped,
+        samples,
+    })
 }
 
-fn flush(graph: &Graph, batch_graph: &str, pending: &mut Vec<(String, String, String)>) -> Result<()> {
+fn flush(
+    graph: &Graph,
+    batch_graph: &str,
+    pending: &mut Vec<(String, String, String)>,
+) -> Result<()> {
     if pending.is_empty() {
         return Ok(());
     }
@@ -345,8 +388,10 @@ mod tests {
     fn malicious_datatype_and_lang_do_not_inject() {
         let g = Graph::new().unwrap();
         // Seed a triple in another graph that a successful `DROP ALL` would erase.
-        g.update("INSERT DATA { GRAPH <urn:keep> { <urn:s> <urn:p> \"v\" } }").unwrap();
-        let evil_dt = "xsd:decimal> } } ; DROP ALL ; INSERT DATA { GRAPH <urn:evil> { <urn:a> <urn:b> \"c";
+        g.update("INSERT DATA { GRAPH <urn:keep> { <urn:s> <urn:p> \"v\" } }")
+            .unwrap();
+        let evil_dt =
+            "xsd:decimal> } } ; DROP ALL ; INSERT DATA { GRAPH <urn:evil> { <urn:a> <urn:b> \"c";
         let mapping: Mapping = serde_json::from_value(serde_json::json!({
             "base": "http://ex",
             "prefixes": { "ex": "http://ex#" },

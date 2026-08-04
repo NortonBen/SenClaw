@@ -11,10 +11,15 @@ import {
   GovernancePanel,
   setPanelNotify,
 } from './panels'
+import { StudioPanel } from './studio'
+import { AssistSidebar } from './assist'
+import { ModelPicker } from './ModelPicker'
+import { LogicPanel } from './logic'
 
 type Toast = { msg: string; err?: boolean } | null
 
 const TABS = [
+  { key: 'studio', step: 0, label: 'Studio', icon: '✨' },
   { key: 'sources', step: 1, label: 'Sources', icon: '📥' },
   { key: 'tbox', step: 2, label: 'Ontology', icon: '🕸️' },
   { key: 'mapping', step: 3, label: 'Mapping', icon: '🔀' },
@@ -22,6 +27,7 @@ const TABS = [
   { key: 'competency', step: 5, label: 'Competency', icon: '✅' },
   { key: 'validate', step: 6, label: 'Validate', icon: '🛡️' },
   { key: 'governance', step: 7, label: 'Reason & Provenance', icon: '🧬' },
+  { key: 'logic', step: 8, label: 'Logic', icon: '⚙️' },
 ] as const
 
 type TabKey = (typeof TABS)[number]['key']
@@ -29,8 +35,10 @@ type TabKey = (typeof TABS)[number]['key']
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([])
   const [pid, setPid] = useState<number | null>(null)
-  const [tab, setTab] = useState<TabKey>('sources')
+  const [tab, setTab] = useState<TabKey>('studio')
   const [toast, setToast] = useState<Toast>(null)
+  const [assistOpen, setAssistOpen] = useState(false)
+  const [selection, setSelection] = useState<string | undefined>()
   const [theme, setTheme] = useState<'light' | 'dark'>(
     () => (document.documentElement.getAttribute('data-theme') as 'light' | 'dark') || 'light',
   )
@@ -112,11 +120,14 @@ export default function App() {
             </div>
           ))}
         </div>
-        <div className="foot">
-          <button className="primary" style={{ flex: 1 }} onClick={createProject}>＋ New project</button>
-          <button className="ghost" title="Toggle theme" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-            {theme === 'dark' ? '☀' : '☾'}
-          </button>
+        <div className="foot" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+          <ModelPicker notify={notify} />
+          <div className="row" style={{ gap: 8 }}>
+            <button className="primary" style={{ flex: 1 }} onClick={createProject}>＋ New project</button>
+            <button className="ghost" title="Toggle theme" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+              {theme === 'dark' ? '☀' : '☾'}
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -126,15 +137,27 @@ export default function App() {
             <nav className="tabs">
               {TABS.map((t) => (
                 <div key={t.key} className={'tab' + (tab === t.key ? ' active' : '')} onClick={() => setTab(t.key)}>
-                  <span className="step">{t.step}</span>
+                  {t.step > 0 && <span className="step">{t.step}</span>}
                   <span>{t.icon} {t.label}</span>
                 </div>
               ))}
               <div className="spacer" />
               <a className="tab" href={api.exportUrl(current.id)} target="_blank" rel="noreferrer" title="Download TriG">⬇ Export</a>
+              <div
+                className={'tab' + (assistOpen ? ' active' : '')}
+                title="AIP Assist — context-aware help about this project's metadata"
+                onClick={() => setAssistOpen((o) => !o)}
+              >
+                ◆ Assist
+              </div>
             </nav>
             <div className="content" key={current.id + tab}>
-              {tab === 'sources' && <SourcesPanel pid={current.id} notify={notify} onChanged={refresh} />}
+              {tab === 'studio' && (
+                <StudioPanel pid={current.id} notify={notify} onChanged={refresh} onGoTo={setTab} />
+              )}
+              {tab === 'sources' && (
+                <SourcesPanel pid={current.id} notify={notify} onChanged={refresh} onSelection={setSelection} />
+              )}
               {tab === 'tbox' && <TboxPanel pid={current.id} notify={notify} onChanged={refresh} />}
               {tab === 'mapping' && <MappingPanel pid={current.id} notify={notify} onChanged={refresh} />}
               {tab === 'explore' && <ExplorerPanel pid={current.id} notify={notify} onChanged={refresh} />}
@@ -143,20 +166,33 @@ export default function App() {
               {tab === 'governance' && (
                 <GovernancePanel pid={current.id} notify={notify} onChanged={refresh} onDeleteProject={() => deleteProject(current.id)} />
               )}
+              {tab === 'logic' && <LogicPanel pid={current.id} notify={notify} onChanged={refresh} />}
             </div>
           </>
         ) : (
           <div className="empty" style={{ margin: 'auto' }}>
             <div className="big">◎</div>
-            <h2>Design an ontology, lift your data into it</h2>
+            <h2>Drop your data in, ask it questions</h2>
             <p style={{ maxWidth: 460 }}>
-              Profile a CSV/JSON source, design the T-Box from competency questions, map raw rows to RDF, validate with
-              SHACL, reason, and query with SPARQL — all provenance-tracked.
+              Any file — spreadsheet, JSON, XML, PDF, Word, prose — is profiled, modelled into an ontology, lifted into
+              RDF and validated for you. Then just ask, in plain language. Every step stays open for review, and every
+              triple keeps its provenance.
             </p>
             <button className="primary" onClick={createProject}>＋ Create your first project</button>
           </div>
         )}
       </main>
+
+      {current && (
+        <AssistSidebar
+          pid={current.id}
+          tab={tab}
+          source={selection}
+          open={assistOpen}
+          onClose={() => setAssistOpen(false)}
+          onGoTo={(t) => setTab(t as TabKey)}
+        />
+      )}
 
       {toast && <div className={'toast' + (toast.err ? ' err' : '')}>{toast.msg}</div>}
     </div>

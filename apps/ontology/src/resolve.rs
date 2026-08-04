@@ -13,7 +13,11 @@ use std::collections::HashMap;
 pub const RESOLUTION_GRAPH: &str = "urn:senclaw:ontology:resolution";
 
 fn normalize(s: &str) -> String {
-    s.trim().to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+    s.trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Find likely-duplicate pairs of individuals of `class` compared on
@@ -65,7 +69,11 @@ pub fn candidates(
                 }
                 let score = strsim::jaro_winkler(&normalize(la), &normalize(lb));
                 if score >= threshold {
-                    let (x, y) = if iri_a <= iri_b { (iri_a, iri_b) } else { (iri_b, iri_a) };
+                    let (x, y) = if iri_a <= iri_b {
+                        (iri_a, iri_b)
+                    } else {
+                        (iri_b, iri_a)
+                    };
                     pairs.push(serde_json::json!({
                         "a": x, "b": y,
                         "labelA": if iri_a <= iri_b { la } else { lb },
@@ -77,7 +85,11 @@ pub fn candidates(
         }
     }
     pairs.sort_by(|x, y| {
-        y["score"].as_f64().unwrap_or(0.0).partial_cmp(&x["score"].as_f64().unwrap_or(0.0)).unwrap()
+        y["score"]
+            .as_f64()
+            .unwrap_or(0.0)
+            .partial_cmp(&x["score"].as_f64().unwrap_or(0.0))
+            .unwrap()
     });
     pairs.truncate(200);
     Ok(serde_json::json!({ "count": pairs.len(), "pairs": pairs }))
@@ -103,7 +115,9 @@ pub fn apply(
         }
     }
     if n > 0 {
-        graph.update(&format!("INSERT DATA {{ GRAPH <{RESOLUTION_GRAPH}> {{\n{body}}} }}"))?;
+        graph.update(&format!(
+            "INSERT DATA {{ GRAPH <{RESOLUTION_GRAPH}> {{\n{body}}} }}"
+        ))?;
     }
     Ok(n)
 }
@@ -128,8 +142,14 @@ mod tests {
         let cand = candidates(&g, "http://ex/", &pfx, "ex:Supplier", "rdfs:label", 0.9).unwrap();
         assert_eq!(cand["count"], 1);
         assert_eq!(cand["pairs"][0]["a"], "http://ex/s/1");
-        let n = apply(&g, "http://ex/", &pfx, "skos:closeMatch",
-            &[("http://ex/s/1".into(), "http://ex/s/2".into())]).unwrap();
+        let n = apply(
+            &g,
+            "http://ex/",
+            &pfx,
+            "skos:closeMatch",
+            &[("http://ex/s/1".into(), "http://ex/s/2".into())],
+        )
+        .unwrap();
         assert_eq!(n, 1);
     }
 }

@@ -47,7 +47,9 @@ pub fn parse_csv(content: &str) -> Result<Table> {
 /// Parse a JSON array of flat objects into a `Table` (union of keys as headers).
 pub fn parse_json(content: &str) -> Result<Table> {
     let v: serde_json::Value = serde_json::from_str(content).map_err(|e| anyhow!("json: {e}"))?;
-    let arr = v.as_array().ok_or_else(|| anyhow!("expected a JSON array of objects"))?;
+    let arr = v
+        .as_array()
+        .ok_or_else(|| anyhow!("expected a JSON array of objects"))?;
     let mut headers: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for item in arr {
@@ -75,9 +77,34 @@ pub fn parse_json(content: &str) -> Result<Table> {
     Ok(Table { headers, rows })
 }
 
+/// Unstructured text as a degenerate one-column table: one row per paragraph.
+/// Text sources are handled by the LLM extraction path, not the mapping DSL —
+/// this exists so profiling/preview never panics on them, and so a text source
+/// can still be *seen* in the UI next to the tabular ones.
+pub fn parse_text(content: &str) -> Table {
+    // Blank-line separated where the document has blank lines; otherwise every
+    // line is its own block, so a single-spaced document does not report as one
+    // giant "paragraph".
+    let split: Box<dyn Iterator<Item = &str>> = if content.contains("\n\n") {
+        Box::new(content.split("\n\n"))
+    } else {
+        Box::new(content.lines())
+    };
+    let rows = split
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .map(|p| vec![p.to_string()])
+        .collect();
+    Table {
+        headers: vec!["text".to_string()],
+        rows,
+    }
+}
+
 pub fn parse(kind: &str, content: &str) -> Result<Table> {
     match kind {
         "json" => parse_json(content),
+        "text" => Ok(parse_text(content)),
         _ => parse_csv(content),
     }
 }
@@ -184,7 +211,8 @@ pub fn profile(table: &Table) -> Vec<ColumnProfile> {
             || lname.contains("code")
             || lname.contains("mst")
             || lname.contains("uuid");
-        let looks_fk = (lname.ends_with("_id") || lname.ends_with("id")) && !is_unique && lname != "id";
+        let looks_fk =
+            (lname.ends_with("_id") || lname.ends_with("id")) && !is_unique && lname != "id";
         let role = if is_unique && looks_id {
             "identifier"
         } else if looks_fk {
@@ -234,6 +262,17 @@ mod tests {
         let status = p.iter().find(|c| c.name == "status").unwrap();
         assert!(status.is_enum);
         assert_eq!(status.role, "enum");
+    }
+
+    #[test]
+    fn text_sources_profile_without_panicking() {
+        let t = parse("text", "Đoạn một.\n\nĐoạn hai.\n").unwrap();
+        assert_eq!(t.headers, vec!["text"]);
+        assert_eq!(t.rows.len(), 2);
+        // A single-spaced document counts its lines, not itself.
+        let t2 = parse("text", "dòng 1\ndòng 2\ndòng 3").unwrap();
+        assert_eq!(t2.rows.len(), 3);
+        assert_eq!(profile(&t2).len(), 1);
     }
 
     #[test]

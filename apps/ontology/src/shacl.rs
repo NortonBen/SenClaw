@@ -110,8 +110,16 @@ pub fn validate(
                     "SELECT ?f (COUNT(DISTINCT ?v) AS ?n) WHERE {{ ?f a {tc_t} . OPTIONAL {{ ?f {path_t} ?v }} }} \
                      GROUP BY ?f HAVING (COUNT(DISTINCT ?v) < {m}) LIMIT {LIMIT}"
                 );
-                push_violations(graph, &mut violations, &q, "f", None, &path, "minCount",
-                    format!("fewer than {m} value(s) for {}", pc.path))?;
+                push_violations(
+                    graph,
+                    &mut violations,
+                    &q,
+                    "f",
+                    None,
+                    &path,
+                    "minCount",
+                    format!("fewer than {m} value(s) for {}", pc.path),
+                )?;
             }
             if let Some(mx) = pc.max_count {
                 checked += 1;
@@ -119,8 +127,16 @@ pub fn validate(
                     "SELECT ?f (COUNT(DISTINCT ?v) AS ?n) WHERE {{ ?f a {tc_t} . OPTIONAL {{ ?f {path_t} ?v }} }} \
                      GROUP BY ?f HAVING (COUNT(DISTINCT ?v) > {mx}) LIMIT {LIMIT}"
                 );
-                push_violations(graph, &mut violations, &q, "f", None, &path, "maxCount",
-                    format!("more than {mx} value(s) for {}", pc.path))?;
+                push_violations(
+                    graph,
+                    &mut violations,
+                    &q,
+                    "f",
+                    None,
+                    &path,
+                    "maxCount",
+                    format!("more than {mx} value(s) for {}", pc.path),
+                )?;
             }
             if let Some(dt) = &pc.datatype {
                 checked += 1;
@@ -129,8 +145,16 @@ pub fn validate(
                     "SELECT ?f ?v WHERE {{ ?f a {tc_t} ; {path_t} ?v . \
                      FILTER(!isLiteral(?v) || datatype(?v) != <{dti}>) }} LIMIT {LIMIT}"
                 );
-                push_violations(graph, &mut violations, &q, "f", Some("v"), &path, "datatype",
-                    format!("value is not a {dt} literal"))?;
+                push_violations(
+                    graph,
+                    &mut violations,
+                    &q,
+                    "f",
+                    Some("v"),
+                    &path,
+                    "datatype",
+                    format!("value is not a {dt} literal"),
+                )?;
             }
             if let Some(cl) = &pc.class {
                 checked += 1;
@@ -139,8 +163,16 @@ pub fn validate(
                     "SELECT ?f ?v WHERE {{ ?f a {tc_t} ; {path_t} ?v . \
                      FILTER((!isIRI(?v) && !isBlank(?v)) || NOT EXISTS {{ ?v a <{cli}> }}) }} LIMIT {LIMIT}"
                 );
-                push_violations(graph, &mut violations, &q, "f", Some("v"), &path, "class",
-                    format!("value is not a {cl}"))?;
+                push_violations(
+                    graph,
+                    &mut violations,
+                    &q,
+                    "f",
+                    Some("v"),
+                    &path,
+                    "class",
+                    format!("value is not a {cl}"),
+                )?;
             }
             if let Some(nk) = &pc.node_kind {
                 // Includes SHACL's three combined kinds. An unrecognized value is
@@ -158,8 +190,21 @@ pub fn validate(
                 let q = format!(
                     "SELECT ?f ?v WHERE {{ ?f a {tc_t} ; {path_t} ?v . FILTER({filt}) }} LIMIT {LIMIT}"
                 );
-                let msg = if filt == "true" { format!("unknown nodeKind '{nk}'") } else { format!("value is not a {nk}") };
-                push_violations(graph, &mut violations, &q, "f", Some("v"), &path, "nodeKind", msg)?;
+                let msg = if filt == "true" {
+                    format!("unknown nodeKind '{nk}'")
+                } else {
+                    format!("value is not a {nk}")
+                };
+                push_violations(
+                    graph,
+                    &mut violations,
+                    &q,
+                    "f",
+                    Some("v"),
+                    &path,
+                    "nodeKind",
+                    msg,
+                )?;
             }
             if let Some(min) = pc.min_inclusive {
                 checked += 1;
@@ -170,8 +215,16 @@ pub fn validate(
                     "SELECT ?f ?v WHERE {{ ?f a {tc_t} ; {path_t} ?v . \
                      FILTER(isLiteral(?v) && (!isNumeric(?v) || ?v < {min})) }} LIMIT {LIMIT}"
                 );
-                push_violations(graph, &mut violations, &q, "f", Some("v"), &path, "minInclusive",
-                    format!("value below minimum {min} (or not numeric)"))?;
+                push_violations(
+                    graph,
+                    &mut violations,
+                    &q,
+                    "f",
+                    Some("v"),
+                    &path,
+                    "minInclusive",
+                    format!("value below minimum {min} (or not numeric)"),
+                )?;
             }
             if let Some(max) = pc.max_inclusive {
                 checked += 1;
@@ -179,8 +232,16 @@ pub fn validate(
                     "SELECT ?f ?v WHERE {{ ?f a {tc_t} ; {path_t} ?v . \
                      FILTER(isLiteral(?v) && (!isNumeric(?v) || ?v > {max})) }} LIMIT {LIMIT}"
                 );
-                push_violations(graph, &mut violations, &q, "f", Some("v"), &path, "maxInclusive",
-                    format!("value above maximum {max} (or not numeric)"))?;
+                push_violations(
+                    graph,
+                    &mut violations,
+                    &q,
+                    "f",
+                    Some("v"),
+                    &path,
+                    "maxInclusive",
+                    format!("value above maximum {max} (or not numeric)"),
+                )?;
             }
             if let Some(pat) = &pc.pattern {
                 checked += 1;
@@ -189,8 +250,16 @@ pub fn validate(
                     "SELECT ?f ?v WHERE {{ ?f a {tc_t} ; {path_t} ?v . \
                      FILTER(!REGEX(STR(?v), \"{esc}\")) }} LIMIT {LIMIT}"
                 );
-                push_violations(graph, &mut violations, &q, "f", Some("v"), &path, "pattern",
-                    format!("value does not match /{pat}/"))?;
+                push_violations(
+                    graph,
+                    &mut violations,
+                    &q,
+                    "f",
+                    Some("v"),
+                    &path,
+                    "pattern",
+                    format!("value does not match /{pat}/"),
+                )?;
             }
         }
     }

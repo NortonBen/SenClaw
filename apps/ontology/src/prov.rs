@@ -16,7 +16,10 @@ pub fn batch_iri(ts: i64, label: &str) -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("urn:senclaw:ontology:batch:{ts}-{}-{n}", vocab::encode_segment(label))
+    format!(
+        "urn:senclaw:ontology:batch:{ts}-{}-{n}",
+        vocab::encode_segment(label)
+    )
 }
 
 const GENERATED_AT: &str = "urn:senclaw:ontology:prop:generatedAt"; // epoch secs (xsd:integer)
@@ -55,21 +58,44 @@ pub fn record_batch(
 ) -> Result<()> {
     let b = vocab::iri_term(batch).ok_or_else(|| anyhow!("bad batch iri"))?;
     let mut body = String::new();
-    body.push_str(&format!("{b} <{}type> <{}Entity> .\n", vocab::RDF, vocab::PROV));
-    body.push_str(&format!("{b} <{}label> \"{}\" .\n", vocab::RDFS, vocab::escape_literal(label)));
+    body.push_str(&format!(
+        "{b} <{}type> <{}Entity> .\n",
+        vocab::RDF,
+        vocab::PROV
+    ));
+    body.push_str(&format!(
+        "{b} <{}label> \"{}\" .\n",
+        vocab::RDFS,
+        vocab::escape_literal(label)
+    ));
     if !source.is_empty() {
-        body.push_str(&format!("{b} <{}wasDerivedFrom> \"{}\" .\n", vocab::PROV, vocab::escape_literal(source)));
+        body.push_str(&format!(
+            "{b} <{}wasDerivedFrom> \"{}\" .\n",
+            vocab::PROV,
+            vocab::escape_literal(source)
+        ));
     }
-    body.push_str(&format!("{b} <{ACTIVITY}> \"{}\" .\n", vocab::escape_literal(activity)));
+    body.push_str(&format!(
+        "{b} <{ACTIVITY}> \"{}\" .\n",
+        vocab::escape_literal(activity)
+    ));
     body.push_str(&format!(
         "{b} <{}generatedAtTime> \"{}\"^^<{}dateTime> .\n",
         vocab::PROV,
         epoch_to_iso(ts),
         vocab::XSD
     ));
-    body.push_str(&format!("{b} <{GENERATED_AT}> \"{ts}\"^^<{}integer> .\n", vocab::XSD));
-    body.push_str(&format!("{b} <{TRIPLE_COUNT}> \"{triple_count}\"^^<{}integer> .\n", vocab::XSD));
-    graph.update(&format!("INSERT DATA {{ GRAPH <{PROV_GRAPH}> {{\n{body}}} }}"))?;
+    body.push_str(&format!(
+        "{b} <{GENERATED_AT}> \"{ts}\"^^<{}integer> .\n",
+        vocab::XSD
+    ));
+    body.push_str(&format!(
+        "{b} <{TRIPLE_COUNT}> \"{triple_count}\"^^<{}integer> .\n",
+        vocab::XSD
+    ));
+    graph.update(&format!(
+        "INSERT DATA {{ GRAPH <{PROV_GRAPH}> {{\n{body}}} }}"
+    ))?;
     Ok(())
 }
 
@@ -108,7 +134,9 @@ pub fn list_batches(graph: &Graph) -> Result<serde_json::Value> {
 pub fn drop_batch(graph: &Graph, batch: &str) -> Result<()> {
     let b = vocab::iri_term(batch).ok_or_else(|| anyhow!("bad batch iri"))?;
     graph.update(&format!("DROP SILENT GRAPH <{batch}>"))?;
-    graph.update(&format!("DELETE WHERE {{ GRAPH <{PROV_GRAPH}> {{ {b} ?p ?o }} }}"))?;
+    graph.update(&format!(
+        "DELETE WHERE {{ GRAPH <{PROV_GRAPH}> {{ {b} ?p ?o }} }}"
+    ))?;
     Ok(())
 }
 
@@ -128,8 +156,20 @@ mod tests {
     fn record_list_drop() {
         let g = Graph::new().unwrap();
         let b = batch_iri(1_784_937_600, "products.csv");
-        g.update(&format!("INSERT DATA {{ GRAPH <{b}> {{ <urn:x> <urn:p> \"v\" }} }}")).unwrap();
-        record_batch(&g, &b, "products.csv", "products.csv", "lift", 1, 1_784_937_600).unwrap();
+        g.update(&format!(
+            "INSERT DATA {{ GRAPH <{b}> {{ <urn:x> <urn:p> \"v\" }} }}"
+        ))
+        .unwrap();
+        record_batch(
+            &g,
+            &b,
+            "products.csv",
+            "products.csv",
+            "lift",
+            1,
+            1_784_937_600,
+        )
+        .unwrap();
         let list = list_batches(&g).unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1);
         assert_eq!(list[0]["tripleCount"], 1);

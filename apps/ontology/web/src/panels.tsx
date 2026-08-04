@@ -4,7 +4,13 @@ import { api } from './api'
 import type { Batch, Column, CompetencyQuestion, Source, SparqlResult, Tbox } from './api'
 import { GraphViz } from './GraphViz'
 
-export type PanelProps = { pid: number; notify: (m: string, err?: boolean) => void; onChanged: () => void }
+export type PanelProps = {
+  pid: number
+  notify: (m: string, err?: boolean) => void
+  onChanged: () => void
+  /** Report what the user has selected, so AIP Assist can use it as context. */
+  onSelection?: (name?: string) => void
+}
 
 // ---- shared bits ----------------------------------------------------------
 
@@ -65,9 +71,15 @@ function useLoad<T>(fn: () => Promise<T>, deps: unknown[], notify: PanelProps['n
 
 // ---- [1] Sources ----------------------------------------------------------
 
-export function SourcesPanel({ pid, notify, onChanged }: PanelProps) {
+export function SourcesPanel({ pid, notify, onChanged, onSelection }: PanelProps) {
   const [sources, reload] = useLoad(() => api.listSources(pid), [pid], notify)
   const [sel, setSel] = useState<Source | null>(null)
+
+  // Tell the shell which source is open — AIP Assist ranks its metadata higher.
+  useEffect(() => {
+    onSelection?.(sel?.name)
+    return () => onSelection?.(undefined)
+  }, [sel?.name, onSelection])
   const [name, setName] = useState('')
   const [content, setContent] = useState('')
   const [llmRoles, setLlmRoles] = useState<Record<string, { role: string; note: string; suggestedClass?: string }>>({})

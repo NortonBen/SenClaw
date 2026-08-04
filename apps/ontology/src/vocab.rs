@@ -37,8 +37,20 @@ pub fn is_absolute_iri(c: &str) -> bool {
             !rest.is_empty()
                 && matches!(
                     scheme,
-                    "urn" | "mailto" | "tag" | "did" | "doi" | "info" | "geo" | "tel"
-                        | "data" | "file" | "ftp" | "ftps" | "ws" | "wss"
+                    "urn"
+                        | "mailto"
+                        | "tag"
+                        | "did"
+                        | "doi"
+                        | "info"
+                        | "geo"
+                        | "tel"
+                        | "data"
+                        | "file"
+                        | "ftp"
+                        | "ftps"
+                        | "ws"
+                        | "wss"
                 )
         }
         None => false,
@@ -62,13 +74,18 @@ pub fn valid_prefix_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
         && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// Expand a possibly-prefixed name (`ex:Product`, `rdfs:label`) or a bare IRI
 /// (`http://…`) into a full IRI, using the supplied prefix map. A value with no
 /// colon is treated as relative to `base`.
-pub fn expand(curie: &str, prefixes: &std::collections::HashMap<String, String>, base: &str) -> String {
+pub fn expand(
+    curie: &str,
+    prefixes: &std::collections::HashMap<String, String>,
+    base: &str,
+) -> String {
     let c = curie.trim();
     if is_absolute_iri(c) {
         return c.to_string();
@@ -90,7 +107,11 @@ pub fn expand(curie: &str, prefixes: &std::collections::HashMap<String, String>,
         }
         // Unknown prefix but looks like scheme-less curie → fall through.
     }
-    format!("{}{}", base.trim_end_matches(['/', '#']).to_string() + "/", encode_segment(c))
+    format!(
+        "{}{}",
+        base.trim_end_matches(['/', '#']).to_string() + "/",
+        encode_segment(c)
+    )
 }
 
 /// Make one path segment safe inside an IRI: keep unreserved chars, percent-ish
@@ -118,7 +139,12 @@ pub fn hashed_iri(base: &str, seg: &str, parts: &[&str]) -> String {
         h.update([0x1f]);
     }
     let digest = hex::encode(&h.finalize()[..8]);
-    format!("{}/{}/{}", base.trim_end_matches('/'), encode_segment(seg), digest)
+    format!(
+        "{}/{}/{}",
+        base.trim_end_matches('/'),
+        encode_segment(seg),
+        digest
+    )
 }
 
 /// `<iri>` for SPARQL, validating there is no `>` / whitespace that would break
@@ -178,8 +204,13 @@ pub fn ensure_prefixes(query: &str, extra: &std::collections::HashMap<String, St
     }
     let mut prologue = String::new();
     for (name, ns) in [
-        ("rdf", RDF), ("rdfs", RDFS), ("owl", OWL), ("xsd", XSD),
-        ("skos", SKOS), ("prov", PROV), ("sh", SH),
+        ("rdf", RDF),
+        ("rdfs", RDFS),
+        ("owl", OWL),
+        ("xsd", XSD),
+        ("skos", SKOS),
+        ("prov", PROV),
+        ("sh", SH),
     ] {
         if !declared.contains(name) {
             prologue.push_str(&format!("PREFIX {name}: <{ns}>\n"));
@@ -235,7 +266,10 @@ mod tests {
     fn template_and_encode() {
         let mut row = HashMap::new();
         row.insert("sku".to_string(), "AB 12/x".to_string());
-        assert_eq!(apply_template("product/{sku}", &row).unwrap(), "product/AB_12_x");
+        assert_eq!(
+            apply_template("product/{sku}", &row).unwrap(),
+            "product/AB_12_x"
+        );
         row.insert("empty".to_string(), "".to_string());
         assert!(apply_template("x/{empty}", &row).is_none());
         assert!(apply_template("x/{missing}", &row).is_none());
@@ -252,8 +286,14 @@ mod tests {
     fn expand_curie() {
         let mut p = HashMap::new();
         p.insert("ex".to_string(), "http://example.org/shop#".to_string());
-        assert_eq!(expand("ex:Product", &p, "http://b/"), "http://example.org/shop#Product");
-        assert_eq!(expand("rdfs:label", &p, "http://b/"), format!("{RDFS}label"));
+        assert_eq!(
+            expand("ex:Product", &p, "http://b/"),
+            "http://example.org/shop#Product"
+        );
+        assert_eq!(
+            expand("rdfs:label", &p, "http://b/"),
+            format!("{RDFS}label")
+        );
         assert_eq!(expand("http://x/y", &p, "http://b/"), "http://x/y");
         // absolute non-http schemes are preserved, not mangled to base-relative.
         assert_eq!(expand("urn:isbn:123", &p, "http://b/"), "urn:isbn:123");
@@ -270,7 +310,10 @@ mod tests {
         assert!(!term.contains("DROP"));
         assert!(!term.contains("^^"));
         // a valid datatype still types the literal.
-        assert_eq!(literal_term("100", Some(XSD_DECIMAL)), format!("\"100\"^^<{XSD_DECIMAL}>"));
+        assert_eq!(
+            literal_term("100", Some(XSD_DECIMAL)),
+            format!("\"100\"^^<{XSD_DECIMAL}>")
+        );
     }
 
     const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
@@ -281,7 +324,9 @@ mod tests {
         assert!(valid_langtag("en-US"));
         assert!(valid_langtag("vi"));
         // injection attempt via a langtag is rejected.
-        assert!(!valid_langtag("en } } ; DROP ALL ; INSERT DATA { GRAPH <x> {"));
+        assert!(!valid_langtag(
+            "en } } ; DROP ALL ; INSERT DATA { GRAPH <x> {"
+        ));
         assert!(!valid_langtag("en\"@"));
         assert!(!valid_langtag(""));
 
@@ -292,7 +337,10 @@ mod tests {
 
         // ensure_prefixes drops an unsafe project prefix instead of injecting it.
         let mut bad = HashMap::new();
-        bad.insert("evil> <urn:x".to_string(), "http://x> } DROP ALL".to_string());
+        bad.insert(
+            "evil> <urn:x".to_string(),
+            "http://x> } DROP ALL".to_string(),
+        );
         let out = ensure_prefixes("SELECT * WHERE {?s ?p ?o}", &bad);
         assert!(!out.contains("DROP"));
         assert!(out.contains("PREFIX rdfs:"));

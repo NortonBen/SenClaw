@@ -75,7 +75,14 @@ pub fn add_class(
 ) -> Result<String> {
     let iri = vocab::expand(&c.iri, prefixes, base);
     let mut body = String::new();
-    body.push_str(&triple(&iri, &format!("{}type", vocab::RDF), &format!("{}Class", vocab::OWL)).ok_or_else(|| anyhow!("bad class iri: {}", c.iri))?);
+    body.push_str(
+        &triple(
+            &iri,
+            &format!("{}type", vocab::RDF),
+            &format!("{}Class", vocab::OWL),
+        )
+        .ok_or_else(|| anyhow!("bad class iri: {}", c.iri))?,
+    );
     if let Some(l) = &c.label {
         if let Some(t) = triple_lit(&iri, &format!("{}label", vocab::RDFS), l) {
             body.push_str(&t);
@@ -92,7 +99,9 @@ pub fn add_class(
             body.push_str(&t);
         }
     }
-    graph.update(&format!("INSERT DATA {{ GRAPH <{TBOX_GRAPH}> {{\n{body}}} }}"))?;
+    graph.update(&format!(
+        "INSERT DATA {{ GRAPH <{TBOX_GRAPH}> {{\n{body}}} }}"
+    ))?;
     Ok(iri)
 }
 
@@ -109,16 +118,16 @@ pub fn add_property(
         _ => format!("{}ObjectProperty", vocab::OWL),
     };
     let mut body = String::new();
-    body.push_str(&triple(&iri, &format!("{}type", vocab::RDF), &ty).ok_or_else(|| anyhow!("bad property iri: {}", p.iri))?);
+    body.push_str(
+        &triple(&iri, &format!("{}type", vocab::RDF), &ty)
+            .ok_or_else(|| anyhow!("bad property iri: {}", p.iri))?,
+    );
     if let Some(l) = &p.label {
         if let Some(t) = triple_lit(&iri, &format!("{}label", vocab::RDFS), l) {
             body.push_str(&t);
         }
     }
-    for (pred, val) in [
-        ("domain", &p.domain),
-        ("range", &p.range),
-    ] {
+    for (pred, val) in [("domain", &p.domain), ("range", &p.range)] {
         if let Some(v) = val {
             let vi = vocab::expand(v, prefixes, base);
             if let Some(t) = triple(&iri, &format!("{}{}", vocab::RDFS, pred), &vi) {
@@ -138,7 +147,9 @@ pub fn add_property(
             body.push_str(&t);
         }
     }
-    graph.update(&format!("INSERT DATA {{ GRAPH <{TBOX_GRAPH}> {{\n{body}}} }}"))?;
+    graph.update(&format!(
+        "INSERT DATA {{ GRAPH <{TBOX_GRAPH}> {{\n{body}}} }}"
+    ))?;
     Ok(iri)
 }
 
@@ -164,7 +175,12 @@ pub fn apply_draft(
 }
 
 /// Delete a class or property (all triples with it as subject) from the T-Box.
-pub fn remove_term(graph: &Graph, base: &str, prefixes: &HashMap<String, String>, iri: &str) -> Result<()> {
+pub fn remove_term(
+    graph: &Graph,
+    base: &str,
+    prefixes: &HashMap<String, String>,
+    iri: &str,
+) -> Result<()> {
     let full = vocab::expand(iri, prefixes, base);
     let term = vocab::iri_term(&full).ok_or_else(|| anyhow!("bad iri"))?;
     graph.update(&format!(
@@ -189,6 +205,57 @@ pub fn read(graph: &Graph) -> Result<serde_json::Value> {
     Ok(serde_json::json!({
         "classes": collapse(&classes, "c", &["label", "super"]),
         "properties": collapse(&props, "p", &["kind", "label", "domain", "range"]),
+    }))
+}
+
+/// The schema the data **actually uses**: classes and predicates observed in
+/// the A-Box with their counts and a sample value, excluding the T-Box and
+/// provenance graphs.
+///
+/// The designed T-Box says what *should* be there; this says what *is*. Feeding
+/// both to the LLM is the difference between a query that runs and one that
+/// silently returns nothing because it used a predicate nobody minted.
+/// (Counts come from the union-of-graphs view, so a triple duplicated across
+/// batches counts twice — they are a magnitude hint, not an exact tally.)
+pub fn live_schema(graph: &Graph) -> Result<serde_json::Value> {
+    let exclude = format!(
+        "FILTER(?g != <{TBOX_GRAPH}> && ?g != <{}> && ?g != <{}>)",
+        crate::graph::PROV_GRAPH,
+        crate::reason::INFERRED_GRAPH
+    );
+    let classes = graph.query_json(&format!(
+        "{}SELECT ?class (COUNT(?s) AS ?count) WHERE {{ GRAPH ?g {{ ?s a ?class }} {exclude} }} \
+         GROUP BY ?class ORDER BY DESC(?count) LIMIT 60",
+        vocab::PREFIXES
+    ))?;
+    let predicates = graph.query_json(&format!(
+        "{}SELECT ?predicate (COUNT(*) AS ?count) (SAMPLE(?o) AS ?example) WHERE {{ \
+         GRAPH ?g {{ ?s ?predicate ?o }} {exclude} FILTER(?predicate != rdf:type) }} \
+         GROUP BY ?predicate ORDER BY DESC(?count) LIMIT 120",
+        vocab::PREFIXES
+    ))?;
+    let flatten = |rows: &serde_json::Value, key: &str, extra: &[&str]| -> serde_json::Value {
+        let mut out = Vec::new();
+        if let Some(rows) = rows["rows"].as_array() {
+            for r in rows {
+                let Some(iri) = r[key]["value"].as_str() else {
+                    continue;
+                };
+                let mut o = serde_json::Map::new();
+                o.insert(key.into(), iri.into());
+                for e in extra {
+                    if let Some(v) = r[*e]["value"].as_str() {
+                        o.insert((*e).into(), v.into());
+                    }
+                }
+                out.push(serde_json::Value::Object(o));
+            }
+        }
+        serde_json::Value::Array(out)
+    };
+    Ok(serde_json::json!({
+        "classes": flatten(&classes, "class", &["count"]),
+        "predicates": flatten(&predicates, "predicate", &["count", "example"]),
     }))
 }
 
@@ -229,25 +296,88 @@ mod tests {
         let g = Graph::new().unwrap();
         let mut pfx = HashMap::new();
         pfx.insert("ex".into(), "http://ex/shop#".into());
-        add_class(&g, "http://ex/shop", &pfx, &ClassDef {
-            iri: "ex:Product".into(),
-            label: Some("Product".into()),
-            comment: None,
-            sub_class_of: None,
-        }).unwrap();
-        add_property(&g, "http://ex/shop", &pfx, &PropertyDef {
-            iri: "ex:hasPrice".into(),
-            kind: "data".into(),
-            label: Some("has price".into()),
-            domain: Some("ex:Product".into()),
-            range: Some("xsd:decimal".into()),
-            sub_property_of: None,
-            inverse_of: None,
-        }).unwrap();
+        add_class(
+            &g,
+            "http://ex/shop",
+            &pfx,
+            &ClassDef {
+                iri: "ex:Product".into(),
+                label: Some("Product".into()),
+                comment: None,
+                sub_class_of: None,
+            },
+        )
+        .unwrap();
+        add_property(
+            &g,
+            "http://ex/shop",
+            &pfx,
+            &PropertyDef {
+                iri: "ex:hasPrice".into(),
+                kind: "data".into(),
+                label: Some("has price".into()),
+                domain: Some("ex:Product".into()),
+                range: Some("xsd:decimal".into()),
+                sub_property_of: None,
+                inverse_of: None,
+            },
+        )
+        .unwrap();
         let t = read(&g).unwrap();
         assert_eq!(t["classes"].as_array().unwrap().len(), 1);
         assert_eq!(t["classes"][0]["label"], "Product");
         assert_eq!(t["properties"].as_array().unwrap().len(), 1);
-        assert_eq!(t["properties"][0]["range"], "http://www.w3.org/2001/XMLSchema#decimal");
+        assert_eq!(
+            t["properties"][0]["range"],
+            "http://www.w3.org/2001/XMLSchema#decimal"
+        );
+    }
+
+    #[test]
+    fn live_schema_reports_data_not_schema() {
+        let g = Graph::new().unwrap();
+        let mut pfx = HashMap::new();
+        pfx.insert("ex".to_string(), "http://ex/shop#".to_string());
+        // Declared in the T-Box but never used by any instance…
+        add_property(
+            &g,
+            "http://ex/shop",
+            &pfx,
+            &PropertyDef {
+                iri: "ex:neverUsed".into(),
+                kind: "data".into(),
+                label: None,
+                domain: None,
+                range: None,
+                sub_property_of: None,
+                inverse_of: None,
+            },
+        )
+        .unwrap();
+        // …while the actual data uses something else.
+        g.update(
+            "INSERT DATA { GRAPH <urn:senclaw:ontology:batch:1> { \
+             <http://ex/p/1> a <http://ex/shop#Product> ; <http://ex/shop#hasPrice> \"10\" . \
+             <http://ex/p/2> a <http://ex/shop#Product> ; <http://ex/shop#hasPrice> \"20\" . } }",
+        )
+        .unwrap();
+        let live = live_schema(&g).unwrap();
+        let classes = live["classes"].as_array().unwrap();
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0]["class"], "http://ex/shop#Product");
+        assert_eq!(classes[0]["count"], "2");
+        let preds: Vec<&str> = live["predicates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["predicate"].as_str().unwrap())
+            .collect();
+        assert!(preds.contains(&"http://ex/shop#hasPrice"));
+        // The T-Box graph must not leak in — that is the whole point of "live".
+        assert!(!preds.iter().any(|p| p.contains("neverUsed")), "{preds:?}");
+        assert!(
+            !preds.iter().any(|p| p.contains("22-rdf-syntax-ns#type")),
+            "{preds:?}"
+        );
     }
 }

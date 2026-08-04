@@ -1,7 +1,7 @@
 {
   "id": "ontology",
   "name": "SenClaw Ontology",
-  "description": "Turn raw data into a real knowledge graph, the right way. Profile a CSV/JSON source, design an ontology (T-Box) from competency questions, map raw rows to RDF with a declarative RML-lite mapping, mint stable IRIs, resolve duplicate entities, validate with SHACL, run RDFS/OWL-RL reasoning, and query everything with SPARQL — all provenance-tracked in per-import named graphs you can drop and reload. Backed by an embedded Oxigraph triple store; the ✨ AI actions (profile roles, draft T-Box, draft mapping, NL→SPARQL, draft SHACL, extract-from-text) run on SenClaw's configured LLM.",
+  "description": "Drop in any file — CSV, TSV, Excel, JSON (nested or wrapped), JSON Lines, YAML, XML, Word, PDF, HTML, Markdown or plain prose — and get a real knowledge graph out. One ✨ Auto-build runs the whole discipline for you: profile the sources, draft the competency questions, design the ontology (T-Box), author a declarative RML-lite mapping and mechanically repair it against your real columns, lift rows into RDF, extract triples from documents, validate with SHACL, answer the competency suite and materialize RDFS/OWL-RL inferences. Then just ask in plain language — you get an answer with the SPARQL and rows behind it. ◆ AIP Assist is a context-aware RAG sidebar you can open from any tab: it indexes the platform documentation plus this project's metadata (sources, columns, classes, properties, mapping, constraints, lineage) and re-ranks answers by the tab you are on and the source you have open, citing every passage it used — and it deliberately holds no cell values, so questions about actual data are handed off to Ask. ⚙️ AIP Logic lets an LLM propose TYPED ACTIONS on the ontology (add entity, set attribute, add relation, link entities) that are type-checked against the schema before they can become triples; every edit lands in a human-in-the-loop proposal queue and is applied only on approval as a droppable provenance batch — extract facts from documents or classify each row of a source at scale, with trial runs and evals. Every triple is provenance-tracked in per-import named graphs you can drop and reload, and every stage stays editable by hand. Backed by an embedded Oxigraph triple store; all AI actions run on SenClaw's configured LLM.",
   "icon": "◎",
   "runtime": {
     "kind": "server",
@@ -24,7 +24,7 @@
     "name": "ontology-mcp",
     "transport": "http",
     "path": "/api/mcp/sse",
-    "description": "SenClaw Ontology MCP: build knowledge graphs from raw data. Create projects, add & profile CSV/JSON sources, design a T-Box (classes/properties), author a declarative RML-lite mapping, lift rows into provenance batches, run SPARQL, save & run competency questions as a test suite, validate with SHACL-lite, materialize RDFS/OWL-RL inferences, resolve duplicate entities, and extract triples from unstructured text.",
+    "description": "SenClaw Ontology MCP: build knowledge graphs from raw data of any format. ontology_ingest auto-detects CSV/TSV/JSON/JSONL/YAML/XML/Markdown/HTML/prose and profiles it; ontology_autobuild runs the entire pipeline in one call (T-Box, mapping + repair, lift, extraction, SHACL, competency suite, reasoning); ontology_ask answers questions in plain language with the SPARQL and rows attached; ontology_assist is a context-aware RAG over platform docs + project metadata (metadata only, never data values) that takes the user's current tab as context and answers with citations. Also exposes every stage individually: T-Box editing, mapping DSL, provenance batches, entity resolution, validation and reasoning.",
     "autoRegister": true
   },
   "skills": [
@@ -43,13 +43,20 @@
         "dựng knowledge graph từ",
         "sinh triple từ CSV",
         "mô hình hoá dữ liệu thành RDF",
+        "bóc tách dữ liệu",
+        "bóc tách file",
+        "trích xuất dữ liệu từ file",
+        "đọc file excel thành dữ liệu",
+        "gom dữ liệu nhiều file",
         "build an ontology",
         "build a knowledge graph from",
         "turn this CSV into RDF",
+        "turn this spreadsheet into",
         "map data to an ontology",
         "lift CSV to RDF",
         "generate triples from",
-        "model this data as RDF"
+        "model this data as RDF",
+        "extract structured data from this file"
       ]
     },
     {
@@ -66,6 +73,17 @@
         "materialize ontology",
         "gộp thực thể trùng",
         "trích triple từ văn bản",
+        "hỏi dữ liệu bằng tiếng Việt",
+        "hỏi knowledge graph",
+        "ontology app hoạt động thế nào",
+        "giải thích metadata dự án",
+        "nguồn dữ liệu có những cột nào",
+        "triple này đến từ đâu",
+        "ask the knowledge graph",
+        "how does this ontology app work",
+        "explain the project metadata",
+        "what columns does this source have",
+        "where did these triples come from",
         "query the ontology",
         "run a SPARQL query",
         "check competency questions",

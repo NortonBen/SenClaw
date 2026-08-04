@@ -1,39 +1,65 @@
 ---
 name: ontology-build
 description: >-
-  Turn raw data (CSV / JSON) into an RDF knowledge graph in the SenClaw Ontology app:
-  profile the source, design the T-Box, author a declarative mapping, and lift rows into
-  triples with provenance. Use when the user wants to BUILD an ontology / knowledge graph
-  from data — e.g. "xây ontology từ CSV này", "biến bảng này thành RDF/knowledge graph",
-  "map dữ liệu sang ontology", "build a knowledge graph from this data", "lift this CSV to
-  RDF". For querying / validating an EXISTING graph, use ontology-query instead.
+  Turn raw data of ANY format (CSV, TSV, Excel, JSON, JSON Lines, YAML, XML, Markdown,
+  HTML, Word, PDF, plain text) into an RDF knowledge graph in the SenClaw Ontology app:
+  ingest & profile the source, design the T-Box, author a declarative mapping, and lift
+  rows into triples with provenance. Use when the user wants to BUILD an ontology /
+  knowledge graph from data — e.g. "xây ontology từ file này", "bóc tách dữ liệu thành
+  knowledge graph", "biến bảng này thành RDF", "map dữ liệu sang ontology", "build a
+  knowledge graph from this data", "lift this spreadsheet to RDF". For querying /
+  validating an EXISTING graph, use ontology-query instead.
 ---
 
 # ontology-build
 
 Build a knowledge graph from raw data in the **SenClaw Ontology** app via the
-`ontology-mcp` server. The golden rule: **the schema (T-Box) is designed by hand from
-competency questions; the data (A-Box) is generated from the mapping.** Never let the CSV
-column layout dictate the ontology — that just produces a database schema in RDF clothing.
+`ontology-mcp` server. The golden rule: **the schema (T-Box) is designed from competency
+questions; the data (A-Box) is generated from the mapping.** Never let the column layout
+dictate the ontology — that just produces a database schema in RDF clothing.
 
 ## When to use this skill
 
-- The user has a CSV/JSON table (or DB export) and wants it as RDF / a knowledge graph.
+- The user has a file of any shape — spreadsheet, export, API dump, report, document —
+  and wants it as RDF / a knowledge graph.
 - The user wants to model a domain and load instance data into it.
-- The user asks to "lift", "map", or "triple-ify" tabular data.
+- The user asks to "lift", "map", "bóc tách", or "triple-ify" data.
 
 If the graph already exists and they want to query, validate, reason, or resolve
 duplicates, use **ontology-query**.
 
-## Pipeline (follow in order)
+## The fast path — use this first
+
+For "here is my data, build me a graph", two calls do the whole thing:
+
+1. `mcp__ontology-mcp__ontology_ingest` — one call per file. Paste the raw text as
+   `content`; the format is auto-detected (CSV/TSV, JSON nested or wrapped, JSON Lines,
+   YAML, XML, Markdown tables, HTML tables, prose). **Do not pre-convert anything** and do
+   not set `kind`. One file may create several sources (one per sheet / table).
+2. `mcp__ontology-mcp__ontology_autobuild` — runs profile → competency questions → T-Box →
+   mapping (drafted, then mechanically checked against the real columns) → lift → extract
+   from text → SHACL → competency suite → reasoning. It returns a `jobId`; poll
+   `mcp__ontology-mcp__ontology_autobuild_status` until `done`.
+
+Then read the result and **report it honestly**: the mapping `repairs` list says what the
+draft got wrong, the validation report says what the data violates, and the competency
+ratio says whether the ontology answers its own questions. Fix what matters with the
+manual steps below rather than presenting a warn-laden build as a clean one.
+
+Binary files (`.xlsx`, `.docx`, `.pdf`) cannot travel through MCP as text — tell the user
+to drop them on the app's **Studio** tab, which posts the bytes to `/api/projects/:id/ingest`.
+
+## Manual pipeline (when the user wants control over each stage)
 
 1. **Create / pick a project.** `mcp__ontology-mcp__ontology_list_projects`, or
    `mcp__ontology-mcp__ontology_create_project` (`name`, optional `baseIri`). Keep the
    returned `id` — every other call needs `projectId`.
-2. **Add & profile the source.** `mcp__ontology-mcp__ontology_add_source` with the file
-   text as `content` and a short logical `name` (e.g. `products`). The reply profiles each
-   column: type, null ratio, uniqueness (candidate key), enum-ness, and a heuristic role
-   (identifier / relation / attribute / enum). Read it before designing anything.
+2. **Ingest & profile the source.** `mcp__ontology-mcp__ontology_ingest` with the file
+   text as `content` and a short logical `name` (e.g. `products.csv`). The reply profiles
+   each column: type, null ratio, uniqueness (candidate key), enum-ness, and a heuristic
+   role (identifier / relation / attribute / enum), plus what the sniffer detected. Read it
+   before designing anything. Nested structures arrive flattened with dotted paths
+   (`customer.name`, `items.0.sku`) — those dotted names are what the mapping addresses.
 3. **Design the T-Box.** Prefer `mcp__ontology-mcp__ontology_apply_tbox` with a full draft
    `{prefixes, classes, properties}`, or add terms one by one with
    `ontology_add_class` / `ontology_add_property`. Apply the four transforms:

@@ -26,10 +26,137 @@ export type Column = {
 export type Source = {
   id: number
   name: string
+  /** Storage kind the pipeline understands: csv | json | text. */
   kind: string
+  /** Format the file actually arrived in (xlsx, pdf, jsonl, …). */
+  origin: string
+  /** One line on what the ingest sniffer did. */
+  note: string
   columns: Column[]
   rowCount: number
   createdAt: number
+}
+
+export type IngestedSource = {
+  id: number
+  name: string
+  kind: string
+  origin: string
+  note: string
+  rowCount: number
+  columns: Column[]
+}
+
+export type AutoStep = {
+  key: string
+  label: string
+  status: 'pending' | 'running' | 'ok' | 'warn' | 'error' | 'skipped'
+  detail: string
+}
+
+export type AutoJob = {
+  id: string
+  projectId: number
+  steps: AutoStep[]
+  done: boolean
+  error: string | null
+  result: {
+    sources?: unknown[]
+    tbox?: { classes: number; properties: number }
+    lift?: { triples: number; subjects: number; skippedRows: number; batch: string }
+    repairs?: string[]
+    extracted?: number
+    validation?: { conforms: boolean; violationCount: number }
+    competency?: { total: number; passed: number }
+    reason?: { inferred: number }
+    tripleCount?: number
+  }
+  startedAt: number
+  updatedAt: number
+}
+
+export type AskResult = {
+  question: string
+  sparql: string
+  repaired: string | null
+  head: string[]
+  rows: SparqlResult['rows']
+  boolean?: boolean
+  count: number
+  answer: string
+  model: string
+}
+
+/** Where the user is when they ask AIP Assist — this is what re-ranks retrieval. */
+export type AssistContext = { tab?: string; source?: string; selection?: string }
+
+export type AssistCitation = {
+  n: number
+  id: string
+  kind: string
+  title: string
+  tab: string | null
+  reason: string
+  score: number
+}
+
+export type AssistResult = {
+  question: string
+  answer: string
+  citations: AssistCitation[]
+  context: string
+  /** True when the question wants values, which Assist deliberately cannot see. */
+  dataQuestion: boolean
+  model: string
+}
+
+// ---- AIP Logic: typed-action functions + proposal queue --------------------
+
+export type LogicFunction = {
+  id: number
+  name: string
+  kind: 'extract' | 'classify' | 'resolve'
+  inputKind: string
+  target: string
+  instruction: string
+  autoApply: boolean
+  createdAt: number
+}
+
+export type RunReport = {
+  proposed: number
+  invalid: number
+  applied: number
+  skippedInputs: number
+  preview: Array<{
+    action: unknown
+    summary: string
+    valid: boolean
+    invalidReason: string
+    confidence: number
+    rationale: string
+  }>
+  errors: string[]
+  batch: string
+}
+
+export type Proposal = {
+  id: number
+  functionId: number | null
+  action: Record<string, unknown>
+  summary: string
+  rationale: string
+  confidence: number
+  status: 'pending' | 'approved' | 'rejected' | 'invalid'
+  valid: boolean
+  invalidReason: string
+  batch: string
+  createdAt: number
+}
+
+export type LiveSchema = {
+  classes: Array<{ class: string; count?: string }>
+  predicates: Array<{ predicate: string; count?: string; example?: string }>
 }
 
 export type TboxClass = { iri: string; label?: string; super?: string }
@@ -69,8 +196,12 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   } catch {
     throw new Error(text || res.statusText)
   }
-  if (!res.ok || (data && typeof data === 'object' && 'error' in data)) {
-    throw new Error((data as { error?: string })?.error || res.statusText)
+  // Only a *truthy* `error` means failure — an autobuild job legitimately
+  // carries `error: null` while it is running, and a presence check would
+  // reject every successful poll.
+  const err = (data as { error?: string } | null)?.error
+  if (!res.ok || err) {
+    throw new Error(err || res.statusText)
   }
   return data as T
 }
@@ -83,12 +214,67 @@ const del = <T>(p: string, body?: unknown) => req<T>(p, { method: 'DELETE', body
 export const api = {
   status: () => get<{ ok: boolean; name: string; version: string; projects: number }>('/status'),
 
+  models: () =>
+    get<{
+      activeId?: string
+      configs?: Array<{ id: string; label?: string; modelName?: string; provider?: string; baseURL?: string; adapt?: string }>
+    }>('/models'),
+  getSettings: () => get<{ llmProfile: string; resolved: string }>('/settings'),
+  setLlmProfile: (llmProfile: string) => put<{ ok: boolean; llmProfile: string }>('/settings', { llmProfile }),
+
   listProjects: () => get<Project[]>('/projects'),
   createProject: (name: string, description: string, baseIri?: string) =>
     post<{ id: number; baseIri: string }>('/projects', { name, description, baseIri }),
   getProject: (id: number) => get<Project>(`/projects/${id}`),
   deleteProject: (id: number) => del(`/projects/${id}`),
   setPrefixes: (id: number, prefixes: Record<string, string>) => put(`/projects/${id}/prefixes`, { prefixes }),
+
+  /** Universal ingest: any file, auto-detected. `content` for text, `contentBase64` for binaries. */
+  ingest: (id: number, filename: string, payload: { content?: string; contentBase64?: string }) =>
+    post<{ sources: IngestedSource[] }>(`/projects/${id}/ingest`, { filename, ...payload }),
+  formats: () => get<{ extensions: string[] }>('/formats'),
+
+  autobuild: (id: number, opts?: { reason?: boolean; extract?: boolean; maxChunks?: number }) =>
+    post<{ jobId: string }>(`/projects/${id}/autobuild`, opts ?? {}),
+  autobuildStatus: (id: number, job: string) => get<AutoJob>(`/projects/${id}/autobuild/${job}`),
+  ask: (id: number, question: string) => post<AskResult>(`/projects/${id}/ask`, { question }),
+  assist: (id: number, question: string, context: AssistContext) =>
+    post<AssistResult>(`/projects/${id}/assist`, { question, context }),
+  assistIndex: (id: number) =>
+    get<{ count: number; documents: Array<{ id: string; kind: string; title: string; body: string }> }>(
+      `/projects/${id}/assist/index`,
+    ),
+  liveSchema: (id: number) => get<LiveSchema>(`/projects/${id}/schema`),
+
+  listFunctions: (id: number) =>
+    get<{ functions: LogicFunction[]; proposalCounts: Record<string, number> }>(`/projects/${id}/functions`),
+  createFunction: (
+    id: number,
+    body: { name: string; kind: string; target?: string; instruction: string; autoApply?: boolean },
+  ) => post<{ id: number }>(`/projects/${id}/functions`, body),
+  deleteFunction: (id: number, fid: number) => del(`/projects/${id}/functions/${fid}`),
+  trialFunction: (id: number, fid: number) => post<RunReport>(`/projects/${id}/functions/${fid}/trial`),
+  runFunction: (id: number, fid: number) => post<RunReport>(`/projects/${id}/functions/${fid}/run`),
+  listProposals: (id: number, status?: string) =>
+    get<{ proposals: Proposal[]; counts: Record<string, number> }>(
+      `/projects/${id}/proposals${status ? `?status=${status}` : ''}`,
+    ),
+  approveProposals: (id: number, ids?: number[]) =>
+    post<{ applied: number; triples: number; batch: string; staleRejected: number }>(
+      `/projects/${id}/proposals/approve`,
+      { ids: ids ?? [] },
+    ),
+  rejectProposals: (id: number, ids?: number[]) =>
+    post<{ rejected: number }>(`/projects/${id}/proposals/reject`, { ids: ids ?? [] }),
+  addEval: (id: number, fid: number, input: string, expect: string) =>
+    post<{ id: number }>(`/projects/${id}/functions/${fid}/evals`, { input, expect }),
+  listEvals: (id: number, fid: number) =>
+    get<Array<{ id: number; input: string; expect: string }>>(`/projects/${id}/functions/${fid}/evals`),
+  runEvals: (id: number, fid: number, profiles?: string[]) =>
+    post<{ results: Array<{ model: string; passed: number; total: number; varied: number; cases: unknown[] }> }>(
+      `/projects/${id}/functions/${fid}/evals/run`,
+      { profiles: profiles ?? [] },
+    ),
 
   listSources: (id: number) => get<Source[]>(`/projects/${id}/sources`),
   addSource: (id: number, name: string, content: string, kind?: string) =>

@@ -25,3 +25,15 @@ hex = "0.4"
 csv = "1"
 # Entity-resolution string similarity
 strsim = "0.11"
+# ---- universal ingest (many source formats -> one normalized table/text) ----
+# "dates" is off by default; without it every date cell reads back as an Excel
+# serial number and the profiler types the column as an integer.
+calamine = { version = "0.26", features = ["dates"] }        # xlsx / xlsm / xls / ods
+# calamine pulls chrono with no features, which leaves NaiveDateTime unable to
+# format itself; naming it here turns on `std` for the whole graph.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+quick-xml = "0.37"                                           # XML sources + docx innards
+serde_yaml = "0.9"                                           # YAML sources
+zip = { version = "2", default-features = false, features = ["deflate"] } # docx container
+base64 = "0.22"                                              # binary upload transport
+pdf-extract = "0.7"                                          # PDF text layer

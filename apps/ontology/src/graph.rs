@@ -59,7 +59,9 @@ impl Graph {
     ) -> Result<()> {
         let obj = object.into();
         let quad = QuadRef::new(subject, predicate, &obj, graph);
-        self.store.insert(quad).map_err(|e| anyhow!("insert: {e}"))?;
+        self.store
+            .insert(quad)
+            .map_err(|e| anyhow!("insert: {e}"))?;
         Ok(())
     }
 
@@ -77,8 +79,11 @@ impl Graph {
             .map_err(|e| anyhow!("sparql query: {e}"))?;
         match results {
             QueryResults::Solutions(solutions) => {
-                let vars: Vec<String> =
-                    solutions.variables().iter().map(|v| v.as_str().to_string()).collect();
+                let vars: Vec<String> = solutions
+                    .variables()
+                    .iter()
+                    .map(|v| v.as_str().to_string())
+                    .collect();
                 let mut rows = Vec::new();
                 for sol in solutions {
                     let sol = sol.map_err(|e| anyhow!("row: {e}"))?;
@@ -182,8 +187,10 @@ mod tests {
     #[test]
     fn dedup_makes_union_a_set() {
         let g = Graph::new().unwrap();
-        g.update("INSERT DATA { GRAPH <urn:a> { <urn:s> a <urn:C> } }").unwrap();
-        g.update("INSERT DATA { GRAPH <urn:b> { <urn:s> a <urn:C> } }").unwrap();
+        g.update("INSERT DATA { GRAPH <urn:a> { <urn:s> a <urn:C> } }")
+            .unwrap();
+        g.update("INSERT DATA { GRAPH <urn:b> { <urn:s> a <urn:C> } }")
+            .unwrap();
         // Before dedup the union-default query double-counts (BAG semantics).
         let before = g.query_json("SELECT ?s WHERE { ?s a <urn:C> }").unwrap();
         assert_eq!(before["rows"].as_array().unwrap().len(), 2);
