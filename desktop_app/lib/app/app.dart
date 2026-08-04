@@ -25,6 +25,7 @@ import '../features/chat/widgets/plan_exit_dialog.dart';
 import '../features/settings/settings_screen.dart' show settingsSectionProvider;
 import '../theme/app_theme.dart';
 import '../theme/theme_mode_provider.dart';
+import 'caption_bar.dart';
 import 'router.dart';
 
 /// Root widget. Kicks off connection bootstrap (daemon spawn/adopt → config
@@ -290,14 +291,19 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
       // StartupGate holds a splash until the daemon answers HTTP, so no route
       // (and none of its data providers) runs against a dead daemon. The
       // plan-approval modal stacks above all routes once the shell is live.
-      builder: (context, child) => StartupGate(
-        child: Stack(
-          children: [
-            child ?? const SizedBox.shrink(),
-            const PlanExitOverlay(),
-            const ReminderInteractionOverlay(),
-            const CaptureReviewOverlay(),
-          ],
+      // DesktopChrome sits above the gate: Windows/Linux draw their own
+      // caption bar (drag + min/max/close), which must exist even on the
+      // splash and daemon-crash screens.
+      builder: (context, child) => DesktopChrome(
+        child: StartupGate(
+          child: Stack(
+            children: [
+              child ?? const SizedBox.shrink(),
+              const PlanExitOverlay(),
+              const ReminderInteractionOverlay(),
+              const CaptureReviewOverlay(),
+            ],
+          ),
         ),
       ),
     );
