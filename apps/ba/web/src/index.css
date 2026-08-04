@@ -1,0 +1,192 @@
+:root {
+  color-scheme: dark;
+}
+:root[data-app-theme='light'] {
+  color-scheme: light;
+}
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Nội dung markdown đã render */
+.md-view {
+  line-height: 1.65;
+  font-size: 13.5px;
+}
+.md-view h1 {
+  font-size: 20px;
+  border-bottom: 2px solid #7c5cff;
+  padding-bottom: 6px;
+}
+.md-view h2 {
+  font-size: 16px;
+  margin-top: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding-bottom: 4px;
+}
+.md-view h3 {
+  font-size: 14px;
+}
+.md-view table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  width: 100%;
+  font-size: 12.5px;
+  display: block;
+  overflow-x: auto;
+}
+.md-view th,
+.md-view td {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.md-view th {
+  background: rgba(124, 92, 255, 0.15);
+}
+.md-view pre {
+  background: #16161f;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 10px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+.md-view code {
+  font-family: ui-monospace, Menlo, monospace;
+}
+.md-view p code,
+.md-view td code,
+.md-view li code {
+  background: rgba(124, 92, 255, 0.15);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+.md-view blockquote {
+  border-left: 3px solid #7c5cff;
+  margin: 8px 0;
+  padding: 2px 12px;
+  color: #b9a8ff;
+  background: rgba(124, 92, 255, 0.08);
+  border-radius: 0 6px 6px 0;
+}
+.md-view .mermaid-box {
+  background: #fff;
+  border-radius: 8px;
+  padding: 12px;
+  margin: 10px 0;
+  overflow-x: auto;
+  text-align: center;
+}
+.md-view .mermaid-box svg {
+  max-width: 100%;
+  height: auto;
+}
+.md-view .mermaid-err {
+  font-size: 11px;
+  color: #ff9c6e;
+}
+
+.doc-iframe {
+  width: 100%;
+  height: calc(100vh - 220px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  background: #fff;
+}
+.phase-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(124, 92, 255, 0.25);
+  color: #b9a8ff;
+  font-weight: 700;
+  font-size: 12px;
+  margin-right: 8px;
+}
+.skill-chip {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: #9df0c8;
+}
+.kanban-col {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+  padding: 10px;
+  min-height: 120px;
+}
+.kanban-card {
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.kanban-card:hover {
+  background: rgba(124, 92, 255, 0.2);
+}
+.urgent-item {
+  padding: 8px 12px;
+  border-left: 3px solid #ffa940;
+  background: rgba(255, 169, 64, 0.08);
+  border-radius: 0 8px 8px 0;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.urgent-item.p0 {
+  border-left-color: #ff4d4f;
+  background: rgba(255, 77, 79, 0.1);
+}
+
+/* ---------- Light theme overrides (data-app-theme trên <html>) ---------- */
+:root[data-app-theme='light'] .md-view h2 {
+  border-bottom-color: rgba(0, 0, 0, 0.12);
+}
+:root[data-app-theme='light'] .md-view th,
+:root[data-app-theme='light'] .md-view td {
+  border-color: rgba(0, 0, 0, 0.22);
+}
+:root[data-app-theme='light'] .md-view th {
+  background: rgba(124, 92, 255, 0.08);
+}
+:root[data-app-theme='light'] .md-view pre {
+  background: #f4f4f8;
+  border-color: rgba(0, 0, 0, 0.1);
+  color: #1a1f2e;
+}
+:root[data-app-theme='light'] .md-view p code,
+:root[data-app-theme='light'] .md-view td code,
+:root[data-app-theme='light'] .md-view li code {
+  background: rgba(124, 92, 255, 0.12);
+  color: #6d28d9;
+}
+:root[data-app-theme='light'] .md-view blockquote {
+  color: #6d28d9;
+  background: rgba(124, 92, 255, 0.07);
+}
+:root[data-app-theme='light'] .skill-chip {
+  color: #0f766e;
+}
+:root[data-app-theme='light'] .phase-badge {
+  background: rgba(124, 92, 255, 0.12);
+  color: #6d28d9;
+}
+:root[data-app-theme='light'] .kanban-col {
+  background: rgba(0, 0, 0, 0.04);
+}
+:root[data-app-theme='light'] .kanban-card {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+:root[data-app-theme='light'] .kanban-card:hover {
+  background: rgba(124, 92, 255, 0.12);
+}
+:root[data-app-theme='light'] .doc-iframe {
+  border-color: rgba(0, 0, 0, 0.15);
+}
