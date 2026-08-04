@@ -1639,7 +1639,7 @@ mod tests {
     #[test]
     fn a_rejected_project_is_recognised_so_the_cache_can_be_busted() {
         // The live 403 that a generated project id produced.
-        let body = r#"{"error":{"code":403,"message":"Permission denied on resource project bright-core-8f831c.","status":"PERMISSION_DENIED","details":[{"reason":"CONSUMER_INVALID"}]}}"#;
+        let body = r#"{"error":{"code":403,"message":"Permission denied on resource project example-proj-0a1b2c.","status":"PERMISSION_DENIED","details":[{"reason":"CONSUMER_INVALID"}]}}"#;
         assert!(is_project_rejected(403, body));
     }
 
