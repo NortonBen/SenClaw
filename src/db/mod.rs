@@ -36,10 +36,10 @@ mod schema;
 mod agent_todos;
 mod agents;
 pub mod background;
-mod chat_widgets;
 mod bindings;
 mod channels;
 mod chat_events;
+mod chat_widgets;
 pub mod code_artifacts;
 pub mod cowork_tasks;
 pub mod cowork_teams;
@@ -52,8 +52,10 @@ mod messages;
 pub mod plans;
 mod router_state;
 mod scheduled_tasks;
+pub mod tool_aliases;
 mod tool_executions;
 mod tool_rules;
+pub mod usage;
 
 #[cfg(test)]
 mod tests;

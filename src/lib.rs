@@ -30,13 +30,16 @@ pub mod mcp;
 pub mod memory;
 pub mod plugins;
 pub mod scheduler;
+pub mod security;
 pub mod setup;
 pub mod skills;
 pub mod subagents;
 pub mod tools;
 pub mod tts;
 pub mod types;
+pub mod usage;
 pub mod util;
+pub mod widgets;
 pub mod wiki;
 pub mod workflow;
 pub mod zen_core;
@@ -1276,6 +1279,19 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let db = Arc::new(db::Db::open(&cfg).context("open database")?);
     tracing::info!("[SenClaw] DB initialized: {}", cfg.paths.db_path.display());
 
+    // Load enabled MCP tool aliases (Plugins → Alias) into the process-wide
+    // registry so `resolve_tool_by_name` applies renames/overrides from the
+    // very first agent turn.
+    tools::tool_alias::reload_from_db(&db);
+
+    // ===== 1a-0. Token usage accounting =====
+    // One recorder shared by every LLM call path (agent loop, bridge,
+    // cognitive, embeddings). Non-blocking; batch-flushed to llm_usage_log.
+    let usage_recorder = usage::UsageRecorder::start(Arc::clone(&db));
+    usage::set_global(Arc::clone(&usage_recorder));
+    usage::aggregate::start(Arc::clone(&db));
+    tracing::info!("[SenClaw] usage recorder started");
+
     // ===== 1a. Boot cleanup of stale pending interactions =====
     // `chat_events` persists permission:request / question:request rows
     // so the UI can replay them on reconnect. When the daemon was killed
@@ -1725,7 +1741,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             tick.tick().await; // skip immediate — the auto-register pass just ran
             loop {
                 tick.tick().await;
-                launcher.supervise(&db_bg, &mgr_bg, &apps_dir, &base_url).await;
+                launcher
+                    .supervise(&db_bg, &mgr_bg, &apps_dir, &base_url)
+                    .await;
             }
         });
         tracing::info!(
@@ -1740,6 +1758,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let zen_core_api = Arc::new(agent::agent_pool::ZenCoreApi::new(Some(Arc::clone(
         &mcp_manager,
     ))));
+    zen_core_api.set_usage_recorder(Arc::clone(&usage_recorder));
     let agent_pool = agent::agent_pool::AgentPool::new(zen_core_api.clone());
     agent_pool.set_db(Arc::clone(&db));
     agent_pool.set_config(Arc::new(cfg.clone()));
@@ -1846,6 +1865,13 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 let text = text.to_string();
                 let bt = bot_token.map(|s| s.to_string());
                 tokio::spawn(async move {
+                    // Egress gate. ĐÂY là đường worm Morris II lây — reply không đi qua
+                    // `mcp::send_server`, nên gate đặt ở đó sẽ bỏ lọt đúng đường này.
+                    // Xem docs/agent-security-hooks.md §3.1.1.
+                    if !crate::security::gate(&jid, &text) {
+                        tracing::warn!("[SenClaw] Reply tới {jid} bị egress guard chặn");
+                        return;
+                    }
                     let guard = chs.lock().await;
                     for c in guard.iter() {
                         if c.owns_jid(&jid) {
@@ -1857,7 +1883,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             },
         ));
     }
-    tracing::info!("[SenClaw] Reply routing wired to channels");
+    tracing::info!("[SenClaw] Reply routing wired to channels (egress guard active)");
 
     // Wire typing indicator through the correct channel.
     {
@@ -1940,6 +1966,15 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // mutate the same on-disk sources/state.
     let marketplace_shared = Arc::new(std::sync::Mutex::new(
         marketplace::manager::MarketplaceManager::from_config(&cfg),
+    ));
+
+    // Process-wide widget registry: built-in kinds + Space-App manifest
+    // `widgets[]` + enabled plugins' `widgets/widgets.json`. Read by the
+    // `emit_widget` (kind `app`) and `widget_list` tools.
+    widgets::init_global(widgets::WidgetRegistry::new(
+        Some(Arc::clone(&db)),
+        cfg.paths.global_config_path.clone(),
+        Some(Arc::clone(&marketplace_shared)),
     ));
 
     let message_router = Arc::new(gateway::message_router::MessageRouter::new(
@@ -2367,17 +2402,19 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         {
             let gw_widget = Arc::clone(&gw);
             let db_widget = Arc::clone(&db);
+            let chs_widget = Arc::clone(&channels);
             let default_msg_limit = cfg.agent.max_messages_per_group;
             zen_core_api.set_on_widget_emit(Arc::new(move |jid, data| {
                 let gw = Arc::clone(&gw_widget);
                 let db = Arc::clone(&db_widget);
+                let chs = Arc::clone(&chs_widget);
                 tokio::spawn(async move {
                     // The tool's optional `chat_jid` overrides the engine's jid;
                     // otherwise the emit targets the emitting agent's chat.
                     let chat_jid = data.chat_jid.clone().unwrap_or(jid);
                     let ts = chrono::Utc::now().to_rfc3339();
-                    let widget_val =
-                        serde_json::to_value(&data.widget).unwrap_or_else(|_| serde_json::json!({}));
+                    let widget_val = serde_json::to_value(&data.widget)
+                        .unwrap_or_else(|_| serde_json::json!({}));
                     let widget_json =
                         serde_json::to_string(&data.widget).unwrap_or_else(|_| "{}".to_string());
                     if let Err(e) = db.insert_chat_widget(
@@ -2393,7 +2430,33 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                             "[WsGateway] failed to persist chat widget; live broadcast continues"
                         );
                     }
-                    gw.notify_widget(&chat_jid, &data.id, &widget_val, &ts).await;
+                    gw.notify_widget(&chat_jid, &data.id, &widget_val, &ts)
+                        .await;
+
+                    // Text fallback for messaging channels. The `chat:widget`
+                    // broadcast above only reaches subscribed WS clients (web /
+                    // desktop / `app:` relay) — a Telegram/QQ/Feishu/WeChat jid
+                    // sees nothing, and before this the emit was a silent drop
+                    // the tool still reported as success. Render one text line
+                    // and push it through the owning channel. Same egress gate
+                    // as `set_send_reply` (the reply path this mirrors).
+                    if !(chat_jid.starts_with("web:")
+                        || chat_jid.starts_with("virtual:")
+                        || chat_jid.starts_with("app:"))
+                    {
+                        let text = crate::widgets::fallback_text(&data.widget);
+                        if !text.is_empty() && crate::security::gate(&chat_jid, &text) {
+                            let guard = chs.lock().await;
+                            for c in guard.iter() {
+                                if c.owns_jid(&chat_jid) {
+                                    // No per-emit bot token: the channel's
+                                    // default bot delivers the fallback.
+                                    let _ = c.send_message(&chat_jid, &text, None).await;
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 });
             }));
         }
@@ -2602,13 +2665,15 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     std::sync::Arc::clone(&kanban_state.db),
                     worker_mcp,
                 ));
-            let sources: Vec<std::sync::Arc<dyn DispatchSource>> =
-                vec![std::sync::Arc::new(LocalDispatchSource::new("kanban", provider))];
+            let sources: Vec<std::sync::Arc<dyn DispatchSource>> = vec![std::sync::Arc::new(
+                LocalDispatchSource::new("kanban", provider),
+            )];
             let dcfg = agent::mcp_dispatch::DispatcherConfig {
                 interval_secs: cfg.dispatch.interval_secs,
                 max_concurrent: cfg.dispatch.max_concurrent,
                 per_assignee: cfg.dispatch.per_assignee,
-                max_agent_turns: (cfg.dispatch.max_agent_turns > 0).then_some(cfg.dispatch.max_agent_turns),
+                max_agent_turns: (cfg.dispatch.max_agent_turns > 0)
+                    .then_some(cfg.dispatch.max_agent_turns),
                 default_timeout_secs: cfg.dispatch.default_timeout_secs,
                 workdir_root: cfg
                     .paths
@@ -2840,6 +2905,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             // the same snapshot the web WS replays on reconnect.
             agent_states: Some(Arc::clone(&ws_gateway.last_known_states)),
             background_scheduler: Some(Arc::clone(&background_scheduler)),
+            usage_recorder: Some(Arc::clone(&usage_recorder)),
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),
         });
@@ -2849,8 +2915,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
         // Mount the built-in Kanban board's REST API under /api/kanban/* on the
         // daemon UI server (the native Flutter screen talks to these routes).
-        let ui_router = gateway::ui_server::build_router(ui_state)
-            .nest("/api/kanban", kanban::api::api_router(std::sync::Arc::clone(&kanban_state)));
+        let ui_router = gateway::ui_server::build_router(ui_state).nest(
+            "/api/kanban",
+            kanban::api::api_router(std::sync::Arc::clone(&kanban_state)),
+        );
         let http_port = cfg.ui_server.port;
         let http_addr = format!("127.0.0.1:{http_port}");
         let listener = tokio::net::TcpListener::bind(&http_addr)

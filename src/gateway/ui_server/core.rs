@@ -21,6 +21,10 @@ use super::chat::{
     chat_form_respond, chat_history, chat_permission_respond, chat_plan_respond,
     chat_question_respond, chat_states,
 };
+use super::code::code_run;
+use super::code_artifacts::{
+    create_artifact, delete_artifact, get_artifact, list_artifacts, run_artifact, update_artifact,
+};
 use super::config_handler::{admin_perms_get, admin_perms_set, config_handler, thinking_handler};
 use super::embedding_config::{embedding_config_get, embedding_config_save};
 use super::hf_validate::{local_models_validate, tts_validate, whisper_validate};
@@ -46,6 +50,11 @@ use super::mcp::{
     mcp_servers_enabled, mcp_servers_get, mcp_servers_list, mcp_servers_save, mcp_servers_test,
     mcp_servers_tools,
 };
+use super::ocr::{
+    ocr_cancel, ocr_custom_download, ocr_delete, ocr_download, ocr_models_list, ocr_recognize,
+    ocr_settings_get, ocr_settings_put, ocr_status,
+};
+use super::open_url::open_url_handler;
 use super::plugins::{
     plugins_configure, plugins_disable, plugins_enable, plugins_get, plugins_install, plugins_list,
     plugins_remote_search, plugins_uninstall,
@@ -62,15 +71,15 @@ use super::space::{
     space_app_mcp_register, space_app_sqlite_query, space_apps_bridge, space_apps_delete,
     space_apps_install_zip, space_apps_list, space_apps_proxy, space_apps_proxy_root,
     space_apps_register, space_apps_register_local, space_apps_restart, space_apps_static,
-    space_apps_update, space_apps_updates,
-    space_events_create,
-    space_events_delete, space_events_list, space_events_search, space_events_set_reminder,
-    space_events_update, space_notes_create, space_notes_delete, space_notes_list,
-    space_notes_search, space_notes_update, space_schedules_cancel, space_schedules_create,
-    space_schedules_detail, space_schedules_list, space_schedules_run_now, space_schedules_update,
+    space_apps_update, space_apps_updates, space_events_create, space_events_delete,
+    space_events_get, space_events_list, space_events_search, space_events_set_reminder,
+    space_events_update,
+    space_notes_create, space_notes_delete, space_notes_list, space_notes_search,
+    space_notes_update, space_schedules_cancel, space_schedules_create, space_schedules_detail,
+    space_schedules_list, space_schedules_run_now, space_schedules_update,
     space_screenshot_extract, space_screenshot_get, space_sync_apple_calendar,
-    space_sync_apple_notes,
-    space_sync_google_calendar, space_sync_google_workspace, space_today_summary,
+    space_sync_apple_notes, space_sync_google_calendar, space_sync_google_workspace,
+    space_today_summary,
 };
 use super::subagents::{
     subagents_create, subagents_list, subagents_readme, subagents_readme_save, subagents_toggle,
@@ -84,17 +93,9 @@ use super::whisper::{
     whisper_cancel, whisper_delete, whisper_download, whisper_models_list, whisper_settings_get,
     whisper_settings_put, whisper_status, whisper_transcribe,
 };
-use super::ocr::{
-    ocr_cancel, ocr_custom_download, ocr_delete, ocr_download, ocr_models_list, ocr_recognize,
-    ocr_settings_get, ocr_settings_put, ocr_status,
-};
-use super::code::code_run;
-use super::code_artifacts::{
-    create_artifact, delete_artifact, get_artifact, list_artifacts, run_artifact, update_artifact,
-};
 use super::wiki::{
-    wiki_dir_delete, wiki_file_delete, wiki_history, wiki_mkdir, wiki_read, wiki_search, wiki_stats, wiki_tags,
-    wiki_tree, wiki_upload, wiki_write,
+    wiki_dir_delete, wiki_file_delete, wiki_history, wiki_mkdir, wiki_read, wiki_search,
+    wiki_stats, wiki_tags, wiki_tree, wiki_upload, wiki_write,
 };
 
 // ===== Trait for AgentPool-dependent operations =====
@@ -157,15 +158,16 @@ pub struct UiState {
     pub workflow_service: Option<Arc<crate::workflow::WorkflowService>>,
     /// Headless agent runtime (tools + MCP + browser). Lets Space Apps run a
     /// full tool-enabled agent via the `agent.run` bridge action.
-    pub virtual_worker_pool:
-        Option<Arc<crate::agent::virtual_worker_pool::VirtualWorkerPool>>,
+    pub virtual_worker_pool: Option<Arc<crate::agent::virtual_worker_pool::VirtualWorkerPool>>,
     /// Autonomous background work (no chat session). Backs `/api/background/*`.
     pub background_scheduler: Option<Arc<crate::background::BackgroundScheduler>>,
     /// Live per-group agent state map (`jid → "processing"/"idle"/…`), shared
     /// with the WebSocket gateway's `last_known_states`. Backs
     /// `GET /api/chat/states` so relay clients can reconcile after a drop.
-    pub agent_states:
-        Option<Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>>,
+    pub agent_states: Option<Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>>,
+    /// Token accounting sink for LLM calls the UI server brokers (bridge
+    /// `llm.request`, internal draft completions). `None` in bare test setups.
+    pub usage_recorder: Option<Arc<crate::usage::UsageRecorder>>,
     pub ws_port: u16,
     pub ws_token: String,
 }
@@ -211,6 +213,8 @@ pub fn build_router(state: Arc<UiState>) -> Router {
     Router::new()
         // API endpoints
         .route("/api/config", get(config_handler))
+        // Open a URL in the host machine's default browser (see open_url.rs).
+        .route("/api/ui/open-url", post(open_url_handler))
         .route("/api/skills", get(skills_list))
         .route("/api/skills/remote-search", get(skills_remote_search))
         .route("/api/skills/create", post(skills_create))
@@ -291,6 +295,18 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(super::agent_behavior_config::agent_behavior_get)
                 .post(super::agent_behavior_config::agent_behavior_set),
         )
+        // Widget catalog + default-flow settings (Plugins → Widget).
+        .route("/api/widgets", get(super::widgets::widgets_list))
+        .route("/api/widgets/:id", put(super::widgets::widget_toggle))
+        .route(
+            "/api/defaults",
+            get(super::widgets::defaults_get).put(super::widgets::defaults_set),
+        )
+        // Enabled marketplace plugins' widget assets (widgets/ dir).
+        .route(
+            "/api/marketplace/plugins/:name/widget-static/*path",
+            get(super::marketplace::plugin_widget_static),
+        )
         .route(
             "/api/dispatch-config",
             get(super::dispatch_config::dispatch_config_get)
@@ -302,10 +318,8 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         .route("/api/quicknotes", post(quicknotes_save))
         // Workspace file discovery + folder creation
-        .route(
-            "/api/workspace/files",
-            get(super::workspace::list_files),
-        )
+        .route("/api/workspace/files", get(super::workspace::list_files))
+        .route("/api/chat/files", get(super::workspace::mention_files))
         .route("/api/workspace/file", get(super::workspace::read_file))
         .route("/api/ws/terminal", get(super::terminal::ws_terminal))
         .route("/api/workspace/mkdir", post(super::workspace::mkdir))
@@ -403,10 +417,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/cowork/teams/:id/save-as-template",
             post(super::cowork::save_team_as_template),
         )
-        .route(
-            "/api/cowork/personas",
-            get(super::cowork::list_personas),
-        )
+        .route("/api/cowork/personas", get(super::cowork::list_personas))
         .route(
             "/api/cowork/personas/:name/file",
             get(super::cowork::get_persona_file).put(super::cowork::put_persona_file),
@@ -498,7 +509,9 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         .route(
             "/api/code/artifacts/:id",
-            get(get_artifact).put(update_artifact).delete(delete_artifact),
+            get(get_artifact)
+                .put(update_artifact)
+                .delete(delete_artifact),
         )
         .route("/api/code/artifacts/:id/run", post(run_artifact))
         // Embedding provider config
@@ -545,6 +558,20 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/mcp-servers/:name/tools", post(mcp_servers_tools))
         .route("/api/mcp-servers/:name/test", post(mcp_servers_test))
         .route("/api/mcp-servers/:name/enabled", post(mcp_servers_enabled))
+        // MCP tool aliases (Plugins → Alias): rename or override tools
+        .route(
+            "/api/tool-aliases",
+            get(super::tool_aliases::aliases_list).post(super::tool_aliases::aliases_create),
+        )
+        .route(
+            "/api/tool-aliases/:alias",
+            axum::routing::put(super::tool_aliases::aliases_update)
+                .delete(super::tool_aliases::aliases_delete),
+        )
+        .route(
+            "/api/tool-aliases/:alias/enabled",
+            post(super::tool_aliases::aliases_set_enabled),
+        )
         // Hooks config
         .route("/api/hooks", get(hooks_get).put(hooks_put))
         // ── Space API ─────────────────────────────────────────────────────────
@@ -569,7 +596,9 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         )
         .route(
             "/api/space/calendar/events/:id",
-            patch(space_events_update).delete(space_events_delete),
+            get(space_events_get)
+                .patch(space_events_update)
+                .delete(space_events_delete),
         )
         .route(
             "/api/space/calendar/events/:id/reminder",
@@ -598,13 +627,29 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/space/schedules/:id/run-now",
             post(space_schedules_run_now),
         )
+        // Token usage accounting (llm_usage_log / llm_usage_daily / pricing).
+        .route("/api/usage/overview", get(super::usage::usage_overview))
+        .route("/api/usage/daily", get(super::usage::usage_daily))
+        .route("/api/usage/breakdown", get(super::usage::usage_breakdown))
+        .route("/api/usage/log", get(super::usage::usage_log))
+        .route(
+            "/api/usage/pricing",
+            get(super::usage::pricing_list).put(super::usage::pricing_upsert),
+        )
+        .route(
+            "/api/usage/pricing/:model",
+            delete(super::usage::pricing_delete),
+        )
         // Background tasks — autonomous work, no chat session. Distinct from
         // the schedules above, which run in a chat and reply to a human.
         .route(
             "/api/background/tasks",
             get(super::background::list).post(super::background::create),
         )
-        .route("/api/background/parse", post(super::background::parse_quick))
+        .route(
+            "/api/background/parse",
+            post(super::background::parse_quick),
+        )
         .route(
             "/api/background/tasks/:id",
             get(super::background::detail)
@@ -615,8 +660,14 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/background/tasks/:id/run-now",
             post(super::background::run_now),
         )
-        .route("/api/background/tasks/:id/runs", get(super::background::runs))
-        .route("/api/background/runs/:id", get(super::background::run_detail))
+        .route(
+            "/api/background/tasks/:id/runs",
+            get(super::background::runs),
+        )
+        .route(
+            "/api/background/runs/:id",
+            get(super::background::run_detail),
+        )
         .route(
             "/api/background/runs/:id/cancel",
             post(super::background::cancel_run),
@@ -753,14 +804,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/cognitive/recall",
             post(super::cognitive::cognitive_recall),
         )
-        .route(
-            "/api/cognitive/add",
-            post(super::cognitive::cognitive_add),
-        )
+        .route("/api/cognitive/add", post(super::cognitive::cognitive_add))
         .route(
             "/api/cognitive/upload",
-            post(super::cognitive::cognitive_upload)
-                .layer(DefaultBodyLimit::max(12 * 1024 * 1024)),
+            post(super::cognitive::cognitive_upload).layer(DefaultBodyLimit::max(12 * 1024 * 1024)),
         )
         .route(
             "/api/cognitive/subgraph",
