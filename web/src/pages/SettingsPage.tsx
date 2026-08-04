@@ -15,6 +15,7 @@ import {
   AppstoreOutlined,
   ControlOutlined,
   ScanOutlined,
+  LinkOutlined,
 } from '@ant-design/icons';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
@@ -23,6 +24,7 @@ import { ChannelSettings } from '../components/settings/ChannelSettings';
 import { AgentSettings } from '../components/settings/AgentSettings';
 import { AgentBehaviorSettings } from '../components/settings/AgentBehaviorSettings';
 import { LLMSettings } from '../components/settings/LLMSettings';
+import { OAuthSettings } from '../components/settings/OAuthSettings';
 import { ToolRulesSettings } from '../components/settings/ToolRulesSettings';
 import { EmbeddingSettings } from '../components/settings/EmbeddingSettings';
 import { LocalModelsSettings } from '../components/settings/LocalModelsSettings';
@@ -40,6 +42,7 @@ type SettingsSection =
   | 'channels'
   | 'agents'
   | 'llm'
+  | 'provider-signin'
   | 'embedding'
   | 'local-models'
   | 'whisper'
@@ -67,6 +70,7 @@ export const SettingsPage: React.FC = () => {
       { key: 'agents', icon: <UserOutlined />, label: 'Profile' },
       { key: 'agent-behavior', icon: <ControlOutlined />, label: 'Agent Behavior' },
       { key: 'llm', icon: <ThunderboltOutlined />, label: 'LLM' },
+      { key: 'provider-signin', icon: <LinkOutlined />, label: 'Provider Sign-in' },
       { key: 'embedding', icon: <DatabaseOutlined />, label: 'Embedding' },
       { key: 'local-models', icon: <CloudDownloadOutlined />, label: 'Local Models' },
       { key: 'whisper', icon: <AudioOutlined />, label: 'Whisper ASR' },
@@ -107,6 +111,8 @@ export const SettingsPage: React.FC = () => {
         );
       case 'llm':
         return <LLMSettings />;
+      case 'provider-signin':
+        return <OAuthSettings />;
       case 'embedding':
         return <EmbeddingSettings />;
       case 'local-models':

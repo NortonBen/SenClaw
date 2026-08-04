@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use axum::{
-    Router,
     extract::DefaultBodyLimit,
     http::StatusCode,
     response::{IntoResponse, Json, Response},
     routing::{delete, get, patch, post, put},
+    Router,
 };
 use tower_http::{cors::CorsLayer, services::ServeDir};
 
@@ -73,10 +73,9 @@ use super::space::{
     space_apps_register, space_apps_register_local, space_apps_restart, space_apps_static,
     space_apps_update, space_apps_updates, space_events_create, space_events_delete,
     space_events_get, space_events_list, space_events_search, space_events_set_reminder,
-    space_events_update,
-    space_notes_create, space_notes_delete, space_notes_list, space_notes_search,
-    space_notes_update, space_schedules_cancel, space_schedules_create, space_schedules_detail,
-    space_schedules_list, space_schedules_run_now, space_schedules_update,
+    space_events_update, space_notes_create, space_notes_delete, space_notes_list,
+    space_notes_search, space_notes_update, space_schedules_cancel, space_schedules_create,
+    space_schedules_detail, space_schedules_list, space_schedules_run_now, space_schedules_update,
     space_screenshot_extract, space_screenshot_get, space_sync_apple_calendar,
     space_sync_apple_notes, space_sync_google_calendar, space_sync_google_workspace,
     space_today_summary,
@@ -433,6 +432,41 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route(
             "/api/llm-config/:id",
             delete(llm_config_delete).patch(llm_config_update),
+        )
+        // OAuth sign-in for subscription providers (Claude Code / Codex /
+        // Antigravity). Responses are token-free; see ui_server::oauth.
+        .route(
+            "/api/oauth/providers",
+            get(super::oauth::oauth_providers_list),
+        )
+        .route(
+            "/api/oauth/accounts",
+            get(super::oauth::oauth_accounts_list),
+        )
+        .route(
+            "/api/oauth/accounts/:id",
+            delete(super::oauth::oauth_account_delete),
+        )
+        .route(
+            "/api/oauth/accounts/:id/refresh",
+            post(super::oauth::oauth_account_refresh),
+        )
+        .route("/api/oauth/bind", post(super::oauth::oauth_bind_config))
+        .route("/api/oauth/test-model", post(super::oauth::oauth_test_model))
+        .route(
+            "/api/oauth/accounts/:id/models",
+            get(super::oauth::oauth_account_models),
+        )
+        .route("/api/oauth/flows/:id", get(super::oauth::oauth_flow_status))
+        // Parameterized last so it cannot shadow the literal routes above.
+        .route(
+            "/api/oauth/:provider/start",
+            post(super::oauth::oauth_start),
+        )
+        // Ready-made API-key provider presets (free tiers).
+        .route(
+            "/api/provider-catalog",
+            get(super::oauth::provider_catalog_list),
         )
         // Local model management (MLX/HF download)
         .route("/api/local-models", get(local_models_list))

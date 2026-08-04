@@ -21,6 +21,93 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 // ============================================================================
+// Credentials
+// ============================================================================
+
+/// Attach the profile's credential to a request.
+///
+/// Two shapes: a plain API key in the provider's own header, or an OAuth
+/// bearer token plus whatever protocol headers that provider needs to accept
+/// one (see [`crate::providers::oauth::transport`]).
+fn apply_auth(
+    request: reqwest::RequestBuilder,
+    profile: &ModelProfile,
+    token: &str,
+) -> reqwest::RequestBuilder {
+    if let Some(provider_id) = profile.oauth_provider.as_deref() {
+        let mut request = request;
+        for (name, value) in crate::providers::oauth::transport::auth_headers(provider_id, token) {
+            request = request.header(name, value);
+        }
+        return request;
+    }
+
+    // API-key path, unchanged: Anthropic wants `x-api-key`, everyone else a
+    // bearer token.
+    match effective_adapter(profile) {
+        "anthropic" => request.header("x-api-key", token).header(
+            "anthropic-version",
+            crate::providers::oauth::transport::ANTHROPIC_VERSION,
+        ),
+        _ => request.header("Authorization", format!("Bearer {token}")),
+    }
+}
+
+/// POST `body` to `url` with the profile's credential, refreshing once if the
+/// provider says the token is no longer good.
+///
+/// The retry only fires for OAuth profiles: an API key that returns 401 is
+/// wrong, not stale, and retrying it just doubles the latency of a hard error.
+pub(crate) async fn post_authed(
+    client: &Client,
+    url: &str,
+    profile: &ModelProfile,
+    body: &Value,
+) -> Result<reqwest::Response> {
+    let mut token = profile.api_key.clone();
+
+    for attempt in 0..2 {
+        let request = apply_auth(
+            client.post(url).timeout(REQUEST_TIMEOUT).json(body),
+            profile,
+            &token,
+        );
+        let response = request.send().await.context("LLM request failed")?;
+
+        let unauthorized = matches!(response.status().as_u16(), 401 | 403);
+        let can_retry = attempt == 0 && unauthorized && profile.is_oauth();
+        if !can_retry {
+            return Ok(response);
+        }
+
+        let Some(account_id) = profile.oauth_account_id.as_deref() else {
+            return Ok(response);
+        };
+        let Some(manager) = crate::providers::oauth::global() else {
+            return Ok(response);
+        };
+
+        debug!(
+            "[oauth] {} rejected the token; refreshing",
+            profile.provider
+        );
+        match manager.refresh_account(account_id).await {
+            Ok(()) => match manager.access_token(account_id) {
+                Some(fresh) => token = fresh,
+                None => return Ok(response),
+            },
+            Err(e) => {
+                // Surface the refresh failure rather than the bare 401 — it
+                // says whether to re-authorise or just wait.
+                bail!("{} token refresh failed: {e}", profile.provider);
+            }
+        }
+    }
+
+    unreachable!("loop returns on the final attempt")
+}
+
+// ============================================================================
 // Main entry point
 // ============================================================================
 
@@ -78,6 +165,34 @@ pub async fn query_llm(
                 profile,
                 thinking,
                 stream,
+            )
+            .await
+        }
+        // Connected via OAuth but not yet speakable: these providers use their
+        // own wire formats (OpenAI Responses / Google Code Assist), not
+        // chat/completions. Fail loudly — the catch-all below would otherwise
+        // POST an OpenAI body at them and surface an unrelated parse error.
+        // OpenAI Responses API — Codex and Grok both speak it.
+        "codex" => {
+            crate::providers::adapters::codex::query_codex(
+                client,
+                messages,
+                system_prompt,
+                tools,
+                cancel,
+                profile,
+            )
+            .await
+        }
+        // Google Code Assist — Gemini contents inside a project envelope.
+        "antigravity" => {
+            crate::providers::adapters::antigravity::query_antigravity(
+                client,
+                messages,
+                system_prompt,
+                tools,
+                cancel,
+                profile,
             )
             .await
         }
@@ -780,18 +895,14 @@ async fn query_openai(
 
     debug!("[openai] POST {url}");
 
-    let request = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", profile.api_key))
-        .timeout(REQUEST_TIMEOUT)
-        .json(&body);
-
     // Check for cancellation before sending
     if cancel.is_cancelled() {
         bail!("Request cancelled before send");
     }
 
-    let response = request.send().await.context("OpenAI request failed")?;
+    let response = post_authed(client, &url, profile, &body)
+        .await
+        .context("OpenAI request failed")?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -1062,14 +1173,9 @@ async fn query_anthropic(
         bail!("Request cancelled before send");
     }
 
-    let request = client
-        .post(&url)
-        .header("x-api-key", &profile.api_key)
-        .header("anthropic-version", "2023-06-01")
-        .timeout(REQUEST_TIMEOUT)
-        .json(&body);
-
-    let response = request.send().await.context("Anthropic request failed")?;
+    let response = post_authed(client, &url, profile, &body)
+        .await
+        .context("Anthropic request failed")?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -1235,7 +1341,7 @@ fn parse_anthropic_non_stream(json: &Value) -> Result<Message> {
 // Message construction helpers
 // ============================================================================
 
-fn build_assistant_message(
+pub(crate) fn build_assistant_message(
     text: &str,
     reasoning: &str,
     tool_calls: &[Value],
@@ -1573,7 +1679,129 @@ mod tests {
             context_length: 200_000,
             adapt: None,
             vision: None,
+            ..Default::default()
         }
+    }
+
+    /// Build a request through `apply_auth` and read back its headers.
+    fn auth_headers_for(profile: &ModelProfile, token: &str) -> reqwest::header::HeaderMap {
+        let client = Client::new();
+        let request = apply_auth(client.post("https://example.invalid"), profile, token);
+        request.build().expect("request builds").headers().clone()
+    }
+
+    #[test]
+    fn api_key_anthropic_profiles_keep_the_x_api_key_header() {
+        let mut p = profile("anthropic", "claude-sonnet-5");
+        p.adapt = Some("anthropic".into());
+        let headers = auth_headers_for(&p, "sk-ant-123");
+
+        assert_eq!(headers.get("x-api-key").unwrap(), "sk-ant-123");
+        assert_eq!(headers.get("anthropic-version").unwrap(), "2023-06-01");
+        assert!(headers.get("authorization").is_none());
+        // The OAuth-only beta flag must not leak onto API-key requests.
+        assert!(headers.get("anthropic-beta").is_none());
+    }
+
+    #[test]
+    fn api_key_openai_profiles_keep_the_bearer_header() {
+        let mut p = profile("openai", "gpt-4o-mini");
+        p.adapt = Some("openai".into());
+        let headers = auth_headers_for(&p, "sk-oai-123");
+
+        assert_eq!(headers.get("authorization").unwrap(), "Bearer sk-oai-123");
+        assert!(headers.get("x-api-key").is_none());
+    }
+
+    #[test]
+    fn oauth_claude_profiles_switch_to_bearer_plus_the_oauth_beta() {
+        let mut p = profile("anthropic", "claude-sonnet-5");
+        p.adapt = Some("anthropic".into());
+        p.oauth_provider = Some("claude".into());
+        p.oauth_account_id = Some("acct-1".into());
+
+        let headers = auth_headers_for(&p, "oauth-tok");
+
+        assert_eq!(headers.get("authorization").unwrap(), "Bearer oauth-tok");
+        assert_eq!(headers.get("anthropic-beta").unwrap(), "oauth-2025-04-20");
+        assert_eq!(headers.get("anthropic-version").unwrap(), "2023-06-01");
+        // Bearer replaces the key header rather than doubling up.
+        assert!(headers.get("x-api-key").is_none());
+    }
+
+    #[test]
+    fn oauth_requests_identify_as_senclaw() {
+        let mut p = profile("anthropic", "claude-sonnet-5");
+        p.oauth_provider = Some("claude".into());
+        let headers = auth_headers_for(&p, "t");
+
+        let ua = headers.get("user-agent").unwrap().to_str().unwrap();
+        assert!(ua.starts_with("senclaw/"), "{ua}");
+        assert!(!ua.contains("claude-cli"), "{ua}");
+    }
+
+    /// Adapter names `query_llm` dispatches to explicitly. Anything not here
+    /// hits the catch-all and is sent an OpenAI chat/completions body.
+    const ROUTED_ADAPTERS: &[&str] = &[
+        "anthropic",
+        "codex",
+        "antigravity",
+        "local-candle-native",
+        "local-mlx",
+        "openai",
+    ];
+
+    #[test]
+    fn every_signin_provider_routes_to_a_real_adapter() {
+        // The guarantee behind "Provider Sign-in": connecting an account is
+        // pointless unless its wire format is actually implemented. A provider
+        // whose `adapt` is not routed would silently get OpenAI-shaped
+        // requests and fail with a confusing upstream parse error.
+        for p in crate::providers::oauth::provider::all() {
+            assert!(
+                ROUTED_ADAPTERS.contains(&p.adapt),
+                "provider `{}` declares adapt `{}`, which query_llm does not route",
+                p.id,
+                p.adapt
+            );
+        }
+    }
+
+    #[test]
+    fn every_free_tier_preset_routes_to_a_real_adapter() {
+        for p in crate::providers::all() {
+            assert!(
+                ROUTED_ADAPTERS.contains(&p.adapt),
+                "preset `{}` declares adapt `{}`, which query_llm does not route",
+                p.id,
+                p.adapt
+            );
+        }
+    }
+
+    #[test]
+    fn oauth_adapters_are_reachable_through_effective_adapter() {
+        // `effective_adapter` prefers `adapt` over the provider name, so a
+        // provider called e.g. "claude-oauth" must still land on its declared
+        // adapter rather than being force-routed by the name match.
+        for p in crate::providers::oauth::provider::all() {
+            let mut prof = profile(p.id, "some-model");
+            prof.adapt = Some(p.adapt.to_string());
+            assert_eq!(
+                effective_adapter(&prof),
+                p.adapt,
+                "provider `{}` misroutes",
+                p.id
+            );
+        }
+    }
+
+    #[test]
+    fn is_oauth_tracks_the_provider_field() {
+        let mut p = profile("anthropic", "claude-sonnet-5");
+        assert!(!p.is_oauth());
+        p.oauth_provider = Some("claude".into());
+        assert!(p.is_oauth());
     }
 
     #[test]

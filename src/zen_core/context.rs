@@ -144,6 +144,7 @@ mod tests {
                     context_length: 4000,
                     adapt: None,
                     vision: None,
+                    ..Default::default()
                 },
                 thinking: false,
                 stream: false,
@@ -171,6 +172,7 @@ mod tests {
                     context_length: 4000,
                     adapt: None,
                     vision: None,
+                    ..Default::default()
                 },
                 thinking: false,
                 stream: false,
@@ -217,6 +219,7 @@ mod tests {
                     context_length: 4000,
                     adapt: None,
                     vision: None,
+                    ..Default::default()
                 },
                 thinking: false,
                 stream: false,
@@ -266,6 +269,7 @@ mod tests {
                     context_length: 4000,
                     adapt: None,
                     vision: None,
+                    ..Default::default()
                 },
                 thinking: false,
                 stream: false,

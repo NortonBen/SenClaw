@@ -352,6 +352,7 @@ fn model_profile_from_input(input: ModelAddInput) -> ModelProfile {
         context_length: input.context_length,
         adapt: input.adapt,
         vision: None,
+        ..Default::default()
     }
 }
 

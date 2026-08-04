@@ -24,6 +24,7 @@ import '../capture/screen_capture.dart' show isCaptureSupported;
 import '../chat/agents_provider.dart';
 import '../chat/new_chat_dialog.dart' show llmConfigsProvider, LlmConfig;
 import 'entity_providers.dart';
+import 'provider_signin_section.dart';
 import 'settings_providers.dart';
 
 const _sections = [
@@ -33,6 +34,7 @@ const _sections = [
   ('agents', 'Profiles', Icons.badge_outlined),
   ('rules', 'Tool Rules', Icons.rule_folder_outlined),
   ('llm', 'LLM Models', Icons.smart_toy_outlined),
+  ('signin', 'Provider Sign-in', Icons.link),
   ('local', 'Local Models', Icons.memory),
   ('embedding', 'Embedding', Icons.scatter_plot_outlined),
   ('memory', 'Knowledge', Icons.account_tree_outlined),
@@ -92,6 +94,7 @@ class SettingsScreen extends ConsumerWidget {
             'agents' => const _AgentsSection(),
             'rules' => const _ToolRulesSection(),
             'llm' => const _LlmSection(),
+            'signin' => const ProviderSignInSection(),
             'local' => const _LocalModelsSection(),
             'embedding' => const _EmbeddingSection(),
             'memory' => const _MemorySection(),
@@ -155,8 +158,13 @@ class _SectionItem extends StatelessWidget {
 }
 
 /// Common scrollable section body with a title.
-class _Body extends StatefulWidget {
-  const _Body({required this.title, required this.children, this.onRefresh});
+class SettingsBody extends StatefulWidget {
+  const SettingsBody({
+    super.key,
+    required this.title,
+    required this.children,
+    this.onRefresh,
+  });
   final String title;
   final List<Widget> children;
 
@@ -166,10 +174,10 @@ class _Body extends StatefulWidget {
   final VoidCallback? onRefresh;
 
   @override
-  State<_Body> createState() => _BodyState();
+  State<SettingsBody> createState() => _SettingsBodyState();
 }
 
-class _BodyState extends State<_Body> {
+class _SettingsBodyState extends State<SettingsBody> {
   @override
   void initState() {
     super.initState();
@@ -270,7 +278,7 @@ class UpdatesSection extends ConsumerWidget {
     // The web console has no bundle to replace and no process to restart.
     final canUpdate = !kIsWeb && !svc.isDevBuild;
 
-    return _Body(
+    return SettingsBody(
       title: 'Updates',
       children: [
         Container(
@@ -475,7 +483,7 @@ class _AppearanceSection extends ConsumerWidget {
       (ThemeMode.light, 'Light', Icons.light_mode_outlined),
       (ThemeMode.dark, 'Dark', Icons.dark_mode_outlined),
     ];
-    return _Body(
+    return SettingsBody(
       title: 'Appearance',
       children: [
         Text('Theme',
@@ -559,7 +567,7 @@ class _GeneralSection extends ConsumerWidget {
     final behavior = ref.watch(agentBehaviorProvider);
     final api = ref.read(settingsApiProvider);
 
-    return _Body(
+    return SettingsBody(
       title: 'General',
       children: [
         Text('Permissions',
@@ -776,7 +784,7 @@ class _ChannelsSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
     final channels = ref.watch(channelsProvider);
-    return _Body(
+    return SettingsBody(
       title: 'Channels',
       onRefresh: () {
         ref.read(channelsProvider.notifier).refresh();
@@ -1450,7 +1458,7 @@ class _AgentsSection extends ConsumerWidget {
     // Watch bindings so the provider is warm before the editor opens (it
     // pre-selects bound channels in initState) and to show per-profile counts.
     final bindings = ref.watch(bindingsProvider);
-    return _Body(
+    return SettingsBody(
       title: 'Profiles',
       onRefresh: () {
         ref.read(agentsProvider.notifier).refresh();
@@ -1847,7 +1855,7 @@ class _ToolRulesSection extends ConsumerWidget {
     final c = context.colors;
     final rules = ref.watch(toolRulesProvider);
     final acceptAll = ref.watch(acceptAllProvider);
-    return _Body(
+    return SettingsBody(
       title: 'Tool Rules',
       children: [
         Container(
@@ -2267,7 +2275,7 @@ class _LlmSection extends ConsumerWidget {
     final c = context.colors;
     final llm = ref.watch(llmConfigsProvider);
     final thinking = ref.watch(thinkingEnabledProvider).valueOrNull ?? true;
-    return _Body(
+    return SettingsBody(
       title: 'LLM Models',
       onRefresh: () => ref.invalidate(llmConfigsProvider),
       children: [
@@ -2840,7 +2848,7 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
     final list = models.valueOrNull ?? const [];
     _syncPoll(list.any((m) => m.downloading));
     final runtime = ref.watch(localModelsRuntimeProvider);
-    return _Body(
+    return SettingsBody(
       title: 'Local Models',
       children: [
         const _LocalInferenceSettings(),
@@ -3139,7 +3147,7 @@ class _MediaModelsSectionState extends ConsumerState<_MediaModelsSection> {
   Widget build(BuildContext context) {
     final c = context.colors;
     final models = ref.watch(mediaModelsProvider(domain));
-    return _Body(
+    return SettingsBody(
       title: widget.title,
       children: [
         // Key by domain: without it Flutter reuses the card's State when
@@ -3354,7 +3362,7 @@ class _EmbeddingSectionState extends ConsumerState<_EmbeddingSection> {
     final cfg = ref.watch(embeddingConfigProvider);
     return cfg.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => _Body(title: 'Embedding', children: [Text('$e')]),
+      error: (e, _) => SettingsBody(title: 'Embedding', children: [Text('$e')]),
       data: (d) {
         if (!_seeded) {
           _seeded = true;
@@ -3368,7 +3376,7 @@ class _EmbeddingSectionState extends ConsumerState<_EmbeddingSection> {
         final needsKey = _provider == 'openai' || _provider == 'openrouter';
         final needsUrl = needsKey || _provider == 'ollama';
         final isLocal = _provider == 'local';
-        return _Body(
+        return SettingsBody(
           title: 'Embedding',
           children: [
             DropdownButtonFormField<String>(
@@ -3631,13 +3639,13 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
     final cfg = ref.watch(cognitiveConfigProvider);
     return cfg.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => _Body(title: 'Knowledge (Cognitive)', children: [Text('$e')]),
+      error: (e, _) => SettingsBody(title: 'Knowledge (Cognitive)', children: [Text('$e')]),
       data: (d) {
         if (!_seeded) {
           _seeded = true;
           _seed(d);
         }
-        return _Body(
+        return SettingsBody(
           title: 'Knowledge (Cognitive)',
           children: [
             _ToggleRow(
@@ -4004,7 +4012,7 @@ class SpaceAppsSection extends ConsumerWidget {
     final apps = ref.watch(spaceAppsProvider);
     final updates =
         ref.watch(spaceAppUpdatesProvider).valueOrNull ?? const {};
-    return _Body(
+    return SettingsBody(
       title: 'Space Apps',
       onRefresh: () {
         ref.invalidate(spaceAppsProvider);
