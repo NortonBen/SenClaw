@@ -35,7 +35,10 @@ fn gateway(e: impl std::fmt::Display) -> ApiError {
 }
 
 pub fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 pub fn make_state() -> Arc<AppState> {
@@ -104,7 +107,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         // Extension bridge callback (extension → app RPC replies)
         .route("/ext/callback", post(ext_callback))
         // MCP
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -127,7 +133,9 @@ async fn search(
     if q.q.trim().is_empty() {
         return Err(bad("thiếu tham số tìm kiếm `q`"));
     }
-    let res = youtube::search(&s.bridge, q.q.trim()).await.map_err(gateway)?;
+    let res = youtube::search(&s.bridge, q.q.trim())
+        .await
+        .map_err(gateway)?;
     s.db.log("search", q.q.trim(), now());
     Ok(Json(res))
 }
@@ -168,7 +176,9 @@ async fn comments(
 ) -> Result<Json<Value>, ApiError> {
     let res = match (q.continuation.as_deref(), q.video_id.as_deref()) {
         (Some(tok), _) if !tok.trim().is_empty() => youtube::comments(&s.bridge, tok.trim()).await,
-        (_, Some(vid)) if !vid.trim().is_empty() => youtube::comments_for_video(&s.bridge, vid.trim()).await,
+        (_, Some(vid)) if !vid.trim().is_empty() => {
+            youtube::comments_for_video(&s.bridge, vid.trim()).await
+        }
         _ => return Err(bad("cần `video_id` hoặc `continuation`")),
     };
     res.map(Json).map_err(gateway)
@@ -189,9 +199,15 @@ async fn sync_comments(
     if b.video_id.trim().is_empty() {
         return Err(bad("thiếu video_id"));
     }
-    let res = youtube::sync_comments(&s.bridge, &s.db, b.video_id.trim(), b.max_pages.unwrap_or(3), now())
-        .await
-        .map_err(gateway)?;
+    let res = youtube::sync_comments(
+        &s.bridge,
+        &s.db,
+        b.video_id.trim(),
+        b.max_pages.unwrap_or(3),
+        now(),
+    )
+    .await
+    .map_err(gateway)?;
     Ok(Json(res))
 }
 
@@ -226,7 +242,9 @@ async fn analyze_comments(
     State(s): State<Arc<AppState>>,
     Json(b): Json<AnalyzeBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let res = youtube::analyze_pending(&s.db, b.max.unwrap_or(60), now()).await.map_err(gateway)?;
+    let res = youtube::analyze_pending(&s.db, b.max.unwrap_or(60), now())
+        .await
+        .map_err(gateway)?;
     Ok(Json(res))
 }
 
@@ -254,15 +272,25 @@ async fn scan_keywords(
     State(s): State<Arc<AppState>>,
     Query(q): Query<ScanQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let kws: Vec<String> = q.keywords.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect();
+    let kws: Vec<String> = q
+        .keywords
+        .split(',')
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .collect();
     if kws.is_empty() {
         return Err(bad("thiếu keywords"));
     }
-    let rows = s
-        .db
-        .search_comments(q.video_id.as_deref(), &kws, q.limit.unwrap_or(100).clamp(1, 500))
+    let rows =
+        s.db.search_comments(
+            q.video_id.as_deref(),
+            &kws,
+            q.limit.unwrap_or(100).clamp(1, 500),
+        )
         .map_err(bad)?;
-    Ok(Json(json!({ "count": rows.len(), "keywords": kws, "comments": rows })))
+    Ok(Json(
+        json!({ "count": rows.len(), "keywords": kws, "comments": rows }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -279,9 +307,13 @@ async fn index_comments(
     if b.video_id.trim().is_empty() {
         return Err(bad("thiếu video_id"));
     }
-    let res = youtube::index_comments(&s.db, b.video_id.trim(), b.limit.unwrap_or(50).clamp(1, 500))
-        .await
-        .map_err(gateway)?;
+    let res = youtube::index_comments(
+        &s.db,
+        b.video_id.trim(),
+        b.limit.unwrap_or(50).clamp(1, 500),
+    )
+    .await
+    .map_err(gateway)?;
     Ok(Json(res))
 }
 
@@ -299,9 +331,15 @@ async fn comment_action(
     State(s): State<Arc<AppState>>,
     Json(b): Json<ActionBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let res = youtube::comment_action(&s.bridge, &s.db, b.comment_id.trim(), b.action.trim(), b.confirm)
-        .await
-        .map_err(gateway)?;
+    let res = youtube::comment_action(
+        &s.bridge,
+        &s.db,
+        b.comment_id.trim(),
+        b.action.trim(),
+        b.confirm,
+    )
+    .await
+    .map_err(gateway)?;
     Ok(Json(res))
 }
 
@@ -344,12 +382,13 @@ async fn inbox_reply(
     if b.text.trim().is_empty() {
         return Err(bad("nội dung reply rỗng"));
     }
-    let rp = s
-        .db
-        .reply_params_of(b.external_id.trim())
-        .map_err(bad)?
-        .ok_or_else(|| bad("comment không có replyParams đã cache — chạy sync trước"))?;
-    let res = youtube::send_action(&s.bridge, "reply", &rp, b.text.trim()).await.map_err(gateway)?;
+    let rp =
+        s.db.reply_params_of(b.external_id.trim())
+            .map_err(bad)?
+            .ok_or_else(|| bad("comment không có replyParams đã cache — chạy sync trước"))?;
+    let res = youtube::send_action(&s.bridge, "reply", &rp, b.text.trim())
+        .await
+        .map_err(gateway)?;
     Ok(Json(res))
 }
 
@@ -373,7 +412,9 @@ async fn oauth_config(
         return Err(bad("thiếu client_id / client_secret"));
     }
     crate::oauth::set_config(&s.db, b.client_id.trim(), b.client_secret.trim()).map_err(bad)?;
-    Ok(Json(json!({ "ok": true, "authUrl": crate::oauth::auth_url(&s.db).map_err(bad)? })))
+    Ok(Json(
+        json!({ "ok": true, "authUrl": crate::oauth::auth_url(&s.db).map_err(bad)? }),
+    ))
 }
 
 /// Redirect the browser to Google's consent screen.
@@ -464,7 +505,10 @@ async fn list_drafts(
     State(s): State<Arc<AppState>>,
     Query(q): Query<DraftFilter>,
 ) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!(s.db.list_drafts(q.status.as_deref()).map_err(bad)?)))
+    Ok(Json(json!(s
+        .db
+        .list_drafts(q.status.as_deref())
+        .map_err(bad)?)))
 }
 
 #[derive(Deserialize)]
@@ -480,11 +524,14 @@ async fn create_draft(
     State(s): State<Arc<AppState>>,
     Json(b): Json<CreateDraftBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let kind = norm_kind(&b.kind).ok_or_else(|| bad("kind phải là comment | reply | community_post"))?;
+    let kind =
+        norm_kind(&b.kind).ok_or_else(|| bad("kind phải là comment | reply | community_post"))?;
     if b.body.trim().is_empty() {
         return Err(bad("nội dung draft rỗng"));
     }
-    let id = s.db.create_draft(kind, b.target.trim(), b.body.trim(), now()).map_err(bad)?;
+    let id =
+        s.db.create_draft(kind, b.target.trim(), b.body.trim(), now())
+            .map_err(bad)?;
     Ok(Json(json!({ "id": id, "status": "draft" })))
 }
 
@@ -504,12 +551,17 @@ async fn ai_draft(
     State(s): State<Arc<AppState>>,
     Json(b): Json<AiDraftBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let kind = norm_kind(&b.kind).ok_or_else(|| bad("kind phải là comment | reply | community_post"))?;
+    let kind =
+        norm_kind(&b.kind).ok_or_else(|| bad("kind phải là comment | reply | community_post"))?;
     let (text, model) = llm::draft_body(kind, &b.context, b.instruction.as_deref())
         .await
         .map_err(gateway)?;
-    let id = s.db.create_draft(kind, b.target.trim(), text.trim(), now()).map_err(bad)?;
-    Ok(Json(json!({ "id": id, "status": "draft", "body": text.trim(), "model": model })))
+    let id =
+        s.db.create_draft(kind, b.target.trim(), text.trim(), now())
+            .map_err(bad)?;
+    Ok(Json(
+        json!({ "id": id, "status": "draft", "body": text.trim(), "model": model }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -521,11 +573,15 @@ async fn approve_draft(
     State(s): State<Arc<AppState>>,
     Json(b): Json<DraftIdBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let d = s.db.get_draft(&b.id).map_err(bad)?.ok_or_else(|| bad("draft không tồn tại"))?;
+    let d =
+        s.db.get_draft(&b.id)
+            .map_err(bad)?
+            .ok_or_else(|| bad("draft không tồn tại"))?;
     if d.status == "sent" {
         return Err(bad("draft đã gửi rồi"));
     }
-    s.db.set_draft_status(&b.id, "approved", None, now()).map_err(bad)?;
+    s.db.set_draft_status(&b.id, "approved", None, now())
+        .map_err(bad)?;
     Ok(Json(json!({ "id": b.id, "status": "approved" })))
 }
 
@@ -534,19 +590,28 @@ async fn send_draft(
     State(s): State<Arc<AppState>>,
     Json(b): Json<DraftIdBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let d = s.db.get_draft(&b.id).map_err(bad)?.ok_or_else(|| bad("draft không tồn tại"))?;
+    let d =
+        s.db.get_draft(&b.id)
+            .map_err(bad)?
+            .ok_or_else(|| bad("draft không tồn tại"))?;
     if d.status != "approved" {
         return Err(bad("chỉ gửi được draft đã DUYỆT (approve trước)"));
     }
     match youtube::send_action(&s.bridge, &d.kind, &d.target, &d.body).await {
         Ok(res) => {
-            s.db.set_draft_status(&b.id, "sent", Some(&res.to_string()), now()).map_err(bad)?;
+            s.db.set_draft_status(&b.id, "sent", Some(&res.to_string()), now())
+                .map_err(bad)?;
             s.db.log("send", &d.kind, now());
             Ok(Json(json!({ "id": b.id, "status": "sent", "result": res })))
         }
         Err(e) => {
-            s.db.set_draft_status(&b.id, "failed", Some(&json!({ "error": e }).to_string()), now())
-                .map_err(bad)?;
+            s.db.set_draft_status(
+                &b.id,
+                "failed",
+                Some(&json!({ "error": e }).to_string()),
+                now(),
+            )
+            .map_err(bad)?;
             Err(gateway(e))
         }
     }
@@ -576,7 +641,10 @@ async fn ext_callback(
 ) -> Result<Json<Value>, ApiError> {
     let secret = body.get("secret").and_then(|x| x.as_str()).unwrap_or("");
     if secret != s.bridge.secret() {
-        return Err(ApiError(StatusCode::UNAUTHORIZED, "sai callback secret".into()));
+        return Err(ApiError(
+            StatusCode::UNAUTHORIZED,
+            "sai callback secret".into(),
+        ));
     }
     let id = body.get("id").and_then(|x| x.as_str()).unwrap_or("");
     if id.is_empty() {
@@ -604,7 +672,8 @@ async fn model_active(Json(b): Json<ModelActiveBody>) -> Result<Json<Value>, Api
 
 /// Which SenClaw LLM the bridge will use (probes the daemon's llm-config).
 async fn llm_info() -> Json<Value> {
-    let base = std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
+    let base =
+        std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
     let url = format!("{}/api/llm-config", base.trim_end_matches('/'));
     let fetch = reqwest::Client::new()
         .get(&url)
@@ -616,13 +685,18 @@ async fn llm_info() -> Json<Value> {
             Ok(v) => {
                 let active = v.get("activeId").and_then(|x| x.as_str()).unwrap_or("");
                 let cfg = v.get("configs").and_then(|a| a.as_array()).and_then(|a| {
-                    a.iter().find(|c| c.get("id").and_then(|x| x.as_str()) == Some(active))
+                    a.iter()
+                        .find(|c| c.get("id").and_then(|x| x.as_str()) == Some(active))
                 });
-                let model = cfg.and_then(|c| c.get("modelName")).and_then(|x| x.as_str());
+                let model = cfg
+                    .and_then(|c| c.get("modelName"))
+                    .and_then(|x| x.as_str());
                 Json(json!({ "ok": model.is_some(), "daemon": base, "model": model }))
             }
             Err(e) => Json(json!({ "ok": false, "daemon": base, "error": format!("parse: {e}") })),
         },
-        Err(e) => Json(json!({ "ok": false, "daemon": base, "error": format!("Không kết nối daemon: {e}") })),
+        Err(e) => Json(
+            json!({ "ok": false, "daemon": base, "error": format!("Không kết nối daemon: {e}") }),
+        ),
     }
 }

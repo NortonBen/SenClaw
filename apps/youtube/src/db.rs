@@ -139,7 +139,9 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -171,7 +173,9 @@ impl Db {
     pub fn get_kv(&self, key: &str) -> Result<Option<serde_json::Value>> {
         self.with(|c| {
             let s: Option<String> = c
-                .query_row("SELECT value FROM kv WHERE key=?1", params![key], |r| r.get(0))
+                .query_row("SELECT value FROM kv WHERE key=?1", params![key], |r| {
+                    r.get(0)
+                })
                 .optional()?;
             Ok(s.and_then(|s| serde_json::from_str(&s).ok()))
         })
@@ -179,9 +183,10 @@ impl Db {
 
     /// The last auth snapshot the extension pushed (or a default "unknown" shape).
     pub fn auth_snapshot(&self) -> serde_json::Value {
-        self.get_kv("auth").ok().flatten().unwrap_or_else(|| {
-            serde_json::json!({ "hasSapisid": false, "loggedIn": false })
-        })
+        self.get_kv("auth")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| serde_json::json!({ "hasSapisid": false, "loggedIn": false }))
     }
 
     // ---- drafts ----
@@ -228,7 +233,10 @@ impl Db {
                 })
             };
             let rows: Vec<Draft> = match filter {
-                Some(st) => stmt.query_map(params![st], map)?.filter_map(|r| r.ok()).collect(),
+                Some(st) => stmt
+                    .query_map(params![st], map)?
+                    .filter_map(|r| r.ok())
+                    .collect(),
                 None => stmt.query_map([], map)?.filter_map(|r| r.ok()).collect(),
             };
             Ok(rows)
@@ -260,7 +268,13 @@ impl Db {
         })
     }
 
-    pub fn set_draft_status(&self, id: &str, status: &str, result: Option<&str>, now: i64) -> Result<()> {
+    pub fn set_draft_status(
+        &self,
+        id: &str,
+        status: &str,
+        result: Option<&str>,
+        now: i64,
+    ) -> Result<()> {
         self.with(|c| {
             let n = c.execute(
                 "UPDATE drafts SET status=?2, result=COALESCE(?3, result), updated_at=?4 WHERE id=?1",
@@ -388,7 +402,18 @@ impl Db {
                    intent=excluded.intent, topics_json=excluded.topics_json, lang=excluded.lang,
                    is_spam=excluded.is_spam, toxicity=excluded.toxicity, model=excluded.model,
                    analyzed_at=excluded.analyzed_at",
-                params![comment_id, sentiment, score, intent, topics_json, lang, is_spam as i64, toxicity, model, now],
+                params![
+                    comment_id,
+                    sentiment,
+                    score,
+                    intent,
+                    topics_json,
+                    lang,
+                    is_spam as i64,
+                    toxicity,
+                    model,
+                    now
+                ],
             )?;
             Ok(())
         })
@@ -478,7 +503,11 @@ impl Db {
     pub fn reply_params_of(&self, comment_id: &str) -> Result<Option<String>> {
         self.with(|conn| {
             Ok(conn
-                .query_row("SELECT reply_params FROM comments WHERE id=?1", params![comment_id], |r| r.get(0))
+                .query_row(
+                    "SELECT reply_params FROM comments WHERE id=?1",
+                    params![comment_id],
+                    |r| r.get(0),
+                )
                 .optional()?
                 .flatten())
         })
@@ -488,7 +517,11 @@ impl Db {
     pub fn tokens_of(&self, comment_id: &str) -> Result<Option<serde_json::Value>> {
         self.with(|conn| {
             let s: Option<String> = conn
-                .query_row("SELECT tokens_json FROM comments WHERE id=?1", params![comment_id], |r| r.get(0))
+                .query_row(
+                    "SELECT tokens_json FROM comments WHERE id=?1",
+                    params![comment_id],
+                    |r| r.get(0),
+                )
                 .optional()?
                 .flatten();
             Ok(s.and_then(|s| serde_json::from_str(&s).ok()))
@@ -497,7 +530,12 @@ impl Db {
 
     /// Cached comments whose text contains ANY of `keywords` (case-insensitive) —
     /// the data source for keyword alerts (P10). `video_id` None = across all videos.
-    pub fn search_comments(&self, video_id: Option<&str>, keywords: &[String], limit: i64) -> Result<Vec<CommentRow>> {
+    pub fn search_comments(
+        &self,
+        video_id: Option<&str>,
+        keywords: &[String],
+        limit: i64,
+    ) -> Result<Vec<CommentRow>> {
         if keywords.is_empty() {
             return Ok(vec![]);
         }
@@ -531,10 +569,19 @@ impl Db {
             let rows = stmt
                 .query_map(params_dyn.as_slice(), |r| {
                     Ok(CommentRow {
-                        id: r.get(0)?, video_id: r.get(1)?, parent_id: r.get(2)?, author: r.get(3)?,
-                        author_channel: r.get(4)?, text: r.get(5)?, like_count: r.get(6)?,
-                        reply_count: r.get(7)?, published: r.get(8)?, reply_params: r.get(9)?,
-                        fetched_at: r.get(10)?, sentiment: r.get(11)?, intent: r.get(12)?,
+                        id: r.get(0)?,
+                        video_id: r.get(1)?,
+                        parent_id: r.get(2)?,
+                        author: r.get(3)?,
+                        author_channel: r.get(4)?,
+                        text: r.get(5)?,
+                        like_count: r.get(6)?,
+                        reply_count: r.get(7)?,
+                        published: r.get(8)?,
+                        reply_params: r.get(9)?,
+                        fetched_at: r.get(10)?,
+                        sentiment: r.get(11)?,
+                        intent: r.get(12)?,
                     })
                 })?
                 .filter_map(|r| r.ok())

@@ -60,7 +60,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "youtube-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -321,14 +323,21 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
         "youtube_scan_keywords" => {
             let kws: Vec<String> = args["keywords"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|x| x.as_str()).map(|s| s.to_string()).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .map(|s| s.to_string())
+                        .collect()
+                })
                 .unwrap_or_default();
             if kws.is_empty() {
                 return error_result("keywords is required (non-empty array)".into());
             }
             let vid = args["video_id"].as_str().filter(|v| !v.trim().is_empty());
             match db.search_comments(vid, &kws, 200) {
-                Ok(rows) => json_result(json!({ "count": rows.len(), "keywords": kws, "comments": rows })),
+                Ok(rows) => {
+                    json_result(json!({ "count": rows.len(), "keywords": kws, "comments": rows }))
+                }
                 Err(e) => error_result(e.to_string()),
             }
         }
@@ -406,7 +415,9 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
         "youtube_draft_comment" => {
             let kind = match norm_kind(args["kind"].as_str().unwrap_or("")) {
                 Some(k) => k,
-                None => return error_result("kind must be comment | reply | community_post".into()),
+                None => {
+                    return error_result("kind must be comment | reply | community_post".into())
+                }
             };
             let context = args["context"].as_str().unwrap_or("").trim();
             if context.is_empty() {
@@ -416,7 +427,9 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let instruction = args["instruction"].as_str();
             match crate::llm::draft_body(kind, context, instruction).await {
                 Ok((body, model)) => match db.create_draft(kind, target, body.trim(), now()) {
-                    Ok(id) => json_result(json!({ "id": id, "status": "draft", "body": body.trim(), "model": model })),
+                    Ok(id) => json_result(
+                        json!({ "id": id, "status": "draft", "body": body.trim(), "model": model }),
+                    ),
                     Err(e) => error_result(e.to_string()),
                 },
                 Err(e) => error_result(e),
@@ -460,7 +473,12 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                     json_result(json!({ "id": id, "status": "sent", "result": res }))
                 }
                 Err(e) => {
-                    let _ = db.set_draft_status(id, "failed", Some(&json!({ "error": e.clone() }).to_string()), now());
+                    let _ = db.set_draft_status(
+                        id,
+                        "failed",
+                        Some(&json!({ "error": e.clone() }).to_string()),
+                        now(),
+                    );
                     error_result(e)
                 }
             }

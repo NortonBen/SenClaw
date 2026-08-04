@@ -20,12 +20,16 @@ async fn proxy(bridge: &ExtBridge, endpoint: &str, body: Value) -> Result<Value,
         "method": "POST",
         "body": body,
     });
-    let reply = bridge.call("yt_fetch", params, Duration::from_secs(30)).await?;
+    let reply = bridge
+        .call("yt_fetch", params, Duration::from_secs(30))
+        .await?;
     let data = unwrap_reply(reply, "extension fetch error")?;
 
     let http = data.get("httpStatus").and_then(|s| s.as_i64()).unwrap_or(0);
     if http != 0 && !(200..300).contains(&http) {
-        return Err(format!("YouTube trả HTTP {http} — có thể bị chặn (BotGuard/PoToken) hoặc chưa đăng nhập"));
+        return Err(format!(
+            "YouTube trả HTTP {http} — có thể bị chặn (BotGuard/PoToken) hoặc chưa đăng nhập"
+        ));
     }
     data.get("json")
         .cloned()
@@ -40,7 +44,10 @@ fn unwrap_reply(reply: Value, default_err: &str) -> Result<Value, String> {
     }
     let status = reply.get("status").and_then(|s| s.as_str()).unwrap_or("ok");
     if status == "error" {
-        let msg = reply.get("message").and_then(|m| m.as_str()).unwrap_or(default_err);
+        let msg = reply
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or(default_err);
         return Err(msg.to_string());
     }
     Ok(reply.get("data").cloned().unwrap_or(Value::Null))
@@ -114,7 +121,11 @@ fn find_editor(snapshot: &Value) -> Option<i64> {
 fn find_button(snapshot: &Value, labels: &[&str], allow_links: bool) -> Option<i64> {
     let els = snapshot.get("elements")?.as_array()?;
     els.iter()
-        .filter(|e| e.get("clickable").and_then(|x| x.as_bool()).unwrap_or(false))
+        .filter(|e| {
+            e.get("clickable")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false)
+        })
         .filter(|e| allow_links || s(e, "tag") != "a")
         .find(|e| {
             let text = s(e, "text").trim().to_lowercase();
@@ -132,7 +143,11 @@ fn find_button(snapshot: &Value, labels: &[&str], allow_links: bool) -> Option<i
 /// trusted input. Returns a step trace so a failure is debuggable; when a step
 /// can't find its target the agent can finish the job with the generic
 /// `youtube_ui_snapshot` / `youtube_ui_act` tools.
-pub async fn post_community(bridge: &ExtBridge, text: &str, composer_url: &str) -> Result<Value, String> {
+pub async fn post_community(
+    bridge: &ExtBridge,
+    text: &str,
+    composer_url: &str,
+) -> Result<Value, String> {
     let mut trace: Vec<Value> = Vec::new();
 
     let opened = ui_open(bridge, composer_url).await?;
@@ -141,7 +156,11 @@ pub async fn post_community(bridge: &ExtBridge, text: &str, composer_url: &str) 
     // 1) Open the composer if it starts collapsed behind a "Create post" control.
     //    Exact-label + button-only so the sidebar "Posts" link can't be hit.
     let snap = ui_snapshot(bridge).await?;
-    if let Some(i) = find_button(&snap, &["create post", "tạo bài viết", "new post", "tạo bài đăng"], false) {
+    if let Some(i) = find_button(
+        &snap,
+        &["create post", "tạo bài viết", "new post", "tạo bài đăng"],
+        false,
+    ) {
         let r = ui_act(bridge, "click", Some(i), None, None).await?;
         trace.push(json!({ "step": "open_composer", "index": i, "result": r }));
     }
@@ -159,11 +178,12 @@ pub async fn post_community(bridge: &ExtBridge, text: &str, composer_url: &str) 
 
     // 3) Submit.
     let snap = ui_snapshot(bridge).await?;
-    let post_btn = find_button(&snap, &["post", "đăng", "publish", "xuất bản"], false).ok_or_else(|| {
-        "không tìm thấy nút Đăng — nội dung ĐÃ được nhập vào ô soạn, hãy dùng \
+    let post_btn =
+        find_button(&snap, &["post", "đăng", "publish", "xuất bản"], false).ok_or_else(|| {
+            "không tìm thấy nút Đăng — nội dung ĐÃ được nhập vào ô soạn, hãy dùng \
          youtube_ui_snapshot/act để bấm gửi thủ công"
-            .to_string()
-    })?;
+                .to_string()
+        })?;
     let r = ui_act(bridge, "click", Some(post_btn), None, None).await?;
     trace.push(json!({ "step": "submit", "index": post_btn, "result": r }));
 
@@ -176,7 +196,10 @@ pub async fn post_community(bridge: &ExtBridge, text: &str, composer_url: &str) 
                     after
                         .get("elements")
                         .and_then(|e| e.as_array())
-                        .and_then(|els| els.iter().find(|e| e.get("idx").and_then(|x| x.as_i64()) == Some(i)))
+                        .and_then(|els| {
+                            els.iter()
+                                .find(|e| e.get("idx").and_then(|x| x.as_i64()) == Some(i))
+                        })
                         .map(|e| s(e, "text").trim().is_empty())
                         .unwrap_or(false)
                 })
@@ -221,7 +244,11 @@ pub async fn search(bridge: &ExtBridge, query: &str) -> Result<Value, String> {
 
 /// Browse a channel by id (`UC…`). `params` optionally selects a tab (e.g. the
 /// community-tab token) — omit for the channel home.
-pub async fn browse(bridge: &ExtBridge, browse_id: &str, params: Option<&str>) -> Result<Value, String> {
+pub async fn browse(
+    bridge: &ExtBridge,
+    browse_id: &str,
+    params: Option<&str>,
+) -> Result<Value, String> {
     let raw = proxy(bridge, "browse", innertube::browse_body(browse_id, params)).await?;
     let videos = innertube::parse_videos(&raw);
     let posts = innertube::parse_posts(&raw);
@@ -242,9 +269,15 @@ pub async fn comments(bridge: &ExtBridge, continuation: &str) -> Result<Value, S
 /// List a video's comments: derive the comment-section token from the watch page,
 /// then page it.
 pub async fn comments_for_video(bridge: &ExtBridge, video_id: &str) -> Result<Value, String> {
-    let n1 = proxy(bridge, "next", json!({ "context": innertube::client_context(), "videoId": video_id })).await?;
-    let token = innertube::find_comment_section_token(&n1)
-        .ok_or_else(|| "không tìm thấy phần bình luận (video tắt bình luận hoặc chưa đăng nhập)".to_string())?;
+    let n1 = proxy(
+        bridge,
+        "next",
+        json!({ "context": innertube::client_context(), "videoId": video_id }),
+    )
+    .await?;
+    let token = innertube::find_comment_section_token(&n1).ok_or_else(|| {
+        "không tìm thấy phần bình luận (video tắt bình luận hoặc chưa đăng nhập)".to_string()
+    })?;
     comments(bridge, &token).await
 }
 
@@ -260,9 +293,15 @@ pub async fn sync_comments(
     now: i64,
 ) -> Result<Value, String> {
     // Locate the comment section, then page it.
-    let n1 = proxy(bridge, "next", json!({ "context": innertube::client_context(), "videoId": video_id })).await?;
-    let mut token = innertube::find_comment_section_token(&n1)
-        .ok_or_else(|| "không tìm thấy phần bình luận (video tắt bình luận hoặc chưa đăng nhập)".to_string())?;
+    let n1 = proxy(
+        bridge,
+        "next",
+        json!({ "context": innertube::client_context(), "videoId": video_id }),
+    )
+    .await?;
+    let mut token = innertube::find_comment_section_token(&n1).ok_or_else(|| {
+        "không tìm thấy phần bình luận (video tắt bình luận hoặc chưa đăng nhập)".to_string()
+    })?;
 
     let mut fetched = 0usize;
     let mut new = 0usize;
@@ -315,7 +354,11 @@ fn comment_in(video_id: &str, c: &Value) -> CommentIn {
         }
     }
     CommentIn {
-        id: c.get("commentId").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        id: c
+            .get("commentId")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
         video_id: video_id.to_string(),
         parent_id: get_str("parentId"),
         author: get_str("author").unwrap_or_default(),
@@ -325,7 +368,11 @@ fn comment_in(video_id: &str, c: &Value) -> CommentIn {
         reply_count: c.get("replyCount").and_then(|x| x.as_i64()),
         published: get_str("published"),
         reply_params: get_str("replyParams"),
-        tokens_json: if tokens.is_empty() { None } else { Some(Value::Object(tokens).to_string()) },
+        tokens_json: if tokens.is_empty() {
+            None
+        } else {
+            Some(Value::Object(tokens).to_string())
+        },
     }
 }
 
@@ -350,9 +397,19 @@ pub async fn analyze_pending(db: &Db, max: usize, now: i64) -> Result<Value, Str
             match results.iter().find(|a| &a.id == id) {
                 Some(a) => {
                     let topics = serde_json::to_string(&a.topics).unwrap_or_else(|_| "[]".into());
-                    db.save_analysis(id, &a.sentiment, a.sentiment_score, &a.intent, &topics,
-                                     &a.lang, a.is_spam, a.toxicity, &model, now)
-                        .map_err(|e| e.to_string())?;
+                    db.save_analysis(
+                        id,
+                        &a.sentiment,
+                        a.sentiment_score,
+                        &a.intent,
+                        &topics,
+                        &a.lang,
+                        a.is_spam,
+                        a.toxicity,
+                        &model,
+                        now,
+                    )
+                    .map_err(|e| e.to_string())?;
                 }
                 // Model dropped this id → store a neutral placeholder so we don't
                 // re-fetch it forever.
@@ -384,22 +441,31 @@ pub async fn comment_action(
     }
     let destructive = matches!(action, "remove" | "report");
     if destructive && !confirm {
-        return Err(format!("hành động '{action}' không thể hoàn tác — cần confirm=true"));
+        return Err(format!(
+            "hành động '{action}' không thể hoàn tác — cần confirm=true"
+        ));
     }
     let tokens = db
         .tokens_of(comment_id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "chưa có action-token cho comment này — chạy youtube_sync_comments trước".to_string())?;
-    let token = tokens
-        .get(action)
-        .and_then(|x| x.as_str())
-        .ok_or_else(|| format!("YouTube không cấp token '{action}' cho comment này (chỉ chủ kênh mới có remove/pin)"))?;
+        .ok_or_else(|| {
+            "chưa có action-token cho comment này — chạy youtube_sync_comments trước".to_string()
+        })?;
+    let token = tokens.get(action).and_then(|x| x.as_str()).ok_or_else(|| {
+        format!(
+            "YouTube không cấp token '{action}' cho comment này (chỉ chủ kênh mới có remove/pin)"
+        )
+    })?;
 
     throttle_write().await;
     let body = json!({ "context": innertube::client_context(), "actions": [token] });
     let resp = proxy(bridge, "comment/perform_comment_action", body).await?;
     if innertube::action_succeeded(&resp) {
-        db.log("comment_action", &format!("{action}:{comment_id}"), crate::api::now());
+        db.log(
+            "comment_action",
+            &format!("{action}:{comment_id}"),
+            crate::api::now(),
+        );
         Ok(json!({ "ok": true, "action": action, "commentId": comment_id }))
     } else {
         Err("YouTube không xác nhận hành động (token có thể đã hết hạn — sync lại)".to_string())
@@ -409,7 +475,9 @@ pub async fn comment_action(
 /// P10 — index a video's cached comments into the app's private knowledge space
 /// (`youtube-comments`) so drafts can recall context / build an FAQ.
 pub async fn index_comments(db: &Db, video_id: &str, limit: i64) -> Result<Value, String> {
-    let rows = db.list_comments(video_id, limit).map_err(|e| e.to_string())?;
+    let rows = db
+        .list_comments(video_id, limit)
+        .map_err(|e| e.to_string())?;
     let items: Vec<(String, String)> = rows
         .into_iter()
         .filter(|r| !r.text.trim().is_empty())
@@ -423,7 +491,12 @@ pub async fn index_comments(db: &Db, video_id: &str, limit: i64) -> Result<Value
 /// video. It lives on the comment simplebox, which may only appear once the comment
 /// section is loaded — so try the watch page first, then the comment continuation.
 async fn create_comment_params(bridge: &ExtBridge, video_id: &str) -> Result<String, String> {
-    let n1 = proxy(bridge, "next", json!({ "context": innertube::client_context(), "videoId": video_id })).await?;
+    let n1 = proxy(
+        bridge,
+        "next",
+        json!({ "context": innertube::client_context(), "videoId": video_id }),
+    )
+    .await?;
     if let Some(p) = innertube::find_key_str(&n1, "createCommentParams") {
         return Ok(p);
     }
@@ -433,7 +506,10 @@ async fn create_comment_params(bridge: &ExtBridge, video_id: &str) -> Result<Str
             return Ok(p);
         }
     }
-    Err("không lấy được createCommentParams — video có thể tắt bình luận hoặc phiên chưa đăng nhập".to_string())
+    Err(
+        "không lấy được createCommentParams — video có thể tắt bình luận hoặc phiên chưa đăng nhập"
+            .to_string(),
+    )
 }
 
 /// Minimum gap between two WRITE actions. Automated posting at machine speed is
@@ -473,7 +549,12 @@ async fn throttle_write() {
 /// InnerTube `comment/*` action endpoints via the extension (or, for community
 /// posts, drive the real composer UI). The human approval gate (only approved
 /// drafts reach here) plus `throttle_write` are the safety mechanisms.
-pub async fn send_action(bridge: &ExtBridge, kind: &str, target: &str, body: &str) -> Result<Value, String> {
+pub async fn send_action(
+    bridge: &ExtBridge,
+    kind: &str,
+    target: &str,
+    body: &str,
+) -> Result<Value, String> {
     let target = target.trim();
     match kind {
         "comment" => {
@@ -482,7 +563,12 @@ pub async fn send_action(bridge: &ExtBridge, kind: &str, target: &str, body: &st
             }
             let params = create_comment_params(bridge, target).await?;
             throttle_write().await;
-            let resp = proxy(bridge, "comment/create_comment", innertube::comment_create_body(&params, body)).await?;
+            let resp = proxy(
+                bridge,
+                "comment/create_comment",
+                innertube::comment_create_body(&params, body),
+            )
+            .await?;
             if innertube::action_succeeded(&resp) {
                 Ok(json!({ "submitted": true, "kind": "comment", "target": target }))
             } else {
@@ -491,10 +577,18 @@ pub async fn send_action(bridge: &ExtBridge, kind: &str, target: &str, body: &st
         }
         "reply" => {
             if target.is_empty() {
-                return Err("reply cần `target` = createReplyParams token (lấy từ youtube_list_comments)".to_string());
+                return Err(
+                    "reply cần `target` = createReplyParams token (lấy từ youtube_list_comments)"
+                        .to_string(),
+                );
             }
             throttle_write().await;
-            let resp = proxy(bridge, "comment/create_comment_reply", innertube::comment_reply_body(target, body)).await?;
+            let resp = proxy(
+                bridge,
+                "comment/create_comment_reply",
+                innertube::comment_reply_body(target, body),
+            )
+            .await?;
             if innertube::action_succeeded(&resp) {
                 Ok(json!({ "submitted": true, "kind": "reply" }))
             } else {
@@ -531,7 +625,10 @@ mod tests {
 
     /// Reply to an RPC id as the fake extension would (HTTP-callback shape).
     fn reply_ok(bridge: &ExtBridge, id: &str, http: i64, body: Value) {
-        bridge.complete_callback(id, json!({ "id": id, "status": "ok", "data": { "httpStatus": http, "json": body } }));
+        bridge.complete_callback(
+            id,
+            json!({ "id": id, "status": "ok", "data": { "httpStatus": http, "json": body } }),
+        );
     }
 
     // ---- P6: comment cache + sync ----
@@ -565,12 +662,24 @@ mod tests {
     fn upsert_comment_is_idempotent_and_updates() {
         let db = tmp_db();
         let c = CommentIn {
-            id: "x".into(), video_id: "v".into(), parent_id: None, author: "a".into(),
-            author_channel: None, text: "hi".into(), like_count: Some(1), reply_count: None,
-            published: None, reply_params: None, tokens_json: None,
+            id: "x".into(),
+            video_id: "v".into(),
+            parent_id: None,
+            author: "a".into(),
+            author_channel: None,
+            text: "hi".into(),
+            like_count: Some(1),
+            reply_count: None,
+            published: None,
+            reply_params: None,
+            tokens_json: None,
         };
         assert!(db.upsert_comment(&c, 1).unwrap(), "first insert = new");
-        let c2 = CommentIn { text: "hi edited".into(), like_count: Some(5), ..c };
+        let c2 = CommentIn {
+            text: "hi edited".into(),
+            like_count: Some(5),
+            ..c
+        };
         assert!(!db.upsert_comment(&c2, 2).unwrap(), "second = not new");
         let rows = db.list_comments("v", 10).unwrap();
         assert_eq!(rows.len(), 1);
@@ -590,24 +699,39 @@ mod tests {
         // 1) next{videoId} → comment-section token
         let r = next_rpc(&mut rx).await;
         assert_eq!(r["params"]["body"]["videoId"], "vid9");
-        reply_ok(&bridge, r["id"].as_str().unwrap(), 200, watch_with_comment_token("C0"));
+        reply_ok(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            200,
+            watch_with_comment_token("C0"),
+        );
 
         // 2) next{C0} → page 1 (2 comments + a next-page sentinel)
         let r = next_rpc(&mut rx).await;
         assert_eq!(r["params"]["body"]["continuation"], "C0");
-        reply_ok(&bridge, r["id"].as_str().unwrap(), 200, comment_page(json!([
-            comment_node("cid1", "a", "hay", "2"),
-            comment_node("cid2", "b", "ok", "0"),
-            cont_item("C1")
-        ])));
+        reply_ok(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            200,
+            comment_page(json!([
+                comment_node("cid1", "a", "hay", "2"),
+                comment_node("cid2", "b", "ok", "0"),
+                cont_item("C1")
+            ])),
+        );
 
         // 3) next{C1} → page 2 (cid2 repeats, cid3 new, no sentinel → stop)
         let r = next_rpc(&mut rx).await;
         assert_eq!(r["params"]["body"]["continuation"], "C1");
-        reply_ok(&bridge, r["id"].as_str().unwrap(), 200, comment_page(json!([
-            comment_node("cid2", "b", "ok sửa", "0"),
-            comment_node("cid3", "c", "mới", "5")
-        ])));
+        reply_ok(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            200,
+            comment_page(json!([
+                comment_node("cid2", "b", "ok sửa", "0"),
+                comment_node("cid3", "c", "mới", "5")
+            ])),
+        );
 
         let res = handle.await.unwrap().expect("sync ok");
         assert_eq!(res["fetched"], 4, "2 + 2 rows seen");
@@ -619,14 +743,24 @@ mod tests {
         assert_eq!(rows.len(), 3);
         // The repeated comment was UPDATED, not duplicated.
         assert_eq!(rows.iter().find(|r| r.id == "cid2").unwrap().text, "ok sửa");
-        assert_eq!(rows.iter().find(|r| r.id == "cid1").unwrap().like_count, Some(2));
+        assert_eq!(
+            rows.iter().find(|r| r.id == "cid1").unwrap().like_count,
+            Some(2)
+        );
     }
 
     fn mk_comment(id: &str, author: &str, text: &str) -> CommentIn {
         CommentIn {
-            id: id.into(), video_id: "v".into(), parent_id: None, author: author.into(),
-            author_channel: None, text: text.into(), like_count: Some(1), reply_count: None,
-            published: None, reply_params: Some(format!("rp-{id}")),
+            id: id.into(),
+            video_id: "v".into(),
+            parent_id: None,
+            author: author.into(),
+            author_channel: None,
+            text: text.into(),
+            like_count: Some(1),
+            reply_count: None,
+            published: None,
+            reply_params: Some(format!("rp-{id}")),
             tokens_json: Some(json!({ "heart": format!("h-{id}") }).to_string()),
         }
     }
@@ -635,11 +769,16 @@ mod tests {
     #[test]
     fn stats_feed_scan_and_tokens() {
         let db = tmp_db();
-        db.upsert_comment(&mk_comment("c1", "alice", "sản phẩm tuyệt vời"), 1).unwrap();
-        db.upsert_comment(&mk_comment("c2", "bob", "giá bao nhiêu vậy?"), 1).unwrap();
-        db.upsert_comment(&mk_comment("c3", "alice", "tệ quá"), 1).unwrap();
-        db.save_analysis("c1", "pos", 0.9, "praise", "[]", "vi", false, 0.0, "m", 2).unwrap();
-        db.save_analysis("c2", "neu", 0.0, "question", "[]", "vi", false, 0.0, "m", 2).unwrap();
+        db.upsert_comment(&mk_comment("c1", "alice", "sản phẩm tuyệt vời"), 1)
+            .unwrap();
+        db.upsert_comment(&mk_comment("c2", "bob", "giá bao nhiêu vậy?"), 1)
+            .unwrap();
+        db.upsert_comment(&mk_comment("c3", "alice", "tệ quá"), 1)
+            .unwrap();
+        db.save_analysis("c1", "pos", 0.9, "praise", "[]", "vi", false, 0.0, "m", 2)
+            .unwrap();
+        db.save_analysis("c2", "neu", 0.0, "question", "[]", "vi", false, 0.0, "m", 2)
+            .unwrap();
 
         let stats = db.comment_stats("v").unwrap();
         assert_eq!(stats["total"], 3);
@@ -654,7 +793,10 @@ mod tests {
         assert_eq!(feed[0]["platform"], "youtube");
         assert_eq!(feed[0]["external_id"], "c1");
         let last = feed.last().unwrap()["id"].as_i64().unwrap();
-        assert!(db.feed_since(last, 10).unwrap().is_empty(), "cursor must advance");
+        assert!(
+            db.feed_since(last, 10).unwrap().is_empty(),
+            "cursor must advance"
+        );
 
         // reply token + action token lookups
         assert_eq!(db.reply_params_of("c2").unwrap().as_deref(), Some("rp-c2"));
@@ -664,7 +806,10 @@ mod tests {
         let hits = db.search_comments(Some("v"), &["giá".into()], 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "c2");
-        assert!(db.search_comments(Some("v"), &["khôngcótừnày".into()], 10).unwrap().is_empty());
+        assert!(db
+            .search_comments(Some("v"), &["khôngcótừnày".into()], 10)
+            .unwrap()
+            .is_empty());
     }
 
     // ---- P8 comment action ----
@@ -676,12 +821,21 @@ mod tests {
         db.upsert_comment(&mk_comment("c1", "a", "hi"), 1).unwrap();
         let mut rx = bridge.test_connect();
         let (b2, dbc) = (bridge.clone(), db.clone());
-        let handle = tokio::spawn(async move { comment_action(&b2, &dbc, "c1", "heart", false).await });
+        let handle =
+            tokio::spawn(async move { comment_action(&b2, &dbc, "c1", "heart", false).await });
 
         let r = next_rpc(&mut rx).await;
-        assert!(r["params"]["url"].as_str().unwrap().contains("comment/perform_comment_action"));
+        assert!(r["params"]["url"]
+            .as_str()
+            .unwrap()
+            .contains("comment/perform_comment_action"));
         assert_eq!(r["params"]["body"]["actions"][0], "h-c1");
-        reply_ok(&bridge, r["id"].as_str().unwrap(), 200, json!({ "actionResults": [{ "status": "STATUS_SUCCEEDED" }] }));
+        reply_ok(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            200,
+            json!({ "actionResults": [{ "status": "STATUS_SUCCEEDED" }] }),
+        );
 
         let res = handle.await.unwrap().expect("action ok");
         assert_eq!(res["ok"], true);
@@ -693,9 +847,18 @@ mod tests {
         let bridge = ExtBridge::new();
         let db = tmp_db();
         // A comment with no cached action tokens.
-        db.upsert_comment(&CommentIn { tokens_json: None, ..mk_comment("c1", "a", "hi") }, 1).unwrap();
+        db.upsert_comment(
+            &CommentIn {
+                tokens_json: None,
+                ..mk_comment("c1", "a", "hi")
+            },
+            1,
+        )
+        .unwrap();
         let _rx = bridge.test_connect();
-        let err = comment_action(&bridge, &db, "c1", "heart", false).await.unwrap_err();
+        let err = comment_action(&bridge, &db, "c1", "heart", false)
+            .await
+            .unwrap_err();
         assert!(err.contains("token"), "got: {err}");
     }
 
@@ -733,16 +896,24 @@ mod tests {
         let _rx = bridge.test_connect();
 
         // Without confirm → refused before any RPC.
-        let err = comment_action(&bridge, &db, "c1", "remove", false).await.unwrap_err();
+        let err = comment_action(&bridge, &db, "c1", "remove", false)
+            .await
+            .unwrap_err();
         assert!(err.contains("confirm=true"), "got: {err}");
 
         // With confirm → fires the action.
         let mut rx = bridge.test_connect();
         let (b2, dbc) = (bridge.clone(), db.clone());
-        let handle = tokio::spawn(async move { comment_action(&b2, &dbc, "c1", "remove", true).await });
+        let handle =
+            tokio::spawn(async move { comment_action(&b2, &dbc, "c1", "remove", true).await });
         let r = next_rpc(&mut rx).await;
         assert_eq!(r["params"]["body"]["actions"][0], "RM_TOK");
-        reply_ok(&bridge, r["id"].as_str().unwrap(), 200, json!({ "actionResults": [{ "status": "STATUS_SUCCEEDED" }] }));
+        reply_ok(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            200,
+            json!({ "actionResults": [{ "status": "STATUS_SUCCEEDED" }] }),
+        );
         assert_eq!(handle.await.unwrap().unwrap()["ok"], true);
     }
 
@@ -767,7 +938,10 @@ mod tests {
 
         let rpc = next_rpc(&mut rx).await;
         assert_eq!(rpc["method"], "yt_fetch");
-        assert!(rpc["params"]["url"].as_str().unwrap().contains("youtubei/v1/search"));
+        assert!(rpc["params"]["url"]
+            .as_str()
+            .unwrap()
+            .contains("youtubei/v1/search"));
         assert_eq!(rpc["params"]["body"]["query"], "rust");
         reply_ok(&bridge, rpc["id"].as_str().unwrap(), 200, search_fixture());
 
@@ -794,20 +968,37 @@ mod tests {
         let bridge = ExtBridge::new();
         let mut rx = bridge.test_connect();
         let b2 = bridge.clone();
-        let handle = tokio::spawn(async move { send_action(&b2, "comment", "vid9", "hay quá!").await });
+        let handle =
+            tokio::spawn(async move { send_action(&b2, "comment", "vid9", "hay quá!").await });
 
         // 1) create_comment_params → next{videoId}; we return the params inline.
         let r1 = next_rpc(&mut rx).await;
-        assert!(r1["params"]["url"].as_str().unwrap().contains("youtubei/v1/next"));
+        assert!(r1["params"]["url"]
+            .as_str()
+            .unwrap()
+            .contains("youtubei/v1/next"));
         assert_eq!(r1["params"]["body"]["videoId"], "vid9");
-        reply_ok(&bridge, r1["id"].as_str().unwrap(), 200, json!({ "createCommentParams": "CCP" }));
+        reply_ok(
+            &bridge,
+            r1["id"].as_str().unwrap(),
+            200,
+            json!({ "createCommentParams": "CCP" }),
+        );
 
         // 2) create_comment with that token.
         let r2 = next_rpc(&mut rx).await;
-        assert!(r2["params"]["url"].as_str().unwrap().contains("comment/create_comment"));
+        assert!(r2["params"]["url"]
+            .as_str()
+            .unwrap()
+            .contains("comment/create_comment"));
         assert_eq!(r2["params"]["body"]["createCommentParams"], "CCP");
         assert_eq!(r2["params"]["body"]["commentText"], "hay quá!");
-        reply_ok(&bridge, r2["id"].as_str().unwrap(), 200, json!({ "actionResults": [{ "status": "STATUS_SUCCEEDED" }] }));
+        reply_ok(
+            &bridge,
+            r2["id"].as_str().unwrap(),
+            200,
+            json!({ "actionResults": [{ "status": "STATUS_SUCCEEDED" }] }),
+        );
 
         let res = handle.await.unwrap().expect("send ok");
         assert_eq!(res["submitted"], true);
@@ -854,7 +1045,10 @@ mod tests {
     fn submit_pick_skips_the_posts_nav_link() {
         // "Posts" link precedes the real "Đăng" button and even matches "post".
         let s = snap(json!([nav_link(1, "Posts"), button(9, "Đăng")]));
-        assert_eq!(find_button(&s, &["post", "đăng", "publish", "xuất bản"], false), Some(9));
+        assert_eq!(
+            find_button(&s, &["post", "đăng", "publish", "xuất bản"], false),
+            Some(9)
+        );
     }
 
     #[test]
@@ -870,7 +1064,12 @@ mod tests {
         let mut rx = bridge.test_connect();
         let b2 = bridge.clone();
         let handle = tokio::spawn(async move {
-            post_community(&b2, "chào cả nhà", "https://studio.youtube.com/channel/UC1/posts").await
+            post_community(
+                &b2,
+                "chào cả nhà",
+                "https://studio.youtube.com/channel/UC1/posts",
+            )
+            .await
         });
 
         // open
@@ -890,15 +1089,25 @@ mod tests {
         let r = next_rpc(&mut rx).await;
         assert_eq!(r["method"], "yt_ui_act");
         assert_eq!(r["params"]["action"], "click");
-        assert_eq!(r["params"]["index"], 2, "phải bấm nút Create post, không phải link Posts");
+        assert_eq!(
+            r["params"]["index"], 2,
+            "phải bấm nút Create post, không phải link Posts"
+        );
         reply_ui(&bridge, r["id"].as_str().unwrap(), json!({ "ok": true }));
 
         // snapshot 2 → type into the composer, NOT the search box
         let r = next_rpc(&mut rx).await;
-        reply_ui(&bridge, r["id"].as_str().unwrap(), snap(json!([search_box(0), composer(5, "")])));
+        reply_ui(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            snap(json!([search_box(0), composer(5, "")])),
+        );
         let r = next_rpc(&mut rx).await;
         assert_eq!(r["params"]["action"], "type");
-        assert_eq!(r["params"]["index"], 5, "phải gõ vào composer, không phải ô tìm kiếm");
+        assert_eq!(
+            r["params"]["index"], 5,
+            "phải gõ vào composer, không phải ô tìm kiếm"
+        );
         assert_eq!(r["params"]["text"], "chào cả nhà");
         reply_ui(&bridge, r["id"].as_str().unwrap(), json!({ "ok": true }));
 
@@ -907,11 +1116,18 @@ mod tests {
         reply_ui(
             &bridge,
             r["id"].as_str().unwrap(),
-            snap(json!([nav_link(1, "Posts"), composer(5, "chào cả nhà"), button(9, "Đăng")])),
+            snap(json!([
+                nav_link(1, "Posts"),
+                composer(5, "chào cả nhà"),
+                button(9, "Đăng")
+            ])),
         );
         let r = next_rpc(&mut rx).await;
         assert_eq!(r["params"]["action"], "click");
-        assert_eq!(r["params"]["index"], 9, "phải bấm nút Đăng, không phải link Posts");
+        assert_eq!(
+            r["params"]["index"], 9,
+            "phải bấm nút Đăng, không phải link Posts"
+        );
         reply_ui(&bridge, r["id"].as_str().unwrap(), json!({ "ok": true }));
 
         // snapshot 4 (verify) → composer gone ⇒ verified
@@ -922,7 +1138,11 @@ mod tests {
         // release the debugger attachment
         let r = next_rpc(&mut rx).await;
         assert_eq!(r["method"], "yt_ui_release");
-        reply_ui(&bridge, r["id"].as_str().unwrap(), json!({ "released": true }));
+        reply_ui(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            json!({ "released": true }),
+        );
 
         let res = handle.await.unwrap().expect("post ok");
         assert_eq!(res["submitted"], true);
@@ -936,29 +1156,54 @@ mod tests {
         let bridge = ExtBridge::new();
         let mut rx = bridge.test_connect();
         let b2 = bridge.clone();
-        let handle = tokio::spawn(async move { post_community(&b2, "xin chào", "https://studio.youtube.com/").await });
+        let handle = tokio::spawn(async move {
+            post_community(&b2, "xin chào", "https://studio.youtube.com/").await
+        });
 
         let r = next_rpc(&mut rx).await; // open
         reply_ui(&bridge, r["id"].as_str().unwrap(), json!({ "tabId": 3 }));
         let r = next_rpc(&mut rx).await; // snapshot 1 — no "Create post" button ⇒ no click
-        reply_ui(&bridge, r["id"].as_str().unwrap(), snap(json!([composer(5, "")])));
+        reply_ui(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            snap(json!([composer(5, "")])),
+        );
         let r = next_rpc(&mut rx).await; // snapshot 2 — locate the editor
-        reply_ui(&bridge, r["id"].as_str().unwrap(), snap(json!([composer(5, "")])));
+        reply_ui(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            snap(json!([composer(5, "")])),
+        );
         let r = next_rpc(&mut rx).await; // type
         assert_eq!(r["params"]["action"], "type");
         reply_ui(&bridge, r["id"].as_str().unwrap(), json!({ "ok": true }));
         let r = next_rpc(&mut rx).await; // snapshot 3 — submit button
-        reply_ui(&bridge, r["id"].as_str().unwrap(), snap(json!([button(9, "Đăng")])));
+        reply_ui(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            snap(json!([button(9, "Đăng")])),
+        );
         let r = next_rpc(&mut rx).await; // click submit
         reply_ui(&bridge, r["id"].as_str().unwrap(), json!({ "ok": true }));
         // verify: composer still holds the text ⇒ the post did NOT go through
         let r = next_rpc(&mut rx).await;
-        reply_ui(&bridge, r["id"].as_str().unwrap(), snap(json!([composer(5, "xin chào")])));
+        reply_ui(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            snap(json!([composer(5, "xin chào")])),
+        );
         let r = next_rpc(&mut rx).await; // release
-        reply_ui(&bridge, r["id"].as_str().unwrap(), json!({ "released": true }));
+        reply_ui(
+            &bridge,
+            r["id"].as_str().unwrap(),
+            json!({ "released": true }),
+        );
 
         let res = handle.await.unwrap().expect("flow completes");
-        assert_eq!(res["verified"], false, "còn chữ trong composer ⇒ không được báo đã đăng");
+        assert_eq!(
+            res["verified"], false,
+            "còn chữ trong composer ⇒ không được báo đã đăng"
+        );
     }
 
     #[tokio::test]
@@ -966,7 +1211,10 @@ mod tests {
         let bridge = ExtBridge::new();
         let mut rx = bridge.test_connect();
         let b2 = bridge.clone();
-        let handle = tokio::spawn(async move { post_community(&b2, "x", "https://studio.youtube.com/").await });
+        let handle =
+            tokio::spawn(
+                async move { post_community(&b2, "x", "https://studio.youtube.com/").await },
+            );
 
         let r = next_rpc(&mut rx).await; // open
         reply_ui(&bridge, r["id"].as_str().unwrap(), json!({ "tabId": 1 }));
@@ -976,6 +1224,9 @@ mod tests {
         reply_ui(&bridge, r["id"].as_str().unwrap(), snap(json!([])));
 
         let err = handle.await.unwrap().unwrap_err();
-        assert!(err.contains("youtube_ui_snapshot"), "phải chỉ đường fallback; got: {err}");
+        assert!(
+            err.contains("youtube_ui_snapshot"),
+            "phải chỉ đường fallback; got: {err}"
+        );
     }
 }

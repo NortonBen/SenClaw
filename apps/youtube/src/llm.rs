@@ -13,7 +13,11 @@ fn client() -> SpaceClient {
 }
 
 /// One-shot completion on SenClaw's active LLM via the SDK open API.
-pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(String, String), String> {
+pub async fn bridge_llm(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String), String> {
     client()
         .llm_request(system, user, max_tokens)
         .await
@@ -36,7 +40,11 @@ as the context.";
 /// community post is an announcement to your own audience, which reads nothing
 /// like a comment left on someone else's video.
 /// The result is a DRAFT — stored, and must be approved before it can be sent.
-pub async fn draft_body(kind: &str, context: &str, instruction: Option<&str>) -> Result<(String, String), String> {
+pub async fn draft_body(
+    kind: &str,
+    context: &str,
+    instruction: Option<&str>,
+) -> Result<(String, String), String> {
     let (system, closing, budget) = match kind {
         "community_post" => (POST_SYSTEM, "Write the community post now.", 700),
         _ => (COMMENT_SYSTEM, "Write the comment now.", 400),
@@ -77,12 +85,18 @@ pub struct Analysis {
     #[serde(default)]
     pub toxicity: f64,
 }
-fn neu() -> String { "neu".into() }
-fn other() -> String { "other".into() }
+fn neu() -> String {
+    "neu".into()
+}
+fn other() -> String {
+    "other".into()
+}
 
 /// Analyse a batch of `(id, text)` comments in one LLM call. Returns (analyses, model).
 /// Keep batches small (≤15) so the JSON array fits the bridge's output ceiling.
-pub async fn analyze_batch(comments: &[(String, String)]) -> Result<(Vec<Analysis>, String), String> {
+pub async fn analyze_batch(
+    comments: &[(String, String)],
+) -> Result<(Vec<Analysis>, String), String> {
     if comments.is_empty() {
         return Ok((vec![], String::new()));
     }
@@ -95,8 +109,12 @@ pub async fn analyze_batch(comments: &[(String, String)]) -> Result<(Vec<Analysi
     prompt.push_str("\n\nReturn the JSON array now.");
 
     let (text, model) = bridge_llm(ANALYZE_SYSTEM, &prompt, 3000).await?;
-    let arr = parse_analyses(&text)
-        .ok_or_else(|| format!("không parse được JSON phân tích từ model:\n{}", &text.chars().take(300).collect::<String>()))?;
+    let arr = parse_analyses(&text).ok_or_else(|| {
+        format!(
+            "không parse được JSON phân tích từ model:\n{}",
+            &text.chars().take(300).collect::<String>()
+        )
+    })?;
     Ok((arr, model))
 }
 
@@ -108,7 +126,11 @@ fn parse_analyses(text: &str) -> Option<Vec<Analysis>> {
     // Strip ``` fences.
     let t = text.trim();
     let cleaned = if let Some(rest) = t.strip_prefix("```") {
-        rest.splitn(2, '\n').nth(1).unwrap_or(rest).trim_end_matches("```").trim()
+        rest.splitn(2, '\n')
+            .nth(1)
+            .unwrap_or(rest)
+            .trim_end_matches("```")
+            .trim()
     } else {
         t
     };
@@ -156,7 +178,10 @@ pub async fn list_models() -> Result<Value, String> {
 }
 
 pub async fn set_active_model(id: &str) -> Result<(), String> {
-    client().set_active_model(id).await.map_err(|e| e.to_string())
+    client()
+        .set_active_model(id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// P10 — save `(author, text)` comments into the app's private knowledge space so

@@ -81,7 +81,11 @@ impl ExtBridge {
 
     pub fn register_pending(&self, id: &str) -> oneshot::Receiver<Value> {
         let (tx, rx) = oneshot::channel();
-        self.inner.pending.lock().unwrap().insert(id.to_string(), tx);
+        self.inner
+            .pending
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), tx);
         rx
     }
 
@@ -110,7 +114,12 @@ impl ExtBridge {
     }
 
     /// send + await the correlated callback with a timeout.
-    pub async fn call(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+    pub async fn call(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let id = crate::db::new_id();
         let rx = self.register_pending(&id);
         if let Err(e) = self.send(&id, method, params) {
@@ -122,7 +131,10 @@ impl ExtBridge {
             Ok(Err(_)) => Err("Extension ngắt kết nối giữa chừng".to_string()),
             Err(_) => {
                 self.cancel_pending(&id);
-                Err(format!("gọi extension `{method}` quá hạn sau {}s", timeout.as_secs()))
+                Err(format!(
+                    "gọi extension `{method}` quá hạn sau {}s",
+                    timeout.as_secs()
+                ))
             }
         }
     }
@@ -157,7 +169,8 @@ impl ExtBridge {
         *self.inner.connected_since.lock().unwrap() = Some(Instant::now());
 
         // Handshake: hand the extension the callback secret.
-        let _ = out_tx.send(json!({ "type": "callback_secret", "secret": self.inner.secret }).to_string());
+        let _ = out_tx
+            .send(json!({ "type": "callback_secret", "secret": self.inner.secret }).to_string());
 
         let (mut sink, mut stream) = socket.split();
         let writer = tokio::spawn(async move {
@@ -184,7 +197,11 @@ impl ExtBridge {
         writer.abort();
         {
             let mut guard = self.inner.conn_tx.lock().unwrap();
-            if guard.as_ref().map(|tx| tx.same_channel(&out_tx)).unwrap_or(false) {
+            if guard
+                .as_ref()
+                .map(|tx| tx.same_channel(&out_tx))
+                .unwrap_or(false)
+            {
                 *guard = None;
                 self.inner.connected.store(false, Ordering::Relaxed);
                 *self.inner.connected_since.lock().unwrap() = None;
@@ -227,9 +244,13 @@ pub async fn serve_ws(bridge: ExtBridge, port: u16) {
             async move { ws.on_upgrade(move |socket| async move { bridge.serve(socket).await }) }
         }),
     );
-    match tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await {
+    // Loopback by default: this bridge is an unauthenticated control channel
+    // for the locally-installed Chrome extension, which dials 127.0.0.1.
+    // SENCLAW_BIND_HOST overrides it in lockstep with the app's HTTP port.
+    let host = std::env::var("SENCLAW_BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    match tokio::net::TcpListener::bind(format!("{host}:{port}")).await {
         Ok(listener) => {
-            println!("youtube extension bridge on ws://0.0.0.0:{port}");
+            println!("youtube extension bridge on ws://{host}:{port}");
             if let Err(e) = axum::serve(listener, app).await {
                 eprintln!("extension WS server error: {e}");
             }

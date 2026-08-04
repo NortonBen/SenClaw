@@ -34,9 +34,7 @@ pub fn client_context() -> Value {
 
 /// Full endpoint URL, e.g. `search` → `https://www.youtube.com/youtubei/v1/search?...`.
 pub fn endpoint_url(endpoint: &str) -> String {
-    format!(
-        "https://www.youtube.com/youtubei/v1/{endpoint}?key={WEB_API_KEY}&prettyPrint=false"
-    )
+    format!("https://www.youtube.com/youtubei/v1/{endpoint}?key={WEB_API_KEY}&prettyPrint=false")
 }
 
 /// `search` body for a text query.
@@ -222,7 +220,10 @@ fn parse_count(s: &str) -> Option<i64> {
     } else {
         1.0
     };
-    let digits: String = t.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
+    let digits: String = t
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
     digits.parse::<f64>().ok().map(|n| (n * mult) as i64)
 }
 
@@ -284,7 +285,10 @@ pub fn find_comment_section_token(v: &Value) -> Option<String> {
     fn search(v: &Value) -> Option<String> {
         if let Value::Object(map) = v {
             if let Some(sec) = map.get("itemSectionRenderer") {
-                let ident = sec.get("sectionIdentifier").and_then(|x| x.as_str()).unwrap_or("");
+                let ident = sec
+                    .get("sectionIdentifier")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("");
                 if ident == "comment-item-section" {
                     if let Some(tok) = find_key_str(sec, "token") {
                         return Some(tok);
@@ -434,13 +438,20 @@ mod tests {
                 }}
             ]
         }}}}});
-        assert_eq!(find_comment_section_token(&resp).as_deref(), Some("COMMENT_CONT"));
+        assert_eq!(
+            find_comment_section_token(&resp).as_deref(),
+            Some("COMMENT_CONT")
+        );
     }
 
     #[test]
     fn action_success_detection() {
-        assert!(action_succeeded(&json!({ "actionResults": [{ "status": "STATUS_SUCCEEDED" }] })));
-        assert!(!action_succeeded(&json!({ "actionResults": [{ "status": "STATUS_FAILED" }] })));
+        assert!(action_succeeded(
+            &json!({ "actionResults": [{ "status": "STATUS_SUCCEEDED" }] })
+        ));
+        assert!(!action_succeeded(
+            &json!({ "actionResults": [{ "status": "STATUS_FAILED" }] })
+        ));
         assert!(!action_succeeded(&json!({ "foo": "bar" })));
     }
 

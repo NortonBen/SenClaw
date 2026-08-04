@@ -21,15 +21,21 @@ fn enc(s: &str) -> String {
 /// The app's own HTTP port (daemon-assigned). A Desktop-app OAuth client permits
 /// any loopback port, so this can vary per launch.
 fn app_port() -> u16 {
-    std::env::var("PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(4491)
+    std::env::var("PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4491)
 }
 fn redirect_uri() -> String {
     format!("http://127.0.0.1:{}/api/oauth/callback", app_port())
 }
 
 pub fn set_config(db: &Db, client_id: &str, client_secret: &str) -> Result<(), String> {
-    db.set_kv("oauth_config", &json!({ "clientId": client_id, "clientSecret": client_secret }))
-        .map_err(|e| e.to_string())
+    db.set_kv(
+        "oauth_config",
+        &json!({ "clientId": client_id, "clientSecret": client_secret }),
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn config(db: &Db) -> Option<(String, String)> {
@@ -50,7 +56,10 @@ pub fn status(db: &Db) -> Value {
         .and_then(|x| x.as_str())
         .map(|s| !s.is_empty())
         .unwrap_or(false);
-    let expires_at = toks.as_ref().and_then(|t| t.get("expiresAt")).and_then(|x| x.as_i64());
+    let expires_at = toks
+        .as_ref()
+        .and_then(|t| t.get("expiresAt"))
+        .and_then(|x| x.as_i64());
     json!({
         "configured": configured,
         "authorized": authorized,
@@ -85,7 +94,10 @@ pub async fn whoami(db: &Db) -> Result<Value, String> {
     if !resp.status().is_success() {
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("channels.list {code}: {}", body.chars().take(200).collect::<String>()));
+        return Err(format!(
+            "channels.list {code}: {}",
+            body.chars().take(200).collect::<String>()
+        ));
     }
     let v: Value = resp.json().await.map_err(|e| e.to_string())?;
     let identity = parse_identity(&v);
@@ -136,8 +148,14 @@ fn store_tokens(db: &Db, v: &Value, keep_refresh: Option<String>) -> Result<(), 
         .get("access_token")
         .and_then(|x| x.as_str())
         .ok_or_else(|| {
-            let err = v.get("error_description").or_else(|| v.get("error")).and_then(|x| x.as_str());
-            format!("token exchange thất bại: {}", err.unwrap_or("(no access_token)"))
+            let err = v
+                .get("error_description")
+                .or_else(|| v.get("error"))
+                .and_then(|x| x.as_str());
+            format!(
+                "token exchange thất bại: {}",
+                err.unwrap_or("(no access_token)")
+            )
         })?;
     let expires_in = v.get("expires_in").and_then(|x| x.as_i64()).unwrap_or(3600);
     let refresh = v
@@ -155,8 +173,15 @@ fn store_tokens(db: &Db, v: &Value, keep_refresh: Option<String>) -> Result<(), 
 
 /// A valid access token, refreshing via the refresh_token when expired.
 async fn access_token(db: &Db) -> Result<String, String> {
-    let toks = db.get_kv("oauth_tokens").ok().flatten().ok_or("chưa uỷ quyền OAuth")?;
-    let access = toks.get("accessToken").and_then(|x| x.as_str()).unwrap_or("");
+    let toks = db
+        .get_kv("oauth_tokens")
+        .ok()
+        .flatten()
+        .ok_or("chưa uỷ quyền OAuth")?;
+    let access = toks
+        .get("accessToken")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
     let expires_at = toks.get("expiresAt").and_then(|x| x.as_i64()).unwrap_or(0);
     if !access.is_empty() && crate::api::now() < expires_at {
         return Ok(access.to_string());
@@ -200,7 +225,9 @@ pub fn moderation_url(comment_id: &str, status: &str, ban: bool) -> Result<Strin
         return Err("status phải là heldForReview | published | rejected".into());
     }
     if ban && status != "rejected" {
-        return Err("banAuthor chỉ hợp lệ khi status=rejected (nếu không → banWithoutReject 400)".into());
+        return Err(
+            "banAuthor chỉ hợp lệ khi status=rejected (nếu không → banWithoutReject 400)".into(),
+        );
     }
     Ok(format!(
         "https://www.googleapis.com/youtube/v3/comments/setModerationStatus?id={}&moderationStatus={}{}",
@@ -224,11 +251,20 @@ pub async fn moderate(db: &Db, comment_id: &str, status: &str, ban: bool) -> Res
         .map_err(|e| e.to_string())?;
     let code = resp.status();
     if code.is_success() {
-        db.log("moderate", &format!("{status}:{comment_id}"), crate::api::now());
-        Ok(json!({ "ok": true, "commentId": comment_id, "moderationStatus": status, "banned": ban }))
+        db.log(
+            "moderate",
+            &format!("{status}:{comment_id}"),
+            crate::api::now(),
+        );
+        Ok(
+            json!({ "ok": true, "commentId": comment_id, "moderationStatus": status, "banned": ban }),
+        )
     } else {
         let body = resp.text().await.unwrap_or_default();
-        Err(format!("YouTube Data API {code}: {}", body.chars().take(300).collect::<String>()))
+        Err(format!(
+            "YouTube Data API {code}: {}",
+            body.chars().take(300).collect::<String>()
+        ))
     }
 }
 
@@ -263,10 +299,16 @@ mod tests {
 
     #[test]
     fn moderation_url_rules() {
-        assert!(moderation_url("cid", "heldForReview", false).unwrap().contains("moderationStatus=heldForReview"));
-        assert!(moderation_url("cid", "rejected", true).unwrap().contains("banAuthor=true"));
+        assert!(moderation_url("cid", "heldForReview", false)
+            .unwrap()
+            .contains("moderationStatus=heldForReview"));
+        assert!(moderation_url("cid", "rejected", true)
+            .unwrap()
+            .contains("banAuthor=true"));
         // ban only with rejected
-        assert!(moderation_url("cid", "published", true).unwrap_err().contains("banWithoutReject"));
+        assert!(moderation_url("cid", "published", true)
+            .unwrap_err()
+            .contains("banWithoutReject"));
         // invalid status
         assert!(moderation_url("cid", "nuke", false).is_err());
         // missing id
@@ -289,8 +331,14 @@ mod tests {
     fn logout_clears_tokens_and_identity() {
         let db = tmp_db();
         set_config(&db, "c", "s").unwrap();
-        store_tokens(&db, &json!({ "access_token": "AT", "refresh_token": "RT", "expires_in": 3600 }), None).unwrap();
-        db.set_kv("oauth_identity", &json!({ "title": "X" })).unwrap();
+        store_tokens(
+            &db,
+            &json!({ "access_token": "AT", "refresh_token": "RT", "expires_in": 3600 }),
+            None,
+        )
+        .unwrap();
+        db.set_kv("oauth_identity", &json!({ "title": "X" }))
+            .unwrap();
         assert_eq!(status(&db)["authorized"], true);
         logout(&db);
         assert_eq!(status(&db)["authorized"], false);
@@ -301,11 +349,21 @@ mod tests {
     fn store_and_status_authorized() {
         let db = tmp_db();
         set_config(&db, "c", "s").unwrap();
-        store_tokens(&db, &json!({ "access_token": "AT", "refresh_token": "RT", "expires_in": 3600 }), None).unwrap();
+        store_tokens(
+            &db,
+            &json!({ "access_token": "AT", "refresh_token": "RT", "expires_in": 3600 }),
+            None,
+        )
+        .unwrap();
         let st = status(&db);
         assert_eq!(st["authorized"], true);
         // A refresh response WITHOUT a refresh_token keeps the old one.
-        store_tokens(&db, &json!({ "access_token": "AT2", "expires_in": 3600 }), Some("RT".into())).unwrap();
+        store_tokens(
+            &db,
+            &json!({ "access_token": "AT2", "expires_in": 3600 }),
+            Some("RT".into()),
+        )
+        .unwrap();
         let toks = db.get_kv("oauth_tokens").unwrap().unwrap();
         assert_eq!(toks["refreshToken"], "RT");
         assert_eq!(toks["accessToken"], "AT2");
