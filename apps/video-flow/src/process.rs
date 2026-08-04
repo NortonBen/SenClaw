@@ -127,9 +127,12 @@ pub async fn entity_image(
 
     let _ = ensure_flow_project(core).await;
     let flow_project = effective_flow_project(core, project_id);
-    let raw = api_request(core, build_image_params(&flow_project, &prompt, aspect, &tier, &[]))
-        .await
-        .map_err(|e| format!("WS error: {e}"))?;
+    let raw = api_request(
+        core,
+        build_image_params(&flow_project, &prompt, aspect, &tier, &[]),
+    )
+    .await
+    .map_err(|e| format!("WS error: {e}"))?;
     let flow_err = extract_flow_error(&raw);
     if !flow_err.is_empty() {
         return Err(format!("flow API error: {flow_err}"));
@@ -149,7 +152,12 @@ pub async fn entity_image(
 
     // Flow's signed URLs expire; keep a local copy so the reference survives.
     let url = crate::mediastore::localize_column(
-        core, "character", character_id, "reference_image_url", &url, "image",
+        core,
+        "character",
+        character_id,
+        "reference_image_url",
+        &url,
+        "image",
     )
     .await
     .unwrap_or(url);
@@ -215,7 +223,11 @@ pub async fn scene_image(
         }
     };
 
-    let aspect = if orient == "HORIZONTAL" { "16:9" } else { "9:16" };
+    let aspect = if orient == "HORIZONTAL" {
+        "16:9"
+    } else {
+        "9:16"
+    };
     let tier = paygate_tier(&proj);
 
     let mut refs = scene_ref_media_ids(core, project_id, &sc);
@@ -228,9 +240,12 @@ pub async fn scene_image(
 
     let _ = ensure_flow_project(core).await;
     let flow_project = effective_flow_project(core, project_id);
-    let raw = api_request(core, build_image_params(&flow_project, &prompt, aspect, &tier, &refs))
-        .await
-        .map_err(|e| format!("WS error: {e}"))?;
+    let raw = api_request(
+        core,
+        build_image_params(&flow_project, &prompt, aspect, &tier, &refs),
+    )
+    .await
+    .map_err(|e| format!("WS error: {e}"))?;
     let flow_err = extract_flow_error(&raw);
     if !flow_err.is_empty() {
         return Err(format!("flow API error: {flow_err}"));
@@ -253,13 +268,15 @@ pub async fn scene_image(
     let _ = core.db.cascade_after_image(scene_id, &orient);
 
     // Mirror locally before the signed URL expires.
-    let url = crate::mediastore::localize_column(
-        core, "scene", scene_id, &cols.image_url, &url, "image",
-    )
-    .await
-    .unwrap_or(url);
+    let url =
+        crate::mediastore::localize_column(core, "scene", scene_id, &cols.image_url, &url, "image")
+            .await
+            .unwrap_or(url);
 
-    core.dash.emit("scene_updated", json!({ "project_id": project_id, "scene_id": scene_id }));
+    core.dash.emit(
+        "scene_updated",
+        json!({ "project_id": project_id, "scene_id": scene_id }),
+    );
 
     Ok(GenOutcome { media_id: mid, url })
 }
@@ -300,7 +317,10 @@ pub async fn scene_video(
             media_id: db::str_of(&sc, &cols.video_media_id),
             url: db::str_of(&sc, &cols.video_url),
         };
-        core.dash.emit("scene_updated", json!({ "project_id": project_id, "scene_id": scene_id }));
+        core.dash.emit(
+            "scene_updated",
+            json!({ "project_id": project_id, "scene_id": scene_id }),
+        );
         return Ok(out);
     }
 
@@ -322,7 +342,10 @@ pub async fn scene_video(
     // image but a text reminder keeps the face/outfit from drifting mid-shot.
     let appearance = scene_ref_appearance(core, project_id, &sc);
     if !appearance.is_empty() && !video_prompt.contains("Character appearance") {
-        video_prompt = format!("{}. {appearance}", video_prompt.trim().trim_end_matches('.'));
+        video_prompt = format!(
+            "{}. {appearance}",
+            video_prompt.trim().trim_end_matches('.')
+        );
     }
 
     let aspect_ratio = if orient == "HORIZONTAL" {
@@ -385,7 +408,9 @@ pub async fn scene_video(
     let mut flow_err = String::new();
     for (i, model_key) in candidates.iter().enumerate() {
         if i > 0 {
-            eprintln!("[SceneVideo] model trước bị từ chối ({flow_err}); thử lại với `{model_key}`");
+            eprintln!(
+                "[SceneVideo] model trước bị từ chối ({flow_err}); thử lại với `{model_key}`"
+            );
         }
         throttle_video_submit().await;
         raw = submit(model_key).await?;
@@ -418,7 +443,10 @@ pub async fn scene_video(
         f.insert(cols.video_url.clone(), json!(url));
         let _ = core.db.update("scene", scene_id, &f);
         let _ = core.db.cascade_after_video(scene_id, &orient);
-        core.dash.emit("scene_updated", json!({ "project_id": project_id, "scene_id": scene_id }));
+        core.dash.emit(
+            "scene_updated",
+            json!({ "project_id": project_id, "scene_id": scene_id }),
+        );
         return Ok(GenOutcome { media_id: mid, url });
     }
 
@@ -433,7 +461,11 @@ pub async fn scene_video(
             crate::llm::truncate(&body, 400)
         ));
     }
-    println!("[SceneVideo] scene={scene_id} submitted, {} entry ({:?} envelope)", ops.len(), envelope);
+    println!(
+        "[SceneVideo] scene={scene_id} submitted, {} entry ({:?} envelope)",
+        ops.len(),
+        envelope
+    );
     // Flow answers with ITS OWN project id — the only handle for loading the
     // project page later to scrape media URLs.
     remember_flow_project(core, project_id, &raw);
@@ -456,7 +488,12 @@ pub async fn scene_video(
     let _ = core.db.cascade_after_video(scene_id, &orient);
 
     let mut video_url = crate::mediastore::localize_column(
-        core, "scene", scene_id, &cols.video_url, &video_url, "video",
+        core,
+        "scene",
+        scene_id,
+        &cols.video_url,
+        &video_url,
+        "video",
     )
     .await
     .unwrap_or(video_url);
@@ -482,9 +519,15 @@ pub async fn scene_video(
         }
     }
 
-    core.dash.emit("scene_updated", json!({ "project_id": project_id, "scene_id": scene_id }));
+    core.dash.emit(
+        "scene_updated",
+        json!({ "project_id": project_id, "scene_id": scene_id }),
+    );
 
-    Ok(GenOutcome { media_id: mid, url: video_url })
+    Ok(GenOutcome {
+        media_id: mid,
+        url: video_url,
+    })
 }
 
 /// Port of the worker's processUpscale core — extension-side `upscale_video`
@@ -526,7 +569,11 @@ pub async fn upscale_video(
         Some(v) if !v.is_empty() => v.to_string(),
         _ => media_id,
     };
-    let url = raw.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let url = raw
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let mut f = Row::new();
     f.insert(cols.upscale_media_id.clone(), json!(mid));
@@ -535,12 +582,20 @@ pub async fn upscale_video(
     let _ = core.db.update("scene", scene_id, &f);
 
     let url = crate::mediastore::localize_column(
-        core, "scene", scene_id, &cols.upscale_url, &url, "video",
+        core,
+        "scene",
+        scene_id,
+        &cols.upscale_url,
+        &url,
+        "video",
     )
     .await
     .unwrap_or(url);
 
-    core.dash.emit("scene_updated", json!({ "project_id": project_id, "scene_id": scene_id }));
+    core.dash.emit(
+        "scene_updated",
+        json!({ "project_id": project_id, "scene_id": scene_id }),
+    );
 
     Ok(GenOutcome { media_id: mid, url })
 }
@@ -552,7 +607,8 @@ pub async fn process_all_entities(core: &Core, project_id: &str) -> Result<usize
     if !core.ext.is_connected() {
         return Err("image agent: extension bridge not connected".to_string());
     }
-    let chars = list_project_characters(core, project_id).map_err(|e| format!("list characters: {e}"))?;
+    let chars =
+        list_project_characters(core, project_id).map_err(|e| format!("list characters: {e}"))?;
     let mut count = 0usize;
     let mut attempts = 0usize;
     let mut last_err = String::new();
@@ -571,7 +627,9 @@ pub async fn process_all_entities(core: &Core, project_id: &str) -> Result<usize
         }
     }
     if count == 0 && attempts > 0 {
-        return Err(format!("all {attempts} entity image generations failed: {last_err}"));
+        return Err(format!(
+            "all {attempts} entity image generations failed: {last_err}"
+        ));
     }
     Ok(count)
 }
@@ -582,7 +640,11 @@ pub async fn process_all_entities(core: &Core, project_id: &str) -> Result<usize
 
 async fn api_request(core: &Core, params: Value) -> Result<Value, String> {
     core.ext
-        .call("api_request", params, Duration::from_secs(config::worker_gen_timeout_secs()))
+        .call(
+            "api_request",
+            params,
+            Duration::from_secs(config::worker_gen_timeout_secs()),
+        )
         .await
 }
 
@@ -621,7 +683,9 @@ fn build_url(path: &str) -> String {
 }
 
 fn build_image_url(project_id: &str) -> String {
-    build_url(&format!("/v1/projects/{project_id}/flowMedia:batchGenerateImages"))
+    build_url(&format!(
+        "/v1/projects/{project_id}/flowMedia:batchGenerateImages"
+    ))
 }
 
 fn image_aspect_ratio(aspect: &str) -> &'static str {
@@ -649,7 +713,12 @@ fn effective_flow_project(core: &Core, project_id: &str) -> String {
 const FLOW_TRPC_BASE: &str = "https://labs.google/fx/api/trpc";
 
 /// One tRPC call through the extension's authenticated `trpc_request` bridge.
-async fn flow_trpc(core: &Core, proc: &str, method: &str, body: Option<Value>) -> Result<Value, String> {
+async fn flow_trpc(
+    core: &Core,
+    proc: &str,
+    method: &str,
+    body: Option<Value>,
+) -> Result<Value, String> {
     let mut params = serde_json::Map::new();
     params.insert("url".into(), json!(format!("{FLOW_TRPC_BASE}/{proc}")));
     params.insert("method".into(), json!(method));
@@ -657,7 +726,11 @@ async fn flow_trpc(core: &Core, proc: &str, method: &str, body: Option<Value>) -
         params.insert("body".into(), b);
     }
     core.ext
-        .call("trpc_request", Value::Object(params), Duration::from_secs(30))
+        .call(
+            "trpc_request",
+            Value::Object(params),
+            Duration::from_secs(30),
+        )
         .await
 }
 
@@ -701,7 +774,10 @@ pub async fn ensure_flow_project(core: &Core) -> Result<String, String> {
     }
 
     // None — create one on the user's Flow account.
-    let title = format!("Video Flow — {}", chrono::Utc::now().format("%Y-%m-%d %H:%M"));
+    let title = format!(
+        "Video Flow — {}",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M")
+    );
     let raw = flow_trpc(
         core,
         "project.createProject",
@@ -713,15 +789,23 @@ pub async fn ensure_flow_project(core: &Core) -> Result<String, String> {
     if !flow_err.is_empty() {
         return Err(format!("createProject: {flow_err}"));
     }
-    let pid = deep_find_project_id(&raw)
-        .ok_or_else(|| format!("createProject không trả projectId: {}", crate::llm::truncate(&raw.to_string(), 300)))?;
+    let pid = deep_find_project_id(&raw).ok_or_else(|| {
+        format!(
+            "createProject không trả projectId: {}",
+            crate::llm::truncate(&raw.to_string(), 300)
+        )
+    })?;
     let _ = core.db.kv_set("flow.session_project", &pid);
     println!("[flow] đã tạo project mới {pid}");
     Ok(pid)
 }
 
 fn client_ctx(project_id: &str, tier: &str) -> Value {
-    let tier = if tier.is_empty() { "PAYGATE_TIER_TWO" } else { tier };
+    let tier = if tier.is_empty() {
+        "PAYGATE_TIER_TWO"
+    } else {
+        tier
+    };
     json!({
         "projectId": project_id,
         "recaptchaContext": {
@@ -966,7 +1050,11 @@ fn unwrap_data(raw: &Value) -> &Value {
 /// Shape: {data: {media: [{name: "<uuid>", image: {generatedImage: {fifeUrl, imageUri}}}]}}
 fn extract_result(raw: &Value) -> (String, String) {
     let data = unwrap_data(raw);
-    let first = match data.get("media").and_then(|v| v.as_array()).and_then(|a| a.first()) {
+    let first = match data
+        .get("media")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+    {
         Some(f) => f,
         None => return (String::new(), String::new()),
     };
@@ -1018,7 +1106,10 @@ fn extract_flow_error(raw: &Value) -> String {
             let reason = err
                 .get("details")
                 .and_then(|d| d.as_array())
-                .and_then(|a| a.iter().find_map(|d| d.get("reason").and_then(|v| v.as_str())))
+                .and_then(|a| {
+                    a.iter()
+                        .find_map(|d| d.get("reason").and_then(|v| v.as_str()))
+                })
                 .unwrap_or("");
             let joined = match (msg.is_empty(), reason.is_empty()) {
                 (false, false) => format!("{msg} ({reason})"),
@@ -1033,7 +1124,11 @@ fn extract_flow_error(raw: &Value) -> String {
     }
     if let Some(st) = raw.get("status").and_then(|v| v.as_f64()) {
         if st >= 400.0 {
-            if let Some(e) = raw.get("data").and_then(|d| d.get("error")).and_then(|v| v.as_str()) {
+            if let Some(e) = raw
+                .get("data")
+                .and_then(|d| d.get("error"))
+                .and_then(|v| v.as_str())
+            {
                 if !e.is_empty() {
                     return e.to_string();
                 }
@@ -1041,7 +1136,11 @@ fn extract_flow_error(raw: &Value) -> String {
             return format!("HTTP {}", st as i64);
         }
     }
-    if let Some(e) = raw.get("data").and_then(|d| d.get("error")).and_then(|v| v.as_str()) {
+    if let Some(e) = raw
+        .get("data")
+        .and_then(|d| d.get("error"))
+        .and_then(|v| v.as_str())
+    {
         if !e.trim().is_empty() {
             return e.to_string();
         }
@@ -1095,7 +1194,9 @@ fn extract_video_ops(raw: &Value) -> (Vec<Value>, VideoEnvelope) {
         if let Some(arr) = obj.get("media").and_then(|x| x.as_array()) {
             let items: Vec<Value> = arr
                 .iter()
-                .filter(|x| x.is_object() && (x.get("video").is_some() || x.get("mediaMetadata").is_some()))
+                .filter(|x| {
+                    x.is_object() && (x.get("video").is_some() || x.get("mediaMetadata").is_some())
+                })
                 .cloned()
                 .collect();
             if !items.is_empty() {
@@ -1107,7 +1208,12 @@ fn extract_video_ops(raw: &Value) -> (Vec<Value>, VideoEnvelope) {
         // Otherwise the operation/workflow envelope. `workflows` is the current
         // key (`{workflows:[{name, metadata:{primaryMediaId}}]}`); its entries are
         // operation-shaped, so treat them like `operations`.
-        for key in ["operations", "operationList", "videoOperations", "workflows"] {
+        for key in [
+            "operations",
+            "operationList",
+            "videoOperations",
+            "workflows",
+        ] {
             if let Some(arr) = obj.get(key).and_then(|x| x.as_array()) {
                 let ops: Vec<Value> = arr.iter().filter(|x| x.is_object()).cloned().collect();
                 if !ops.is_empty() {
@@ -1166,7 +1272,8 @@ fn remember_flow_project(core: &Core, project_id: &str, raw: &Value) {
     }
     // Response id first; else the real session project we generated into; else
     // the app's own id.
-    let flow_pid = find_project_id(raw, 0).unwrap_or_else(|| effective_flow_project(core, project_id));
+    let flow_pid =
+        find_project_id(raw, 0).unwrap_or_else(|| effective_flow_project(core, project_id));
     if flow_pid.is_empty() {
         return;
     }
@@ -1342,9 +1449,15 @@ fn video_entry_status(entry: &Value, env: VideoEnvelope) -> String {
             // → treated as not-ready so the caller keeps polling.
             for path in [
                 entry.get("status"),
-                entry.get("operation").and_then(|o| o.get("metadata")).and_then(|m| m.get("status")),
+                entry
+                    .get("operation")
+                    .and_then(|o| o.get("metadata"))
+                    .and_then(|m| m.get("status")),
                 entry.get("metadata").and_then(|m| m.get("status")),
-                entry.get("operation").and_then(|o| o.get("done")).map(|_| entry), // marker
+                entry
+                    .get("operation")
+                    .and_then(|o| o.get("done"))
+                    .map(|_| entry), // marker
             ] {
                 if let Some(s) = path.and_then(|v| v.as_str()) {
                     if !s.is_empty() {
@@ -1353,7 +1466,12 @@ fn video_entry_status(entry: &Value, env: VideoEnvelope) -> String {
                 }
             }
             // `operation.done: true` with no explicit status ⇒ success.
-            if entry.get("operation").and_then(|o| o.get("done")).and_then(|v| v.as_bool()) == Some(true) {
+            if entry
+                .get("operation")
+                .and_then(|o| o.get("done"))
+                .and_then(|v| v.as_bool())
+                == Some(true)
+            {
                 return MEDIA_GEN_SUCCESS.to_string();
             }
             String::new()
@@ -1382,9 +1500,11 @@ fn video_entry_name(entry: &Value, env: VideoEnvelope) -> String {
             .or_else(|| entry.get("name").and_then(|v| v.as_str()))
             .unwrap_or("")
             .to_string(),
-        VideoEnvelope::Media => {
-            entry.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string()
-        }
+        VideoEnvelope::Media => entry
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
     }
 }
 
@@ -1422,10 +1542,16 @@ fn video_meta_from_entry(entry: &Value, env: VideoEnvelope) -> (String, String) 
             (String::new(), String::new())
         };
     };
-    let raw_mid = vid.get("mediaId").and_then(|v| v.as_str())
+    let raw_mid = vid
+        .get("mediaId")
+        .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .unwrap_or(primary_media.as_str());
-    let mut fife = vid.get("fifeUrl").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let mut fife = vid
+        .get("fifeUrl")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if fife.is_empty() {
         for k in ["videoUri", "url", "servingUrl"] {
             if let Some(u) = vid.get(k).and_then(|v| v.as_str()) {
@@ -1442,7 +1568,11 @@ fn video_meta_from_entry(entry: &Value, env: VideoEnvelope) -> (String, String) 
     if fife.is_empty() {
         fife = find_media_url(entry);
     }
-    let mut media_id = if is_uuid(raw_mid) { raw_mid.to_string() } else { uuid_from_str(raw_mid) };
+    let mut media_id = if is_uuid(raw_mid) {
+        raw_mid.to_string()
+    } else {
+        uuid_from_str(raw_mid)
+    };
     if media_id.is_empty() {
         // In the media envelope the entry's own `name` IS the media UUID.
         let name = video_entry_name(entry, env);
@@ -1484,31 +1614,37 @@ async fn poll_video_ops(
     // Evaluated both at the loop top (previous response) AND immediately after a
     // fresh poll, so a SUCCESS arriving just before the deadline isn't discarded
     // by the next sleep+deadline gate as a false "timed out".
-    let evaluate = |entries: &[Value], env: VideoEnvelope| -> Option<Result<(String, String), String>> {
-        for entry in entries {
-            if video_entry_status(entry, env) == MEDIA_GEN_FAILED {
-                return Some(Err(format!(
-                    "video generation failed: {}",
-                    video_entry_name(entry, env)
-                )));
-            }
-        }
-        if !entries.is_empty()
-            && entries.iter().all(|e| video_entry_status(e, env) == MEDIA_GEN_SUCCESS)
-        {
-            let (mid, u) = entries.first().map(|e| video_meta_from_entry(e, env)).unwrap_or_default();
-            if !mid.is_empty() {
-                if u.is_empty() {
-                    eprintln!(
-                        "[SceneVideo] SUCCESSFUL but no URL found; entry = {}",
-                        serde_json::to_string(&entries[0]).unwrap_or_default()
-                    );
+    let evaluate =
+        |entries: &[Value], env: VideoEnvelope| -> Option<Result<(String, String), String>> {
+            for entry in entries {
+                if video_entry_status(entry, env) == MEDIA_GEN_FAILED {
+                    return Some(Err(format!(
+                        "video generation failed: {}",
+                        video_entry_name(entry, env)
+                    )));
                 }
-                return Some(Ok((mid, u)));
             }
-        }
-        None
-    };
+            if !entries.is_empty()
+                && entries
+                    .iter()
+                    .all(|e| video_entry_status(e, env) == MEDIA_GEN_SUCCESS)
+            {
+                let (mid, u) = entries
+                    .first()
+                    .map(|e| video_meta_from_entry(e, env))
+                    .unwrap_or_default();
+                if !mid.is_empty() {
+                    if u.is_empty() {
+                        eprintln!(
+                            "[SceneVideo] SUCCESSFUL but no URL found; entry = {}",
+                            serde_json::to_string(&entries[0]).unwrap_or_default()
+                        );
+                    }
+                    return Some(Ok((mid, u)));
+                }
+            }
+            None
+        };
 
     let mut current = ops;
     let mut env = envelope;
@@ -1558,7 +1694,8 @@ async fn poll_video_ops(
 /// Long-lived per-(scene, orientation) async mutex; entries are tiny and
 /// bounded by the number of distinct scenes.
 fn scene_video_lock(scene_id: &str, orientation: &str) -> Arc<tokio::sync::Mutex<()>> {
-    static LOCKS: OnceLock<StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    static LOCKS: OnceLock<StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+        OnceLock::new();
     let key = format!("{scene_id}|{}", orientation.trim().to_uppercase());
     LOCKS
         .get_or_init(|| StdMutex::new(HashMap::new()))
@@ -1791,12 +1928,19 @@ fn scene_ref_appearance(core: &Core, project_id: &str, sc: &Row) -> String {
         if tags.is_empty() {
             continue;
         }
-        parts.push(format!("{} — {}", name.trim(), crate::llm::truncate(tags, 220)));
+        parts.push(format!(
+            "{} — {}",
+            name.trim(),
+            crate::llm::truncate(tags, 220)
+        ));
     }
     if parts.is_empty() {
         String::new()
     } else {
-        format!("Character appearance (keep identical to reference): {}", parts.join("; "))
+        format!(
+            "Character appearance (keep identical to reference): {}",
+            parts.join("; ")
+        )
     }
 }
 
@@ -1926,16 +2070,24 @@ mod tests {
         assert_eq!(ops.len(), 1);
 
         // Double-wrapped by the extension
-        let (ops, _) = extract_video_ops(&serde_json::json!({"data": {"data": {"operations": [op]}}}));
+        let (ops, _) =
+            extract_video_ops(&serde_json::json!({"data": {"data": {"operations": [op]}}}));
         assert_eq!(ops.len(), 1);
 
         // A single operation object, not a batch
-        let (ops, _) = extract_video_ops(&serde_json::json!({"data": {"operation": {"name": "op/1"}}}));
+        let (ops, _) =
+            extract_video_ops(&serde_json::json!({"data": {"operation": {"name": "op/1"}}}));
         assert_eq!(ops.len(), 1);
 
         // Genuinely empty stays empty
-        assert!(extract_video_ops(&serde_json::json!({"data": {}})).0.is_empty());
-        assert!(extract_video_ops(&serde_json::json!({"data": {"operations": []}})).0.is_empty());
+        assert!(extract_video_ops(&serde_json::json!({"data": {}}))
+            .0
+            .is_empty());
+        assert!(
+            extract_video_ops(&serde_json::json!({"data": {"operations": []}}))
+                .0
+                .is_empty()
+        );
     }
 
     /// The flat operation shape observed live on batchAsyncGenerateVideo:
@@ -1953,7 +2105,8 @@ mod tests {
                 "primaryMediaId": "206d1a5d-4455-42f7-b0e2-36e32cc78abc"
             }
         });
-        let (ops, env) = extract_video_ops(&serde_json::json!({ "data": { "operations": [fresh.clone()] } }));
+        let (ops, env) =
+            extract_video_ops(&serde_json::json!({ "data": { "operations": [fresh.clone()] } }));
         assert_eq!(ops.len(), 1);
         assert_eq!(env, VideoEnvelope::Operations);
 
@@ -1963,11 +2116,20 @@ mod tests {
         let (ops, env) = extract_video_ops(&wf);
         assert_eq!(ops.len(), 1);
         assert_eq!(env, VideoEnvelope::Operations);
-        assert_eq!(video_entry_name(&ops[0], env), "663bb2cb-72de-4130-bb28-f042469b2892");
+        assert_eq!(
+            video_entry_name(&ops[0], env),
+            "663bb2cb-72de-4130-bb28-f042469b2892"
+        );
         // Name is the poll handle.
-        assert_eq!(video_entry_name(&ops[0], env), "663bb2cb-72de-4130-bb28-f042469b2892");
+        assert_eq!(
+            video_entry_name(&ops[0], env),
+            "663bb2cb-72de-4130-bb28-f042469b2892"
+        );
         // Fresh submit (no status) → not ready, keep polling.
-        assert_eq!(video_meta_from_entry(&ops[0], env), (String::new(), String::new()));
+        assert_eq!(
+            video_meta_from_entry(&ops[0], env),
+            (String::new(), String::new())
+        );
 
         // Same op, now SUCCEEDED → primaryMediaId surfaces, still no URL (comes
         // from the project-page scrape).
@@ -1997,9 +2159,15 @@ mod tests {
             video_entry_status(&entries[0], env),
             "MEDIA_GENERATION_STATUS_SCHEDULED"
         );
-        assert_eq!(video_entry_name(&entries[0], env), "daa86d53-0043-4eb1-a163-f49e1a42c0ee");
+        assert_eq!(
+            video_entry_name(&entries[0], env),
+            "daa86d53-0043-4eb1-a163-f49e1a42c0ee"
+        );
         // Still rendering ⇒ not ready, so the caller keeps polling.
-        assert_eq!(video_meta_from_entry(&entries[0], env), (String::new(), String::new()));
+        assert_eq!(
+            video_meta_from_entry(&entries[0], env),
+            (String::new(), String::new())
+        );
         // The poll body must echo back under `media`, not `operations`.
         let params = build_video_poll_params("https://x/check", &entries, env);
         assert!(params["body"]["media"].is_array());
@@ -2026,7 +2194,10 @@ mod tests {
         assert_eq!(find_media_url(&mixed), url);
 
         // Nothing media-ish ⇒ empty
-        assert_eq!(find_media_url(&serde_json::json!({"a": "hello", "b": 3})), "");
+        assert_eq!(
+            find_media_url(&serde_json::json!({"a": "hello", "b": 3})),
+            ""
+        );
     }
 
     /// Once rendered, the media entry carries the URL and its `name` is the id.
@@ -2049,12 +2220,17 @@ mod tests {
         assert!(!is_uuid("123E4567-E89B-12D3-A456-426614174000")); // uppercase rejected like the Go regex
         assert!(!is_uuid("not-a-uuid"));
         assert_eq!(
-            uuid_from_str("https://lh3.googleusercontent.com/x/123e4567-e89b-12d3-a456-426614174000=s0"),
+            uuid_from_str(
+                "https://lh3.googleusercontent.com/x/123e4567-e89b-12d3-a456-426614174000=s0"
+            ),
             "123e4567-e89b-12d3-a456-426614174000"
         );
         assert_eq!(uuid_from_str("CAMSbase64idAAAA"), "");
         // Multibyte text must not panic the scanner.
-        assert_eq!(uuid_from_str("ảnh không có uuid ở đây, chỉ có chữ tiếng Việt thôi nhé"), "");
+        assert_eq!(
+            uuid_from_str("ảnh không có uuid ở đây, chỉ có chữ tiếng Việt thôi nhé"),
+            ""
+        );
     }
 
     #[test]
@@ -2113,11 +2289,15 @@ mod tests {
 
     #[test]
     fn model_access_denied_detection() {
-        assert!(is_model_access_denied("permission denied (PUBLIC_ERROR_MODEL_ACCESS_DENIED)"));
+        assert!(is_model_access_denied(
+            "permission denied (PUBLIC_ERROR_MODEL_ACCESS_DENIED)"
+        ));
         // Generic PERMISSION_DENIED must NOT step down the model — a reCAPTCHA /
         // unusual-activity 403 shares that status, and retrying it hammers the
         // anti-bot flag. Only the model-specific reason counts.
-        assert!(!is_model_access_denied("The caller does not have permission (PERMISSION_DENIED)"));
+        assert!(!is_model_access_denied(
+            "The caller does not have permission (PERMISSION_DENIED)"
+        ));
         assert!(!is_model_access_denied("HTTP 500"));
 
         // The model-denied 403 parses and matches the model retry.
@@ -2149,17 +2329,35 @@ mod tests {
     #[test]
     fn submit_honors_explicit_model_key() {
         let with = build_video_submit_params(
-            "http://x", "p1", "s1", "prompt", "startmid", "",
-            "VIDEO_ASPECT_RATIO_PORTRAIT", "PAYGATE_TIER_ONE", "veo_3_1_i2v_s_lite_portrait",
+            "http://x",
+            "p1",
+            "s1",
+            "prompt",
+            "startmid",
+            "",
+            "VIDEO_ASPECT_RATIO_PORTRAIT",
+            "PAYGATE_TIER_ONE",
+            "veo_3_1_i2v_s_lite_portrait",
         );
-        let sent = with["body"]["requests"][0]["videoModelKey"].as_str().unwrap();
+        let sent = with["body"]["requests"][0]["videoModelKey"]
+            .as_str()
+            .unwrap();
         assert_eq!(sent, "veo_3_1_i2v_s_lite_portrait");
 
         let without = build_video_submit_params(
-            "http://x", "p1", "s1", "prompt", "startmid", "",
-            "VIDEO_ASPECT_RATIO_PORTRAIT", "PAYGATE_TIER_ONE", "",
+            "http://x",
+            "p1",
+            "s1",
+            "prompt",
+            "startmid",
+            "",
+            "VIDEO_ASPECT_RATIO_PORTRAIT",
+            "PAYGATE_TIER_ONE",
+            "",
         );
-        let fallback = without["body"]["requests"][0]["videoModelKey"].as_str().unwrap();
+        let fallback = without["body"]["requests"][0]["videoModelKey"]
+            .as_str()
+            .unwrap();
         assert_eq!(fallback, "veo_3_1_i2v_s_fast_portrait");
     }
 
@@ -2181,7 +2379,10 @@ mod tests {
         let junk = base64::engine::general_purpose::STANDARD.encode(&vec![1u8; 400]);
         assert!(find_inline_video_b64(&json!({ "x": junk })).is_none());
         // A signed URL response must not be mistaken for inline media.
-        assert!(find_inline_video_b64(&json!({ "url": "https://storage.googleapis.com/b/video/x?s=1" })).is_none());
+        assert!(find_inline_video_b64(
+            &json!({ "url": "https://storage.googleapis.com/b/video/x?s=1" })
+        )
+        .is_none());
     }
 
     #[test]
@@ -2233,4 +2434,3 @@ mod tests {
         assert_eq!(byte_prefix("short", 30), "short");
     }
 }
-

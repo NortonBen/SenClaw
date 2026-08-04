@@ -24,14 +24,21 @@ fn kv_key(project_id: &str) -> String {
 }
 
 fn api(path: &str) -> String {
-    format!("{}/api/workflows{}", crate::llm::base_url().trim_end_matches('/'), path)
+    format!(
+        "{}/api/workflows{}",
+        crate::llm::base_url().trim_end_matches('/'),
+        path
+    )
 }
 
 /// Send a request and unwrap the daemon's `{"error": …}` convention. Any
 /// non-2xx carries a body worth surfacing verbatim — a 400 here is almost
 /// always a malformed definition, and the message names the offending step.
 async fn send(req: reqwest::RequestBuilder) -> Result<Value, String> {
-    let resp = req.send().await.map_err(|e| format!("workflow engine không phản hồi: {e}"))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("workflow engine không phản hồi: {e}"))?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     let v: Value = if body.trim().is_empty() {
@@ -103,7 +110,10 @@ pub async fn run_activity(run_id: &str) -> Result<Value, String> {
 // ---------- project ↔ run binding ----------
 
 pub fn remember_run(st: &AppState, project_id: &str, workflow: &str, run_id: &str) {
-    let _ = st.core.db.kv_set(&kv_key(project_id), &format!("{workflow}\n{run_id}"));
+    let _ = st
+        .core
+        .db
+        .kv_set(&kv_key(project_id), &format!("{workflow}\n{run_id}"));
 }
 
 /// `(workflow_name, run_id)` of the project's last launched run, if any.
@@ -185,7 +195,10 @@ pub async fn launch_project_workflow(
     let vid = db::str_of(&video, "id");
 
     let scenes = db_
-        .query("SELECT * FROM scene WHERE video_id = ?1 ORDER BY display_order", &[&vid])
+        .query(
+            "SELECT * FROM scene WHERE video_id = ?1 ORDER BY display_order",
+            &[&vid],
+        )
         .map_err(|e| e.to_string())?;
 
     // One workspace per project: the engine allows a single run per workspace,
@@ -258,7 +271,10 @@ pub async fn launch_custom_workflow(
     let video = ensure_video(db_, &project, project_id, video_id, orientation)?;
     let vid = db::str_of(&video, "id");
     let scenes = db_
-        .query("SELECT * FROM scene WHERE video_id = ?1 ORDER BY display_order", &[&vid])
+        .query(
+            "SELECT * FROM scene WHERE video_id = ?1 ORDER BY display_order",
+            &[&vid],
+        )
         .map_err(|e| e.to_string())?;
 
     let workspace = crate::config::data_dir().join("workflow").join(project_id);
@@ -320,7 +336,10 @@ fn ensure_video(
     }
     let mut row = db::Row::new();
     row.insert("project_id".into(), serde_json::json!(project_id));
-    row.insert("title".into(), serde_json::json!(format!("{} — Video 1", db::str_of(project, "name"))));
+    row.insert(
+        "title".into(),
+        serde_json::json!(format!("{} — Video 1", db::str_of(project, "name"))),
+    );
     row.insert("display_order".into(), serde_json::json!(1));
     row.insert(
         "orientation".into(),
@@ -341,13 +360,25 @@ fn ensure_video(
 /// Compact view of a run: enough for an agent to say "7/12 xong, cảnh 3 lỗi"
 /// without dumping every step's stdout into the transcript.
 pub fn summarize_run(run: &Value) -> Value {
-    let steps = run.get("steps").and_then(|s| s.as_array()).cloned().unwrap_or_default();
+    let steps = run
+        .get("steps")
+        .and_then(|s| s.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut tally: std::collections::BTreeMap<String, i64> = Default::default();
     let mut nodes = Vec::new();
     let mut failed = Vec::new();
     for st in &steps {
-        let id = st.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let status = st.get("status").and_then(|v| v.as_str()).unwrap_or("pending").to_string();
+        let id = st
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let status = st
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("pending")
+            .to_string();
         *tally.entry(status.clone()).or_insert(0) += 1;
         if status == "failed" {
             // The error is the one field worth carrying through verbatim.

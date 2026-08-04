@@ -298,7 +298,10 @@ mod tests {
             parse_skill_agent_skill_ids(r#"["a","b"]"#, "legacy"),
             vec!["a".to_string(), "b".to_string()]
         );
-        assert_eq!(parse_skill_agent_skill_ids("[]", "legacy"), vec!["legacy".to_string()]);
+        assert_eq!(
+            parse_skill_agent_skill_ids("[]", "legacy"),
+            vec!["legacy".to_string()]
+        );
         assert_eq!(
             parse_skill_agent_skill_ids(r#"["-","__none__"]"#, "fk:x"),
             vec!["fk:x".to_string()]
@@ -310,6 +313,9 @@ mod tests {
     #[test]
     fn description_extraction_skips_headings() {
         let body = "# Title\n\n## Sub\nDoes the thing end-to-end.\nmore";
-        assert_eq!(extract_skill_description(body), "Does the thing end-to-end.");
+        assert_eq!(
+            extract_skill_description(body),
+            "Does the thing end-to-end."
+        );
     }
 }

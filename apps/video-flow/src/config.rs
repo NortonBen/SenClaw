@@ -5,11 +5,17 @@
 use std::path::PathBuf;
 
 fn env_or(k: &str, d: &str) -> String {
-    std::env::var(k).ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| d.to_string())
+    std::env::var(k)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| d.to_string())
 }
 
 fn env_u64(k: &str, d: u64) -> u64 {
-    std::env::var(k).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(d)
+    std::env::var(k)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(d)
 }
 
 /// App HTTP port — injected by the SenClaw daemon as PORT (manifest: 4460).
@@ -96,7 +102,10 @@ pub fn data_dir() -> PathBuf {
     }
     let app_id = std::env::var("SENCLAW_SPACE_APP_ID").unwrap_or_else(|_| "video-flow".to_string());
     match std::env::var("HOME").ok().filter(|h| !h.is_empty()) {
-        Some(home) => PathBuf::from(home).join(".senclaw").join("space-app-data").join(app_id),
+        Some(home) => PathBuf::from(home)
+            .join(".senclaw")
+            .join("space-app-data")
+            .join(app_id),
         // No HOME (unusual): fall back to the cwd so the app still runs.
         None => PathBuf::from("."),
     }
@@ -158,11 +167,17 @@ fn legacy_media_target(data: &PathBuf) -> PathBuf {
 }
 
 pub fn db_path() -> String {
-    env_or("FLOWKIT_DB_PATH", data_dir().join("app.sqlite").to_string_lossy().as_ref())
+    env_or(
+        "FLOWKIT_DB_PATH",
+        data_dir().join("app.sqlite").to_string_lossy().as_ref(),
+    )
 }
 
 pub fn media_dir() -> PathBuf {
-    PathBuf::from(env_or("FLOWKIT_MEDIA_DIR", data_dir().join("media").to_string_lossy().as_ref()))
+    PathBuf::from(env_or(
+        "FLOWKIT_MEDIA_DIR",
+        data_dir().join("media").to_string_lossy().as_ref(),
+    ))
 }
 
 /// Souls (sub-agent system prompts). Checked in candidate order so both the dev

@@ -233,7 +233,10 @@ impl Registry {
             .kill_on_drop(true);
         let cwd = sval(input, "cwd");
         if !cwd.is_empty() {
-            let resolved = self.sandbox.resolve(&cwd).map_err(|e| format!("execute_cmd: cwd: {e}"))?;
+            let resolved = self
+                .sandbox
+                .resolve(&cwd)
+                .map_err(|e| format!("execute_cmd: cwd: {e}"))?;
             c.current_dir(resolved);
         }
 
@@ -241,7 +244,9 @@ impl Registry {
         let out = if self.exec_timeout > Duration::ZERO {
             tokio::time::timeout(self.exec_timeout, fut)
                 .await
-                .map_err(|_| format!("execute_cmd {cmd}: timed out after {:?}", self.exec_timeout))?
+                .map_err(|_| {
+                    format!("execute_cmd {cmd}: timed out after {:?}", self.exec_timeout)
+                })?
         } else {
             fut.await
         }
@@ -257,7 +262,10 @@ impl Registry {
     // ---- file tools (file.go) ----
 
     fn file_read(&self, input: &Map<String, Value>) -> Result<Value, String> {
-        let safe = self.sandbox.resolve(&sval(input, "path")).map_err(|e| format!("file_read: {e}"))?;
+        let safe = self
+            .sandbox
+            .resolve(&sval(input, "path"))
+            .map_err(|e| format!("file_read: {e}"))?;
         let data = std::fs::read(&safe).map_err(|e| format!("file_read: {e}"))?;
         Ok(json!({
             "content": String::from_utf8_lossy(&data).to_string(),
@@ -266,12 +274,18 @@ impl Registry {
     }
 
     fn file_write(&self, input: &Map<String, Value>) -> Result<Value, String> {
-        let safe = self.sandbox.resolve(&sval(input, "path")).map_err(|e| format!("file_write: {e}"))?;
+        let safe = self
+            .sandbox
+            .resolve(&sval(input, "path"))
+            .map_err(|e| format!("file_write: {e}"))?;
         let content = sval_raw(input, "content");
         if let Some(parent) = safe.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("file_write: mkdir: {e}"))?;
         }
-        let append = input.get("append").and_then(|v| v.as_bool()).unwrap_or(false);
+        let append = input
+            .get("append")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()
             .create(true)
@@ -280,13 +294,20 @@ impl Registry {
             .truncate(!append)
             .open(&safe)
             .map_err(|e| format!("file_write: {e}"))?;
-        f.write_all(content.as_bytes()).map_err(|e| format!("file_write: {e}"))?;
+        f.write_all(content.as_bytes())
+            .map_err(|e| format!("file_write: {e}"))?;
         Ok(json!({ "bytes_written": content.len(), "path": safe.to_string_lossy() }))
     }
 
     fn file_list(&self, input: &Map<String, Value>) -> Result<Value, String> {
-        let dir = self.sandbox.resolve(&sval(input, "path")).map_err(|e| format!("file_list: {e}"))?;
-        let recursive = input.get("recursive").and_then(|v| v.as_bool()).unwrap_or(false);
+        let dir = self
+            .sandbox
+            .resolve(&sval(input, "path"))
+            .map_err(|e| format!("file_list: {e}"))?;
+        let recursive = input
+            .get("recursive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let mut entries: Vec<Value> = Vec::new();
         walk_dir(&dir, recursive, &mut entries).map_err(|e| format!("file_list: {e}"))?;
         Ok(json!({ "entries": entries, "count": entries.len() }))
@@ -298,7 +319,11 @@ impl Registry {
             .resolve(&sval(input, "path"))
             .map_err(|e| format!("file_read_image: {e}"))?;
         let data = std::fs::read(&safe).map_err(|e| format!("file_read_image: {e}"))?;
-        let ext = safe.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let ext = safe
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
         Ok(json!({
             "base64": base64_encode(&data),
             "mime_type": mime_by_ext(&ext),
@@ -317,7 +342,9 @@ impl Registry {
         }
         let parsed = reqwest::Url::parse(&url).map_err(|e| format!("{tool}: {e}"))?;
         if !self.http_allow_private {
-            ssrf_check(&parsed).await.map_err(|e| format!("{tool}: {e}"))?;
+            ssrf_check(&parsed)
+                .await
+                .map_err(|e| format!("{tool}: {e}"))?;
         }
 
         let client = http_client(self.http_allow_private);
@@ -345,7 +372,10 @@ impl Registry {
         for (k, v) in resp.headers() {
             headers.insert(k.to_string(), json!(v.to_str().unwrap_or("")));
         }
-        let body = resp.text().await.map_err(|e| format!("{tool}: read response: {e}"))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("{tool}: read response: {e}"))?;
         Ok(json!({ "status_code": status, "body": body, "headers": headers }))
     }
 
@@ -362,7 +392,8 @@ impl Registry {
     fn repo_list(&self, input: &Map<String, Value>) -> Result<Value, String> {
         let table = sval(input, "table");
         check_table(&table)?;
-        let cols = db::table_columns(&table).ok_or_else(|| format!("repo: unknown table {table:?}"))?;
+        let cols =
+            db::table_columns(&table).ok_or_else(|| format!("repo: unknown table {table:?}"))?;
         let mut conds: Vec<String> = Vec::new();
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(Value::Object(filters)) = input.get("filters") {
@@ -370,7 +401,9 @@ impl Registry {
                 // Column names come from the LLM — allowlist them (the Go code
                 // concatenated raw keys; here we refuse unknown columns).
                 if !cols.contains(&k.as_str()) {
-                    return Err(format!("repo_list: unknown filter column {k:?} for table {table:?}"));
+                    return Err(format!(
+                        "repo_list: unknown filter column {k:?} for table {table:?}"
+                    ));
                 }
                 conds.push(format!("{k} = ?{}", params.len() + 1));
                 params.push(to_sql_box(v));
@@ -387,7 +420,9 @@ impl Registry {
         sql.push_str(&format!(" ORDER BY rowid DESC LIMIT {limit}"));
         let refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|b| b.as_ref()).collect();
         let rows = self.db.query(&sql, &refs).map_err(|e| e.to_string())?;
-        Ok(json!({ "count": rows.len(), "rows": rows.into_iter().map(Value::Object).collect::<Vec<_>>() }))
+        Ok(
+            json!({ "count": rows.len(), "rows": rows.into_iter().map(Value::Object).collect::<Vec<_>>() }),
+        )
     }
 
     fn repo_create(&self, input: &Map<String, Value>) -> Result<Value, String> {
@@ -397,7 +432,10 @@ impl Registry {
             Some(Value::Object(f)) if !f.is_empty() => f.clone(),
             _ => return Err("repo_create: fields is required".to_string()),
         };
-        let id = self.db.insert(&table, &fields).map_err(|e| format!("repo_create: {e}"))?;
+        let id = self
+            .db
+            .insert(&table, &fields)
+            .map_err(|e| format!("repo_create: {e}"))?;
         let row = self.db.get(&table, &id).map_err(|e| e.to_string())?;
         Ok(row.map(Value::Object).unwrap_or(Value::Null))
     }
@@ -410,7 +448,9 @@ impl Registry {
             Some(Value::Object(f)) if !f.is_empty() => f.clone(),
             _ => return Err("repo_update: fields is required".to_string()),
         };
-        self.db.update(&table, &id, &fields).map_err(|e| format!("repo_update: {e}"))?;
+        self.db
+            .update(&table, &id, &fields)
+            .map_err(|e| format!("repo_update: {e}"))?;
         let row = self.db.get(&table, &id).map_err(|e| e.to_string())?;
         Ok(row.map(Value::Object).unwrap_or(Value::Null))
     }
@@ -421,7 +461,11 @@ impl Registry {
 // ---------------------------------------------------------------------------
 
 fn sval(m: &Map<String, Value>, k: &str) -> String {
-    m.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string()
+    m.get(k)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 /// Untrimmed string value (file content, request body).
@@ -454,7 +498,13 @@ fn check_exec_allowlist(allowlist: &[String], cmd: &str) -> Result<(), String> {
 }
 
 const ALLOWED_REPO_TABLES: &[&str] = &[
-    "project", "character", "video", "scene", "request", "dag_parents", "dag_tasks",
+    "project",
+    "character",
+    "video",
+    "scene",
+    "request",
+    "dag_parents",
+    "dag_tasks",
 ];
 
 fn check_table(table: &str) -> Result<(), String> {
@@ -522,8 +572,9 @@ pub(crate) fn validate_exec_arg(arg: &str, sb: &Sandbox) -> Result<(), String> {
 /// protocol but "scale=1280" (from "scale=1280:720") is not.
 fn is_scheme_token(s: &str) -> bool {
     !s.is_empty()
-        && s.chars()
-            .all(|r| r.is_ascii_lowercase() || r.is_ascii_digit() || r == '+' || r == '-' || r == '.')
+        && s.chars().all(|r| {
+            r.is_ascii_lowercase() || r.is_ascii_digit() || r == '+' || r == '-' || r == '.'
+        })
 }
 
 /// Whether arg is a filesystem path that should be sandbox-checked: absolute,
@@ -726,8 +777,16 @@ pub fn base64_encode(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(TABLE[(n >> 18 & 63) as usize] as char);
         out.push(TABLE[(n >> 12 & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { TABLE[(n >> 6 & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -820,7 +879,12 @@ mod tests {
             let ip: IpAddr = h.parse().unwrap();
             assert!(is_blocked_ip(&ip), "{h} should be blocked");
         }
-        let allowed = ["8.8.8.8", "1.1.1.1", "142.250.72.196", "2607:f8b0:4004:c07::64"];
+        let allowed = [
+            "8.8.8.8",
+            "1.1.1.1",
+            "142.250.72.196",
+            "2607:f8b0:4004:c07::64",
+        ];
         for h in allowed {
             let ip: IpAddr = h.parse().unwrap();
             assert!(!is_blocked_ip(&ip), "{h} should be allowed");

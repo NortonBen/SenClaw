@@ -13,7 +13,10 @@ use std::sync::{Arc, Weak};
 /// Register every built-in agent (Go: pool.New wiring).
 pub fn register_builtins(pool: &Arc<Pool>) {
     let core = pool.core.clone();
-    pool.register(Arc::new(OrchestratorAgent { core: core.clone(), pool: Arc::downgrade(pool) }));
+    pool.register(Arc::new(OrchestratorAgent {
+        core: core.clone(),
+        pool: Arc::downgrade(pool),
+    }));
     pool.register(Arc::new(DirectorAgent));
     pool.register(Arc::new(ScreenwriterAgent));
     pool.register(Arc::new(ScenePlanAgent));
@@ -26,7 +29,9 @@ pub fn register_builtins(pool: &Arc<Pool>) {
     pool.register(Arc::new(CharacterAgent { core: core.clone() }));
     pool.register(Arc::new(ImageAgent { core: core.clone() }));
     pool.register(Arc::new(VideoAgent { core: core.clone() }));
-    pool.register(Arc::new(AudioAgent { core: pool.core.clone() }));
+    pool.register(Arc::new(AudioAgent {
+        core: pool.core.clone(),
+    }));
     pool.register(Arc::new(MediaDownloadAgent { core: core.clone() }));
     pool.register(Arc::new(ConcatAgent { core }));
     pool.register(Arc::new(CriticAgent));
@@ -44,10 +49,17 @@ pub fn register_builtins(pool: &Arc<Pool>) {
 /// should hold 27 shots silently becomes 4 and the stage reports success.
 /// `finish == "length"` is therefore treated as failure and retried, not
 /// salvaged.
-async fn complete_json(system: &str, user: &str, max_tokens: u32) -> Result<Map<String, Value>, String> {
+async fn complete_json(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<Map<String, Value>, String> {
     let (raw, _model, finish) = crate::llm::bridge_llm(system, user, max_tokens).await?;
     if finish != "length" {
-        if let Some(m) = crate::llm::parse_value(&raw).ok().and_then(|v| v.as_object().cloned()) {
+        if let Some(m) = crate::llm::parse_value(&raw)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+        {
             return Ok(m);
         }
     } else {
@@ -62,7 +74,12 @@ free-text field short — the previous reply did not fit in the response budget.
     let parsed = crate::llm::parse_value(&raw2)
         .ok()
         .and_then(|v| v.as_object().cloned())
-        .ok_or_else(|| format!("invalid JSON from LLM: {}", crate::llm::truncate(&raw2, 500)))?;
+        .ok_or_else(|| {
+            format!(
+                "invalid JSON from LLM: {}",
+                crate::llm::truncate(&raw2, 500)
+            )
+        })?;
     if finish2 == "length" {
         // Salvaged, but the caller is getting a partial answer — say so rather
         // than passing off a truncated plan as a complete one.
@@ -109,12 +126,18 @@ fn parse_upstream_json(raw: &str) -> Option<Map<String, Value>> {
     if raw.is_empty() {
         return None;
     }
-    serde_json::from_str::<Value>(raw).ok().and_then(|v| v.as_object().cloned())
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
 }
 
 /// Find an upstream result containing `required_field`: canonical label first,
 /// then a scan over every result. Returns the raw JSON string.
-fn resolve_by_field(w: &WorkingContext, canonical_label: &str, required_field: &str) -> Option<String> {
+fn resolve_by_field(
+    w: &WorkingContext,
+    canonical_label: &str,
+    required_field: &str,
+) -> Option<String> {
     if let Some(raw) = w.get_result(canonical_label) {
         if let Some(obj) = parse_upstream_json(raw) {
             if obj.contains_key(required_field) {
@@ -176,8 +199,12 @@ fn resolve_scene_blocks(w: &WorkingContext) -> Vec<Map<String, Value>> {
 }
 
 fn extract_scene_blocks(raw: &str) -> Vec<Map<String, Value>> {
-    let Some(obj) = parse_upstream_json(raw) else { return Vec::new() };
-    let Some(arr) = obj.get("scenes").and_then(|v| v.as_array()) else { return Vec::new() };
+    let Some(obj) = parse_upstream_json(raw) else {
+        return Vec::new();
+    };
+    let Some(arr) = obj.get("scenes").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
     // Verify it's a text-block array (has "content"), not production data.
     match arr.first().and_then(|v| v.as_object()) {
         Some(first) if first.contains_key("content") => {}
@@ -254,12 +281,12 @@ fn is_scene_heading(line: &str) -> bool {
 
 fn fold_vn_char(r: char) -> char {
     match r {
-        'à' | 'á' | 'ả' | 'ã' | 'ạ' | 'ă' | 'ằ' | 'ắ' | 'ẳ' | 'ẵ' | 'ặ' | 'â' | 'ầ' | 'ấ'
-        | 'ẩ' | 'ẫ' | 'ậ' => 'a',
+        'à' | 'á' | 'ả' | 'ã' | 'ạ' | 'ă' | 'ằ' | 'ắ' | 'ẳ' | 'ẵ' | 'ặ' | 'â' | 'ầ' | 'ấ' | 'ẩ'
+        | 'ẫ' | 'ậ' => 'a',
         'è' | 'é' | 'ẻ' | 'ẽ' | 'ẹ' | 'ê' | 'ề' | 'ế' | 'ể' | 'ễ' | 'ệ' => 'e',
         'ì' | 'í' | 'ỉ' | 'ĩ' | 'ị' => 'i',
-        'ò' | 'ó' | 'ỏ' | 'õ' | 'ọ' | 'ô' | 'ồ' | 'ố' | 'ổ' | 'ỗ' | 'ộ' | 'ơ' | 'ờ' | 'ớ'
-        | 'ở' | 'ỡ' | 'ợ' => 'o',
+        'ò' | 'ó' | 'ỏ' | 'õ' | 'ọ' | 'ô' | 'ồ' | 'ố' | 'ổ' | 'ỗ' | 'ộ' | 'ơ' | 'ờ' | 'ớ' | 'ở'
+        | 'ỡ' | 'ợ' => 'o',
         'ù' | 'ú' | 'ủ' | 'ũ' | 'ụ' | 'ư' | 'ừ' | 'ứ' | 'ử' | 'ữ' | 'ự' => 'u',
         'ỳ' | 'ý' | 'ỷ' | 'ỹ' | 'ỵ' => 'y',
         'đ' => 'd',
@@ -381,7 +408,10 @@ fn resolve_video_id_or_first(w: &WorkingContext, db: &Db, project_id: &str) -> S
     if !vid.is_empty() {
         return vid;
     }
-    list_videos(db, project_id).first().map(|v| str_of(v, "id")).unwrap_or_default()
+    list_videos(db, project_id)
+        .first()
+        .map(|v| str_of(v, "id"))
+        .unwrap_or_default()
 }
 
 // ---- prompt assembly (script.go helpers) ----
@@ -556,7 +586,9 @@ fn assemble_image_prompt(fields: &Map<String, Value>, prev_scene_cue: &str) -> S
         }
     }
     if !prev_scene_cue.is_empty() {
-        parts.push(format!("Continuity anchor from previous scene: {prev_scene_cue}"));
+        parts.push(format!(
+            "Continuity anchor from previous scene: {prev_scene_cue}"
+        ));
     }
     parts.join(". ")
 }
@@ -582,9 +614,15 @@ fn build_scene_continuity_cue(fields: &Map<String, Value>) -> String {
 /// as strings (faithful to the Go implementation).
 fn build_shot_by_idx(w: &WorkingContext) -> HashMap<usize, Map<String, Value>> {
     let mut out = HashMap::new();
-    let Some(raw) = resolve_by_field(w, "shot_list", "shots") else { return out };
-    let Some(obj) = parse_upstream_json(&raw) else { return out };
-    let Some(shots) = obj.get("shots").and_then(|v| v.as_array()) else { return out };
+    let Some(raw) = resolve_by_field(w, "shot_list", "shots") else {
+        return out;
+    };
+    let Some(obj) = parse_upstream_json(&raw) else {
+        return out;
+    };
+    let Some(shots) = obj.get("shots").and_then(|v| v.as_array()) else {
+        return out;
+    };
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut ordered_ids: Vec<String> = Vec::new();
@@ -597,8 +635,11 @@ fn build_shot_by_idx(w: &WorkingContext) -> HashMap<usize, Map<String, Value>> {
         }
     }
     ordered_ids.sort();
-    let id_to_idx: HashMap<&String, usize> =
-        ordered_ids.iter().enumerate().map(|(i, s)| (s, i)).collect();
+    let id_to_idx: HashMap<&String, usize> = ordered_ids
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s, i))
+        .collect();
 
     for s in shots {
         if let Some(shot) = s.as_object() {
@@ -614,8 +655,12 @@ fn build_shot_by_idx(w: &WorkingContext) -> HashMap<usize, Map<String, Value>> {
 /// scene index (0-based) → environment JSON string.
 fn build_env_by_idx(w: &WorkingContext) -> HashMap<usize, String> {
     let mut out = HashMap::new();
-    let Some(raw) = resolve_by_field(w, "environments", "scene_environments") else { return out };
-    let Some(obj) = parse_upstream_json(&raw) else { return out };
+    let Some(raw) = resolve_by_field(w, "environments", "scene_environments") else {
+        return out;
+    };
+    let Some(obj) = parse_upstream_json(&raw) else {
+        return out;
+    };
     if let Some(envs) = obj.get("scene_environments").and_then(|v| v.as_array()) {
         for (i, e) in envs.iter().enumerate() {
             if e.is_object() {
@@ -629,8 +674,12 @@ fn build_env_by_idx(w: &WorkingContext) -> HashMap<usize, String> {
 /// scene index (0-based) → director scene_block.
 fn build_director_by_idx(w: &WorkingContext) -> HashMap<usize, Map<String, Value>> {
     let mut out = HashMap::new();
-    let Some(raw) = resolve_by_field(w, "director", "scene_blocks") else { return out };
-    let Some(obj) = parse_upstream_json(&raw) else { return out };
+    let Some(raw) = resolve_by_field(w, "director", "scene_blocks") else {
+        return out;
+    };
+    let Some(obj) = parse_upstream_json(&raw) else {
+        return out;
+    };
     if let Some(blocks) = obj.get("scene_blocks").and_then(|v| v.as_array()) {
         for (i, b) in blocks.iter().enumerate() {
             if let Some(m) = b.as_object() {
@@ -643,7 +692,12 @@ fn build_director_by_idx(w: &WorkingContext) -> HashMap<usize, Map<String, Value
 
 fn director_narrative_context(block: &Map<String, Value>) -> String {
     let mut nctx = Map::new();
-    for k in ["narrative_beat", "conflict_type", "scene_objective", "value_charge_shift"] {
+    for k in [
+        "narrative_beat",
+        "conflict_type",
+        "scene_objective",
+        "value_charge_shift",
+    ] {
         nctx.insert(k.into(), block.get(k).cloned().unwrap_or(Value::Null));
     }
     Value::Object(nctx).to_string()
@@ -669,14 +723,18 @@ impl Agent for OrchestratorAgent {
         "orchestrator"
     }
     fn description(&self) -> String {
-        "Decompose a goal/script into a DAG of pipeline tasks using the available agent types.".into()
+        "Decompose a goal/script into a DAG of pipeline tasks using the available agent types."
+            .into()
     }
     fn default_system(&self) -> String {
         DEFAULT_ORCHESTRATOR.into()
     }
 
     async fn execute(&self, ctx: &mut AgentContext, task: &Task) -> Result<TaskResult, String> {
-        let pool = self.pool.upgrade().ok_or("orchestrator: agent pool unavailable")?;
+        let pool = self
+            .pool
+            .upgrade()
+            .ok_or("orchestrator: agent pool unavailable")?;
         let goal = ctx.working.inject_into_prompt(&task.prompt);
         let summary = ctx.memory.project_summary();
         let tasks = crate::pipeline::plan_with_llm(&self.core, &pool, &goal, &summary)
@@ -721,8 +779,15 @@ impl Agent for DirectorAgent {
         let result = complete_json(&sys, &prompt, 4000)
             .await
             .map_err(|e| format!("director llm: {e}"))?;
-        let blocks = result.get("scene_blocks").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-        Ok(TaskResult::new(result, format!("Narrative blueprint: {blocks} scene blocks")))
+        let blocks = result
+            .get("scene_blocks")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        Ok(TaskResult::new(
+            result,
+            format!("Narrative blueprint: {blocks} scene blocks"),
+        ))
     }
 }
 
@@ -794,36 +859,65 @@ impl Agent for ScreenwriterAgent {
                 .collect::<Result<Vec<_>, String>>()?
             };
             written.sort_by_key(|(i, _)| *i);
-            let full = written.into_iter().map(|(_, s)| s).collect::<Vec<_>>().join("\n\n");
+            let full = written
+                .into_iter()
+                .map(|(_, s)| s)
+                .collect::<Vec<_>>()
+                .join("\n\n");
             let blocks = split_screenplay_into_blocks(&full);
             let n = blocks.len();
             let mut result = Map::new();
             result.insert("screenplay".into(), json!(full));
             result.insert("scene_count".into(), json!(n));
-            result.insert("scenes".into(), Value::Array(blocks.into_iter().map(Value::Object).collect()));
-            return Ok(TaskResult::new(result, format!("Screenplay written: {n} scenes (scene-by-scene mode)")));
+            result.insert(
+                "scenes".into(),
+                Value::Array(blocks.into_iter().map(Value::Object).collect()),
+            );
+            return Ok(TaskResult::new(
+                result,
+                format!("Screenplay written: {n} scenes (scene-by-scene mode)"),
+            ));
         }
 
         // Fallback: full screenplay in one shot.
-        let prompt = format!("{entity_ctx}{}", ctx.working.inject_into_prompt(&task.prompt));
+        let prompt = format!(
+            "{entity_ctx}{}",
+            ctx.working.inject_into_prompt(&task.prompt)
+        );
         let sys = sysprompt(ctx, DEFAULT_SCREENWRITER_FULL);
         let (raw, _) = crate::llm::complete(&sys, &prompt, 8000)
             .await
             .map_err(|e| format!("screenwriter llm: {e}"))?;
 
-        let mut result = match crate::llm::parse_value(&raw).ok().and_then(|v| v.as_object().cloned()) {
+        let mut result = match crate::llm::parse_value(&raw)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+        {
             Some(m) => m,
-            None => parse_screenwriter_fallback(&crate::llm::strip_fences(&raw))
-                .map_err(|e| format!("screenwriter unmarshal: {e}\nraw: {}", crate::llm::truncate(&raw, 500)))?,
+            None => parse_screenwriter_fallback(&crate::llm::strip_fences(&raw)).map_err(|e| {
+                format!(
+                    "screenwriter unmarshal: {e}\nraw: {}",
+                    crate::llm::truncate(&raw, 500)
+                )
+            })?,
         };
 
         let sp = mstr(&result, "screenplay");
         if !sp.is_empty() {
             let blocks = split_screenplay_into_blocks(&sp);
-            result.insert("scenes".into(), Value::Array(blocks.into_iter().map(Value::Object).collect()));
+            result.insert(
+                "scenes".into(),
+                Value::Array(blocks.into_iter().map(Value::Object).collect()),
+            );
         }
-        let count = result.get("scene_count").and_then(|v| v.as_i64()).unwrap_or(0);
-        Ok(TaskResult::new(result, format!("Screenplay written: {count} scenes")))
+        let count = result
+            .get("scene_count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        Ok(TaskResult::new(
+            result,
+            format!("Screenplay written: {count} scenes"),
+        ))
     }
 }
 
@@ -846,7 +940,14 @@ fn build_entity_context(ctx: &AgentContext) -> String {
     let mut sb = String::new();
     let chars = ctx.memory.list_characters();
     if !chars.is_empty() {
-        let order = ["character", "location", "creature", "visual_asset", "generic_troop", "faction"];
+        let order = [
+            "character",
+            "location",
+            "creature",
+            "visual_asset",
+            "generic_troop",
+            "faction",
+        ];
         let labels: HashMap<&str, &str> = [
             ("character", "CHARACTER PROFILES"),
             ("location", "LOCATIONS"),
@@ -891,8 +992,12 @@ fn build_entity_context(ctx: &AgentContext) -> String {
 }
 
 fn resolve_director_blocks(w: &WorkingContext) -> Vec<Map<String, Value>> {
-    let Some(raw) = resolve_by_field(w, "director", "scene_blocks") else { return Vec::new() };
-    let Some(obj) = parse_upstream_json(&raw) else { return Vec::new() };
+    let Some(raw) = resolve_by_field(w, "director", "scene_blocks") else {
+        return Vec::new();
+    };
+    let Some(obj) = parse_upstream_json(&raw) else {
+        return Vec::new();
+    };
     obj.get("scene_blocks")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|b| b.as_object().cloned()).collect())
@@ -902,9 +1007,13 @@ fn resolve_director_blocks(w: &WorkingContext) -> Vec<Map<String, Value>> {
 /// Salvage `{"screenplay": ..., "scene_count": N}` from broken JSON.
 fn parse_screenwriter_fallback(s: &str) -> Result<Map<String, Value>, String> {
     let sc_key = "\"scene_count\"";
-    let sc_idx = s.rfind(sc_key).ok_or("fallback parse failed: scene_count not found")?;
+    let sc_idx = s
+        .rfind(sc_key)
+        .ok_or("fallback parse failed: scene_count not found")?;
     let after = &s[sc_idx + sc_key.len()..];
-    let colon = after.find(':').ok_or("fallback parse failed: scene_count has no value")?;
+    let colon = after
+        .find(':')
+        .ok_or("fallback parse failed: scene_count has no value")?;
     let digits: String = after[colon + 1..]
         .chars()
         .skip_while(|c| c.is_whitespace())
@@ -915,7 +1024,9 @@ fn parse_screenwriter_fallback(s: &str) -> Result<Map<String, Value>, String> {
         .map_err(|e| format!("fallback parse failed: invalid scene_count: {e}"))?;
 
     let key = "\"screenplay\"";
-    let k = s.find(key).ok_or("fallback parse failed: screenplay not found")?;
+    let k = s
+        .find(key)
+        .ok_or("fallback parse failed: screenplay not found")?;
     let colon2 = s[k + key.len()..]
         .find(':')
         .ok_or("fallback parse failed: screenplay key has no value")?;
@@ -976,8 +1087,15 @@ impl Agent for ScenePlanAgent {
         let result = complete_json(&sys, &prompt, 8000)
             .await
             .map_err(|e| format!("scene_plan llm: {e}"))?;
-        let envs = result.get("scene_environments").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-        Ok(TaskResult::new(result, format!("Environment blueprints: {envs} scenes planned")))
+        let envs = result
+            .get("scene_environments")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        Ok(TaskResult::new(
+            result,
+            format!("Environment blueprints: {envs} scenes planned"),
+        ))
     }
 }
 
@@ -1041,8 +1159,15 @@ impl Agent for ShotDesignAgent {
         let result = complete_json(&sys, &prompt, 8000)
             .await
             .map_err(|e| format!("shot_design llm: {e}"))?;
-        let shots = result.get("shots").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-        Ok(TaskResult::new(result, format!("Shot list designed: {shots} shots")))
+        let shots = result
+            .get("shots")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        Ok(TaskResult::new(
+            result,
+            format!("Shot list designed: {shots} shots"),
+        ))
     }
 }
 
@@ -1083,8 +1208,11 @@ impl Agent for VisualAssetAgent {
     async fn execute(&self, ctx: &mut AgentContext, task: &Task) -> Result<TaskResult, String> {
         let db = ctx.memory.db.clone();
         let mut chars = ctx.memory.list_characters();
-        let db_ids: HashSet<String> =
-            chars.iter().map(|c| str_of(c, "id")).filter(|s| !s.is_empty()).collect();
+        let db_ids: HashSet<String> = chars
+            .iter()
+            .map(|c| str_of(c, "id"))
+            .filter(|s| !s.is_empty())
+            .collect();
         if chars.is_empty() {
             chars = build_visual_asset_fallback_entities(&ctx.working);
             if chars.is_empty() {
@@ -1139,7 +1267,9 @@ impl Agent for VisualAssetAgent {
         if let Some(Value::Array(dna_list)) = result.get_mut("characters") {
             count = dna_list.len();
             for item in dna_list.iter_mut() {
-                let Some(dna) = item.as_object_mut() else { continue };
+                let Some(dna) = item.as_object_mut() else {
+                    continue;
+                };
                 let cid = mstr(dna, "character_id").trim().to_string();
                 let prompt = mstr(dna, "golden_image_prompt");
                 let tags = mstr(dna, "base_appearance_tags");
@@ -1174,7 +1304,10 @@ impl Agent for VisualAssetAgent {
             }
         }
 
-        Ok(TaskResult::new(result, format!("Character DNA generated: {count} characters")))
+        Ok(TaskResult::new(
+            result,
+            format!("Character DNA generated: {count} characters"),
+        ))
     }
 }
 
@@ -1197,7 +1330,11 @@ fn build_visual_asset_ref_scenes_index(db: &Db, project_id: &str) -> HashMap<Str
                 if key.is_empty() {
                     continue;
                 }
-                if seen.entry(key.clone()).or_default().insert(scene_id.clone()) {
+                if seen
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(scene_id.clone())
+                {
                     out.entry(key).or_default().push(scene_id.clone());
                 }
             }
@@ -1229,8 +1366,12 @@ fn build_visual_asset_fallback_entities(w: &WorkingContext) -> Vec<Row> {
 }
 
 fn extract_characters_from_result(raw: &str) -> Vec<Row> {
-    let Some(obj) = parse_upstream_json(raw) else { return Vec::new() };
-    let Some(arr) = obj.get("characters").and_then(|v| v.as_array()) else { return Vec::new() };
+    let Some(obj) = parse_upstream_json(raw) else {
+        return Vec::new();
+    };
+    let Some(arr) = obj.get("characters").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for (i, item) in arr.iter().enumerate() {
         let Some(m) = item.as_object() else { continue };
@@ -1243,7 +1384,11 @@ fn extract_characters_from_result(raw: &str) -> Vec<Row> {
             cid = mstr(m, "id");
         }
         if cid.is_empty() {
-            cid = format!("virtual:{}:{}", i + 1, name.to_lowercase().replace(' ', "_"));
+            cid = format!(
+                "virtual:{}:{}",
+                i + 1,
+                name.to_lowercase().replace(' ', "_")
+            );
         }
         let mut et = mstr(m, "entity_type");
         if et.is_empty() {
@@ -1261,8 +1406,12 @@ fn extract_characters_from_result(raw: &str) -> Vec<Row> {
 }
 
 fn infer_characters_from_screenwriter_scenes(raw: &str) -> Vec<Row> {
-    let Some(obj) = parse_upstream_json(raw) else { return Vec::new() };
-    let Some(scenes) = obj.get("scenes").and_then(|v| v.as_array()) else { return Vec::new() };
+    let Some(obj) = parse_upstream_json(raw) else {
+        return Vec::new();
+    };
+    let Some(scenes) = obj.get("scenes").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
     let mut seen: HashSet<String> = HashSet::new();
     let mut out = Vec::new();
     for sc in scenes {
@@ -1282,11 +1431,17 @@ fn infer_characters_from_screenwriter_scenes(raw: &str) -> Vec<Row> {
             let mut row = Map::new();
             row.insert(
                 "id".into(),
-                json!(format!("virtual:scene:{}", name.to_lowercase().replace(' ', "_"))),
+                json!(format!(
+                    "virtual:scene:{}",
+                    name.to_lowercase().replace(' ', "_")
+                )),
             );
             row.insert("name".into(), json!(name));
             row.insert("entity_type".into(), json!("character"));
-            row.insert("description".into(), json!("Inferred from screenplay dialogue cue"));
+            row.insert(
+                "description".into(),
+                json!("Inferred from screenplay dialogue cue"),
+            );
             row.insert("image_prompt".into(), json!(""));
             out.push(row);
         }
@@ -1303,13 +1458,16 @@ fn is_ascii_dialogue_cue(s: &str) -> bool {
     if !bytes[0].is_ascii_uppercase() {
         return false;
     }
-    bytes[1..]
-        .iter()
-        .all(|&b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b' ' || b == b'-' || b == b'\'')
+    bytes[1..].iter().all(|&b| {
+        b.is_ascii_uppercase() || b.is_ascii_digit() || b == b' ' || b == b'-' || b == b'\''
+    })
 }
 
 fn is_ignored_cue(s: &str) -> bool {
-    matches!(s, "INT" | "EXT" | "INT/EXT" | "CUT TO" | "FADE IN" | "FADE OUT" | "NARRATOR")
+    matches!(
+        s,
+        "INT" | "EXT" | "INT/EXT" | "CUT TO" | "FADE IN" | "FADE OUT" | "NARRATOR"
+    )
 }
 
 fn title_case(s: &str) -> String {
@@ -1392,8 +1550,15 @@ impl Agent for ScriptParserAgent {
             if !referenced.contains(&ch.name.trim().to_lowercase()) {
                 continue;
             }
-            let cid = upsert_character(&db, &ctx.project_id, &ch.name, &ch.entity_type, &ch.description, &ch.image_prompt)
-                .map_err(|e| format!("script_parser upsert character {:?}: {e}", ch.name))?;
+            let cid = upsert_character(
+                &db,
+                &ctx.project_id,
+                &ch.name,
+                &ch.entity_type,
+                &ch.description,
+                &ch.image_prompt,
+            )
+            .map_err(|e| format!("script_parser upsert character {:?}: {e}", ch.name))?;
             character_ids.insert(ch.name.clone(), json!(cid));
         }
 
@@ -1402,7 +1567,8 @@ impl Agent for ScriptParserAgent {
         let mut scene_ids: Vec<String> = Vec::new();
         let mut prev_scene_cue = String::new();
         for (i, sc) in parsed.scenes.iter().enumerate() {
-            let names = normalize_names_to_entity_catalog(&sc.character_names, &entity_canonical_by_key);
+            let names =
+                normalize_names_to_entity_catalog(&sc.character_names, &entity_canonical_by_key);
             let sid = db::new_id();
             let mut fields = Map::new();
             fields.insert("id".into(), json!(sid));
@@ -1413,7 +1579,10 @@ impl Agent for ScriptParserAgent {
             fields.insert("action_sequence".into(), json!(sc.action_sequence));
             fields.insert("camera_movement".into(), json!(sc.camera_movement));
             fields.insert("shot_type".into(), json!(sc.shot_type));
-            fields.insert("character_names".into(), json!(serde_json::to_string(&names).unwrap_or_else(|_| "[]".into())));
+            fields.insert(
+                "character_names".into(),
+                json!(serde_json::to_string(&names).unwrap_or_else(|_| "[]".into())),
+            );
             fields.insert("narrator_text".into(), json!(sc.narrator_text));
             fields.insert("duration".into(), json!(sc.duration));
             fields.insert("chain_type".into(), json!(chain_type_for_index(i)));
@@ -1440,7 +1609,10 @@ impl Agent for ScriptParserAgent {
             }
             // director overlay
             if let Some(block) = director_by_idx.get(&i) {
-                fields.insert("narrative_context".into(), json!(director_narrative_context(block)));
+                fields.insert(
+                    "narrative_context".into(),
+                    json!(director_narrative_context(block)),
+                );
             }
 
             let vp = assemble_video_prompt(&fields, &prev_scene_cue);
@@ -1462,7 +1634,11 @@ impl Agent for ScriptParserAgent {
         data.insert("character_count".into(), json!(parsed.characters.len()));
         Ok(TaskResult::new(
             data,
-            format!("Parsed {} scenes and {} characters", parsed.scenes.len(), parsed.characters.len()),
+            format!(
+                "Parsed {} scenes and {} characters",
+                parsed.scenes.len(),
+                parsed.characters.len()
+            ),
         ))
     }
 }
@@ -1546,7 +1722,9 @@ fn normalize_names_to_entity_catalog(
         if key.is_empty() {
             continue;
         }
-        let Some(canonical) = entity_canonical_by_key.get(&key) else { continue };
+        let Some(canonical) = entity_canonical_by_key.get(&key) else {
+            continue;
+        };
         if seen.insert(key) {
             out.push(canonical.clone());
         }
@@ -1599,7 +1777,8 @@ impl Agent for SceneBuilderAgent {
         }
 
         let narrator_by_scene = sb_extract_narrator_by_scene(&ctx.working);
-        let scene_entity_refs = sb_build_scene_entity_refs(&shots_by_scene, &narrator_by_scene, &entities);
+        let scene_entity_refs =
+            sb_build_scene_entity_refs(&shots_by_scene, &narrator_by_scene, &entities);
         let entities = sb_filter_entities_by_usage(&entities, &scene_entity_refs);
 
         // 3. Ensure video + purge old scenes.
@@ -1636,7 +1815,10 @@ impl Agent for SceneBuilderAgent {
                 shots,
                 env_by_scene.get(scene_id).map(|s| s.as_str()).unwrap_or(""),
                 dir_by_scene.get(scene_id),
-                narrator_by_scene.get(scene_id).map(|s| s.as_str()).unwrap_or(""),
+                narrator_by_scene
+                    .get(scene_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or(""),
                 &prev_scene_cue,
                 scene_entity_refs.get(scene_id).cloned().unwrap_or_default(),
             );
@@ -1654,7 +1836,11 @@ impl Agent for SceneBuilderAgent {
         data.insert("character_count".into(), json!(entities.len()));
         Ok(TaskResult::new(
             data,
-            format!("Built {} scenes and {} entities from shot_design", scene_ids_out.len(), entities.len()),
+            format!(
+                "Built {} scenes and {} entities from shot_design",
+                scene_ids_out.len(),
+                entities.len()
+            ),
         ))
     }
 }
@@ -1689,9 +1875,21 @@ fn sb_build_scene_fields(
     let prompt = mstr(primary, "action_description");
 
     let video_prompt = sb_assemble_video_prompt(
-        &synthesis, &camera_angle, &camera_move, &action_seq, narrator_text, env_json, prev_scene_cue,
+        &synthesis,
+        &camera_angle,
+        &camera_move,
+        &action_seq,
+        narrator_text,
+        env_json,
+        prev_scene_cue,
     );
-    let image_prompt = sb_assemble_image_prompt(&synthesis, &action_seq, env_json, prev_scene_cue, &scene_entities);
+    let image_prompt = sb_assemble_image_prompt(
+        &synthesis,
+        &action_seq,
+        env_json,
+        prev_scene_cue,
+        &scene_entities,
+    );
 
     let mut fields = Map::new();
     fields.insert("id".into(), json!(sid));
@@ -1705,7 +1903,10 @@ fn sb_build_scene_fields(
     fields.insert("camera_movement".into(), json!(camera_move));
     fields.insert("narrator_text".into(), json!(narrator_text));
     fields.insert("duration".into(), json!(sb_default_duration(shots.len())));
-    fields.insert("chain_type".into(), json!(chain_type_for_index(display_order - 1)));
+    fields.insert(
+        "chain_type".into(),
+        json!(chain_type_for_index(display_order - 1)),
+    );
     fields.insert("source".into(), json!("system"));
     if !scene_entities.is_empty() {
         fields.insert(
@@ -1717,7 +1918,10 @@ fn sb_build_scene_fields(
         fields.insert("scene_environment".into(), json!(env_json));
     }
     if let Some(block) = dir_block {
-        fields.insert("narrative_context".into(), json!(director_narrative_context(block)));
+        fields.insert(
+            "narrative_context".into(),
+            json!(director_narrative_context(block)),
+        );
     }
     fields
 }
@@ -1801,7 +2005,9 @@ fn sb_assemble_image_prompt(
         }
     }
     if !prev_scene_cue.is_empty() {
-        parts.push(format!("Continuity anchor from previous scene: {prev_scene_cue}"));
+        parts.push(format!(
+            "Continuity anchor from previous scene: {prev_scene_cue}"
+        ));
     }
     parts.join(". ")
 }
@@ -1843,7 +2049,10 @@ fn sb_build_scene_entity_refs(
         let mut seen: HashSet<&String> = HashSet::new();
         for (lower, canonical) in &entity_by_lower {
             if scene_text.contains(lower.as_str()) && seen.insert(canonical) {
-                scene_refs.entry(scene_id.clone()).or_default().push(canonical.clone());
+                scene_refs
+                    .entry(scene_id.clone())
+                    .or_default()
+                    .push(canonical.clone());
             }
         }
     }
@@ -1871,8 +2080,12 @@ fn sb_filter_entities_by_usage(
 
 fn sb_group_shots_by_scene_id(w: &WorkingContext) -> HashMap<String, Vec<Map<String, Value>>> {
     let mut out: HashMap<String, Vec<Map<String, Value>>> = HashMap::new();
-    let Some(raw) = resolve_by_field(w, "shot_list", "shots") else { return out };
-    let Some(obj) = parse_upstream_json(&raw) else { return out };
+    let Some(raw) = resolve_by_field(w, "shot_list", "shots") else {
+        return out;
+    };
+    let Some(obj) = parse_upstream_json(&raw) else {
+        return out;
+    };
     if let Some(shots) = obj.get("shots").and_then(|v| v.as_array()) {
         for s in shots {
             let Some(shot) = s.as_object() else { continue };
@@ -1891,8 +2104,12 @@ fn sb_group_shots_by_scene_id(w: &WorkingContext) -> HashMap<String, Vec<Map<Str
 
 fn sb_group_env_by_scene_id(w: &WorkingContext) -> HashMap<String, String> {
     let mut out = HashMap::new();
-    let Some(raw) = resolve_by_field(w, "environments", "scene_environments") else { return out };
-    let Some(obj) = parse_upstream_json(&raw) else { return out };
+    let Some(raw) = resolve_by_field(w, "environments", "scene_environments") else {
+        return out;
+    };
+    let Some(obj) = parse_upstream_json(&raw) else {
+        return out;
+    };
     if let Some(envs) = obj.get("scene_environments").and_then(|v| v.as_array()) {
         for (i, e) in envs.iter().enumerate() {
             let Some(env) = e.as_object() else { continue };
@@ -1908,8 +2125,12 @@ fn sb_group_env_by_scene_id(w: &WorkingContext) -> HashMap<String, String> {
 
 fn sb_group_dir_by_scene_id(w: &WorkingContext) -> HashMap<String, Map<String, Value>> {
     let mut out = HashMap::new();
-    let Some(raw) = resolve_by_field(w, "director", "scene_blocks") else { return out };
-    let Some(obj) = parse_upstream_json(&raw) else { return out };
+    let Some(raw) = resolve_by_field(w, "director", "scene_blocks") else {
+        return out;
+    };
+    let Some(obj) = parse_upstream_json(&raw) else {
+        return out;
+    };
     if let Some(blocks) = obj.get("scene_blocks").and_then(|v| v.as_array()) {
         for (i, b) in blocks.iter().enumerate() {
             let Some(block) = b.as_object() else { continue };
@@ -1987,7 +2208,8 @@ fn is_speaker_name(s: &str) -> bool {
     if s.is_empty() || s.len() > 40 {
         return false;
     }
-    s.chars().all(|r| r == ' ' || r == '.' || is_letter_or_vietnamese(r))
+    s.chars()
+        .all(|r| r == ' ' || r == '.' || is_letter_or_vietnamese(r))
 }
 
 fn is_fountain_character_cue(s: &str) -> bool {
@@ -2030,7 +2252,11 @@ fn sb_default_duration(num_shots: usize) -> f64 {
     }
 }
 
-fn sb_upsert_entity(db: &Db, project_id: &str, ch: &crate::script::ParsedCharacter) -> Result<String, String> {
+fn sb_upsert_entity(
+    db: &Db,
+    project_id: &str,
+    ch: &crate::script::ParsedCharacter,
+) -> Result<String, String> {
     let rows = db
         .query(
             "SELECT c.* FROM character c JOIN project_character pc ON pc.character_id = c.id \
@@ -2129,7 +2355,9 @@ impl Agent for GenRefAgent {
                 continue;
             }
             entity_names.push((name.clone(), key.clone()));
-            entity_by_key.entry(key.clone()).or_insert_with(|| name.clone());
+            entity_by_key
+                .entry(key.clone())
+                .or_insert_with(|| name.clone());
             entity_no_accent_by_key
                 .entry(key)
                 .or_insert_with(|| to_vietnamese_no_accent_name(&name));
@@ -2197,7 +2425,9 @@ impl Agent for GenRefAgent {
                 if key.is_empty() || seen.contains(&key) {
                     continue;
                 }
-                let Some(canonical) = entity_by_key.get(&key) else { continue };
+                let Some(canonical) = entity_by_key.get(&key) else {
+                    continue;
+                };
                 seen.insert(key);
                 merged.push(to_vietnamese_no_accent_name(canonical));
             }
@@ -2208,7 +2438,9 @@ impl Agent for GenRefAgent {
                     if key.is_empty() || seen.contains(&key) {
                         continue;
                     }
-                    let Some(no_accent) = entity_no_accent_by_key.get(&key) else { continue };
+                    let Some(no_accent) = entity_no_accent_by_key.get(&key) else {
+                        continue;
+                    };
                     seen.insert(key);
                     merged.push(no_accent.clone());
                 }
@@ -2229,7 +2461,10 @@ impl Agent for GenRefAgent {
         let mut data = Map::new();
         data.insert("video_id".into(), json!(video_id));
         data.insert("updated_scenes".into(), json!(updated));
-        Ok(TaskResult::new(data, format!("Synchronized references for {n} scene(s)")))
+        Ok(TaskResult::new(
+            data,
+            format!("Synchronized references for {n} scene(s)"),
+        ))
     }
 }
 
@@ -2265,7 +2500,9 @@ async fn infer_scene_refs_with_llm(
         sb.push_str(&format!("scene_id: {scene_id}\ntext:\n{}\n\n", text.trim()));
     }
     let sys = sysprompt(ctx, DEFAULT_GEN_REF);
-    let Ok(obj) = complete_json(&sys, &sb, 4000).await else { return out };
+    let Ok(obj) = complete_json(&sys, &sb, 4000).await else {
+        return out;
+    };
     if let Some(arr) = obj.get("scene_refs").and_then(|v| v.as_array()) {
         for row in arr {
             let Some(m) = row.as_object() else { continue };
@@ -2316,7 +2553,9 @@ fn infer_dialogue_cues(content: &str) -> Vec<String> {
 
 fn is_upper_dialogue_cue(s: &str) -> bool {
     let mut chars = s.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !(first.is_alphabetic() && first.is_uppercase()) {
         return false;
     }
@@ -2325,13 +2564,25 @@ fn is_upper_dialogue_cue(s: &str) -> bool {
         return false;
     }
     rest.iter().all(|&r| {
-        (r.is_alphabetic() && r.is_uppercase()) || r.is_ascii_digit() || r == ' ' || r == '-' || r == '\''
+        (r.is_alphabetic() && r.is_uppercase())
+            || r.is_ascii_digit()
+            || r == ' '
+            || r == '-'
+            || r == '\''
     })
 }
 
 fn same_canonical_names(a: &[String], b: &[String]) -> bool {
-    let ka: Vec<String> = a.iter().map(|x| canonical_name_key(x)).filter(|k| !k.is_empty()).collect();
-    let kb: Vec<String> = b.iter().map(|x| canonical_name_key(x)).filter(|k| !k.is_empty()).collect();
+    let ka: Vec<String> = a
+        .iter()
+        .map(|x| canonical_name_key(x))
+        .filter(|k| !k.is_empty())
+        .collect();
+    let kb: Vec<String> = b
+        .iter()
+        .map(|x| canonical_name_key(x))
+        .filter(|k| !k.is_empty())
+        .collect();
     ka == kb
 }
 
@@ -2384,11 +2635,17 @@ impl Agent for DirectorFrameAgent {
         let pair_inputs: Vec<(usize, String, String, String)> = (0..scenes.len() - 1)
             .filter_map(|i| {
                 let cur_prompt = strip_director_frame_bridge(&str_of(&scenes[i], "video_prompt"));
-                let next_prompt = strip_director_frame_bridge(&str_of(&scenes[i + 1], "video_prompt"));
+                let next_prompt =
+                    strip_director_frame_bridge(&str_of(&scenes[i + 1], "video_prompt"));
                 if cur_prompt.is_empty() || next_prompt.is_empty() {
                     return None;
                 }
-                Some((i, cur_prompt, next_prompt, str_of(&scenes[i], "camera_movement")))
+                Some((
+                    i,
+                    cur_prompt,
+                    next_prompt,
+                    str_of(&scenes[i], "camera_movement"),
+                ))
             })
             .collect();
 
@@ -2427,7 +2684,9 @@ impl Agent for DirectorFrameAgent {
 
             let mut next_video = next_prompt.trim().trim_end_matches('.').to_string();
             next_video.push_str(". ");
-            next_video.push_str(&build_director_frame_bridge_block(&directive, &motion, &negative));
+            next_video.push_str(&build_director_frame_bridge_block(
+                &directive, &motion, &negative,
+            ));
             let mut updates = Map::new();
             updates.insert("video_prompt".into(), json!(next_video));
             let next_image = strip_director_frame_bridge(&str_of(next, "image_prompt"));
@@ -2455,7 +2714,10 @@ impl Agent for DirectorFrameAgent {
         let mut data = Map::new();
         data.insert("video_id".into(), json!(video_id));
         data.insert("bridges".into(), Value::Array(bridges));
-        Ok(TaskResult::new(data, format!("Applied {n} scene-to-scene continuity bridges")))
+        Ok(TaskResult::new(
+            data,
+            format!("Applied {n} scene-to-scene continuity bridges"),
+        ))
     }
 }
 
@@ -2463,9 +2725,14 @@ fn build_director_frame_prompt(cur: &str, next: &str, camera_move_a: &str, extra
     let mut b = String::new();
     b.push_str("Create a bridge from Shot A to Shot B.\n");
     b.push_str(&format!("camera_movement_a: {camera_move_a}\n\n"));
-    b.push_str(&format!("shot_a_prompt:\n{cur}\n\nshot_b_target_prompt:\n{next}"));
+    b.push_str(&format!(
+        "shot_a_prompt:\n{cur}\n\nshot_b_target_prompt:\n{next}"
+    ));
     if !extra.trim().is_empty() {
-        b.push_str(&format!("\n\nExtra continuity requirements:\n{}", extra.trim()));
+        b.push_str(&format!(
+            "\n\nExtra continuity requirements:\n{}",
+            extra.trim()
+        ));
     }
     b
 }
@@ -2484,7 +2751,10 @@ fn build_director_frame_bridge_block(directive: &str, motion: &str, negative: &s
     if parts.is_empty() {
         return String::new();
     }
-    format!("{DIRECTOR_FRAME_BRIDGE_START} {} {DIRECTOR_FRAME_BRIDGE_END}", parts.join(". "))
+    format!(
+        "{DIRECTOR_FRAME_BRIDGE_START} {} {DIRECTOR_FRAME_BRIDGE_END}",
+        parts.join(". ")
+    )
 }
 
 /// Remove any (possibly repeated / malformed) bridge blocks from a prompt.
@@ -2494,7 +2764,9 @@ fn strip_director_frame_bridge(prompt: &str) -> String {
         return String::new();
     }
     loop {
-        let Some(start) = p.find(DIRECTOR_FRAME_BRIDGE_START) else { break };
+        let Some(start) = p.find(DIRECTOR_FRAME_BRIDGE_START) else {
+            break;
+        };
         match p[start..].find(DIRECTOR_FRAME_BRIDGE_END) {
             None => {
                 // malformed old content: cut from marker to end
@@ -2570,7 +2842,12 @@ fn finish_image_request(
                 db.get("scene", &params.scene_id)
                     .ok()
                     .flatten()
-                    .map(|s| (str_of(&s, &cols.image_media_id), str_of(&s, &cols.image_url)))
+                    .map(|s| {
+                        (
+                            str_of(&s, &cols.image_media_id),
+                            str_of(&s, &cols.image_url),
+                        )
+                    })
                     .unwrap_or_default()
             } else {
                 (String::new(), String::new())
@@ -2629,7 +2906,10 @@ impl Agent for CharacterAgent {
             .map_err(|e| format!("character agent: {e}"))?;
         let mut data = Map::new();
         data.insert("processed_count".into(), json!(n));
-        Ok(TaskResult::new(data, format!("Generated {n} entity images")))
+        Ok(TaskResult::new(
+            data,
+            format!("Generated {n} entity images"),
+        ))
     }
 }
 
@@ -2661,7 +2941,11 @@ impl Agent for ImageAgent {
 }
 
 impl ImageAgent {
-    async fn run(&self, ctx: &mut AgentContext, params: &MediaParams) -> Result<TaskResult, String> {
+    async fn run(
+        &self,
+        ctx: &mut AgentContext,
+        params: &MediaParams,
+    ) -> Result<TaskResult, String> {
         let orientation = if params.orientation.is_empty() {
             crate::config::default_orientation()
         } else {
@@ -2669,24 +2953,42 @@ impl ImageAgent {
         };
         println!(
             "[AgentImage] Execute project={} mode={:?} char={} scene={} ext_connected={}",
-            ctx.project_id, params.mode, params.character_id, params.scene_id,
+            ctx.project_id,
+            params.mode,
+            params.character_id,
+            params.scene_id,
             self.core.ext.is_connected()
         );
 
         match params.mode.as_str() {
             "single_entity" => {
-                crate::process::entity_image(&self.core, &params.character_id, &ctx.project_id, false).await?;
+                crate::process::entity_image(
+                    &self.core,
+                    &params.character_id,
+                    &ctx.project_id,
+                    false,
+                )
+                .await?;
                 Ok(TaskResult::new(Map::new(), "Generated entity image"))
             }
             "all_entities" => {
-                let count = crate::process::process_all_entities(&self.core, &ctx.project_id).await?;
+                let count =
+                    crate::process::process_all_entities(&self.core, &ctx.project_id).await?;
                 let mut data = Map::new();
                 data.insert("processed_count".into(), json!(count));
-                Ok(TaskResult::new(data, format!("Generated {count} entity images")))
+                Ok(TaskResult::new(
+                    data,
+                    format!("Generated {count} entity images"),
+                ))
             }
             "single_scene" => {
                 crate::process::scene_image(
-                    &self.core, &params.scene_id, &ctx.project_id, &orientation, false, None,
+                    &self.core,
+                    &params.scene_id,
+                    &ctx.project_id,
+                    &orientation,
+                    false,
+                    None,
                 )
                 .await?;
                 Ok(TaskResult::new(Map::new(), "Generated scene image"))
@@ -2715,7 +3017,12 @@ impl ImageAgent {
                     attempts += 1;
                     let sid = str_of(&sc, "id");
                     match crate::process::scene_image(
-                        &self.core, &sid, &ctx.project_id, &orientation, false, None,
+                        &self.core,
+                        &sid,
+                        &ctx.project_id,
+                        &orientation,
+                        false,
+                        None,
                     )
                     .await
                     {
@@ -2727,12 +3034,17 @@ impl ImageAgent {
                     }
                 }
                 if count == 0 && attempts > 0 {
-                    return Err(format!("all {attempts} scene image generations failed: {last_err}"));
+                    return Err(format!(
+                        "all {attempts} scene image generations failed: {last_err}"
+                    ));
                 }
                 let mut data = Map::new();
                 data.insert("processed_count".into(), json!(count));
                 data.insert("video_id".into(), json!(vid));
-                Ok(TaskResult::new(data, format!("Generated {count} scene images")))
+                Ok(TaskResult::new(
+                    data,
+                    format!("Generated {count} scene images"),
+                ))
             }
         }
     }
@@ -2760,7 +3072,9 @@ impl Agent for VideoAgent {
         };
         println!(
             "[VideoAgent] Execute project={} mode={:?} scene={} ext_connected={}",
-            ctx.project_id, params.mode, params.scene_id,
+            ctx.project_id,
+            params.mode,
+            params.scene_id,
             self.core.ext.is_connected()
         );
 
@@ -2768,8 +3082,14 @@ impl Agent for VideoAgent {
             if params.scene_id.is_empty() {
                 return Err("video agent: single_scene requires scene_id".to_string());
             }
-            crate::process::scene_video(&self.core, &params.scene_id, &ctx.project_id, &orientation, false)
-                .await?;
+            crate::process::scene_video(
+                &self.core,
+                &params.scene_id,
+                &ctx.project_id,
+                &orientation,
+                false,
+            )
+            .await?;
             return Ok(TaskResult::new(Map::new(), "Generated scene video"));
         }
 
@@ -2828,7 +3148,15 @@ impl Agent for VideoAgent {
             req.insert("orientation".into(), json!(orientation));
             let _ = db.insert("request", &req);
 
-            match crate::process::scene_video(&self.core, &sid, &ctx.project_id, &orientation, false).await {
+            match crate::process::scene_video(
+                &self.core,
+                &sid,
+                &ctx.project_id,
+                &orientation,
+                false,
+            )
+            .await
+            {
                 Ok(_) => count += 1,
                 Err(e) => {
                     eprintln!("[VideoAgent] scene {sid}: {e}");
@@ -2837,12 +3165,17 @@ impl Agent for VideoAgent {
             }
         }
         if count == 0 && attempts > 0 {
-            return Err(format!("all {attempts} scene video generations failed: {last_err}"));
+            return Err(format!(
+                "all {attempts} scene video generations failed: {last_err}"
+            ));
         }
         let mut data = Map::new();
         data.insert("processed_count".into(), json!(count));
         data.insert("video_id".into(), json!(vid));
-        Ok(TaskResult::new(data, format!("Generated {count} scene videos")))
+        Ok(TaskResult::new(
+            data,
+            format!("Generated {count} scene videos"),
+        ))
     }
 }
 
@@ -2905,9 +3238,21 @@ impl Agent for AudioAgent {
 
         // Project-level narration settings; each falls back to the daemon's own
         // TTS settings when unset (tts::synthesize omits empty fields).
-        let project = db.get("project", &ctx.project_id).ok().flatten().unwrap_or_default();
-        let voice = if params.voice.is_empty() { str_of(&project, "narrator_voice") } else { params.voice.clone() };
-        let language = if params.language.is_empty() { str_of(&project, "language") } else { params.language.clone() };
+        let project = db
+            .get("project", &ctx.project_id)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let voice = if params.voice.is_empty() {
+            str_of(&project, "narrator_voice")
+        } else {
+            params.voice.clone()
+        };
+        let language = if params.language.is_empty() {
+            str_of(&project, "language")
+        } else {
+            params.language.clone()
+        };
 
         let scenes = list_scenes(&db, &video_id);
         let mut narrations: Vec<Value> = Vec::new();
@@ -2938,39 +3283,38 @@ impl Agent for AudioAgent {
             mark.insert("narrator_audio_status".into(), json!("PROCESSING"));
             let _ = db.update("scene", &scene_id, &mark);
 
-            match crate::tts::synthesize(&text, &language, &voice, params.speed, &params.model_id).await
+            match crate::tts::synthesize(&text, &language, &voice, params.speed, &params.model_id)
+                .await
             {
-                Ok(wav) => {
-                    match self.store_wav(&db, &scene_id, wav) {
-                        Ok(url) => {
-                            generated += 1;
-                            narrations.push(json!({
-                                "scene_id": scene_id,
-                                "display_order": db::i64_of(sc, "display_order"),
-                                "narrator_text": text,
-                                "audio_url": url,
-                                "status": "COMPLETED",
-                            }));
-                            self.core.dash.emit(
-                                "scene_updated",
-                                json!({ "project_id": ctx.project_id, "scene_id": scene_id }),
-                            );
-                        }
-                        Err(e) => {
-                            failed += 1;
-                            if first_error.is_empty() {
-                                first_error = e.clone();
-                            }
-                            let mut m = Map::new();
-                            m.insert("narrator_audio_status".into(), json!("FAILED"));
-                            let _ = db.update("scene", &scene_id, &m);
-                            narrations.push(json!({
-                                "scene_id": scene_id, "narrator_text": text,
-                                "status": "FAILED", "error": e,
-                            }));
-                        }
+                Ok(wav) => match self.store_wav(&db, &scene_id, wav) {
+                    Ok(url) => {
+                        generated += 1;
+                        narrations.push(json!({
+                            "scene_id": scene_id,
+                            "display_order": db::i64_of(sc, "display_order"),
+                            "narrator_text": text,
+                            "audio_url": url,
+                            "status": "COMPLETED",
+                        }));
+                        self.core.dash.emit(
+                            "scene_updated",
+                            json!({ "project_id": ctx.project_id, "scene_id": scene_id }),
+                        );
                     }
-                }
+                    Err(e) => {
+                        failed += 1;
+                        if first_error.is_empty() {
+                            first_error = e.clone();
+                        }
+                        let mut m = Map::new();
+                        m.insert("narrator_audio_status".into(), json!("FAILED"));
+                        let _ = db.update("scene", &scene_id, &m);
+                        narrations.push(json!({
+                            "scene_id": scene_id, "narrator_text": text,
+                            "status": "FAILED", "error": e,
+                        }));
+                    }
+                },
                 Err(e) => {
                     failed += 1;
                     if first_error.is_empty() {
@@ -2999,14 +3343,19 @@ impl Agent for AudioAgent {
 
         // No narrator text at all is a legitimate no-op, not a failure.
         if n == 0 {
-            return Ok(TaskResult::new(data, "No narrator_text on any scene — nothing to narrate"));
+            return Ok(TaskResult::new(
+                data,
+                "No narrator_text on any scene — nothing to narrate",
+            ));
         }
         // Every synthesis failing means TTS is unusable (no model installed,
         // daemon down). Surface it as a task error so the pipeline shows why,
         // rather than reporting success with zero audio.
         if generated == 0 && skipped == 0 && failed > 0 {
             data.insert("error".into(), json!(first_error.clone()));
-            return Err(format!("audio agent: TTS failed for all {failed} narration(s): {first_error}"));
+            return Err(format!(
+                "audio agent: TTS failed for all {failed} narration(s): {first_error}"
+            ));
         }
         let summary = if failed > 0 {
             format!("Narrated {generated} scene(s), {skipped} already done, {failed} failed ({first_error})")
@@ -3043,7 +3392,8 @@ impl AudioAgent {
         sm.insert("narrator_audio_url".into(), json!(url));
         sm.insert("narrator_audio_media_id".into(), json!(id));
         sm.insert("narrator_audio_status".into(), json!("COMPLETED"));
-        db.update("scene", scene_id, &sm).map_err(|e| format!("update scene: {e}"))?;
+        db.update("scene", scene_id, &sm)
+            .map_err(|e| format!("update scene: {e}"))?;
         Ok(url)
     }
 }
@@ -3100,7 +3450,12 @@ impl Agent for MediaDownloadAgent {
                     skipped += 1;
                     continue;
                 }
-                jobs.push((sid.clone(), (*col).to_string(), (*media_type).to_string(), raw));
+                jobs.push((
+                    sid.clone(),
+                    (*col).to_string(),
+                    (*media_type).to_string(),
+                    raw,
+                ));
             }
         }
 
@@ -3179,7 +3534,12 @@ impl MediaDownloadAgent {
     /// Download a remote URL into the media dir, create a media row (with
     /// original_url + probed dims) and return `/api/media/{id}/file`. An
     /// already-downloaded URL reuses the existing record.
-    async fn download_url(&self, db: &Db, raw_url: &str, media_type: &str) -> Result<String, String> {
+    async fn download_url(
+        &self,
+        db: &Db,
+        raw_url: &str,
+        media_type: &str,
+    ) -> Result<String, String> {
         if let Ok(Some(existing)) =
             db.query_one("SELECT id FROM media WHERE original_url = ?1", &[&raw_url])
         {
@@ -3200,7 +3560,10 @@ impl MediaDownloadAgent {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let bytes = resp.bytes().await.map_err(|e| format!("download body: {e}"))?;
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("download body: {e}"))?;
 
         let mut ext = ext_from_content_type(&content_type).to_string();
         if ext.is_empty() {
@@ -3222,7 +3585,12 @@ impl MediaDownloadAgent {
         let dest_path = self.core.media_dir.join(&file_name);
         std::fs::write(&dest_path, &bytes).map_err(|e| format!("write: {e}"))?;
 
-        let mime_type = content_type.split(';').next().unwrap_or("").trim().to_string();
+        let mime_type = content_type
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         let (w_px, h_px) = probe_dimensions(media_type, &dest_path, &bytes);
 
         let mut cm = Map::new();
@@ -3280,8 +3648,14 @@ fn probe_dimensions(media_type: &str, path: &std::path::Path, bytes: &[u8]) -> (
     // ffprobe fallback (works for video and any image format it knows).
     let out = std::process::Command::new("ffprobe")
         .args([
-            "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
-            "-of", "csv=s=x:p=0",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=s=x:p=0",
         ])
         .arg(path)
         .output();
@@ -3319,7 +3693,8 @@ fn sniff_image_dimensions(b: &[u8]) -> Option<(i64, i64)> {
                 continue;
             }
             let marker = b[i + 1];
-            if (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC {
+            if (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC
+            {
                 let h = u16::from_be_bytes([b[i + 5], b[i + 6]]) as i64;
                 let w = u16::from_be_bytes([b[i + 7], b[i + 8]]) as i64;
                 return Some((w, h));
@@ -3379,7 +3754,10 @@ impl Agent for ConcatAgent {
         if video_urls.is_empty() {
             let mut data = Map::new();
             data.insert("status".into(), json!("no_videos_ready"));
-            return Ok(TaskResult::new(data, "No completed video clips to concat yet"));
+            return Ok(TaskResult::new(
+                data,
+                "No completed video clips to concat yet",
+            ));
         }
 
         // Graceful when ffmpeg is absent.
@@ -3390,13 +3768,19 @@ impl Agent for ConcatAgent {
             data.insert("count".into(), json!(video_urls.len()));
             return Ok(TaskResult::new(
                 data,
-                format!("ffmpeg not found — {} clips ready for manual concat", video_urls.len()),
+                format!(
+                    "ffmpeg not found — {} clips ready for manual concat",
+                    video_urls.len()
+                ),
             ));
         }
 
         // Local-path resolution: /api/media/{id}/file → media.file_path;
         // remote http(s) URLs stay as-is (whitelisted in the ffmpeg args).
-        let inputs: Vec<String> = video_urls.iter().map(|u| resolve_media_input(&db, u)).collect();
+        let inputs: Vec<String> = video_urls
+            .iter()
+            .map(|u| resolve_media_input(&db, u))
+            .collect();
 
         let out_dir = crate::config::data_dir().join("output");
         std::fs::create_dir_all(&out_dir).map_err(|e| format!("concat mkdir: {e}"))?;
@@ -3453,7 +3837,11 @@ impl Agent for ConcatAgent {
         data.insert("video_id".into(), json!(video_id));
         Ok(TaskResult::new(
             data,
-            format!("Concatenated {} clips → {}", inputs.len(), out_path.to_string_lossy()),
+            format!(
+                "Concatenated {} clips → {}",
+                inputs.len(),
+                out_path.to_string_lossy()
+            ),
         ))
     }
 }
@@ -3547,26 +3935,46 @@ impl Agent for CriticAgent {
             let order = db::i64_of(sc, "display_order");
             let image_prompt = {
                 let p = str_of(sc, "image_prompt");
-                if p.is_empty() { str_of(sc, "prompt") } else { p }
+                if p.is_empty() {
+                    str_of(sc, "prompt")
+                } else {
+                    p
+                }
             };
             if image_prompt.trim().is_empty() {
-                issue(&mut errors, order, "no_image_prompt",
-                      "không có image_prompt — ảnh khung hình sẽ vô nghĩa".into());
+                issue(
+                    &mut errors,
+                    order,
+                    "no_image_prompt",
+                    "không có image_prompt — ảnh khung hình sẽ vô nghĩa".into(),
+                );
             }
 
             let video_prompt = str_of(sc, "video_prompt");
             if video_prompt.trim().is_empty() {
-                issue(&mut errors, order, "no_video_prompt",
-                      "không có video_prompt — clip sẽ thiếu chỉ dẫn máy quay".into());
+                issue(
+                    &mut errors,
+                    order,
+                    "no_video_prompt",
+                    "không có video_prompt — clip sẽ thiếu chỉ dẫn máy quay".into(),
+                );
             } else if !has_subclip_timing(&video_prompt) {
-                issue(&mut warnings, order, "no_timing",
-                      "video_prompt thiếu mốc thời gian kiểu \"0-3s: …\"".into());
+                issue(
+                    &mut warnings,
+                    order,
+                    "no_timing",
+                    "video_prompt thiếu mốc thời gian kiểu \"0-3s: …\"".into(),
+                );
             }
 
             let names = parse_names(&str_of(sc, "character_names"));
             if names.is_empty() {
-                issue(&mut warnings, order, "no_entities",
-                      "không tham chiếu entity nào — nhân vật dễ lệch giữa các cảnh".into());
+                issue(
+                    &mut warnings,
+                    order,
+                    "no_entities",
+                    "không tham chiếu entity nào — nhân vật dễ lệch giữa các cảnh".into(),
+                );
             }
             for n in &names {
                 let key = canonical_name_key(n);
@@ -3574,18 +3982,30 @@ impl Agent for CriticAgent {
                     continue;
                 }
                 if !known.contains(&key) {
-                    issue(&mut warnings, order, "unknown_entity",
-                          format!("`{n}` không có trong danh sách entity"));
+                    issue(
+                        &mut warnings,
+                        order,
+                        "unknown_entity",
+                        format!("`{n}` không có trong danh sách entity"),
+                    );
                 } else if !ref_ready.contains(&key) {
-                    issue(&mut errors, order, "entity_without_reference",
-                          format!("`{n}` chưa có ảnh tham chiếu — sinh ảnh ref trước"));
+                    issue(
+                        &mut errors,
+                        order,
+                        "entity_without_reference",
+                        format!("`{n}` chưa có ảnh tham chiếu — sinh ảnh ref trước"),
+                    );
                 }
             }
 
             // Continuity: every scene after the first should carry a bridge.
             if i > 0 && !video_prompt.contains(DIRECTOR_FRAME_BRIDGE_START) {
-                issue(&mut warnings, order, "no_continuity_bridge",
-                      "chưa có cầu nối liên tục từ cảnh trước".into());
+                issue(
+                    &mut warnings,
+                    order,
+                    "no_continuity_bridge",
+                    "chưa có cầu nối liên tục từ cảnh trước".into(),
+                );
             }
         }
 
@@ -3594,7 +4014,10 @@ impl Agent for CriticAgent {
         data.insert("scene_count".into(), json!(scenes.len()));
         data.insert("errors".into(), Value::Array(errors.clone()));
         data.insert("warnings".into(), Value::Array(warnings.clone()));
-        data.insert("status".into(), json!(if errors.is_empty() { "PASS" } else { "FAIL" }));
+        data.insert(
+            "status".into(),
+            json!(if errors.is_empty() { "PASS" } else { "FAIL" }),
+        );
 
         if !errors.is_empty() {
             // Fail the node: the render stages depend on it, so nothing is
@@ -3618,7 +4041,10 @@ impl Agent for CriticAgent {
         }
 
         let summary = if warnings.is_empty() {
-            format!("Kiểm tra trước render: {} cảnh, không có vấn đề", scenes.len())
+            format!(
+                "Kiểm tra trước render: {} cảnh, không có vấn đề",
+                scenes.len()
+            )
         } else {
             format!(
                 "Kiểm tra trước render: {} cảnh, {} cảnh báo (vẫn render được)",
@@ -3680,7 +4106,10 @@ mod tests {
     fn diacritic_folding_no_accent_display_name() {
         assert_eq!(to_vietnamese_no_accent_name("Cụ Già"), "CU GIA");
         assert_eq!(to_vietnamese_no_accent_name("Đường Phố"), "DUONG PHO");
-        assert_eq!(to_vietnamese_no_accent_name("ông Tư - xe ôm"), "ONG TU XE OM");
+        assert_eq!(
+            to_vietnamese_no_accent_name("ông Tư - xe ôm"),
+            "ONG TU XE OM"
+        );
         assert_eq!(to_vietnamese_no_accent_name("  "), "");
         assert_eq!(to_vietnamese_no_accent_name("NAM"), "NAM");
     }
@@ -3762,9 +4191,18 @@ mod tests {
     /// them silently disabled character consistency.
     #[test]
     fn empty_catalog_keeps_parsed_names() {
-        let names = vec!["HẬU".to_string(), "hậu".to_string(), " PHONG ".to_string(), "".to_string()];
+        let names = vec![
+            "HẬU".to_string(),
+            "hậu".to_string(),
+            " PHONG ".to_string(),
+            "".to_string(),
+        ];
         let out = normalize_names_to_entity_catalog(&names, &HashMap::new());
-        assert_eq!(out, vec!["HẬU".to_string(), "PHONG".to_string()], "deduped, trimmed, order kept");
+        assert_eq!(
+            out,
+            vec!["HẬU".to_string(), "PHONG".to_string()],
+            "deduped, trimmed, order kept"
+        );
         // No names at all is still nothing.
         assert!(normalize_names_to_entity_catalog(&[], &HashMap::new()).is_empty());
     }

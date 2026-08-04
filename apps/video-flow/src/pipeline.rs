@@ -36,9 +36,22 @@ struct PlanDoc {
 /// Canonical builtin DAG agent types (Go: DAGAgentTypeOrder, reordered to the
 /// pool's canonical `builtin_order` — media_download before concat).
 pub const KNOWN_DAG_TYPES: &[&str] = &[
-    "director", "screenwriter", "scene_plan", "shot_design", "visual_asset",
-    "scene_builder", "script_parser", "gen_ref", "director_frame", "character",
-    "image", "video", "audio", "media_download", "concat", "critic",
+    "director",
+    "screenwriter",
+    "scene_plan",
+    "shot_design",
+    "visual_asset",
+    "scene_builder",
+    "script_parser",
+    "gen_ref",
+    "director_frame",
+    "character",
+    "image",
+    "video",
+    "audio",
+    "media_download",
+    "concat",
+    "critic",
 ];
 
 /// Canonical per-type description; encodes required upstream deps in a
@@ -115,9 +128,14 @@ fn build_agent_catalog(infos: &[AgentInfo]) -> String {
         }
     }
 
-    let mut b = String::from("\nAVAILABLE AGENT TYPES (only these may appear in \"agent_type\"):\n");
+    let mut b =
+        String::from("\nAVAILABLE AGENT TYPES (only these may appear in \"agent_type\"):\n");
     let write_block = |b: &mut String, title: &str, types: &[&str]| {
-        let present: Vec<&str> = types.iter().copied().filter(|t| type_set.contains(*t)).collect();
+        let present: Vec<&str> = types
+            .iter()
+            .copied()
+            .filter(|t| type_set.contains(*t))
+            .collect();
         if present.is_empty() {
             return;
         }
@@ -136,21 +154,49 @@ fn build_agent_catalog(infos: &[AgentInfo]) -> String {
             b.push('\n');
         }
     };
-    write_block(&mut b, "Pre-production (when starting from a raw concept, run these first):",
-        &["director", "screenwriter", "scene_plan", "shot_design", "visual_asset"]);
-    write_block(&mut b, "Production (parse script and generate media):",
-        &["scene_builder", "script_parser", "gen_ref", "director_frame", "character", "image", "video", "audio", "concat"]);
+    write_block(
+        &mut b,
+        "Pre-production (when starting from a raw concept, run these first):",
+        &[
+            "director",
+            "screenwriter",
+            "scene_plan",
+            "shot_design",
+            "visual_asset",
+        ],
+    );
+    write_block(
+        &mut b,
+        "Production (parse script and generate media):",
+        &[
+            "scene_builder",
+            "script_parser",
+            "gen_ref",
+            "director_frame",
+            "character",
+            "image",
+            "video",
+            "audio",
+            "concat",
+        ],
+    );
     write_block(&mut b, "QA (optional, per-clip review):", &["critic"]);
     write_block(&mut b, "Post-production (ALWAYS run media_download BEFORE concat — download remote URLs to local first, then concat local files):",
         &["media_download"]);
 
     let known: HashSet<&str> = KNOWN_DAG_TYPES.iter().copied().collect();
-    let custom: Vec<&AgentInfo> =
-        infos.iter().filter(|a| !known.contains(a.agent_type.as_str())).collect();
+    let custom: Vec<&AgentInfo> = infos
+        .iter()
+        .filter(|a| !known.contains(a.agent_type.as_str()))
+        .collect();
     if !custom.is_empty() {
         b.push_str("\nCustom Agents (dynamically registered skill agents):\n");
         for a in custom {
-            let desc = if a.description.is_empty() { a.agent_type.clone() } else { a.description.clone() };
+            let desc = if a.description.is_empty() {
+                a.agent_type.clone()
+            } else {
+                a.description.clone()
+            };
             b.push_str("- ");
             b.push_str(&a.agent_type);
             b.push_str(": ");
@@ -167,7 +213,11 @@ fn build_agent_catalog(infos: &[AgentInfo]) -> String {
 pub fn build_orchestrator_system(pool: &Pool) -> String {
     let base = pool.system_prompt("orchestrator");
     let base = base.trim();
-    let base = if base.is_empty() { DEFAULT_ORCHESTRATOR_INTRO } else { base };
+    let base = if base.is_empty() {
+        DEFAULT_ORCHESTRATOR_INTRO
+    } else {
+        base
+    };
     format!("{}\n\n{}", base, build_agent_catalog(&pool.list_info()))
 }
 
@@ -200,7 +250,10 @@ pub fn validate_plan(tasks: &[PlannedTask], known_types: &[String]) -> Result<()
             return Err(format!("orchestrator: duplicate label {:?}", t.label));
         }
         if t.agent_type.is_empty() {
-            return Err(format!("orchestrator: task {:?} has empty agent_type", t.label));
+            return Err(format!(
+                "orchestrator: task {:?} has empty agent_type",
+                t.label
+            ));
         }
         if !allow.contains(&t.agent_type) {
             return Err(format!(
@@ -212,7 +265,10 @@ pub fn validate_plan(tasks: &[PlannedTask], known_types: &[String]) -> Result<()
     for t in tasks {
         for d in &t.depends_on {
             if !labels.contains(d.as_str()) {
-                return Err(format!("orchestrator: task {:?} depends on unknown label {d:?}", t.label));
+                return Err(format!(
+                    "orchestrator: task {:?} depends on unknown label {d:?}",
+                    t.label
+                ));
             }
         }
         for src in &t.input_from {
@@ -237,8 +293,11 @@ fn validate_no_cycle(tasks: &[PlannedTask]) -> Result<(), String> {
     for t in tasks {
         *in_degree.entry(t.label.as_str()).or_insert(0) += t.depends_on.len();
     }
-    let mut queue: Vec<&str> =
-        in_degree.iter().filter(|(_, d)| **d == 0).map(|(l, _)| *l).collect();
+    let mut queue: Vec<&str> = in_degree
+        .iter()
+        .filter(|(_, d)| **d == 0)
+        .map(|(l, _)| *l)
+        .collect();
     let mut visited = 0usize;
     while let Some(u) = queue.pop() {
         visited += 1;
@@ -326,11 +385,16 @@ pub fn normalize_dependencies(tasks: &mut Vec<PlannedTask>, order: &[&str]) {
     // Index labels by agent_type (supports multiple tasks per type).
     let mut labels_by_type: HashMap<String, Vec<String>> = HashMap::new();
     for t in tasks.iter() {
-        labels_by_type.entry(t.agent_type.clone()).or_default().push(t.label.clone());
+        labels_by_type
+            .entry(t.agent_type.clone())
+            .or_default()
+            .push(t.label.clone());
     }
 
     // Ensure gen_ref exists whenever script_parser exists.
-    let has_script = labels_by_type.get("script_parser").is_some_and(|v| !v.is_empty());
+    let has_script = labels_by_type
+        .get("script_parser")
+        .is_some_and(|v| !v.is_empty());
     let has_gen_ref = labels_by_type.get("gen_ref").is_some_and(|v| !v.is_empty());
     if has_script && !has_gen_ref {
         let script_label = labels_by_type["script_parser"][0].clone();
@@ -343,11 +407,20 @@ pub fn normalize_dependencies(tasks: &mut Vec<PlannedTask>, order: &[&str]) {
             input_from: vec![script_label],
             timeout_seconds: 300,
         });
-        labels_by_type.entry("gen_ref".to_string()).or_default().push(gen_ref_label);
+        labels_by_type
+            .entry("gen_ref".to_string())
+            .or_default()
+            .push(gen_ref_label);
     }
 
-    let script_labels = labels_by_type.get("script_parser").cloned().unwrap_or_default();
-    let visual_labels = labels_by_type.get("visual_asset").cloned().unwrap_or_default();
+    let script_labels = labels_by_type
+        .get("script_parser")
+        .cloned()
+        .unwrap_or_default();
+    let visual_labels = labels_by_type
+        .get("visual_asset")
+        .cloned()
+        .unwrap_or_default();
     let gen_ref_labels = labels_by_type.get("gen_ref").cloned().unwrap_or_default();
 
     for i in 0..tasks.len() {
@@ -416,9 +489,14 @@ pub fn normalize_dependencies(tasks: &mut Vec<PlannedTask>, order: &[&str]) {
 
     // Character waits for director_frame when that step exists, but character
     // reads DB only — exclude director_frame from upstream JSON injection.
-    let type_by_label: HashMap<String, String> =
-        tasks.iter().map(|t| (t.label.clone(), t.agent_type.clone())).collect();
-    let df_labels = labels_by_type.get("director_frame").cloned().unwrap_or_default();
+    let type_by_label: HashMap<String, String> = tasks
+        .iter()
+        .map(|t| (t.label.clone(), t.agent_type.clone()))
+        .collect();
+    let df_labels = labels_by_type
+        .get("director_frame")
+        .cloned()
+        .unwrap_or_default();
     if !df_labels.is_empty() {
         for i in 0..tasks.len() {
             if tasks[i].agent_type != "character" {
@@ -448,12 +526,19 @@ fn enforce_known_type_order(tasks: &mut [PlannedTask], order: &[&str]) {
         return;
     }
     let type_order: HashMap<&str, usize> = order.iter().enumerate().map(|(i, t)| (*t, i)).collect();
-    let type_by_label: HashMap<String, String> =
-        tasks.iter().map(|t| (t.label.clone(), t.agent_type.clone())).collect();
+    let type_by_label: HashMap<String, String> = tasks
+        .iter()
+        .map(|t| (t.label.clone(), t.agent_type.clone()))
+        .collect();
     for t in tasks.iter_mut() {
-        let Some(&cur) = type_order.get(t.agent_type.as_str()) else { continue };
+        let Some(&cur) = type_order.get(t.agent_type.as_str()) else {
+            continue;
+        };
         t.depends_on.retain(|dep| {
-            match type_by_label.get(dep).and_then(|dt| type_order.get(dt.as_str())) {
+            match type_by_label
+                .get(dep)
+                .and_then(|dt| type_order.get(dt.as_str()))
+            {
                 Some(&d) if d > cur => false, // reverse builtin order
                 _ => true,
             }
@@ -469,13 +554,31 @@ fn enforce_known_type_order(tasks: &mut [PlannedTask], order: &[&str]) {
 fn template_chain(mode: &str) -> &'static [&'static str] {
     match mode {
         "full" => &[
-            "director", "screenwriter", "scene_plan", "shot_design", "visual_asset",
-            "script_parser", "gen_ref", "director_frame",
-            "character", "image", "video", "audio", "concat", "media_download",
+            "director",
+            "screenwriter",
+            "scene_plan",
+            "shot_design",
+            "visual_asset",
+            "script_parser",
+            "gen_ref",
+            "director_frame",
+            "character",
+            "image",
+            "video",
+            "audio",
+            "concat",
+            "media_download",
         ],
         _ => &[
-            "script_parser", "gen_ref", "director_frame",
-            "character", "image", "video", "audio", "concat", "media_download",
+            "script_parser",
+            "gen_ref",
+            "director_frame",
+            "character",
+            "image",
+            "video",
+            "audio",
+            "concat",
+            "media_download",
         ],
     }
 }
@@ -503,7 +606,11 @@ fn template_prompt(agent_type: &str) -> &'static str {
 
 /// Deterministic DAG for a template mode, restricted to enabled agent types.
 /// Disabled/unavailable agents are skipped and the chain re-links across the gap.
-fn build_template_plan(mode: &str, allowed: &[String], order: &[&str]) -> Result<Vec<PlannedTask>, String> {
+fn build_template_plan(
+    mode: &str,
+    allowed: &[String],
+    order: &[&str],
+) -> Result<Vec<PlannedTask>, String> {
     let allowed_set: HashSet<&str> = allowed.iter().map(|s| s.as_str()).collect();
     let mut tasks: Vec<PlannedTask> = Vec::new();
     let mut prev_label = String::new();
@@ -511,7 +618,11 @@ fn build_template_plan(mode: &str, allowed: &[String], order: &[&str]) -> Result
         if !allowed_set.contains(typ) {
             continue;
         }
-        let deps = if prev_label.is_empty() { Vec::new() } else { vec![prev_label.clone()] };
+        let deps = if prev_label.is_empty() {
+            Vec::new()
+        } else {
+            vec![prev_label.clone()]
+        };
         tasks.push(PlannedTask {
             label: typ.to_string(),
             agent_type: typ.to_string(),
@@ -523,7 +634,9 @@ fn build_template_plan(mode: &str, allowed: &[String], order: &[&str]) -> Result
         prev_label = typ.to_string();
     }
     if tasks.is_empty() {
-        return Err(format!("no enabled agents available for template mode {mode:?}"));
+        return Err(format!(
+            "no enabled agents available for template mode {mode:?}"
+        ));
     }
     normalize_dependencies(&mut tasks, order);
     Ok(tasks)
@@ -564,7 +677,10 @@ pub async fn plan_with_llm(
 ) -> Result<Vec<PlannedTask>, String> {
     let infos = pool.list_info();
     if infos.is_empty() {
-        return Err("no agent types available for planning (all agents may be disabled in settings)".to_string());
+        return Err(
+            "no agent types available for planning (all agents may be disabled in settings)"
+                .to_string(),
+        );
     }
     let allowed: Vec<String> = infos.iter().map(|a| a.agent_type.clone()).collect();
     let sys = build_orchestrator_system(pool);
@@ -579,7 +695,11 @@ pub async fn plan_with_llm(
         } else {
             (goal.to_string(), sys.clone())
         };
-        let prompt = if script.trim().is_empty() { g } else { format!("{script}\n\n{g}") };
+        let prompt = if script.trim().is_empty() {
+            g
+        } else {
+            format!("{script}\n\n{g}")
+        };
         let text = match llm::complete(&s, &prompt, 8000).await {
             Ok((t, _model)) => t,
             Err(e) => {
@@ -590,7 +710,10 @@ pub async fn plan_with_llm(
         let doc: PlanDoc = match llm::parse_json(&text) {
             Ok(d) => d,
             Err(e) => {
-                last_err = format!("orchestrator parse plan: {e}\nraw: {}", llm::truncate(&text, 500));
+                last_err = format!(
+                    "orchestrator parse plan: {e}\nraw: {}",
+                    llm::truncate(&text, 500)
+                );
                 continue;
             }
         };
@@ -607,7 +730,9 @@ pub async fn plan_with_llm(
         }
         return Ok(tasks);
     }
-    Err(format!("orchestrate pipeline (LLM planning failed after retry): {last_err}"))
+    Err(format!(
+        "orchestrate pipeline (LLM planning failed after retry): {last_err}"
+    ))
 }
 
 // ---- manager (manager.go) ----
@@ -673,7 +798,11 @@ pub async fn create(
     if project_id.is_empty() {
         return Err("project_id required".to_string());
     }
-    let orientation = if orientation.is_empty() { "VERTICAL" } else { orientation };
+    let orientation = if orientation.is_empty() {
+        "VERTICAL"
+    } else {
+        orientation
+    };
 
     // Enforce 1 active pipeline per project.
     if let Some(existing) = core
@@ -709,7 +838,10 @@ pub async fn create(
 
     let infos = pool.list_info();
     if infos.is_empty() {
-        return Err("no agent types available for planning (all agents may be disabled in settings)".to_string());
+        return Err(
+            "no agent types available for planning (all agents may be disabled in settings)"
+                .to_string(),
+        );
     }
     let allowed: Vec<String> = infos.iter().map(|a| a.agent_type.clone()).collect();
 
@@ -722,7 +854,9 @@ pub async fn create(
             .map_err(|e| format!("build template pipeline: {e}"))?;
         match validate_plan(&tp, &allowed) {
             Ok(()) => plan = Some(tp),
-            Err(e) => eprintln!("[pipeline] template plan invalid ({e}); falling back to LLM planner"),
+            Err(e) => {
+                eprintln!("[pipeline] template plan invalid ({e}); falling back to LLM planner")
+            }
         }
     }
     let tasks = match plan {
@@ -741,7 +875,9 @@ pub async fn create(
     prow.insert("goal".into(), json!(computed_goal));
     prow.insert("orientation".into(), json!(orientation));
     prow.insert("script_md".into(), json!(script));
-    core.db.insert("dag_parents", &prow).map_err(|e| format!("create pipeline parent: {e}"))?;
+    core.db
+        .insert("dag_parents", &prow)
+        .map_err(|e| format!("create pipeline parent: {e}"))?;
 
     // Persist tasks.
     for pt in &tasks {
@@ -751,15 +887,25 @@ pub async fn create(
         if pt.agent_type == "script_parser" && !script.is_empty() && mode != "full" {
             prompt = format!("{script}\n\n{prompt}");
         }
-        let timeout = if pt.timeout_seconds == 0 { 900 } else { pt.timeout_seconds };
+        let timeout = if pt.timeout_seconds == 0 {
+            900
+        } else {
+            pt.timeout_seconds
+        };
         let mut row = Map::new();
         row.insert("id".into(), json!(db::new_id()));
         row.insert("parent_id".into(), json!(parent_id));
         row.insert("label".into(), json!(pt.label));
         row.insert("agent_type".into(), json!(pt.agent_type));
         row.insert("prompt".into(), json!(prompt));
-        row.insert("depends_on".into(), json!(dag::encode_depends_on(&pt.depends_on)));
-        row.insert("input_from".into(), json!(dag::encode_depends_on(&pt.input_from)));
+        row.insert(
+            "depends_on".into(),
+            json!(dag::encode_depends_on(&pt.depends_on)),
+        );
+        row.insert(
+            "input_from".into(),
+            json!(dag::encode_depends_on(&pt.input_from)),
+        );
         row.insert("status".into(), json!("registered"));
         row.insert("timeout_seconds".into(), json!(timeout));
         core.db
@@ -767,7 +913,8 @@ pub async fn create(
             .map_err(|e| format!("create dag task {:?}: {e}", pt.label))?;
     }
 
-    core.dash.emit("pipeline:created", json!({"pipeline_id": parent_id}));
+    core.dash
+        .emit("pipeline:created", json!({"pipeline_id": parent_id}));
     Ok((parent_id, tasks.len()))
 }
 
@@ -792,7 +939,9 @@ pub fn retry_task(core: &Core, pipeline_id: &str, task_id: &str) -> Result<(), S
     fields.insert("result".into(), Value::Null);
     fields.insert("started_at".into(), Value::Null);
     fields.insert("completed_at".into(), Value::Null);
-    core.db.update("dag_tasks", task_id, &fields).map_err(|e| e.to_string())?;
+    core.db
+        .update("dag_tasks", task_id, &fields)
+        .map_err(|e| e.to_string())?;
     let parent = dag::load_parent(&core.db, pipeline_id)?;
     if parent.status == "failed" || parent.status == "done" {
         dag::update_parent_status(&core.db, pipeline_id, "active")?;
@@ -810,7 +959,10 @@ pub fn get_status(core: &Core, id: &str) -> Result<Value, String> {
         .ok_or_else(|| format!("dag parent {id:?} not found"))?;
     let rows = core
         .db
-        .query("SELECT * FROM dag_tasks WHERE parent_id = ?1 ORDER BY rowid", &[&id])
+        .query(
+            "SELECT * FROM dag_tasks WHERE parent_id = ?1 ORDER BY rowid",
+            &[&id],
+        )
         .map_err(|e| e.to_string())?;
     let tasks: Vec<Value> = rows
         .into_iter()
@@ -854,18 +1006,26 @@ mod tests {
         assert!(validate_plan(&[], &[]).is_err());
         // duplicate label
         let dup = vec![pt("a", "director", &[]), pt("a", "screenwriter", &[])];
-        assert!(validate_plan(&dup, &[]).unwrap_err().contains("duplicate label"));
+        assert!(validate_plan(&dup, &[])
+            .unwrap_err()
+            .contains("duplicate label"));
         // disallowed agent_type
         let bad_type = vec![pt("a", "image", &[])];
         let known = vec!["script_parser".to_string()];
-        assert!(validate_plan(&bad_type, &known).unwrap_err().contains("disallowed agent_type"));
+        assert!(validate_plan(&bad_type, &known)
+            .unwrap_err()
+            .contains("disallowed agent_type"));
         // unknown dependency label
         let bad_dep = vec![pt("a", "director", &["ghost"])];
-        assert!(validate_plan(&bad_dep, &[]).unwrap_err().contains("unknown label"));
+        assert!(validate_plan(&bad_dep, &[])
+            .unwrap_err()
+            .contains("unknown label"));
         // unknown input_from label
         let mut bad_input = vec![pt("a", "director", &[])];
         bad_input[0].input_from = vec!["ghost".to_string()];
-        assert!(validate_plan(&bad_input, &[]).unwrap_err().contains("input_from"));
+        assert!(validate_plan(&bad_input, &[])
+            .unwrap_err()
+            .contains("input_from"));
         // cycle
         let cyc = vec![pt("a", "director", &["b"]), pt("b", "screenwriter", &["a"])];
         assert!(validate_plan(&cyc, &[]).unwrap_err().contains("cycle"));
@@ -894,7 +1054,9 @@ mod tests {
         assert!(gr.input_from.contains(&"parse".to_string()));
         assert_eq!(gr.timeout_seconds, 300);
         // script_parser never depends on gen_ref
-        assert!(!find(&tasks, "parse").depends_on.contains(&"gen_ref_sync".to_string()));
+        assert!(!find(&tasks, "parse")
+            .depends_on
+            .contains(&"gen_ref_sync".to_string()));
     }
 
     #[test]
@@ -943,9 +1105,18 @@ mod tests {
 
     #[test]
     fn dependency_hints_parse_from_descriptions() {
-        assert_eq!(dependency_types_from_description("shot_design"), vec!["screenwriter", "scene_plan"]);
-        assert_eq!(dependency_types_from_description("director_frame"), vec!["scene_builder", "script_parser"]);
-        assert_eq!(dependency_types_from_description("concat"), vec!["media_download"]);
+        assert_eq!(
+            dependency_types_from_description("shot_design"),
+            vec!["screenwriter", "scene_plan"]
+        );
+        assert_eq!(
+            dependency_types_from_description("director_frame"),
+            vec!["scene_builder", "script_parser"]
+        );
+        assert_eq!(
+            dependency_types_from_description("concat"),
+            vec!["media_download"]
+        );
         assert!(dependency_types_from_description("critic").is_empty());
         assert!(dependency_types_from_description("nonexistent").is_empty());
     }
@@ -955,13 +1126,26 @@ mod tests {
         let allowed: Vec<String> = KNOWN_DAG_TYPES.iter().map(|s| s.to_string()).collect();
         let tasks = build_template_plan("production", &allowed, ORDER).unwrap();
         let labels: Vec<&str> = tasks.iter().map(|t| t.label.as_str()).collect();
-        assert_eq!(labels, vec![
-            "script_parser", "gen_ref", "director_frame", "character", "image",
-            "video", "audio", "concat", "media_download",
-        ]);
+        assert_eq!(
+            labels,
+            vec![
+                "script_parser",
+                "gen_ref",
+                "director_frame",
+                "character",
+                "image",
+                "video",
+                "audio",
+                "concat",
+                "media_download",
+            ]
+        );
         assert!(validate_plan(&tasks, &allowed).is_ok());
         // media_download runs before concat under the pool's canonical order.
-        assert_eq!(find(&tasks, "media_download").depends_on, vec!["video".to_string()]);
+        assert_eq!(
+            find(&tasks, "media_download").depends_on,
+            vec!["video".to_string()]
+        );
         let concat = find(&tasks, "concat");
         assert!(concat.depends_on.contains(&"audio".to_string()));
         assert!(concat.depends_on.contains(&"media_download".to_string()));
@@ -976,11 +1160,25 @@ mod tests {
         let allowed: Vec<String> = KNOWN_DAG_TYPES.iter().map(|s| s.to_string()).collect();
         let tasks = build_template_plan("full", &allowed, ORDER).unwrap();
         let labels: Vec<&str> = tasks.iter().map(|t| t.label.as_str()).collect();
-        assert_eq!(labels, vec![
-            "director", "screenwriter", "scene_plan", "shot_design", "visual_asset",
-            "script_parser", "gen_ref", "director_frame", "character", "image",
-            "video", "audio", "concat", "media_download",
-        ]);
+        assert_eq!(
+            labels,
+            vec![
+                "director",
+                "screenwriter",
+                "scene_plan",
+                "shot_design",
+                "visual_asset",
+                "script_parser",
+                "gen_ref",
+                "director_frame",
+                "character",
+                "image",
+                "video",
+                "audio",
+                "concat",
+                "media_download",
+            ]
+        );
         assert!(validate_plan(&tasks, &allowed).is_ok());
         let sp = find(&tasks, "script_parser");
         assert!(sp.depends_on.contains(&"visual_asset".to_string()));
@@ -1000,7 +1198,9 @@ mod tests {
             .collect();
         let tasks = build_template_plan("production", &allowed, ORDER).unwrap();
         assert!(tasks.iter().all(|t| t.agent_type != "director_frame"));
-        assert!(find(&tasks, "character").depends_on.contains(&"gen_ref".to_string()));
+        assert!(find(&tasks, "character")
+            .depends_on
+            .contains(&"gen_ref".to_string()));
         assert!(validate_plan(&tasks, &allowed).is_ok());
     }
 

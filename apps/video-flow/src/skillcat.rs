@@ -21,9 +21,7 @@ pub fn scan(dir: &Path) -> Result<Vec<PlaybookSkill>, String> {
     let entries = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
     let mut names: Vec<std::path::PathBuf> = entries
         .flatten()
-        .filter(|e| {
-            e.path().is_file() && e.file_name().to_string_lossy().ends_with(".md")
-        })
+        .filter(|e| e.path().is_file() && e.file_name().to_string_lossy().ends_with(".md"))
         .map(|e| e.path())
         .collect();
     names.sort();
@@ -39,7 +37,11 @@ pub fn scan(dir: &Path) -> Result<Vec<PlaybookSkill>, String> {
 fn parse_file(path: &Path) -> Option<PlaybookSkill> {
     let content = std::fs::read_to_string(path).ok()?;
     let id = path.file_stem()?.to_string_lossy().to_string();
-    let mut s = PlaybookSkill { id: id.clone(), body: content.clone(), ..Default::default() };
+    let mut s = PlaybookSkill {
+        id: id.clone(),
+        body: content.clone(),
+        ..Default::default()
+    };
     if content.starts_with("---") {
         let (name, description, triggers) = parse_frontmatter(&content);
         s.name = name;
@@ -232,25 +234,43 @@ mod tests {
     #[test]
     fn matches_how_people_actually_type() {
         let skills = vec![
-            PlaybookSkill { id: "refresh-urls".into(),
-                triggers: vec!["không xem được video".into()], ..Default::default() },
-            PlaybookSkill { id: "concat".into(),
-                triggers: vec!["ghép video".into()], ..Default::default() },
+            PlaybookSkill {
+                id: "refresh-urls".into(),
+                triggers: vec!["không xem được video".into()],
+                ..Default::default()
+            },
+            PlaybookSkill {
+                id: "concat".into(),
+                triggers: vec!["ghép video".into()],
+                ..Default::default()
+            },
         ];
         // doubled letter + "dk" abbreviation, no diacritics
-        assert_eq!(match_playbooks(&skills, "khoong xem dk video")[0].id, "refresh-urls");
+        assert_eq!(
+            match_playbooks(&skills, "khoong xem dk video")[0].id,
+            "refresh-urls"
+        );
         // trigger words present but separated by filler
-        assert_eq!(match_playbooks(&skills, "ghép clip lại thành 1 video")[0].id, "concat");
+        assert_eq!(
+            match_playbooks(&skills, "ghép clip lại thành 1 video")[0].id,
+            "concat"
+        );
         assert!(match_playbooks(&skills, "hôm nay trời đẹp").is_empty());
     }
 
     /// One generic word must not drag a playbook in.
     #[test]
     fn single_common_word_does_not_match() {
-        let skills = vec![PlaybookSkill { id: "gen-videos".into(),
-            triggers: vec!["sinh video".into()], ..Default::default() }];
+        let skills = vec![PlaybookSkill {
+            id: "gen-videos".into(),
+            triggers: vec!["sinh video".into()],
+            ..Default::default()
+        }];
         assert!(match_playbooks(&skills, "cái video này đẹp").is_empty());
-        assert_eq!(match_playbooks(&skills, "sinh video giúp tôi")[0].id, "gen-videos");
+        assert_eq!(
+            match_playbooks(&skills, "sinh video giúp tôi")[0].id,
+            "gen-videos"
+        );
     }
 
     /// Vietnamese gets typed both ways — a trigger must fire with or without
@@ -258,10 +278,18 @@ mod tests {
     #[test]
     fn matches_with_and_without_diacritics() {
         let skills = vec![
-            PlaybookSkill { id: "refresh-urls".into(), name: "refresh".into(),
-                triggers: vec!["không xem được video".into(), "mất hình".into()], ..Default::default() },
-            PlaybookSkill { id: "gen-videos".into(), name: "gen".into(),
-                triggers: vec!["sinh video".into()], ..Default::default() },
+            PlaybookSkill {
+                id: "refresh-urls".into(),
+                name: "refresh".into(),
+                triggers: vec!["không xem được video".into(), "mất hình".into()],
+                ..Default::default()
+            },
+            PlaybookSkill {
+                id: "gen-videos".into(),
+                name: "gen".into(),
+                triggers: vec!["sinh video".into()],
+                ..Default::default()
+            },
         ];
         let hit = match_playbooks(&skills, "Sao tôi KHONG XEM DUOC VIDEO vậy?");
         assert_eq!(hit.len(), 1);
@@ -277,8 +305,16 @@ mod tests {
     #[test]
     fn longer_trigger_ranks_first() {
         let skills = vec![
-            PlaybookSkill { id: "broad".into(), triggers: vec!["video".into()], ..Default::default() },
-            PlaybookSkill { id: "specific".into(), triggers: vec!["không xem được video".into()], ..Default::default() },
+            PlaybookSkill {
+                id: "broad".into(),
+                triggers: vec!["video".into()],
+                ..Default::default()
+            },
+            PlaybookSkill {
+                id: "specific".into(),
+                triggers: vec!["không xem được video".into()],
+                ..Default::default()
+            },
         ];
         let hit = match_playbooks(&skills, "không xem được video");
         assert_eq!(hit[0].id, "specific");
@@ -287,16 +323,24 @@ mod tests {
 
     #[test]
     fn frontmatter_parsed() {
-        let (n, d, _) = parse_frontmatter("---\nname: Gen Images\ndescription: makes: images\n---\nbody");
+        let (n, d, _) =
+            parse_frontmatter("---\nname: Gen Images\ndescription: makes: images\n---\nbody");
         assert_eq!(n, "Gen Images");
         assert_eq!(d, "makes: images");
-        assert_eq!(strip_frontmatter_body("---\nname: x\n---\n\nBody here"), "Body here");
+        assert_eq!(
+            strip_frontmatter_body("---\nname: x\n---\n\nBody here"),
+            "Body here"
+        );
     }
 
     #[test]
     fn scan_dir() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.md"), "---\nname: A\ndescription: first\n---\nHello").unwrap();
+        std::fs::write(
+            dir.path().join("a.md"),
+            "---\nname: A\ndescription: first\n---\nHello",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("b.md"), "no frontmatter").unwrap();
         std::fs::write(dir.path().join("c.txt"), "ignored").unwrap();
         let skills = scan(dir.path()).unwrap();

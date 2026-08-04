@@ -37,14 +37,18 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", 5000)?;
         conn.pragma_update(None, "foreign_keys", "OFF")?;
-        let db = Db { conn: Arc::new(Mutex::new(conn)) };
+        let db = Db {
+            conn: Arc::new(Mutex::new(conn)),
+        };
         db.migrate()?;
         Ok(db)
     }
 
     pub fn open_memory() -> anyhow::Result<Self> {
         let conn = Connection::open_in_memory()?;
-        let db = Db { conn: Arc::new(Mutex::new(conn)) };
+        let db = Db {
+            conn: Arc::new(Mutex::new(conn)),
+        };
         db.migrate()?;
         Ok(db)
     }
@@ -53,37 +57,68 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         conn.execute_batch(SCHEMA)?;
         // Upgrade path for DBs created by the Go backend (pre-fold columns).
-        ensure_columns(&conn, "scene", &[
-            ("scene_environment", "TEXT"),
-            ("narrative_context", "TEXT"),
-            ("action_sequence", "TEXT"),
-            // Narration synthesized by the SenClaw TTS subsystem. Not in the Go
-            // schema — the Go audio agent only collected narrator_text.
-            ("narrator_audio_url", "TEXT"),
-            ("narrator_audio_media_id", "TEXT"),
-            ("narrator_audio_status", "TEXT NOT NULL DEFAULT 'PENDING'"),
-        ]);
-        ensure_columns(&conn, "media", &[
-            ("original_url", "TEXT"),
-            ("width_px", "INTEGER"),
-            ("height_px", "INTEGER"),
-        ]);
-        ensure_columns(&conn, "material", &[("is_builtin", "INTEGER NOT NULL DEFAULT 0")]);
+        ensure_columns(
+            &conn,
+            "scene",
+            &[
+                ("scene_environment", "TEXT"),
+                ("narrative_context", "TEXT"),
+                ("action_sequence", "TEXT"),
+                // Narration synthesized by the SenClaw TTS subsystem. Not in the Go
+                // schema — the Go audio agent only collected narrator_text.
+                ("narrator_audio_url", "TEXT"),
+                ("narrator_audio_media_id", "TEXT"),
+                ("narrator_audio_status", "TEXT NOT NULL DEFAULT 'PENDING'"),
+            ],
+        );
+        ensure_columns(
+            &conn,
+            "media",
+            &[
+                ("original_url", "TEXT"),
+                ("width_px", "INTEGER"),
+                ("height_px", "INTEGER"),
+            ],
+        );
+        ensure_columns(
+            &conn,
+            "material",
+            &[("is_builtin", "INTEGER NOT NULL DEFAULT 0")],
+        );
         // Compact invariant appearance ("35yo, short black hair, blue shirt…") woven
         // into every scene prompt so a character stays consistent across scenes.
-        ensure_columns(&conn, "character", &[("appearance_tags", "TEXT NOT NULL DEFAULT ''")]);
-        ensure_columns(&conn, "skill_agent", &[("skill_ids", "TEXT NOT NULL DEFAULT '[]'")]);
-        ensure_columns(&conn, "dag_tasks", &[("input_from", "TEXT NOT NULL DEFAULT '[]'")]);
-        ensure_columns(&conn, "request", &[
-            ("next_retry_at", "TEXT"),
-            ("edit_prompt", "TEXT"),
-            ("source_media_id", "TEXT"),
-        ]);
+        ensure_columns(
+            &conn,
+            "character",
+            &[("appearance_tags", "TEXT NOT NULL DEFAULT ''")],
+        );
+        ensure_columns(
+            &conn,
+            "skill_agent",
+            &[("skill_ids", "TEXT NOT NULL DEFAULT '[]'")],
+        );
+        ensure_columns(
+            &conn,
+            "dag_tasks",
+            &[("input_from", "TEXT NOT NULL DEFAULT '[]'")],
+        );
+        ensure_columns(
+            &conn,
+            "request",
+            &[
+                ("next_retry_at", "TEXT"),
+                ("edit_prompt", "TEXT"),
+                ("source_media_id", "TEXT"),
+            ],
+        );
         Ok(())
     }
 
     /// Run `f` with the (locked) connection.
-    pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> anyhow::Result<T> {
+    pub fn with_conn<T>(
+        &self,
+        f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> anyhow::Result<T> {
         let conn = self.conn.lock().unwrap();
         Ok(f(&conn)?)
     }
@@ -114,12 +149,18 @@ impl Db {
         let placeholders: Vec<String> = (1..=keys.len()).map(|i| format!("?{i}")).collect();
         let sql = format!(
             "INSERT OR REPLACE INTO {table} ({}) VALUES ({})",
-            keys.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", "),
+            keys.iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
             placeholders.join(", ")
         );
         let params: Vec<Box<dyn rusqlite::ToSql>> = m.values().map(json_to_sql).collect();
         self.with_conn(|c| {
-            c.execute(&sql, rusqlite::params_from_iter(params.iter().map(|b| b.as_ref())))
+            c.execute(
+                &sql,
+                rusqlite::params_from_iter(params.iter().map(|b| b.as_ref())),
+            )
         })?;
         Ok(id)
     }
@@ -129,7 +170,9 @@ impl Db {
         let cols = table_columns(table).ok_or_else(|| anyhow::anyhow!("unknown table {table}"))?;
         let mut m: Row = data
             .iter()
-            .filter(|(k, _)| cols.contains(&k.as_str()) && k.as_str() != "id" && k.as_str() != "created_at")
+            .filter(|(k, _)| {
+                cols.contains(&k.as_str()) && k.as_str() != "id" && k.as_str() != "created_at"
+            })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         if m.is_empty() {
@@ -138,12 +181,23 @@ impl Db {
         if cols.contains(&"updated_at") {
             m.insert("updated_at".into(), json!(now()));
         }
-        let sets: Vec<String> = m.keys().enumerate().map(|(i, k)| format!("{k} = ?{}", i + 1)).collect();
-        let sql = format!("UPDATE {table} SET {} WHERE id = ?{}", sets.join(", "), m.len() + 1);
+        let sets: Vec<String> = m
+            .keys()
+            .enumerate()
+            .map(|(i, k)| format!("{k} = ?{}", i + 1))
+            .collect();
+        let sql = format!(
+            "UPDATE {table} SET {} WHERE id = ?{}",
+            sets.join(", "),
+            m.len() + 1
+        );
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = m.values().map(json_to_sql).collect();
         params.push(Box::new(id.to_string()));
         self.with_conn(|c| {
-            c.execute(&sql, rusqlite::params_from_iter(params.iter().map(|b| b.as_ref())))
+            c.execute(
+                &sql,
+                rusqlite::params_from_iter(params.iter().map(|b| b.as_ref())),
+            )
         })?;
         Ok(())
     }
@@ -174,7 +228,11 @@ impl Db {
         })
     }
 
-    pub fn query_one(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> anyhow::Result<Option<Row>> {
+    pub fn query_one(
+        &self,
+        sql: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) -> anyhow::Result<Option<Row>> {
         Ok(self.query(sql, params)?.into_iter().next())
     }
 
@@ -232,7 +290,11 @@ impl Db {
     }
 
     /// Delete a pipeline and everything it produced (tx, port of DeletePipelineCascade).
-    pub fn delete_pipeline_cascade(&self, pipeline_id: &str, project_id: &str) -> anyhow::Result<()> {
+    pub fn delete_pipeline_cascade(
+        &self,
+        pipeline_id: &str,
+        project_id: &str,
+    ) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         let tx_now = now();
         let _ = tx_now;
@@ -247,7 +309,10 @@ impl Db {
                     [project_id],
                 )?;
                 conn.execute("DELETE FROM video WHERE project_id = ?1", [project_id])?;
-                conn.execute("DELETE FROM project_character WHERE project_id = ?1", [project_id])?;
+                conn.execute(
+                    "DELETE FROM project_character WHERE project_id = ?1",
+                    [project_id],
+                )?;
             }
             Ok(())
         })();
@@ -346,68 +411,243 @@ pub fn table_columns(table: &str) -> Option<&'static [&'static str]> {
     static MAP: OnceLock<HashMap<&'static str, Vec<&'static str>>> = OnceLock::new();
     let map = MAP.get_or_init(|| {
         let mut m: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
-        m.insert("project", vec![
-            "id", "name", "description", "story", "story_original", "thumbnail_url", "language",
-            "status", "user_paygate_tier", "narrator_voice", "narrator_ref_audio", "material",
-            "allow_music", "allow_voice", "created_at", "updated_at",
-        ]);
-        m.insert("character", vec![
-            "id", "name", "slug", "entity_type", "description", "image_prompt", "voice_description",
-            "reference_image_url", "media_id", "appearance_tags", "created_at", "updated_at",
-        ]);
+        m.insert(
+            "project",
+            vec![
+                "id",
+                "name",
+                "description",
+                "story",
+                "story_original",
+                "thumbnail_url",
+                "language",
+                "status",
+                "user_paygate_tier",
+                "narrator_voice",
+                "narrator_ref_audio",
+                "material",
+                "allow_music",
+                "allow_voice",
+                "created_at",
+                "updated_at",
+            ],
+        );
+        m.insert(
+            "character",
+            vec![
+                "id",
+                "name",
+                "slug",
+                "entity_type",
+                "description",
+                "image_prompt",
+                "voice_description",
+                "reference_image_url",
+                "media_id",
+                "appearance_tags",
+                "created_at",
+                "updated_at",
+            ],
+        );
         m.insert("project_character", vec!["project_id", "character_id"]);
-        m.insert("video", vec![
-            "id", "project_id", "title", "description", "display_order", "status", "vertical_url",
-            "horizontal_url", "thumbnail_url", "duration", "resolution", "orientation", "youtube_id",
-            "privacy", "tags", "created_at", "updated_at",
-        ]);
-        m.insert("scene", vec![
-            "id", "video_id", "display_order", "prompt", "image_prompt", "video_prompt",
-            "camera_movement", "character_names", "parent_scene_id", "chain_type", "source",
-            "vertical_image_url", "vertical_image_media_id", "vertical_image_status",
-            "vertical_video_url", "vertical_video_media_id", "vertical_video_status",
-            "vertical_upscale_url", "vertical_upscale_media_id", "vertical_upscale_status",
-            "horizontal_image_url", "horizontal_image_media_id", "horizontal_image_status",
-            "horizontal_video_url", "horizontal_video_media_id", "horizontal_video_status",
-            "horizontal_upscale_url", "horizontal_upscale_media_id", "horizontal_upscale_status",
-            "vertical_end_scene_media_id", "horizontal_end_scene_media_id",
-            "trim_start", "trim_end", "duration", "transition_prompt", "narrator_text", "shot_type",
-            "scene_environment", "narrative_context", "action_sequence",
-            "narrator_audio_url", "narrator_audio_media_id", "narrator_audio_status",
-            "created_at", "updated_at",
-        ]);
-        m.insert("request", vec![
-            "id", "project_id", "video_id", "scene_id", "character_id", "type", "orientation",
-            "status", "request_id", "media_id", "output_url", "error_message", "retry_count",
-            "next_retry_at", "edit_prompt", "source_media_id", "created_at", "updated_at",
-        ]);
-        m.insert("material", vec![
-            "id", "name", "style_instruction", "negative_prompt", "scene_prefix", "lighting",
-            "is_builtin", "created_at",
-        ]);
-        m.insert("pipe_skill_prompt", vec![
-            "id", "slug", "title", "group_id", "group_title", "display_order", "description",
-            "applies_to", "prompt_template", "is_active", "version", "created_at", "updated_at",
-        ]);
-        m.insert("project_pipe_skill", vec![
-            "project_id", "prompt_slug", "enabled", "display_order", "updated_at",
-        ]);
-        m.insert("project_skill", vec!["project_id", "skill_slug", "enabled", "updated_at"]);
-        m.insert("skill_agent", vec![
-            "id", "name", "skill_id", "skill_ids", "prompt", "enabled", "created_at", "updated_at",
-        ]);
-        m.insert("dag_parents", vec![
-            "id", "project_id", "status", "goal", "orientation", "script_md", "created_at",
-            "updated_at",
-        ]);
-        m.insert("dag_tasks", vec![
-            "id", "parent_id", "label", "agent_type", "prompt", "depends_on", "input_from",
-            "status", "result", "timeout_seconds", "started_at", "completed_at",
-        ]);
-        m.insert("media", vec![
-            "id", "file_name", "file_path", "mime_type", "size_bytes", "media_type", "original_url",
-            "width_px", "height_px", "created_at",
-        ]);
+        m.insert(
+            "video",
+            vec![
+                "id",
+                "project_id",
+                "title",
+                "description",
+                "display_order",
+                "status",
+                "vertical_url",
+                "horizontal_url",
+                "thumbnail_url",
+                "duration",
+                "resolution",
+                "orientation",
+                "youtube_id",
+                "privacy",
+                "tags",
+                "created_at",
+                "updated_at",
+            ],
+        );
+        m.insert(
+            "scene",
+            vec![
+                "id",
+                "video_id",
+                "display_order",
+                "prompt",
+                "image_prompt",
+                "video_prompt",
+                "camera_movement",
+                "character_names",
+                "parent_scene_id",
+                "chain_type",
+                "source",
+                "vertical_image_url",
+                "vertical_image_media_id",
+                "vertical_image_status",
+                "vertical_video_url",
+                "vertical_video_media_id",
+                "vertical_video_status",
+                "vertical_upscale_url",
+                "vertical_upscale_media_id",
+                "vertical_upscale_status",
+                "horizontal_image_url",
+                "horizontal_image_media_id",
+                "horizontal_image_status",
+                "horizontal_video_url",
+                "horizontal_video_media_id",
+                "horizontal_video_status",
+                "horizontal_upscale_url",
+                "horizontal_upscale_media_id",
+                "horizontal_upscale_status",
+                "vertical_end_scene_media_id",
+                "horizontal_end_scene_media_id",
+                "trim_start",
+                "trim_end",
+                "duration",
+                "transition_prompt",
+                "narrator_text",
+                "shot_type",
+                "scene_environment",
+                "narrative_context",
+                "action_sequence",
+                "narrator_audio_url",
+                "narrator_audio_media_id",
+                "narrator_audio_status",
+                "created_at",
+                "updated_at",
+            ],
+        );
+        m.insert(
+            "request",
+            vec![
+                "id",
+                "project_id",
+                "video_id",
+                "scene_id",
+                "character_id",
+                "type",
+                "orientation",
+                "status",
+                "request_id",
+                "media_id",
+                "output_url",
+                "error_message",
+                "retry_count",
+                "next_retry_at",
+                "edit_prompt",
+                "source_media_id",
+                "created_at",
+                "updated_at",
+            ],
+        );
+        m.insert(
+            "material",
+            vec![
+                "id",
+                "name",
+                "style_instruction",
+                "negative_prompt",
+                "scene_prefix",
+                "lighting",
+                "is_builtin",
+                "created_at",
+            ],
+        );
+        m.insert(
+            "pipe_skill_prompt",
+            vec![
+                "id",
+                "slug",
+                "title",
+                "group_id",
+                "group_title",
+                "display_order",
+                "description",
+                "applies_to",
+                "prompt_template",
+                "is_active",
+                "version",
+                "created_at",
+                "updated_at",
+            ],
+        );
+        m.insert(
+            "project_pipe_skill",
+            vec![
+                "project_id",
+                "prompt_slug",
+                "enabled",
+                "display_order",
+                "updated_at",
+            ],
+        );
+        m.insert(
+            "project_skill",
+            vec!["project_id", "skill_slug", "enabled", "updated_at"],
+        );
+        m.insert(
+            "skill_agent",
+            vec![
+                "id",
+                "name",
+                "skill_id",
+                "skill_ids",
+                "prompt",
+                "enabled",
+                "created_at",
+                "updated_at",
+            ],
+        );
+        m.insert(
+            "dag_parents",
+            vec![
+                "id",
+                "project_id",
+                "status",
+                "goal",
+                "orientation",
+                "script_md",
+                "created_at",
+                "updated_at",
+            ],
+        );
+        m.insert(
+            "dag_tasks",
+            vec![
+                "id",
+                "parent_id",
+                "label",
+                "agent_type",
+                "prompt",
+                "depends_on",
+                "input_from",
+                "status",
+                "result",
+                "timeout_seconds",
+                "started_at",
+                "completed_at",
+            ],
+        );
+        m.insert(
+            "media",
+            vec![
+                "id",
+                "file_name",
+                "file_path",
+                "mime_type",
+                "size_bytes",
+                "media_type",
+                "original_url",
+                "width_px",
+                "height_px",
+                "created_at",
+            ],
+        );
         m
     });
     map.get(table).map(|v| v.as_slice())
@@ -415,11 +655,20 @@ pub fn table_columns(table: &str) -> Option<&'static [&'static str]> {
 
 /// Trimmed string field (port of repo.Str).
 pub fn str_of(m: &Row, k: &str) -> String {
-    m.get(k).and_then(|v| v.as_str()).unwrap_or("").trim().to_string()
+    m.get(k)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 pub fn i64_of(m: &Row, k: &str) -> i64 {
-    m.get(k).map(|v| v.as_i64().unwrap_or_else(|| v.as_f64().unwrap_or(0.0) as i64)).unwrap_or(0)
+    m.get(k)
+        .map(|v| {
+            v.as_i64()
+                .unwrap_or_else(|| v.as_f64().unwrap_or(0.0) as i64)
+        })
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

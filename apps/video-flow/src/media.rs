@@ -62,7 +62,9 @@ pub async fn probe_dimensions(media_type: &str, path: &std::path::Path) -> (i64,
 
 fn probe_image(path: &std::path::Path) -> (i64, i64) {
     use std::io::Read;
-    let Ok(f) = std::fs::File::open(path) else { return (0, 0) };
+    let Ok(f) = std::fs::File::open(path) else {
+        return (0, 0);
+    };
     let mut buf = Vec::new();
     // Headers live at the front; 5 MB covers even EXIF-heavy JPEGs.
     if f.take(5 * 1024 * 1024).read_to_end(&mut buf).is_err() {
@@ -119,7 +121,8 @@ fn jpeg_dims(b: &[u8]) -> Option<(i64, i64)> {
             continue;
         }
         let seg_len = be16(b[i + 2], b[i + 3]) as usize;
-        let is_sof = (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC;
+        let is_sof =
+            (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC;
         if is_sof {
             if i + 9 <= b.len() {
                 let h = be16(b[i + 5], b[i + 6]);
@@ -155,7 +158,10 @@ fn webp_dims(b: &[u8]) -> Option<(i64, i64)> {
                 return None;
             }
             let bits = u32::from_le_bytes([b[21], b[22], b[23], b[24]]);
-            Some((((bits & 0x3FFF) + 1) as i64, (((bits >> 14) & 0x3FFF) + 1) as i64))
+            Some((
+                ((bits & 0x3FFF) + 1) as i64,
+                (((bits >> 14) & 0x3FFF) + 1) as i64,
+            ))
         }
         b"VP8X" => {
             let w = 1 + (b[24] as i64 | ((b[25] as i64) << 8) | ((b[26] as i64) << 16));
@@ -169,10 +175,14 @@ fn webp_dims(b: &[u8]) -> Option<(i64, i64)> {
 async fn probe_video(path: &std::path::Path) -> (i64, i64) {
     let out = tokio::process::Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=width,height",
-            "-of", "csv=p=0",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0",
         ])
         .arg(path)
         .output()
@@ -257,7 +267,10 @@ pub async fn upload_media(State(st): State<AppState>, mut mp: Multipart) -> Resp
         let mut fields = Map::new();
         fields.insert("id".into(), json!(id));
         fields.insert("file_name".into(), json!(file_name));
-        fields.insert("file_path".into(), json!(dest.to_string_lossy().to_string()));
+        fields.insert(
+            "file_path".into(),
+            json!(dest.to_string_lossy().to_string()),
+        );
         fields.insert("mime_type".into(), json!(mime));
         fields.insert("size_bytes".into(), json!(size));
         fields.insert("media_type".into(), json!(media_type));

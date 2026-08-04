@@ -41,28 +41,58 @@ pub fn api_router(state: AppState) -> Router {
         .route("/projects", get(list_projects).post(create_project))
         .route(
             "/projects/:pid",
-            get(get_project).patch(update_project).put(update_project).delete(delete_project),
+            get(get_project)
+                .patch(update_project)
+                .put(update_project)
+                .delete(delete_project),
         )
         .route("/projects/:pid/duplicate", post(duplicate_project))
         .route("/projects/:pid/clone-ai", post(clone_project_ai))
         .route("/projects/:pid/output-dir", get(project_output_dir))
-        .route("/projects/:pid/characters", get(list_project_characters).post(create_project_character))
+        .route(
+            "/projects/:pid/characters",
+            get(list_project_characters).post(create_project_character),
+        )
         .route("/projects/:pid/characters/:cid/link", post(link_character))
-        .route("/projects/:pid/characters/:cid/unlink", delete(unlink_character))
+        .route(
+            "/projects/:pid/characters/:cid/unlink",
+            delete(unlink_character),
+        )
         // Characters
-        .route("/characters/:cid", get(get_character).patch(update_character).delete(delete_character))
+        .route(
+            "/characters/:cid",
+            get(get_character)
+                .patch(update_character)
+                .delete(delete_character),
+        )
         // Videos
         .route("/videos", get(list_videos).post(create_video))
-        .route("/videos/:vid", get(get_video).patch(update_video).delete(delete_video))
+        .route(
+            "/videos/:vid",
+            get(get_video).patch(update_video).delete(delete_video),
+        )
         // Scenes
         .route("/scenes", get(list_scenes).post(create_scene))
-        .route("/scenes/:sid", get(get_scene).patch(update_scene).delete(delete_scene))
+        .route(
+            "/scenes/:sid",
+            get(get_scene).patch(update_scene).delete(delete_scene),
+        )
         // Requests
-        .route("/requests", get(list_requests).post(create_request).delete(clear_requests))
+        .route(
+            "/requests",
+            get(list_requests)
+                .post(create_request)
+                .delete(clear_requests),
+        )
         .route("/requests/batch", post(batch_requests))
         .route("/requests/batch-status", get(batch_request_status))
         .route("/requests/pending", get(list_pending_requests))
-        .route("/requests/:rid", get(get_request).patch(update_request).delete(delete_request))
+        .route(
+            "/requests/:rid",
+            get(get_request)
+                .patch(update_request)
+                .delete(delete_request),
+        )
         // Pipeline
         .route("/pipeline/create", post(create_pipeline))
         .route("/pipeline/project/:projectId", get(list_project_pipelines))
@@ -77,7 +107,10 @@ pub fn api_router(state: AppState) -> Router {
         .route("/pipeline/custom-workflow", post(start_custom_workflow))
         .route("/pipeline/workflow/project/:pid", get(project_workflow_run))
         .route("/pipeline/workflow/:runId", get(get_workflow_run))
-        .route("/pipeline/workflow/:runId/cancel", post(cancel_workflow_run))
+        .route(
+            "/pipeline/workflow/:runId/cancel",
+            post(cancel_workflow_run),
+        )
         // Blocking step endpoints the workflow definition curls back into
         .route("/steps/agent", post(crate::steps::run_agent_step))
         .route("/steps/scene", post(crate::steps::run_scene_step))
@@ -90,12 +123,21 @@ pub fn api_router(state: AppState) -> Router {
         // Agents (built-in)
         .route("/agents", get(list_agents))
         .route("/agents/log", get(agent_log))
-        .route("/agents/history", get(agent_history).delete(clear_agent_history))
+        .route(
+            "/agents/history",
+            get(agent_history).delete(clear_agent_history),
+        )
         .route("/agents/:agentType/soul", put(put_agent_soul))
         .route("/agents/:agentType", patch(patch_builtin_agent))
         // Skill agents (user-created, DB-backed)
-        .route("/skill-agents", get(list_skill_agents).post(create_skill_agent))
-        .route("/skill-agents/:id", put(update_skill_agent).delete(delete_skill_agent))
+        .route(
+            "/skill-agents",
+            get(list_skill_agents).post(create_skill_agent),
+        )
+        .route(
+            "/skill-agents/:id",
+            put(update_skill_agent).delete(delete_skill_agent),
+        )
         // AI suggestions
         .route("/ai/suggest-project", post(suggest_project))
         .route("/ai/suggest-scenes", post(suggest_scenes))
@@ -121,7 +163,10 @@ pub fn api_router(state: AppState) -> Router {
         .route("/media/:mid", get(get_media).delete(delete_media))
         .route("/media/:mid/file", get(media::download_media))
         // MCP
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .layer(DefaultBodyLimit::max(media::MAX_UPLOAD_BYTES))
         .with_state(state)
@@ -163,7 +208,9 @@ fn body_obj(body: MaybeJson) -> Result<Row, Response> {
 
 fn parse_body<T: for<'de> Deserialize<'de>>(body: MaybeJson) -> Result<T, Response> {
     match body {
-        Ok(Json(v)) => serde_json::from_value(v).map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string())),
+        Ok(Json(v)) => {
+            serde_json::from_value(v).map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))
+        }
         Err(e) => Err(err(StatusCode::BAD_REQUEST, e.to_string())),
     }
 }
@@ -230,7 +277,11 @@ async fn ext_callback(State(st): State<AppState>, body: MaybeJson) -> Response {
         Ok(Json(v @ Value::Object(_))) => v,
         _ => return err(StatusCode::BAD_REQUEST, "invalid body"),
     };
-    let id = payload.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let id = payload
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if id.is_empty() {
         return err(StatusCode::BAD_REQUEST, "missing id");
     }
@@ -245,12 +296,21 @@ async fn ext_callback(State(st): State<AppState>, body: MaybeJson) -> Response {
 
 // ---------- projects ----------
 
-async fn list_projects(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn list_projects(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
     let status = q.get("status").cloned().unwrap_or_default();
     let r = if !status.is_empty() {
-        st.core.db.query("SELECT * FROM project WHERE status = ?1 ORDER BY created_at DESC", &[&status])
+        st.core.db.query(
+            "SELECT * FROM project WHERE status = ?1 ORDER BY created_at DESC",
+            &[&status],
+        )
     } else {
-        st.core.db.query("SELECT * FROM project WHERE status != 'DELETED' ORDER BY created_at DESC", &[])
+        st.core.db.query(
+            "SELECT * FROM project WHERE status != 'DELETED' ORDER BY created_at DESC",
+            &[],
+        )
     };
     match r {
         Ok(rows) => respond(StatusCode::OK, rows_json(rows)),
@@ -282,7 +342,11 @@ async fn get_project(State(st): State<AppState>, Path(pid): Path<String>) -> Res
     }
 }
 
-async fn update_project(State(st): State<AppState>, Path(pid): Path<String>, body: MaybeJson) -> Response {
+async fn update_project(
+    State(st): State<AppState>,
+    Path(pid): Path<String>,
+    body: MaybeJson,
+) -> Response {
     let mut b = match body_obj(body) {
         Ok(b) => b,
         Err(r) => return r,
@@ -323,19 +387,40 @@ fn clone_project_base_fields(src: &Row) -> Row {
     }
     let mut m = Map::new();
     m.insert("id".into(), json!(db::new_id()));
-    m.insert("name".into(), json!(format!("{} (Copy)", db::str_of(src, "name"))));
+    m.insert(
+        "name".into(),
+        json!(format!("{} (Copy)", db::str_of(src, "name"))),
+    );
     m.insert("description".into(), json!(db::str_of(src, "description")));
     m.insert("story".into(), json!(base_story));
     m.insert("story_original".into(), json!(base_story));
-    m.insert("thumbnail_url".into(), json!(db::str_of(src, "thumbnail_url")));
+    m.insert(
+        "thumbnail_url".into(),
+        json!(db::str_of(src, "thumbnail_url")),
+    );
     m.insert("language".into(), json!(base_language));
     m.insert("status".into(), json!("ACTIVE"));
-    m.insert("user_paygate_tier".into(), json!(db::str_of(src, "user_paygate_tier")));
-    m.insert("narrator_voice".into(), json!(db::str_of(src, "narrator_voice")));
-    m.insert("narrator_ref_audio".into(), json!(db::str_of(src, "narrator_ref_audio")));
+    m.insert(
+        "user_paygate_tier".into(),
+        json!(db::str_of(src, "user_paygate_tier")),
+    );
+    m.insert(
+        "narrator_voice".into(),
+        json!(db::str_of(src, "narrator_voice")),
+    );
+    m.insert(
+        "narrator_ref_audio".into(),
+        json!(db::str_of(src, "narrator_ref_audio")),
+    );
     m.insert("material".into(), json!(base_material));
-    m.insert("allow_music".into(), src.get("allow_music").cloned().unwrap_or(Value::Null));
-    m.insert("allow_voice".into(), src.get("allow_voice").cloned().unwrap_or(Value::Null));
+    m.insert(
+        "allow_music".into(),
+        src.get("allow_music").cloned().unwrap_or(Value::Null),
+    );
+    m.insert(
+        "allow_voice".into(),
+        src.get("allow_voice").cloned().unwrap_or(Value::Null),
+    );
     m
 }
 
@@ -407,7 +492,12 @@ async fn clone_project_ai(
                     ("material", false),
                     ("language", false),
                 ] {
-                    let v = parsed.get(key).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+                    let v = parsed
+                        .get(key)
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
                     if !v.is_empty() {
                         fields.insert(key.into(), json!(v));
                         if dual {
@@ -454,7 +544,10 @@ async fn list_project_characters(State(st): State<AppState>, Path(pid): Path<Str
     }
 }
 
-async fn link_character(State(st): State<AppState>, Path((pid, cid)): Path<(String, String)>) -> Response {
+async fn link_character(
+    State(st): State<AppState>,
+    Path((pid, cid)): Path<(String, String)>,
+) -> Response {
     match st.core.db.execute(
         "INSERT OR IGNORE INTO project_character (project_id, character_id) VALUES (?1, ?2)",
         &[&pid, &cid],
@@ -525,7 +618,11 @@ async fn get_character(State(st): State<AppState>, Path(cid): Path<String>) -> R
     }
 }
 
-async fn update_character(State(st): State<AppState>, Path(cid): Path<String>, body: MaybeJson) -> Response {
+async fn update_character(
+    State(st): State<AppState>,
+    Path(cid): Path<String>,
+    body: MaybeJson,
+) -> Response {
     let mut b = match body_obj(body) {
         Ok(b) => b,
         Err(r) => return r,
@@ -549,12 +646,18 @@ async fn delete_character(State(st): State<AppState>, Path(cid): Path<String>) -
 
 // ---------- videos ----------
 
-async fn list_videos(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn list_videos(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
     let project_id = q.get("project_id").cloned().unwrap_or_default();
     if project_id.is_empty() {
         return err(StatusCode::BAD_REQUEST, "project_id required");
     }
-    match st.core.db.query("SELECT * FROM video WHERE project_id = ?1 ORDER BY display_order", &[&project_id]) {
+    match st.core.db.query(
+        "SELECT * FROM video WHERE project_id = ?1 ORDER BY display_order",
+        &[&project_id],
+    ) {
         Ok(rows) => respond(StatusCode::OK, rows_json(rows)),
         Err(e) => err500(e),
     }
@@ -581,7 +684,11 @@ async fn get_video(State(st): State<AppState>, Path(vid): Path<String>) -> Respo
     }
 }
 
-async fn update_video(State(st): State<AppState>, Path(vid): Path<String>, body: MaybeJson) -> Response {
+async fn update_video(
+    State(st): State<AppState>,
+    Path(vid): Path<String>,
+    body: MaybeJson,
+) -> Response {
     let mut b = match body_obj(body) {
         Ok(b) => b,
         Err(r) => return r,
@@ -605,12 +712,18 @@ async fn delete_video(State(st): State<AppState>, Path(vid): Path<String>) -> Re
 
 // ---------- scenes ----------
 
-async fn list_scenes(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn list_scenes(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
     let video_id = q.get("video_id").cloned().unwrap_or_default();
     if video_id.is_empty() {
         return err(StatusCode::BAD_REQUEST, "video_id required");
     }
-    match st.core.db.query("SELECT * FROM scene WHERE video_id = ?1 ORDER BY display_order", &[&video_id]) {
+    match st.core.db.query(
+        "SELECT * FROM scene WHERE video_id = ?1 ORDER BY display_order",
+        &[&video_id],
+    ) {
         Ok(rows) => respond(StatusCode::OK, rows_json(rows)),
         Err(e) => err500(e),
     }
@@ -648,7 +761,11 @@ async fn get_scene(State(st): State<AppState>, Path(sid): Path<String>) -> Respo
     }
 }
 
-async fn update_scene(State(st): State<AppState>, Path(sid): Path<String>, body: MaybeJson) -> Response {
+async fn update_scene(
+    State(st): State<AppState>,
+    Path(sid): Path<String>,
+    body: MaybeJson,
+) -> Response {
     let mut b = match body_obj(body) {
         Ok(b) => b,
         Err(r) => return r,
@@ -658,7 +775,9 @@ async fn update_scene(State(st): State<AppState>, Path(sid): Path<String>, body:
     if let Err(e) = st.core.db.update("scene", &sid, &b) {
         return err500(e);
     }
-    st.core.dash.emit("scene_updated", json!({ "scene_id": sid }));
+    st.core
+        .dash
+        .emit("scene_updated", json!({ "scene_id": sid }));
     match st.core.db.get("scene", &sid) {
         Ok(row) => respond(StatusCode::OK, row_or_null(row)),
         Err(e) => err500(e),
@@ -674,9 +793,19 @@ async fn delete_scene(State(st): State<AppState>, Path(sid): Path<String>) -> Re
 
 // ---------- requests ----------
 
-const REQUEST_FILTER_KEYS: [&str; 6] = ["scene_id", "video_id", "project_id", "status", "type", "character_id"];
+const REQUEST_FILTER_KEYS: [&str; 6] = [
+    "scene_id",
+    "video_id",
+    "project_id",
+    "status",
+    "type",
+    "character_id",
+];
 
-async fn list_requests(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn list_requests(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
     let mut conds: Vec<String> = Vec::new();
     let mut args: Vec<String> = Vec::new();
     for k in REQUEST_FILTER_KEYS {
@@ -691,7 +820,8 @@ async fn list_requests(State(st): State<AppState>, Query(q): Query<HashMap<Strin
         sql.push_str(&conds.join(" AND "));
     }
     sql.push_str(" ORDER BY created_at DESC");
-    let params: Vec<&dyn rusqlite::ToSql> = args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let params: Vec<&dyn rusqlite::ToSql> =
+        args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
     match st.core.db.query(&sql, &params) {
         Ok(rows) => respond(StatusCode::OK, rows_json(rows)),
         Err(e) => err500(e),
@@ -702,14 +832,20 @@ async fn list_requests(State(st): State<AppState>, Query(q): Query<HashMap<Strin
 fn is_image_req_type(t: &str) -> bool {
     matches!(
         t,
-        "GENERATE_CHARACTER_IMAGE" | "REGENERATE_CHARACTER_IMAGE" | "EDIT_CHARACTER_IMAGE"
-            | "GENERATE_IMAGE" | "REGENERATE_IMAGE" | "EDIT_IMAGE"
+        "GENERATE_CHARACTER_IMAGE"
+            | "REGENERATE_CHARACTER_IMAGE"
+            | "EDIT_CHARACTER_IMAGE"
+            | "GENERATE_IMAGE"
+            | "REGENERATE_IMAGE"
+            | "EDIT_IMAGE"
     )
 }
 
 fn request_type_to_mode(t: &str) -> &'static str {
     match t {
-        "GENERATE_CHARACTER_IMAGE" | "REGENERATE_CHARACTER_IMAGE" | "EDIT_CHARACTER_IMAGE" => "single_entity",
+        "GENERATE_CHARACTER_IMAGE" | "REGENERATE_CHARACTER_IMAGE" | "EDIT_CHARACTER_IMAGE" => {
+            "single_entity"
+        }
         _ => "single_scene",
     }
 }
@@ -770,7 +906,12 @@ fn create_one_request(st: &AppState, mut b: Row) -> Result<Row, Response> {
         b.insert("status".into(), json!("PENDING"));
     }
     let id = st.core.db.insert("request", &b).map_err(err500)?;
-    let row = st.core.db.get("request", &id).map_err(err500)?.unwrap_or_default();
+    let row = st
+        .core
+        .db
+        .get("request", &id)
+        .map_err(err500)?
+        .unwrap_or_default();
     if schedule {
         let mut orientation = db::str_of(&row, "orientation");
         if orientation.is_empty() {
@@ -813,7 +954,9 @@ async fn batch_requests(State(st): State<AppState>, body: MaybeJson) -> Response
     };
     let mut created: Vec<Value> = Vec::new();
     for req in b.requests {
-        let Some(obj) = req.as_object().cloned() else { continue };
+        let Some(obj) = req.as_object().cloned() else {
+            continue;
+        };
         match create_one_request(&st, obj) {
             Ok(row) => created.push(Value::Object(row)),
             Err(r) => return r,
@@ -828,7 +971,10 @@ async fn batch_requests(State(st): State<AppState>, body: MaybeJson) -> Response
 /// `done` — so its wave loop never advanced and every batch ended in a 4-minute
 /// "Timeout" even though the requests had completed. Return the shape the UI
 /// actually binds to; the per-status counts stay under `counts` for debugging.
-async fn batch_request_status(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn batch_request_status(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
     let mut conds: Vec<String> = Vec::new();
     let mut args: Vec<String> = Vec::new();
     // `orientation` matters here: vertical and horizontal are independent
@@ -845,7 +991,8 @@ async fn batch_request_status(State(st): State<AppState>, Query(q): Query<HashMa
         sql.push_str(&conds.join(" AND "));
     }
     sql.push_str(" GROUP BY status");
-    let params: Vec<&dyn rusqlite::ToSql> = args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let params: Vec<&dyn rusqlite::ToSql> =
+        args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
     let rows = match st.core.db.query(&sql, &params) {
         Ok(r) => r,
         Err(e) => return err500(e),
@@ -885,7 +1032,10 @@ async fn batch_request_status(State(st): State<AppState>, Query(q): Query<HashMa
 }
 
 async fn list_pending_requests(State(st): State<AppState>) -> Response {
-    match st.core.db.query("SELECT * FROM request WHERE status = 'PENDING' ORDER BY created_at ASC", &[]) {
+    match st.core.db.query(
+        "SELECT * FROM request WHERE status = 'PENDING' ORDER BY created_at ASC",
+        &[],
+    ) {
         Ok(rows) => respond(StatusCode::OK, rows_json(rows)),
         Err(e) => err500(e),
     }
@@ -898,7 +1048,11 @@ async fn get_request(State(st): State<AppState>, Path(rid): Path<String>) -> Res
     }
 }
 
-async fn update_request(State(st): State<AppState>, Path(rid): Path<String>, body: MaybeJson) -> Response {
+async fn update_request(
+    State(st): State<AppState>,
+    Path(rid): Path<String>,
+    body: MaybeJson,
+) -> Response {
     let mut b = match body_obj(body) {
         Ok(b) => b,
         Err(r) => return r,
@@ -920,10 +1074,15 @@ async fn delete_request(State(st): State<AppState>, Path(rid): Path<String>) -> 
     }
 }
 
-async fn clear_requests(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn clear_requests(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
     let video_id = q.get("video_id").cloned().unwrap_or_default();
     let r = if !video_id.is_empty() {
-        st.core.db.execute("DELETE FROM request WHERE video_id = ?1", &[&video_id])
+        st.core
+            .db
+            .execute("DELETE FROM request WHERE video_id = ?1", &[&video_id])
     } else {
         st.core.db.execute("DELETE FROM request", &[])
     };
@@ -957,10 +1116,21 @@ async fn create_pipeline(State(st): State<AppState>, body: MaybeJson) -> Respons
         return err(StatusCode::BAD_REQUEST, "project_id required");
     }
     // pipeline::create emits `pipeline:created` itself.
-    match pipeline::create(&st.core, &st.pool, &b.project_id, &b.script, &b.orientation, &b.goal, &b.pipeline_mode).await {
-        Ok((pipeline_id, task_count)) => {
-            respond(StatusCode::CREATED, json!({ "id": pipeline_id, "task_count": task_count }))
-        }
+    match pipeline::create(
+        &st.core,
+        &st.pool,
+        &b.project_id,
+        &b.script,
+        &b.orientation,
+        &b.goal,
+        &b.pipeline_mode,
+    )
+    .await
+    {
+        Ok((pipeline_id, task_count)) => respond(
+            StatusCode::CREATED,
+            json!({ "id": pipeline_id, "task_count": task_count }),
+        ),
         Err(e) => err500(e),
     }
 }
@@ -1084,7 +1254,9 @@ async fn get_workflow_run(Path(run_id): Path<String>) -> Response {
     };
     // Activity is a cheap in-memory read on the daemon; fold it in so the UI
     // gets node state and the live agent/script log in one round trip.
-    let activity = crate::wfclient::run_activity(&run_id).await.unwrap_or(Value::Array(vec![]));
+    let activity = crate::wfclient::run_activity(&run_id)
+        .await
+        .unwrap_or(Value::Array(vec![]));
     respond(
         StatusCode::OK,
         json!({
@@ -1106,7 +1278,10 @@ async fn cancel_workflow_run(Path(run_id): Path<String>) -> Response {
 /// "never run" is a normal state for the UI, not an error.
 async fn project_workflow_run(State(st): State<AppState>, Path(pid): Path<String>) -> Response {
     let Some((workflow, run_id)) = crate::wfclient::stored_run(&st, &pid) else {
-        return respond(StatusCode::OK, json!({ "run_id": null, "workflow": null, "run": null }));
+        return respond(
+            StatusCode::OK,
+            json!({ "run_id": null, "workflow": null, "run": null }),
+        );
     };
     let run = crate::wfclient::get_run(&run_id).await.ok();
     let summary = run.as_ref().map(crate::wfclient::summarize_run);
@@ -1131,14 +1306,20 @@ async fn delete_pipeline(
     }
 }
 
-async fn retry_task(State(st): State<AppState>, Path((pid, tid)): Path<(String, String)>) -> Response {
+async fn retry_task(
+    State(st): State<AppState>,
+    Path((pid, tid)): Path<(String, String)>,
+) -> Response {
     match pipeline::retry_task(&st.core, &pid, &tid) {
         Ok(()) => respond(StatusCode::OK, json!({ "ok": true })),
         Err(e) => err500(e),
     }
 }
 
-async fn stop_task(State(st): State<AppState>, Path((_pid, tid)): Path<(String, String)>) -> Response {
+async fn stop_task(
+    State(st): State<AppState>,
+    Path((_pid, tid)): Path<(String, String)>,
+) -> Response {
     // Cancel the running task if active; if it was merely registered (queued
     // but not started), mark it error directly like the Go fallback.
     st.engine.stop_task(&tid);
@@ -1155,7 +1336,10 @@ async fn stop_task(State(st): State<AppState>, Path((_pid, tid)): Path<(String, 
     respond(StatusCode::OK, json!({ "ok": true }))
 }
 
-async fn list_project_pipelines(State(st): State<AppState>, Path(project_id): Path<String>) -> Response {
+async fn list_project_pipelines(
+    State(st): State<AppState>,
+    Path(project_id): Path<String>,
+) -> Response {
     match st.core.db.query(
         "SELECT * FROM dag_parents WHERE project_id = ?1 ORDER BY created_at DESC",
         &[&project_id],
@@ -1182,7 +1366,10 @@ async fn parse_script(State(st): State<AppState>, body: MaybeJson) -> Response {
     }
     let soul = souls::load(&st.core.souls_dir, "script_parser");
     match script::parse(&soul, &b.script).await {
-        Ok(parsed) => respond(StatusCode::OK, serde_json::to_value(&parsed).unwrap_or_default()),
+        Ok(parsed) => respond(
+            StatusCode::OK,
+            serde_json::to_value(&parsed).unwrap_or_default(),
+        ),
         Err(e) => err500(e),
     }
 }
@@ -1250,7 +1437,12 @@ fn normalize_skill_ids(ids: &[String]) -> Vec<String> {
 
 async fn list_agents(State(st): State<AppState>) -> Response {
     let mut out: Vec<Value> = Vec::new();
-    for info in st.pool.list_info().into_iter().filter(|i| i.kind == "built-in") {
+    for info in st
+        .pool
+        .list_info()
+        .into_iter()
+        .filter(|i| i.kind == "built-in")
+    {
         let prompt = souls::load_raw(&st.core.souls_dir, &info.agent_type);
         out.push(json!({
             "type": info.agent_type,
@@ -1297,7 +1489,10 @@ fn task_log_entry(pipeline_id: &str, project_id: &str, pipeline_status: &str, t:
         if let Ok(res) = serde_json::from_str::<Value>(&result) {
             if let Some(msg) = res.get("error").and_then(|v| v.as_str()) {
                 error_message = msg.to_string();
-                if let Some(dep) = msg.strip_prefix("blocked: ").and_then(|r| r.strip_suffix(" failed")) {
+                if let Some(dep) = msg
+                    .strip_prefix("blocked: ")
+                    .and_then(|r| r.strip_suffix(" failed"))
+                {
                     blocked_by = dep.to_string();
                     status = "blocked".to_string(); // virtual status for the UI
                 }
@@ -1342,23 +1537,39 @@ async fn agent_log(State(st): State<AppState>) -> Response {
     let mut out: Vec<Value> = Vec::new();
     for p in &parents {
         let pid = db::str_of(p, "id");
-        let Ok(tasks) = st.core.db.query("SELECT * FROM dag_tasks WHERE parent_id = ?1 ORDER BY rowid", &[&pid])
-        else {
+        let Ok(tasks) = st.core.db.query(
+            "SELECT * FROM dag_tasks WHERE parent_id = ?1 ORDER BY rowid",
+            &[&pid],
+        ) else {
             continue;
         };
         for t in &tasks {
             let status = db::str_of(t, "status");
-            if status != "active" && status != "registered" && status != "error" && status != "timeout" {
+            if status != "active"
+                && status != "registered"
+                && status != "error"
+                && status != "timeout"
+            {
                 continue;
             }
-            out.push(task_log_entry(&pid, &db::str_of(p, "project_id"), &db::str_of(p, "status"), t));
+            out.push(task_log_entry(
+                &pid,
+                &db::str_of(p, "project_id"),
+                &db::str_of(p, "status"),
+                t,
+            ));
         }
     }
     respond(StatusCode::OK, Value::Array(out))
 }
 
 async fn agent_history(State(st): State<AppState>) -> Response {
-    let cleared = st.core.db.kv_get("agent_history_cleared_at").trim().to_string();
+    let cleared = st
+        .core
+        .db
+        .kv_get("agent_history_cleared_at")
+        .trim()
+        .to_string();
     let limit = 100i64;
     let r = if !cleared.is_empty() {
         st.core.db.query(
@@ -1403,7 +1614,11 @@ async fn clear_agent_history(State(st): State<AppState>) -> Response {
     }
 }
 
-async fn put_agent_soul(State(st): State<AppState>, Path(agent_type): Path<String>, body: MaybeJson) -> Response {
+async fn put_agent_soul(
+    State(st): State<AppState>,
+    Path(agent_type): Path<String>,
+    body: MaybeJson,
+) -> Response {
     if !is_builtin_agent_type(&st, &agent_type) {
         return err(StatusCode::NOT_FOUND, "unknown built-in agent type");
     }
@@ -1429,7 +1644,11 @@ async fn put_agent_soul(State(st): State<AppState>, Path(agent_type): Path<Strin
     }
 }
 
-async fn patch_builtin_agent(State(st): State<AppState>, Path(agent_type): Path<String>, body: MaybeJson) -> Response {
+async fn patch_builtin_agent(
+    State(st): State<AppState>,
+    Path(agent_type): Path<String>,
+    body: MaybeJson,
+) -> Response {
     if !is_builtin_agent_type(&st, &agent_type) {
         return err(StatusCode::NOT_FOUND, "unknown built-in agent type");
     }
@@ -1443,8 +1662,15 @@ async fn patch_builtin_agent(State(st): State<AppState>, Path(agent_type): Path<
         Err(r) => return r,
     };
     let val = if b.enabled { "0" } else { "1" };
-    match st.core.db.kv_set(&format!("builtin_agent_disabled:{agent_type}"), val) {
-        Ok(()) => respond(StatusCode::OK, json!({ "type": agent_type, "enabled": b.enabled })),
+    match st
+        .core
+        .db
+        .kv_set(&format!("builtin_agent_disabled:{agent_type}"), val)
+    {
+        Ok(()) => respond(
+            StatusCode::OK,
+            json!({ "type": agent_type, "enabled": b.enabled }),
+        ),
         Err(e) => err500(e),
     }
 }
@@ -1487,7 +1713,10 @@ async fn create_skill_agent(State(st): State<AppState>, body: MaybeJson) -> Resp
         ids = normalize_skill_ids(&[b.skill_id.clone()]);
     }
     if ids.is_empty() && b.prompt.trim().is_empty() {
-        return err(StatusCode::BAD_REQUEST, "chọn ít nhất một skill hoặc điền prompt tùy chỉnh");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "chọn ít nhất một skill hoặc điền prompt tùy chỉnh",
+        );
     }
     let id = if b.id.is_empty() {
         format!("{}-{}", slugify(&b.name), &db::new_id()[..8])
@@ -1512,7 +1741,11 @@ async fn create_skill_agent(State(st): State<AppState>, body: MaybeJson) -> Resp
     respond(StatusCode::CREATED, json!({ "id": id }))
 }
 
-async fn update_skill_agent(State(st): State<AppState>, Path(id): Path<String>, body: MaybeJson) -> Response {
+async fn update_skill_agent(
+    State(st): State<AppState>,
+    Path(id): Path<String>,
+    body: MaybeJson,
+) -> Response {
     #[derive(Deserialize, Default)]
     struct Body {
         name: Option<String>,
@@ -1530,7 +1763,11 @@ async fn update_skill_agent(State(st): State<AppState>, Path(id): Path<String>, 
     };
     let mut name = db::str_of(&row, "name");
     let mut prompt = db::str_of(&row, "prompt");
-    let mut enabled: i64 = if db::i64_of(&row, "enabled") == 0 { 0 } else { 1 };
+    let mut enabled: i64 = if db::i64_of(&row, "enabled") == 0 {
+        0
+    } else {
+        1
+    };
     if let Some(n) = b.name {
         name = n;
     }
@@ -1540,20 +1777,29 @@ async fn update_skill_agent(State(st): State<AppState>, Path(id): Path<String>, 
     if let Some(e) = b.enabled {
         enabled = if e { 1 } else { 0 };
     }
-    let mut merged_ids = parse_skill_agent_skill_ids(&db::str_of(&row, "skill_ids"), &db::str_of(&row, "skill_id"));
+    let mut merged_ids = parse_skill_agent_skill_ids(
+        &db::str_of(&row, "skill_ids"),
+        &db::str_of(&row, "skill_id"),
+    );
     let skill_cols_in_request = b.skill_ids.is_some();
     if let Some(replace) = &b.skill_ids {
         merged_ids = normalize_skill_ids(replace);
     }
     if enabled == 1 && merged_ids.is_empty() && prompt.trim().is_empty() {
-        return err(StatusCode::BAD_REQUEST, "agent cần ít nhất một skill hoặc prompt tùy chỉnh");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "agent cần ít nhất một skill hoặc prompt tùy chỉnh",
+        );
     }
     let mut up = Map::new();
     up.insert("name".into(), json!(name));
     up.insert("prompt".into(), json!(prompt));
     up.insert("enabled".into(), json!(enabled));
     if skill_cols_in_request {
-        let mirror = merged_ids.first().cloned().unwrap_or_else(|| "-".to_string());
+        let mirror = merged_ids
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "-".to_string());
         up.insert("skill_id".into(), json!(mirror));
         up.insert("skill_ids".into(), json!(json!(merged_ids).to_string()));
     }
@@ -1620,7 +1866,11 @@ async fn suggest_project(State(st): State<AppState>, body: MaybeJson) -> Respons
         .map(|m| {
             let id = crate::db::str_of(m, "id");
             let name = crate::db::str_of(m, "name");
-            if name.is_empty() { id } else { format!("{id} ({name})") }
+            if name.is_empty() {
+                id
+            } else {
+                format!("{id} ({name})")
+            }
         })
         .collect();
     let material_line = if materials.is_empty() {
@@ -1702,7 +1952,13 @@ không xuống dòng thừa, và phải có đủ 4 khoá name/story/material/la
 
     // Keep only a material the form actually has; strip any "(name)" suffix the
     // model echoed back.
-    let mat = s.material.trim().split_whitespace().next().unwrap_or("").to_string();
+    let mat = s
+        .material
+        .trim()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string();
     let known: Vec<String> = st
         .core
         .db
@@ -1711,7 +1967,11 @@ không xuống dòng thừa, và phải có đủ 4 khoá name/story/material/la
         .iter()
         .map(|m| crate::db::str_of(m, "id"))
         .collect();
-    let material = if known.iter().any(|k| *k == mat) { mat } else { String::new() };
+    let material = if known.iter().any(|k| *k == mat) {
+        mat
+    } else {
+        String::new()
+    };
 
     let language = match s.language.trim().to_lowercase().as_str() {
         "vi" | "vietnamese" | "tiếng việt" => "vi",
@@ -1772,16 +2032,28 @@ async fn suggest_scenes(State(_st): State<AppState>, body: MaybeJson) -> Respons
          Return ONLY the JSON array, no markdown fences.",
     );
 
-    let reply = match llm::complete("You are a professional cinematographer and screenwriter.", &user_msg, 8000).await {
+    let reply = match llm::complete(
+        "You are a professional cinematographer and screenwriter.",
+        &user_msg,
+        8000,
+    )
+    .await
+    {
         Ok((t, _)) => t,
         Err(e) => return err500(e),
     };
 
     let (Some(start), Some(end)) = (reply.find('['), reply.rfind(']')) else {
-        return respond(StatusCode::OK, json!({ "scene_hints": [], "provider": provider }));
+        return respond(
+            StatusCode::OK,
+            json!({ "scene_hints": [], "provider": provider }),
+        );
     };
     if end <= start {
-        return respond(StatusCode::OK, json!({ "scene_hints": [], "provider": provider }));
+        return respond(
+            StatusCode::OK,
+            json!({ "scene_hints": [], "provider": provider }),
+        );
     }
     let hints: Vec<Map<String, Value>> = match serde_json::from_str(&reply[start..=end]) {
         Ok(h) => h,
@@ -1800,7 +2072,11 @@ async fn suggest_scenes(State(_st): State<AppState>, body: MaybeJson) -> Respons
             let names: Vec<String> = h
                 .get("character_names")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
                 .unwrap_or_default();
             json!({
                 "order": order,
@@ -1810,7 +2086,10 @@ async fn suggest_scenes(State(_st): State<AppState>, body: MaybeJson) -> Respons
             })
         })
         .collect();
-    respond(StatusCode::OK, json!({ "scene_hints": scenes, "provider": provider }))
+    respond(
+        StatusCode::OK,
+        json!({ "scene_hints": scenes, "provider": provider }),
+    )
 }
 
 async fn suggest_entities(State(_st): State<AppState>, body: MaybeJson) -> Response {
@@ -1844,19 +2123,36 @@ async fn suggest_entities(State(_st): State<AppState>, body: MaybeJson) -> Respo
          Return ONLY the JSON array, no markdown fences.",
     );
 
-    let reply = match llm::complete("You are a creative film production designer.", &user_msg, 4000).await {
+    let reply = match llm::complete(
+        "You are a creative film production designer.",
+        &user_msg,
+        4000,
+    )
+    .await
+    {
         Ok((t, _)) => t,
         Err(e) => return err500(e),
     };
     let (Some(start), Some(end)) = (reply.find('['), reply.rfind(']')) else {
-        return respond(StatusCode::OK, json!({ "entities": [], "provider": provider }));
+        return respond(
+            StatusCode::OK,
+            json!({ "entities": [], "provider": provider }),
+        );
     };
     if end <= start {
-        return respond(StatusCode::OK, json!({ "entities": [], "provider": provider }));
+        return respond(
+            StatusCode::OK,
+            json!({ "entities": [], "provider": provider }),
+        );
     }
     let raw: Vec<Map<String, Value>> = match serde_json::from_str(&reply[start..=end]) {
         Ok(v) => v,
-        Err(_) => return respond(StatusCode::OK, json!({ "entities": [], "provider": provider })),
+        Err(_) => {
+            return respond(
+                StatusCode::OK,
+                json!({ "entities": [], "provider": provider }),
+            )
+        }
     };
     let out: Vec<Value> = raw
         .iter()
@@ -1868,7 +2164,10 @@ async fn suggest_entities(State(_st): State<AppState>, body: MaybeJson) -> Respo
             })
         })
         .collect();
-    respond(StatusCode::OK, json!({ "entities": out, "provider": provider }))
+    respond(
+        StatusCode::OK,
+        json!({ "entities": out, "provider": provider }),
+    )
 }
 
 async fn list_providers() -> Response {
@@ -1914,7 +2213,11 @@ async fn llm_settings_payload(st: &AppState) -> Value {
     // `fast` is the credit-charged `_ultra` family (needs a higher service tier).
     let video_model = {
         let t = st.core.db.kv_get("video.model_tier");
-        if t.is_empty() { "auto".to_string() } else { t }
+        if t.is_empty() {
+            "auto".to_string()
+        } else {
+            t
+        }
     };
     json!({
         "provider": "senclaw",
@@ -1975,7 +2278,10 @@ async fn localize_media(State(st): State<AppState>, body: MaybeJson) -> Response
         Err(r) => return r,
     };
     let rep = crate::mediastore::localize_project(&st.core, b.project_id.trim()).await;
-    respond(StatusCode::OK, serde_json::to_value(rep).unwrap_or_else(|_| json!({})))
+    respond(
+        StatusCode::OK,
+        serde_json::to_value(rep).unwrap_or_else(|_| json!({})),
+    )
 }
 
 /// Ask the extension to load the Flow project page so its tRPC calls expose
@@ -2035,7 +2341,11 @@ async fn list_tools(State(st): State<AppState>) -> Response {
 // ---------- materials ----------
 
 async fn list_materials(State(st): State<AppState>) -> Response {
-    match st.core.db.query("SELECT * FROM material ORDER BY name", &[]) {
+    match st
+        .core
+        .db
+        .query("SELECT * FROM material ORDER BY name", &[])
+    {
         Ok(rows) => respond(StatusCode::OK, json!({ "materials": rows_json(rows) })),
         Err(e) => err500(e),
     }
@@ -2062,7 +2372,10 @@ async fn create_material(State(st): State<AppState>, body: MaybeJson) -> Respons
         Err(r) => return r,
     };
     if b.id.is_empty() || b.name.is_empty() || b.style_instruction.is_empty() {
-        return err(StatusCode::BAD_REQUEST, "id, name, style_instruction required");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "id, name, style_instruction required",
+        );
     }
     if b.lighting.is_empty() {
         b.lighting = "Studio lighting, highly detailed".to_string();
@@ -2073,14 +2386,22 @@ async fn create_material(State(st): State<AppState>, body: MaybeJson) -> Respons
     ) {
         return err500(e);
     }
-    match st.core.db.query_one("SELECT * FROM material WHERE id = ?1", &[&b.id]) {
+    match st
+        .core
+        .db
+        .query_one("SELECT * FROM material WHERE id = ?1", &[&b.id])
+    {
         Ok(row) => respond(StatusCode::CREATED, row_or_null(row)),
         Err(e) => err500(e),
     }
 }
 
 async fn delete_material(State(st): State<AppState>, Path(mid): Path<String>) -> Response {
-    match st.core.db.execute("DELETE FROM material WHERE id = ?1", &[&mid]) {
+    match st
+        .core
+        .db
+        .execute("DELETE FROM material WHERE id = ?1", &[&mid])
+    {
         Ok(_) => respond(StatusCode::OK, json!({ "ok": true })),
         Err(e) => err500(e),
     }
@@ -2126,7 +2447,10 @@ async fn import_materials(State(st): State<AppState>, body: axum::body::Bytes) -
 
 async fn list_skills(State(st): State<AppState>) -> Response {
     match skillcat::scan(&st.core.playbooks_dir) {
-        Ok(skills) => respond(StatusCode::OK, serde_json::to_value(&skills).unwrap_or_default()),
+        Ok(skills) => respond(
+            StatusCode::OK,
+            serde_json::to_value(&skills).unwrap_or_default(),
+        ),
         Err(e) => err500(e),
     }
 }
@@ -2158,11 +2482,23 @@ const PROJECT_MEDIA_COND: &str = "(\
    WHERE v.project_id = ? AND s.horizontal_end_scene_media_id IS NOT NULL AND s.horizontal_end_scene_media_id != '') \
 )";
 
-async fn list_media(State(st): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn list_media(
+    State(st): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Response {
     let media_type = q.get("type").cloned().unwrap_or_default();
-    let search = q.get("search").map(|s| s.trim().to_string()).unwrap_or_default();
-    let project_id = q.get("project_id").map(|s| s.trim().to_string()).unwrap_or_default();
-    let orientation = q.get("orientation").map(|s| s.trim().to_string()).unwrap_or_default();
+    let search = q
+        .get("search")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let project_id = q
+        .get("project_id")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let orientation = q
+        .get("orientation")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
 
     let mut conds: Vec<String> = Vec::new();
     let mut args: Vec<String> = Vec::new();
@@ -2181,9 +2517,13 @@ async fn list_media(State(st): State<AppState>, Query(q): Query<HashMap<String, 
         }
     }
     match orientation.to_lowercase().as_str() {
-        "portrait" => conds.push("m.width_px > 0 AND m.height_px > 0 AND m.height_px > m.width_px".to_string()),
-        "landscape" => conds.push("m.width_px > 0 AND m.height_px > 0 AND m.width_px > m.height_px".to_string()),
-        "square" => conds.push("m.width_px > 0 AND m.height_px > 0 AND ABS(m.width_px - m.height_px) <= 2".to_string()),
+        "portrait" => conds
+            .push("m.width_px > 0 AND m.height_px > 0 AND m.height_px > m.width_px".to_string()),
+        "landscape" => conds
+            .push("m.width_px > 0 AND m.height_px > 0 AND m.width_px > m.height_px".to_string()),
+        "square" => conds.push(
+            "m.width_px > 0 AND m.height_px > 0 AND ABS(m.width_px - m.height_px) <= 2".to_string(),
+        ),
         "unknown" => conds.push("(m.width_px = 0 OR m.height_px = 0)".to_string()),
         _ => {}
     }
@@ -2193,7 +2533,8 @@ async fn list_media(State(st): State<AppState>, Query(q): Query<HashMap<String, 
         sql.push_str(&conds.join(" AND "));
     }
     sql.push_str(" ORDER BY m.created_at DESC");
-    let params: Vec<&dyn rusqlite::ToSql> = args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let params: Vec<&dyn rusqlite::ToSql> =
+        args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
     match st.core.db.query(&sql, &params) {
         Ok(rows) => respond(StatusCode::OK, rows_json(rows)),
         Err(e) => err500(e),
@@ -2283,14 +2624,20 @@ async fn agent_generate_image(State(st): State<AppState>, body: MaybeJson) -> Re
         b.orientation = "VERTICAL".to_string();
     }
     if st.pool.get("image").is_none() {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, "image agent not initialized");
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "image agent not initialized",
+        );
     }
 
     let rid = db::new_id();
     let mut req = Map::new();
     req.insert("id".into(), json!(rid));
     req.insert("project_id".into(), json!(b.project_id));
-    req.insert("type".into(), json!(format!("AGENT_IMAGE_{}", b.mode.to_uppercase())));
+    req.insert(
+        "type".into(),
+        json!(format!("AGENT_IMAGE_{}", b.mode.to_uppercase())),
+    );
     req.insert("orientation".into(), json!(b.orientation));
     req.insert("status".into(), json!("PROCESSING"));
     if !b.character_id.is_empty() {
@@ -2307,7 +2654,14 @@ async fn agent_generate_image(State(st): State<AppState>, body: MaybeJson) -> Re
     }
 
     if let Err(e) = schedule_image_dag_task(
-        &st, &b.project_id, &rid, &b.mode, &b.character_id, &b.scene_id, &b.video_id, &b.orientation,
+        &st,
+        &b.project_id,
+        &rid,
+        &b.mode,
+        &b.character_id,
+        &b.scene_id,
+        &b.video_id,
+        &b.orientation,
     ) {
         let mut up = Map::new();
         up.insert("status".into(), json!("FAILED"));
@@ -2316,5 +2670,8 @@ async fn agent_generate_image(State(st): State<AppState>, body: MaybeJson) -> Re
         return err500(e);
     }
 
-    respond(StatusCode::ACCEPTED, json!({ "request_id": rid, "status": "queued" }))
+    respond(
+        StatusCode::ACCEPTED,
+        json!({ "request_id": rid, "status": "queued" }),
+    )
 }

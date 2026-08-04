@@ -94,9 +94,18 @@ pub async fn bridge_llm(
         };
         return match v.get("status").and_then(|x| x.as_str()) {
             Some("ok") => Ok((
-                v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("finish").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                v.get("text")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                v.get("model")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                v.get("finish")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             )),
             Some("pending") => Err("bridge LLM chưa được bật trong daemon này".to_string()),
             _ => Err(v
@@ -110,8 +119,14 @@ pub async fn bridge_llm(
 }
 
 /// Convenience: `(text, model)`, dropping the finish reason.
-pub async fn complete(system: &str, user: &str, max_tokens: u32) -> Result<(String, String), String> {
-    bridge_llm(system, user, max_tokens).await.map(|(t, m, _)| (t, m))
+pub async fn complete(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String), String> {
+    bridge_llm(system, user, max_tokens)
+        .await
+        .map(|(t, m, _)| (t, m))
 }
 
 /// Full SenClaw agent run (tools + skills + MCP) through the bridge. Used by
@@ -155,7 +170,11 @@ pub async fn agent_run(
         .await
         .map_err(|e| format!("invalid bridge response: {}", describe(&e)))?;
     match v.get("status").and_then(|x| x.as_str()) {
-        Some("ok") => Ok(v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string()),
+        Some("ok") => Ok(v
+            .get("text")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string()),
         _ => Err(v
             .get("message")
             .and_then(|x| x.as_str())
@@ -270,7 +289,11 @@ fn repair_candidates(text: &str) -> Vec<String> {
     points.sort_unstable();
     points.dedup();
     points.reverse();
-    points.iter().take(60).filter_map(|&p| close_at(s, p)).collect()
+    points
+        .iter()
+        .take(60)
+        .filter_map(|&p| close_at(s, p))
+        .collect()
 }
 
 /// Cut `s` at `cut` and close whatever brackets are still open. `None` when the

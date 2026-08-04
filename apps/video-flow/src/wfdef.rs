@@ -74,7 +74,14 @@ impl StepEndpoint {
 
     /// Address the scene by position, not id: `script_parser` recreates scenes
     /// during the run, so ids captured at definition time are already stale.
-    fn scene(&self, op: &str, video_id: &str, index: usize, project_id: &str, orientation: &str) -> String {
+    fn scene(
+        &self,
+        op: &str,
+        video_id: &str,
+        index: usize,
+        project_id: &str,
+        orientation: &str,
+    ) -> String {
         let body = serde_json::json!({
             "op": op,
             "video_id": video_id,
@@ -86,7 +93,13 @@ impl StepEndpoint {
         self.curl("scene", &body)
     }
 
-    fn catchup(&self, video_id: &str, project_id: &str, orientation: &str, from_index: usize) -> String {
+    fn catchup(
+        &self,
+        video_id: &str,
+        project_id: &str,
+        orientation: &str,
+        from_index: usize,
+    ) -> String {
         let body = serde_json::json!({
             "video_id": video_id,
             "project_id": project_id,
@@ -123,7 +136,10 @@ pub struct BuildOpts<'a> {
 
 /// Workflow name for a project — stable, so re-running overwrites the same def.
 pub fn workflow_name(project_id: &str) -> String {
-    format!("video-flow-{}", &project_id.replace('-', "")[..project_id.replace('-', "").len().min(12)])
+    format!(
+        "video-flow-{}",
+        &project_id.replace('-', "")[..project_id.replace('-', "").len().min(12)]
+    )
 }
 
 fn yaml_quote(s: &str) -> String {
@@ -182,7 +198,11 @@ pub fn build(opts: &BuildOpts) -> String {
             yaml_quote(&ep.parse_story(&project_id, &video_id))
         ));
     }
-    let after_parse = if parse_first { "\n    dependsOn: [parse]" } else { "" };
+    let after_parse = if parse_first {
+        "\n    dependsOn: [parse]"
+    } else {
+        ""
+    };
     push(format!(
         "  - id: refs\n    kind: script{after_parse}\n    run: {}\n    timeout: 900\n",
         yaml_quote(&ep.agent("gen_ref", &project_id, &video_id))
@@ -299,9 +319,22 @@ pub struct CustomBuildOpts<'a> {
 /// into a stage; unknown names are rejected by the caller.
 pub fn known_agent_types() -> &'static [&'static str] {
     &[
-        "director", "screenwriter", "scene_plan", "shot_design", "visual_asset",
-        "scene_builder", "script_parser", "gen_ref", "director_frame", "character",
-        "image", "video", "audio", "media_download", "concat", "critic",
+        "director",
+        "screenwriter",
+        "scene_plan",
+        "shot_design",
+        "visual_asset",
+        "scene_builder",
+        "script_parser",
+        "gen_ref",
+        "director_frame",
+        "character",
+        "image",
+        "video",
+        "audio",
+        "media_download",
+        "concat",
+        "critic",
     ]
 }
 
@@ -451,10 +484,17 @@ mod tests {
     }
 
     fn sample(n: usize) -> String {
-        let project = row(&[("id", "1126ef9e-99e3-449b-af47-a30565f8d60c"), ("name", "Khói Bếp")]);
+        let project = row(&[
+            ("id", "1126ef9e-99e3-449b-af47-a30565f8d60c"),
+            ("name", "Khói Bếp"),
+        ]);
         let video = row(&[("id", "v-1")]);
-        let scenes: Vec<Row> = (0..n).map(|i| row(&[("id", &format!("s-{i}")[..])])).collect();
-        let ep = StepEndpoint { base_url: "http://127.0.0.1:4460".into() };
+        let scenes: Vec<Row> = (0..n)
+            .map(|i| row(&[("id", &format!("s-{i}")[..])]))
+            .collect();
+        let ep = StepEndpoint {
+            base_url: "http://127.0.0.1:4460".into(),
+        };
         build(&BuildOpts {
             project: &project,
             video: &video,
@@ -469,10 +509,17 @@ mod tests {
     }
 
     fn custom(stages: &[&[&str]], n: usize) -> String {
-        let project = row(&[("id", "1126ef9e-99e3-449b-af47-a30565f8d60c"), ("name", "Khói Bếp")]);
+        let project = row(&[
+            ("id", "1126ef9e-99e3-449b-af47-a30565f8d60c"),
+            ("name", "Khói Bếp"),
+        ]);
         let video = row(&[("id", "v-1")]);
-        let scenes: Vec<Row> = (0..n).map(|i| row(&[("id", &format!("s-{i}")[..])])).collect();
-        let ep = StepEndpoint { base_url: "http://127.0.0.1:4460".into() };
+        let scenes: Vec<Row> = (0..n)
+            .map(|i| row(&[("id", &format!("s-{i}")[..])]))
+            .collect();
+        let ep = StepEndpoint {
+            base_url: "http://127.0.0.1:4460".into(),
+        };
         let stages: Vec<Vec<String>> = stages
             .iter()
             .map(|s| s.iter().map(|a| a.to_string()).collect())
@@ -496,7 +543,10 @@ mod tests {
     #[test]
     fn custom_stages_sequence_and_parallel() {
         // director → (screenwriter ∥ scene_plan) → critic
-        let def = custom(&[&["director"], &["screenwriter", "scene_plan"], &["critic"]], 2);
+        let def = custom(
+            &[&["director"], &["screenwriter", "scene_plan"], &["critic"]],
+            2,
+        );
         // Stage 0 has no deps.
         assert!(def.contains("- id: director_0\n    kind: script\n    run:"));
         // Stage 1 agents both depend on stage 0's only node, and NOT on each other.
@@ -511,7 +561,11 @@ mod tests {
     #[test]
     fn custom_dedups_repeated_agent_in_stage() {
         let def = custom(&[&["critic", "critic"]], 2);
-        assert_eq!(def.matches("- id: critic_0").count(), 1, "duplicate agent not deduped");
+        assert_eq!(
+            def.matches("- id: critic_0").count(),
+            1,
+            "duplicate agent not deduped"
+        );
         let vid = custom(&[&["image", "image"]], 2);
         // Two "image" collapse to one fan-out (image_0_0, image_0_1), not four.
         assert_eq!(vid.matches("- id: image_0_").count(), 2);
@@ -522,11 +576,19 @@ mod tests {
     fn custom_scene_fanout_binds_video_to_image() {
         let def = custom(&[&["image", "video"]], 3);
         for i in 0..3 {
-            assert!(def.contains(&format!("- id: image_0_{i}")), "missing image_0_{i}");
-            assert!(def.contains(&format!("- id: video_0_{i}")), "missing video_0_{i}");
+            assert!(
+                def.contains(&format!("- id: image_0_{i}")),
+                "missing image_0_{i}"
+            );
+            assert!(
+                def.contains(&format!("- id: video_0_{i}")),
+                "missing video_0_{i}"
+            );
             // video_0_i depends on image_0_i (same scene), even in the same stage.
             assert!(
-                def.contains(&format!("- id: video_0_{i}\n    kind: script\n    dependsOn: [image_0_{i}]")),
+                def.contains(&format!(
+                    "- id: video_0_{i}\n    kind: script\n    dependsOn: [image_0_{i}]"
+                )),
                 "video_0_{i} not bound to its image"
             );
         }
@@ -540,8 +602,18 @@ mod tests {
     #[test]
     fn bare_story_runs_full_preproduction() {
         let def = sample(0);
-        for stage in ["blueprint", "draft", "environments", "shot_list", "dna", "parse"] {
-            assert!(def.contains(&format!("- id: {stage}")), "missing stage {stage}");
+        for stage in [
+            "blueprint",
+            "draft",
+            "environments",
+            "shot_list",
+            "dna",
+            "parse",
+        ] {
+            assert!(
+                def.contains(&format!("- id: {stage}")),
+                "missing stage {stage}"
+            );
         }
         // Ordering that matters: shots need environments; parse needs both the
         // shot list and the character DNA.
@@ -555,8 +627,14 @@ mod tests {
     #[test]
     fn does_not_reparse_when_scenes_exist() {
         let def = sample(3);
-        assert!(!def.contains("- id: parse"), "parse must be skipped when scenes exist");
-        assert!(def.contains("- id: refs\n    kind: script\n    run:"), "refs should be the entry node");
+        assert!(
+            !def.contains("- id: parse"),
+            "parse must be skipped when scenes exist"
+        );
+        assert!(
+            def.contains("- id: refs\n    kind: script\n    run:"),
+            "refs should be the entry node"
+        );
         assert!(!def.contains("dependsOn: [parse]"));
     }
 
@@ -589,7 +667,10 @@ mod tests {
         assert!(def.contains("- id: catchup"), "missing catchup node");
         // Body is JSON embedded in a yaml-quoted curl line, so quotes are
         // escaped; keys are alphabetical (from_index first). 3 = the slot count.
-        assert!(def.contains(r#"from_index\":3"#), "catchup must start at the slot count (3)");
+        assert!(
+            def.contains(r#"from_index\":3"#),
+            "catchup must start at the slot count (3)"
+        );
         // Everything downstream of the fan-out hangs off catchup, not the last vid.
         assert!(def.contains("- id: download\n    kind: script\n    dependsOn: [catchup]"));
     }
@@ -621,7 +702,10 @@ mod tests {
         assert!(def.contains("- id: preflight\n    kind: script\n    dependsOn: [entities]"));
         // Every image node waits on the gate, not on `entities` directly.
         assert_eq!(def.matches("dependsOn: [preflight]").count(), 3);
-        assert!(!def.contains("dependsOn: [concat]"), "critic must not run after concat");
+        assert!(
+            !def.contains("dependsOn: [concat]"),
+            "critic must not run after concat"
+        );
     }
 
     #[test]
@@ -640,7 +724,9 @@ mod tests {
     /// Single quotes in a prompt must not break out of the shell string.
     #[test]
     fn curl_body_is_shell_safe() {
-        let ep = StepEndpoint { base_url: "http://127.0.0.1:4460".into() };
+        let ep = StepEndpoint {
+            base_url: "http://127.0.0.1:4460".into(),
+        };
         let cmd = ep.curl("agent", r#"{"prompt":"Hậu's home"}"#);
         assert!(cmd.contains(r#"'\''"#), "single quote not escaped: {cmd}");
     }

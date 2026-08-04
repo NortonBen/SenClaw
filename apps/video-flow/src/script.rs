@@ -232,10 +232,17 @@ pub async fn parse_blocks(
         .iter()
         .enumerate()
         .filter_map(|(i, block)| {
-            let mut content =
-                block.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let mut content = block
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if content.is_empty() {
-                content = block.get("heading").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                content = block
+                    .get("heading")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
             }
             if content.trim().is_empty() {
                 None
@@ -299,9 +306,15 @@ async fn parse_block(system_override: &str, content: &str) -> Result<ParsedScrip
                 "Sửa JSON sau thành JSON hợp lệ theo schema ParsedScript (scenes[], characters[]).\n\
                  Giữ nguyên nội dung nghĩa gốc tối đa, không thêm text ngoài JSON.\n\n---\n{raw}\n---"
             );
-            let (repair_raw, _) = crate::llm::complete(PARSER_JSON_REPAIR_PROMPT, &repair_user, 8000)
-                .await
-                .map_err(|_| format!("parse json: {err}\nraw: {}", crate::llm::truncate(&raw, 500)))?;
+            let (repair_raw, _) =
+                crate::llm::complete(PARSER_JSON_REPAIR_PROMPT, &repair_user, 8000)
+                    .await
+                    .map_err(|_| {
+                        format!(
+                            "parse json: {err}\nraw: {}",
+                            crate::llm::truncate(&raw, 500)
+                        )
+                    })?;
             extract_parsed(&repair_raw).map_err(|e| {
                 format!(
                     "parse json (after repair): {e}\nraw: {}",
@@ -410,25 +423,73 @@ pub fn infer_entity_type(name: &str, desc: &str) -> String {
     let lower = format!("{name} {desc}").to_lowercase();
     let has = |subs: &[&str]| subs.iter().any(|s| lower.contains(s));
     if has(&[
-        "địa điểm", "location", "căn phòng", "room", "rừng", "forest", "biển", "sea",
-        "thành phố", "city", "palace", "cung điện", "dungeon", "hầm ngục",
+        "địa điểm",
+        "location",
+        "căn phòng",
+        "room",
+        "rừng",
+        "forest",
+        "biển",
+        "sea",
+        "thành phố",
+        "city",
+        "palace",
+        "cung điện",
+        "dungeon",
+        "hầm ngục",
     ]) {
         "location".to_string()
-    } else if has(&["quái vật", "monster", "creature", "sinh vật", "dragon", "rồng", "beast", "dã thú"]) {
+    } else if has(&[
+        "quái vật",
+        "monster",
+        "creature",
+        "sinh vật",
+        "dragon",
+        "rồng",
+        "beast",
+        "dã thú",
+    ]) {
         "creature".to_string()
     } else if has(&[
-        "đạo cụ", "prop", "artifact", "bảo vật", "sword", "kiếm", "armor", "giáp", "relic",
-        "trang phục", "costume",
+        "đạo cụ",
+        "prop",
+        "artifact",
+        "bảo vật",
+        "sword",
+        "kiếm",
+        "armor",
+        "giáp",
+        "relic",
+        "trang phục",
+        "costume",
     ]) {
         "visual_asset".to_string()
     } else if has(&[
-        "quân đội", "troop", "lính", "soldier", "army", "đội quân", "legion", "battalion",
-        "đám đông", "crowd",
+        "quân đội",
+        "troop",
+        "lính",
+        "soldier",
+        "army",
+        "đội quân",
+        "legion",
+        "battalion",
+        "đám đông",
+        "crowd",
     ]) {
         "generic_troop".to_string()
     } else if has(&[
-        "phe", "faction", "guild", "hội", "clan", "tổ chức", "organization", "order", "empire",
-        "đế chế", "kingdom", "vương quốc",
+        "phe",
+        "faction",
+        "guild",
+        "hội",
+        "clan",
+        "tổ chức",
+        "organization",
+        "order",
+        "empire",
+        "đế chế",
+        "kingdom",
+        "vương quốc",
     ]) {
         "faction".to_string()
     } else {
@@ -444,11 +505,7 @@ pub fn estimate_duration(text: &str) -> f64 {
     if text.trim().is_empty() {
         return 8.0;
     }
-    let non_empty = text
-        .trim()
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .count();
+    let non_empty = text.trim().lines().filter(|l| !l.trim().is_empty()).count();
     let seconds = (non_empty as f64 / 55.0) * 60.0;
     seconds.clamp(4.0, 16.0)
 }
@@ -474,9 +531,36 @@ mod tests {
     fn merge_preserves_block_order() {
         // Simulate what the concurrent stage produces: results arriving shuffled.
         let mut results: Vec<(usize, ParsedScript)> = vec![
-            (2, ParsedScript { scenes: vec![ParsedScene { prompt: "C".into(), ..Default::default() }], characters: vec![] }),
-            (0, ParsedScript { scenes: vec![ParsedScene { prompt: "A".into(), ..Default::default() }], characters: vec![] }),
-            (1, ParsedScript { scenes: vec![ParsedScene { prompt: "B".into(), ..Default::default() }], characters: vec![] }),
+            (
+                2,
+                ParsedScript {
+                    scenes: vec![ParsedScene {
+                        prompt: "C".into(),
+                        ..Default::default()
+                    }],
+                    characters: vec![],
+                },
+            ),
+            (
+                0,
+                ParsedScript {
+                    scenes: vec![ParsedScene {
+                        prompt: "A".into(),
+                        ..Default::default()
+                    }],
+                    characters: vec![],
+                },
+            ),
+            (
+                1,
+                ParsedScript {
+                    scenes: vec![ParsedScene {
+                        prompt: "B".into(),
+                        ..Default::default()
+                    }],
+                    characters: vec![],
+                },
+            ),
         ];
         results.sort_by_key(|(i, _)| *i);
         let mut merged = ParsedScript::default();
@@ -498,11 +582,17 @@ mod tests {
         // 1 line → 60/55 ≈ 1.09 → clamped to min 4.0
         assert_eq!(estimate_duration("one line"), 4.0);
         // 7 lines ≈ 1/8 page → ~7.64s (inside [4, 16])
-        let seven = (0..7).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let seven = (0..7)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let d = estimate_duration(&seven);
         assert!((d - 7.636).abs() < 0.01, "got {d}");
         // 55+ lines → clamped to max 16.0
-        let many = (0..80).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let many = (0..80)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(estimate_duration(&many), 16.0);
     }
 
@@ -537,8 +627,14 @@ mod tests {
     #[test]
     fn infer_entity_types() {
         assert_eq!(infer_entity_type("Khu rừng", "rừng già âm u"), "location");
-        assert_eq!(infer_entity_type("Rồng lửa", "quái vật khổng lồ"), "creature");
-        assert_eq!(infer_entity_type("Thanh kiếm", "bảo vật gia truyền"), "visual_asset");
+        assert_eq!(
+            infer_entity_type("Rồng lửa", "quái vật khổng lồ"),
+            "creature"
+        );
+        assert_eq!(
+            infer_entity_type("Thanh kiếm", "bảo vật gia truyền"),
+            "visual_asset"
+        );
         assert_eq!(infer_entity_type("NAM", "chàng trai 25 tuổi"), "character");
     }
 }

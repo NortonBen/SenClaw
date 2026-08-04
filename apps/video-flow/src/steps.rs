@@ -27,7 +27,11 @@ fn ok(v: Value) -> Response {
 fn fail(msg: impl Into<String>) -> Response {
     let msg = msg.into();
     eprintln!("[step] {msg}");
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": msg }))).into_response()
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": msg })),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize, Default)]
@@ -78,7 +82,13 @@ pub async fn run_agent_step(State(st): State<AppState>, Json(b): Json<AgentStepB
 
     let mut prompt = b.prompt.clone();
     if prompt.trim().is_empty() && b.use_project_story {
-        let project = st.core.db.get("project", &b.project_id).ok().flatten().unwrap_or_default();
+        let project = st
+            .core
+            .db
+            .get("project", &b.project_id)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         for field in ["story", "story_original", "description"] {
             let v = db::str_of(&project, field);
             if !v.trim().is_empty() {
@@ -101,7 +111,11 @@ pub async fn run_agent_step(State(st): State<AppState>, Json(b): Json<AgentStepB
         label: agent_type.clone(),
         agent_type: agent_type.clone(),
         prompt,
-        timeout_seconds: if b.timeout_seconds > 0 { b.timeout_seconds } else { 900 },
+        timeout_seconds: if b.timeout_seconds > 0 {
+            b.timeout_seconds
+        } else {
+            900
+        },
         // Each workflow step is its own process, so there is no in-memory
         // upstream to inherit — replay what earlier stages persisted.
         upstream_results: load_stage_results(&st, &b.project_id),
@@ -138,7 +152,12 @@ fn stage_key(project_id: &str, agent_type: &str) -> String {
     format!("stage:{project_id}:{agent_type}")
 }
 
-fn save_stage_result(st: &AppState, project_id: &str, agent_type: &str, data: &serde_json::Map<String, Value>) {
+fn save_stage_result(
+    st: &AppState,
+    project_id: &str,
+    agent_type: &str,
+    data: &serde_json::Map<String, Value>,
+) {
     if !RELAYED_STAGES.contains(&agent_type) || data.is_empty() {
         return;
     }
@@ -197,7 +216,10 @@ pub struct SceneStepBody {
 /// One scene per call is the whole point: the workflow fans these out so N
 /// clips render concurrently instead of one 20-minute serial loop, and a scene
 /// that fails is retried on its own without redoing the rest.
-pub async fn run_scene_step(State(st): State<AppState>, Json(mut b): Json<SceneStepBody>) -> Response {
+pub async fn run_scene_step(
+    State(st): State<AppState>,
+    Json(mut b): Json<SceneStepBody>,
+) -> Response {
     // Resolve position → id at execution time, so a definition written before
     // `script_parser` ran still targets the right scene.
     if b.scene_id.trim().is_empty() {
@@ -243,7 +265,10 @@ pub async fn run_scene_step(State(st): State<AppState>, Json(mut b): Json<SceneS
         b.project_id.clone()
     };
     if project_id.is_empty() {
-        return fail(format!("không xác định được project cho scene {}", b.scene_id));
+        return fail(format!(
+            "không xác định được project cho scene {}",
+            b.scene_id
+        ));
     }
 
     let orientation = if b.orientation.trim().is_empty() {
@@ -260,11 +285,25 @@ pub async fn run_scene_step(State(st): State<AppState>, Json(mut b): Json<SceneS
 
     let out = match b.op.trim() {
         "image" => {
-            crate::process::scene_image(&st.core, &b.scene_id, &project_id, &orientation, b.regenerate, None)
-                .await
+            crate::process::scene_image(
+                &st.core,
+                &b.scene_id,
+                &project_id,
+                &orientation,
+                b.regenerate,
+                None,
+            )
+            .await
         }
         "video" => {
-            crate::process::scene_video(&st.core, &b.scene_id, &project_id, &orientation, b.regenerate).await
+            crate::process::scene_video(
+                &st.core,
+                &b.scene_id,
+                &project_id,
+                &orientation,
+                b.regenerate,
+            )
+            .await
         }
         "upscale" => {
             crate::process::upscale_video(&st.core, &b.scene_id, &project_id, &orientation).await
@@ -305,7 +344,10 @@ pub struct CatchupStepBody {
 /// the surplus scenes have nobody to render them and sit at PENDING while the
 /// run reports success — a silent under-delivery. Serial by design: the
 /// overflow is normally a couple of scenes, and correctness beats speed here.
-pub async fn run_catchup_step(State(st): State<AppState>, Json(b): Json<CatchupStepBody>) -> Response {
+pub async fn run_catchup_step(
+    State(st): State<AppState>,
+    Json(b): Json<CatchupStepBody>,
+) -> Response {
     if b.video_id.trim().is_empty() {
         return fail("cần video_id");
     }
@@ -324,7 +366,10 @@ pub async fn run_catchup_step(State(st): State<AppState>, Json(b): Json<CatchupS
         }));
     }
 
-    let extra: Vec<String> = scenes[b.from_index..].iter().map(|r| db::str_of(r, "id")).collect();
+    let extra: Vec<String> = scenes[b.from_index..]
+        .iter()
+        .map(|r| db::str_of(r, "id"))
+        .collect();
     let project_id = if b.project_id.trim().is_empty() {
         st.core
             .db
@@ -337,7 +382,10 @@ pub async fn run_catchup_step(State(st): State<AppState>, Json(b): Json<CatchupS
         b.project_id.clone()
     };
     if project_id.is_empty() {
-        return fail(format!("không xác định được project cho video {}", b.video_id));
+        return fail(format!(
+            "không xác định được project cho video {}",
+            b.video_id
+        ));
     }
     let orientation = if b.orientation.trim().is_empty() {
         crate::config::default_orientation()
@@ -357,18 +405,25 @@ pub async fn run_catchup_step(State(st): State<AppState>, Json(b): Json<CatchupS
     let mut errors: Vec<String> = Vec::new();
     for scene_id in &extra {
         if let Err(e) =
-            crate::process::scene_image(&st.core, scene_id, &project_id, &orientation, false, None).await
+            crate::process::scene_image(&st.core, scene_id, &project_id, &orientation, false, None)
+                .await
         {
             errors.push(format!("cảnh {scene_id} ảnh: {e}"));
             continue;
         }
-        match crate::process::scene_video(&st.core, scene_id, &project_id, &orientation, false).await {
+        match crate::process::scene_video(&st.core, scene_id, &project_id, &orientation, false)
+            .await
+        {
             Ok(_) => done += 1,
             Err(e) => errors.push(format!("cảnh {scene_id} video: {e}")),
         }
     }
     if !errors.is_empty() {
-        return fail(format!("bù {done}/{} cảnh; lỗi: {}", extra.len(), errors.join("; ")));
+        return fail(format!(
+            "bù {done}/{} cảnh; lỗi: {}",
+            extra.len(),
+            errors.join("; ")
+        ));
     }
     ok(json!({ "status": "done", "rendered": done, "from_index": b.from_index }))
 }
@@ -385,7 +440,10 @@ pub struct EntityStepBody {
 }
 
 /// `POST /api/steps/entity` — reference image for one entity, or all missing.
-pub async fn run_entity_step(State(st): State<AppState>, Json(b): Json<EntityStepBody>) -> Response {
+pub async fn run_entity_step(
+    State(st): State<AppState>,
+    Json(b): Json<EntityStepBody>,
+) -> Response {
     if b.project_id.trim().is_empty() {
         return fail("project_id là bắt buộc");
     }
@@ -398,7 +456,8 @@ pub async fn run_entity_step(State(st): State<AppState>, Json(b): Json<EntitySte
             Err(e) => fail(format!("gen refs: {e}")),
         };
     }
-    match crate::process::entity_image(&st.core, &b.character_id, &b.project_id, b.regenerate).await {
+    match crate::process::entity_image(&st.core, &b.character_id, &b.project_id, b.regenerate).await
+    {
         Ok(g) => ok(json!({
             "status": "done",
             "character_id": b.character_id,

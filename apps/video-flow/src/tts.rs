@@ -21,7 +21,10 @@ pub async fn synthesize(
     if text.trim().is_empty() {
         return Err("tts: empty text".to_string());
     }
-    let url = format!("{}/api/tts/synthesize", crate::llm::base_url().trim_end_matches('/'));
+    let url = format!(
+        "{}/api/tts/synthesize",
+        crate::llm::base_url().trim_end_matches('/')
+    );
     let mut body = json!({ "text": text });
     if !language.trim().is_empty() {
         body["language"] = json!(language.trim());
@@ -57,9 +60,16 @@ pub async fn synthesize(
         .to_string();
     if !status.is_success() {
         let msg = resp.text().await.unwrap_or_default();
-        return Err(format!("tts {}: {}", status.as_u16(), crate::llm::truncate(msg.trim(), 300)));
+        return Err(format!(
+            "tts {}: {}",
+            status.as_u16(),
+            crate::llm::truncate(msg.trim(), 300)
+        ));
     }
-    let bytes = resp.bytes().await.map_err(|e| format!("tts read failed: {e}"))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("tts read failed: {e}"))?;
     if bytes.is_empty() {
         return Err("tts returned no audio".to_string());
     }
@@ -72,7 +82,10 @@ pub async fn synthesize(
 /// `GET /api/tts/settings` — `{model_id, voice, speed, language}`. Used to show
 /// what narration *would* sound like without synthesizing anything.
 pub async fn settings() -> Result<Value, String> {
-    let url = format!("{}/api/tts/settings", crate::llm::base_url().trim_end_matches('/'));
+    let url = format!(
+        "{}/api/tts/settings",
+        crate::llm::base_url().trim_end_matches('/')
+    );
     let v: Value = crate::llm::http()
         .get(&url)
         .timeout(Duration::from_secs(6))
@@ -88,7 +101,10 @@ pub async fn settings() -> Result<Value, String> {
 /// `GET /api/tts/models` — catalog with install status, so the app can tell the
 /// user "no TTS model installed" instead of failing mid-pipeline.
 pub async fn models() -> Result<Value, String> {
-    let url = format!("{}/api/tts/models", crate::llm::base_url().trim_end_matches('/'));
+    let url = format!(
+        "{}/api/tts/models",
+        crate::llm::base_url().trim_end_matches('/')
+    );
     let v: Value = crate::llm::http()
         .get(&url)
         .timeout(Duration::from_secs(6))
@@ -105,9 +121,15 @@ pub async fn models() -> Result<Value, String> {
 pub async fn is_available() -> bool {
     match models().await {
         Ok(v) => {
-            let list = v.get("models").and_then(|m| m.as_array()).cloned().unwrap_or_default();
+            let list = v
+                .get("models")
+                .and_then(|m| m.as_array())
+                .cloned()
+                .unwrap_or_default();
             list.iter().any(|m| {
-                m.get("installed").and_then(|b| b.as_bool()).unwrap_or(false)
+                m.get("installed")
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(false)
                     || m.get("status").and_then(|s| s.as_str()).unwrap_or("") == "installed"
             })
         }

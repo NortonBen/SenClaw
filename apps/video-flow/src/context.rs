@@ -97,10 +97,19 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
-    pub fn new(db: Db, souls_dir: &std::path::PathBuf, agent_type: &str, parent_id: &str, project_id: &str) -> Self {
+    pub fn new(
+        db: Db,
+        souls_dir: &std::path::PathBuf,
+        agent_type: &str,
+        parent_id: &str,
+        project_id: &str,
+    ) -> Self {
         AgentContext {
             working: WorkingContext::default(),
-            memory: MemoryManager { db, project_id: project_id.to_string() },
+            memory: MemoryManager {
+                db,
+                project_id: project_id.to_string(),
+            },
             soul: crate::souls::load(souls_dir, agent_type),
             parent_id: parent_id.to_string(),
             project_id: project_id.to_string(),

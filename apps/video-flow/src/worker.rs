@@ -44,7 +44,12 @@ pub fn reconcile_stale_requests(core: &Arc<Core>) {
             db.get("character", &character_id)
                 .ok()
                 .flatten()
-                .map(|c| (db::str_of(&c, "media_id"), db::str_of(&c, "reference_image_url")))
+                .map(|c| {
+                    (
+                        db::str_of(&c, "media_id"),
+                        db::str_of(&c, "reference_image_url"),
+                    )
+                })
                 .unwrap_or_default()
         } else if !scene_id.is_empty() {
             let cols = db::scene_cols(&orientation);
@@ -114,7 +119,10 @@ pub fn spawn(core: Arc<Core>) {
 async fn tick(core: &Core) -> Result<(), String> {
     let rows = core
         .db
-        .query("SELECT * FROM request WHERE status = 'PENDING' ORDER BY created_at ASC", &[])
+        .query(
+            "SELECT * FROM request WHERE status = 'PENDING' ORDER BY created_at ASC",
+            &[],
+        )
         .map_err(|e| e.to_string())?;
     let req = match pick_job(&rows) {
         Some(r) => r,
@@ -202,7 +210,10 @@ fn complete_request(core: &Core, rid: &str, pid: &str, out: &process::GenOutcome
         f.insert("output_url".into(), json!(out.url));
     }
     let _ = core.db.update("request", rid, &f);
-    core.dash.emit("request_completed", json!({ "request_id": rid, "project_id": pid }));
+    core.dash.emit(
+        "request_completed",
+        json!({ "request_id": rid, "project_id": pid }),
+    );
 }
 
 fn fail_request(core: &Core, rid: &str, msg: &str) -> Result<(), String> {
@@ -212,7 +223,10 @@ fn fail_request(core: &Core, rid: &str, msg: &str) -> Result<(), String> {
          retry_count = retry_count + 1, updated_at = ?3 WHERE id = ?1",
         &[&rid, &msg, &now],
     );
-    core.dash.emit("request_failed", json!({ "request_id": rid, "error_message": msg }));
+    core.dash.emit(
+        "request_failed",
+        json!({ "request_id": rid, "error_message": msg }),
+    );
     let short: String = rid.chars().take(8).collect();
     Err(format!("request {short}: {msg}"))
 }
@@ -225,7 +239,11 @@ fn fail_request(core: &Core, rid: &str, msg: &str) -> Result<(), String> {
 pub fn install_extension_event_handler(core: Arc<Core>) {
     let c = core.clone();
     core.ext.set_event_handler(move |msg: Value| {
-        let t = msg.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let t = msg
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         match t.as_str() {
             "token_captured" => {
                 println!("[worker] extension: token captured");
@@ -247,7 +265,9 @@ pub fn install_extension_event_handler(core: Arc<Core>) {
                 // tab-navigation, so a user browsing to an unrelated project
                 // mid-batch would hijack generation and scatter scenes into it.
                 if let Some(pid) = msg.get("projectId").and_then(|v| v.as_str()) {
-                    if crate::process::is_uuid(pid) && c.db.kv_get("flow.session_project").is_empty() {
+                    if crate::process::is_uuid(pid)
+                        && c.db.kv_get("flow.session_project").is_empty()
+                    {
                         let _ = c.db.kv_set("flow.session_project", pid);
                         println!("[worker] seeded Flow project id = {pid}");
                         c.dash.emit("flow:project", json!({ "project_id": pid }));
@@ -304,9 +324,10 @@ fn refresh_media_urls(core: &Arc<Core>, msg: &Value) {
                 Some(u) => u,
                 None => continue,
             };
-            let _ = core
-                .db
-                .execute(&format!("UPDATE scene SET {url_col} = ?1 WHERE {col} = ?2"), &[&url, &mid]);
+            let _ = core.db.execute(
+                &format!("UPDATE scene SET {url_col} = ?1 WHERE {col} = ?2"),
+                &[&url, &mid],
+            );
         }
 
         // Character reference image.
@@ -332,7 +353,8 @@ fn refresh_media_urls(core: &Arc<Core>, msg: &Value) {
             println!("[worker] media URLs came from tRPC: {src}");
         }
         println!("[worker] refreshed {applied} media URL(s) from the extension");
-        core.dash.emit("media_urls_refreshed", json!({ "count": applied }));
+        core.dash
+            .emit("media_urls_refreshed", json!({ "count": applied }));
 
         // These are short-lived signed URLs. Pull the assets down now so the
         // rescue is permanent instead of expiring again in a few hours.
@@ -343,7 +365,10 @@ fn refresh_media_urls(core: &Arc<Core>, msg: &Value) {
             handle.spawn(async move {
                 let rep = crate::mediastore::localize_project(&core2, "").await;
                 if rep.downloaded > 0 {
-                    println!("[worker] downloaded {} refreshed asset(s) locally", rep.downloaded);
+                    println!(
+                        "[worker] downloaded {} refreshed asset(s) locally",
+                        rep.downloaded
+                    );
                 }
             });
         }
@@ -380,13 +405,19 @@ mod tests {
             req("REGENERATE_VIDEO", "2026-01-01T00:00:01Z"),
             req("GENERATE_VIDEO", "2026-01-01T00:00:02Z"),
         ];
-        assert_eq!(db::str_of(pick_job(&rows).unwrap(), "type"), "GENERATE_VIDEO");
+        assert_eq!(
+            db::str_of(pick_job(&rows).unwrap(), "type"),
+            "GENERATE_VIDEO"
+        );
 
         let rows = vec![
             req("UPSCALE_VIDEO", "2026-01-01T00:00:00Z"),
             req("REGENERATE_VIDEO", "2026-01-01T00:00:01Z"),
         ];
-        assert_eq!(db::str_of(pick_job(&rows).unwrap(), "type"), "REGENERATE_VIDEO");
+        assert_eq!(
+            db::str_of(pick_job(&rows).unwrap(), "type"),
+            "REGENERATE_VIDEO"
+        );
 
         assert!(pick_job(&[]).is_none());
         assert!(pick_job(&[req("GENERATE_IMAGE", "x")]).is_none());
@@ -394,8 +425,14 @@ mod tests {
 
     #[test]
     fn url_column_mapping() {
-        assert_eq!(url_column_for("vertical_video_media_id"), Some("vertical_video_url"));
-        assert_eq!(url_column_for("horizontal_upscale_media_id"), Some("horizontal_upscale_url"));
+        assert_eq!(
+            url_column_for("vertical_video_media_id"),
+            Some("vertical_video_url")
+        );
+        assert_eq!(
+            url_column_for("horizontal_upscale_media_id"),
+            Some("horizontal_upscale_url")
+        );
         assert_eq!(url_column_for("bogus"), None);
     }
 }

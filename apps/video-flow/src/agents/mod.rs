@@ -32,7 +32,10 @@ pub struct TaskResult {
 
 impl TaskResult {
     pub fn new(data: Map<String, Value>, summary: impl Into<String>) -> Self {
-        TaskResult { data, summary: summary.into() }
+        TaskResult {
+            data,
+            summary: summary.into(),
+        }
     }
 }
 
@@ -98,7 +101,10 @@ impl Pool {
     }
 
     pub fn register(&self, agent: Arc<dyn Agent>) {
-        self.agents.write().unwrap().insert(agent.agent_type().to_string(), agent);
+        self.agents
+            .write()
+            .unwrap()
+            .insert(agent.agent_type().to_string(), agent);
     }
 
     pub fn unregister(&self, agent_type: &str) {
@@ -133,7 +139,9 @@ impl Pool {
         }
         let mut rest: Vec<&Arc<dyn Agent>> = agents
             .values()
-            .filter(|a| !self.builtin_order.contains(&a.agent_type()) && a.agent_type() != "orchestrator")
+            .filter(|a| {
+                !self.builtin_order.contains(&a.agent_type()) && a.agent_type() != "orchestrator"
+            })
             .collect();
         rest.sort_by_key(|a| a.agent_type().to_string());
         for a in rest {
@@ -174,7 +182,10 @@ impl Pool {
     /// system prompt = soul override or the agent's in-code default.
     pub fn system_prompt(&self, agent_type: &str) -> String {
         let soul = crate::souls::load(&self.core.souls_dir, agent_type);
-        let fallback = self.get(agent_type).map(|a| a.default_system()).unwrap_or_default();
+        let fallback = self
+            .get(agent_type)
+            .map(|a| a.default_system())
+            .unwrap_or_default();
         crate::souls::or_default(&soul, &fallback)
     }
 }

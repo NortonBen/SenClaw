@@ -69,7 +69,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "video-flow-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -144,7 +146,11 @@ fn count(state: &AppState, sql: &str) -> i64 {
 
 /// Resolve project_id + orientation for a scene (scene → video → project).
 /// Orientation preference: explicit arg > video.orientation > env default.
-fn scene_context(state: &AppState, scene_id: &str, ori_arg: &str) -> Result<(Row, String, String), String> {
+fn scene_context(
+    state: &AppState,
+    scene_id: &str,
+    ori_arg: &str,
+) -> Result<(Row, String, String), String> {
     let scene = state
         .core
         .db
@@ -163,7 +169,11 @@ fn scene_context(state: &AppState, scene_id: &str, ori_arg: &str) -> Result<(Row
         ori_arg.to_uppercase()
     } else {
         let vo = db::str_of(&video, "orientation");
-        if vo.is_empty() { crate::config::default_orientation() } else { vo }
+        if vo.is_empty() {
+            crate::config::default_orientation()
+        } else {
+            vo
+        }
     };
     Ok((scene, project_id, ori))
 }
@@ -556,7 +566,10 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             if pname.is_empty() {
                 return error_result("name là bắt buộc".into());
             }
-            let mut row = patch_from(args, &["name", "story", "description", "language", "material"]);
+            let mut row = patch_from(
+                args,
+                &["name", "story", "description", "language", "material"],
+            );
             if !row.contains_key("material") {
                 row.insert("material".into(), json!("realistic"));
             }
@@ -571,12 +584,18 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         }
         "vf_project_list" => {
             let limit = int(args, "limit", 50).clamp(1, 500);
-            let rows = match db.query("SELECT * FROM project ORDER BY created_at DESC LIMIT ?1", &[&limit]) {
+            let rows = match db.query(
+                "SELECT * FROM project ORDER BY created_at DESC LIMIT ?1",
+                &[&limit],
+            ) {
                 Ok(r) => r,
                 Err(e) => return error_result(e.to_string()),
             };
             let vcounts = db
-                .query("SELECT project_id, COUNT(*) AS n FROM video GROUP BY project_id", &[])
+                .query(
+                    "SELECT project_id, COUNT(*) AS n FROM video GROUP BY project_id",
+                    &[],
+                )
                 .unwrap_or_default();
             let items: Vec<Value> = rows
                 .into_iter()
@@ -664,15 +683,27 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             if pid.is_empty() {
                 return error_result("project_id là bắt buộc".into());
             }
-            let patch = patch_from(args, &[
-                "name", "story", "description", "status", "language", "material",
-                "narrator_voice", "allow_music", "allow_voice",
-            ]);
+            let patch = patch_from(
+                args,
+                &[
+                    "name",
+                    "story",
+                    "description",
+                    "status",
+                    "language",
+                    "material",
+                    "narrator_voice",
+                    "allow_music",
+                    "allow_voice",
+                ],
+            );
             if patch.is_empty() {
                 return error_result("không có trường nào để cập nhật".into());
             }
             match db.update("project", &pid, &patch) {
-                Ok(()) => json_result(json!({ "ok": true, "project": db.get("project", &pid).ok().flatten().map(row_value) })),
+                Ok(()) => json_result(
+                    json!({ "ok": true, "project": db.get("project", &pid).ok().flatten().map(row_value) }),
+                ),
                 Err(e) => error_result(e.to_string()),
             }
         }
@@ -697,10 +728,16 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 &[&pid],
             );
             let _ = db.execute("DELETE FROM video WHERE project_id = ?1", &[&pid]);
-            let _ = db.execute("DELETE FROM project_character WHERE project_id = ?1", &[&pid]);
+            let _ = db.execute(
+                "DELETE FROM project_character WHERE project_id = ?1",
+                &[&pid],
+            );
             match db.delete("project", &pid) {
                 Ok(_) => {
-                    state.core.dash.emit("pipeline:updated", json!({ "project_id": pid, "deleted": true }));
+                    state.core.dash.emit(
+                        "pipeline:updated",
+                        json!({ "project_id": pid, "deleted": true }),
+                    );
                     json_result(json!({ "ok": true, "deleted": pid }))
                 }
                 Err(e) => error_result(e.to_string()),
@@ -714,9 +751,19 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             if cname.is_empty() || desc.is_empty() {
                 return error_result("name và description là bắt buộc".into());
             }
-            let mut row = patch_from(args, &["name", "description", "image_prompt", "voice_description"]);
+            let mut row = patch_from(
+                args,
+                &["name", "description", "image_prompt", "voice_description"],
+            );
             let etype = s(args, "entity_type");
-            row.insert("entity_type".into(), json!(if etype.is_empty() { "CHARACTER".to_string() } else { etype.to_uppercase() }));
+            row.insert(
+                "entity_type".into(),
+                json!(if etype.is_empty() {
+                    "CHARACTER".to_string()
+                } else {
+                    etype.to_uppercase()
+                }),
+            );
             row.insert("slug".into(), json!(simple_slug(&cname)));
             let cid = match db.insert("character", &row) {
                 Ok(id) => id,
@@ -770,7 +817,10 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             if cid.is_empty() {
                 return error_result("character_id là bắt buộc".into());
             }
-            let mut patch = patch_from(args, &["name", "description", "image_prompt", "voice_description"]);
+            let mut patch = patch_from(
+                args,
+                &["name", "description", "image_prompt", "voice_description"],
+            );
             let etype = s(args, "entity_type");
             if !etype.is_empty() {
                 patch.insert("entity_type".into(), json!(etype.to_uppercase()));
@@ -802,10 +852,16 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let ori = s(args, "orientation");
             row.insert(
                 "orientation".into(),
-                json!(if ori.is_empty() { crate::config::default_orientation() } else { ori.to_uppercase() }),
+                json!(if ori.is_empty() {
+                    crate::config::default_orientation()
+                } else {
+                    ori.to_uppercase()
+                }),
             );
             match db.insert("video", &row) {
-                Ok(id) => json_result(json!({ "ok": true, "video": db.get("video", &id).ok().flatten().map(row_value) })),
+                Ok(id) => json_result(
+                    json!({ "ok": true, "video": db.get("video", &id).ok().flatten().map(row_value) }),
+                ),
                 Err(e) => error_result(e.to_string()),
             }
         }
@@ -822,7 +878,10 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             match rows {
                 Ok(rs) => {
                     let scounts = db
-                        .query("SELECT video_id, COUNT(*) AS n FROM scene GROUP BY video_id", &[])
+                        .query(
+                            "SELECT video_id, COUNT(*) AS n FROM scene GROUP BY video_id",
+                            &[],
+                        )
                         .unwrap_or_default();
                     let items: Vec<Value> = rs
                         .into_iter()
@@ -884,10 +943,21 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             if db.get("video", &vid).ok().flatten().is_none() {
                 return error_result(format!("video {vid} không tồn tại"));
             }
-            let mut row = patch_from(args, &[
-                "video_id", "display_order", "prompt", "video_prompt", "narrator_text",
-                "camera_movement", "character_names", "duration", "parent_scene_id", "chain_type",
-            ]);
+            let mut row = patch_from(
+                args,
+                &[
+                    "video_id",
+                    "display_order",
+                    "prompt",
+                    "video_prompt",
+                    "narrator_text",
+                    "camera_movement",
+                    "character_names",
+                    "duration",
+                    "parent_scene_id",
+                    "chain_type",
+                ],
+            );
             if !row.contains_key("chain_type") {
                 row.insert("chain_type".into(), json!("ROOT"));
             }
@@ -902,8 +972,13 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             }
             match db.insert("scene", &row) {
                 Ok(id) => {
-                    state.core.dash.emit("scene_updated", json!({ "scene_id": id }));
-                    json_result(json!({ "ok": true, "scene": db.get("scene", &id).ok().flatten().map(row_value) }))
+                    state
+                        .core
+                        .dash
+                        .emit("scene_updated", json!({ "scene_id": id }));
+                    json_result(
+                        json!({ "ok": true, "scene": db.get("scene", &id).ok().flatten().map(row_value) }),
+                    )
                 }
                 Err(e) => error_result(e.to_string()),
             }
@@ -913,16 +988,30 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             if sid.is_empty() {
                 return error_result("scene_id là bắt buộc".into());
             }
-            let patch = patch_from(args, &[
-                "prompt", "image_prompt", "video_prompt", "narrator_text", "camera_movement",
-                "character_names", "duration", "display_order", "shot_type", "transition_prompt",
-            ]);
+            let patch = patch_from(
+                args,
+                &[
+                    "prompt",
+                    "image_prompt",
+                    "video_prompt",
+                    "narrator_text",
+                    "camera_movement",
+                    "character_names",
+                    "duration",
+                    "display_order",
+                    "shot_type",
+                    "transition_prompt",
+                ],
+            );
             if patch.is_empty() {
                 return error_result("không có trường nào để cập nhật".into());
             }
             match db.update("scene", &sid, &patch) {
                 Ok(()) => {
-                    state.core.dash.emit("scene_updated", json!({ "scene_id": sid }));
+                    state
+                        .core
+                        .dash
+                        .emit("scene_updated", json!({ "scene_id": sid }));
                     json_result(json!({
                         "ok": true,
                         "scene": db.get("scene", &sid).ok().flatten().map(row_value),
@@ -941,7 +1030,10 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 Ok(0) => error_result(format!("scene {sid} không tồn tại")),
                 Ok(_) => {
                     let _ = db.execute("DELETE FROM request WHERE scene_id = ?1", &[&sid]);
-                    state.core.dash.emit("scene_updated", json!({ "scene_id": sid, "deleted": true }));
+                    state
+                        .core
+                        .dash
+                        .emit("scene_updated", json!({ "scene_id": sid, "deleted": true }));
                     json_result(json!({ "ok": true, "deleted": sid }))
                 }
                 Err(e) => error_result(e.to_string()),
@@ -965,14 +1057,32 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             }
             let ori = {
                 let o = s(args, "orientation");
-                if o.is_empty() { crate::config::default_orientation() } else { o.to_uppercase() }
+                if o.is_empty() {
+                    crate::config::default_orientation()
+                } else {
+                    o.to_uppercase()
+                }
             };
             let goal = s(args, "goal");
             let mode = {
                 let m = s(args, "mode");
-                if m.is_empty() { "production".to_string() } else { m }
+                if m.is_empty() {
+                    "production".to_string()
+                } else {
+                    m
+                }
             };
-            match crate::pipeline::create(&state.core, &state.pool, &pid, &script, &ori, &goal, &mode).await {
+            match crate::pipeline::create(
+                &state.core,
+                &state.pool,
+                &pid,
+                &script,
+                &ori,
+                &goal,
+                &mode,
+            )
+            .await
+            {
                 Ok((pipeline_id, task_count)) => json_result(json!({
                     "ok": true,
                     "pipeline_id": pipeline_id,
@@ -1019,11 +1129,17 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 "retry_task" => {
                     let tid = s(args, "task_id");
                     if tid.is_empty() {
-                        return error_result("retry_task cần task_id (lấy từ vf_pipeline_status)".into());
+                        return error_result(
+                            "retry_task cần task_id (lấy từ vf_pipeline_status)".into(),
+                        );
                     }
                     crate::pipeline::retry_task(&state.core, &id, &tid)
                 }
-                other => return error_result(format!("action không hợp lệ: {other} (start|pause|cancel|retry_task)")),
+                other => {
+                    return error_result(format!(
+                        "action không hợp lệ: {other} (start|pause|cancel|retry_task)"
+                    ))
+                }
             };
             match r {
                 Ok(()) => json_result(json!({
@@ -1078,7 +1194,9 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 Err(e) => return error_result(e),
             };
             match crate::wfclient::cancel_run(&run_id).await {
-                Ok(()) => json_result(json!({ "ok": true, "run_id": run_id, "status": "cancelled" })),
+                Ok(()) => {
+                    json_result(json!({ "ok": true, "run_id": run_id, "status": "cancelled" }))
+                }
                 Err(e) => error_result(e),
             }
         }
@@ -1094,7 +1212,9 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let project_id = s(args, "project_id");
 
             // Mode 3: all missing reference images of a project.
-            if flag(args, "all_refs") || (scene_id.is_empty() && character_id.is_empty() && !project_id.is_empty()) {
+            if flag(args, "all_refs")
+                || (scene_id.is_empty() && character_id.is_empty() && !project_id.is_empty())
+            {
                 if project_id.is_empty() {
                     return error_result("all_refs cần project_id".into());
                 }
@@ -1102,7 +1222,10 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 let pid = project_id.clone();
                 tokio::spawn(async move {
                     match crate::process::process_all_entities(&core, &pid).await {
-                        Ok(n) => core.dash.emit("request_completed", json!({ "project_id": pid, "kind": "all_refs", "generated": n })),
+                        Ok(n) => core.dash.emit(
+                            "request_completed",
+                            json!({ "project_id": pid, "kind": "all_refs", "generated": n }),
+                        ),
                         Err(e) => eprintln!("[mcp] process_all_entities {pid}: {e}"),
                     }
                 });
@@ -1128,7 +1251,9 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 let core = state.core.clone();
                 let (cid, pid2) = (character_id.clone(), pid.clone());
                 tokio::spawn(async move {
-                    if let Err(e) = crate::process::entity_image(&core, &cid, &pid2, regenerate).await {
+                    if let Err(e) =
+                        crate::process::entity_image(&core, &cid, &pid2, regenerate).await
+                    {
                         eprintln!("[mcp] entity_image {cid}: {e}");
                     }
                 });
@@ -1141,7 +1266,9 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
 
             // Mode 1: scene frame.
             if scene_id.is_empty() {
-                return error_result("cần scene_id, character_id hoặc project_id + all_refs".into());
+                return error_result(
+                    "cần scene_id, character_id hoặc project_id + all_refs".into(),
+                );
             }
             let (_, pid, ori) = match scene_context(state, &scene_id, &s(args, "orientation")) {
                 Ok(t) => t,
@@ -1151,8 +1278,14 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let core = state.core.clone();
             let (sid, pid2, ori2) = (scene_id.clone(), pid.clone(), ori.clone());
             tokio::spawn(async move {
-                let ep = if edit_prompt.is_empty() { None } else { Some(edit_prompt.as_str()) };
-                if let Err(e) = crate::process::scene_image(&core, &sid, &pid2, &ori2, regenerate, ep).await {
+                let ep = if edit_prompt.is_empty() {
+                    None
+                } else {
+                    Some(edit_prompt.as_str())
+                };
+                if let Err(e) =
+                    crate::process::scene_image(&core, &sid, &pid2, &ori2, regenerate, ep).await
+                {
                     eprintln!("[mcp] scene_image {sid}: {e}");
                 }
             });
@@ -1187,7 +1320,9 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let core = state.core.clone();
             let (sid, pid2, ori2) = (scene_id.clone(), pid.clone(), ori.clone());
             tokio::spawn(async move {
-                if let Err(e) = crate::process::scene_video(&core, &sid, &pid2, &ori2, regenerate).await {
+                if let Err(e) =
+                    crate::process::scene_video(&core, &sid, &pid2, &ori2, regenerate).await
+                {
                     eprintln!("[mcp] scene_video {sid}: {e}");
                 }
             });
@@ -1266,7 +1401,10 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 sql.push_str(&(params.len() + 1).to_string());
                 params.push(&status);
             }
-            sql.push_str(&format!(" ORDER BY updated_at DESC LIMIT ?{}", params.len() + 1));
+            sql.push_str(&format!(
+                " ORDER BY updated_at DESC LIMIT ?{}",
+                params.len() + 1
+            ));
             params.push(&limit);
             let recent = db.query(&sql, &params).unwrap_or_default();
             json_result(json!({
@@ -1308,13 +1446,20 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             }
             let raw = crate::souls::load_raw(&state.core.souls_dir, &t);
             if raw.is_empty() {
-                let types: Vec<String> = state.pool.list_info().iter().map(|a| a.agent_type.clone()).collect();
+                let types: Vec<String> = state
+                    .pool
+                    .list_info()
+                    .iter()
+                    .map(|a| a.agent_type.clone())
+                    .collect();
                 return error_result(format!(
                     "Chưa có soul file cho '{t}'. Các agent_type hiện có: {}",
                     types.join(", ")
                 ));
             }
-            json_result(json!({ "agent_type": t, "file": crate::souls::canonical_basename(&t), "content": raw }))
+            json_result(
+                json!({ "agent_type": t, "file": crate::souls::canonical_basename(&t), "content": raw }),
+            )
         }
         "vf_soul_set" => {
             let t = s(args, "agent_type");
@@ -1379,7 +1524,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             if let Some(sp) = args.get("speed").and_then(|x| x.as_f64()) {
                 params.insert("speed".into(), json!(sp));
             }
-            if args.get("regenerate").and_then(|x| x.as_bool()).unwrap_or(false) {
+            if args
+                .get("regenerate")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false)
+            {
                 params.insert("regenerate".into(), json!(true));
             }
             let prompt = Value::Object(params).to_string();
@@ -1416,7 +1565,7 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 "project_id": project_id,
                 "scenes_with_narrator_text": pending,
                 "note": "Đang tổng hợp giọng bằng TTS của SenClaw (không cần Chrome extension). \
-Theo dõi narrator_audio_status qua vf_scene_list.",
+            Theo dõi narrator_audio_status qua vf_scene_list.",
             }))
         }
         "vf_media_localize" => {
@@ -1500,7 +1649,10 @@ Theo dõi narrator_audio_status qua vf_scene_list.",
         }
         "vf_status" => {
             let pipelines = db
-                .query("SELECT status, COUNT(*) AS n FROM dag_parents GROUP BY status", &[])
+                .query(
+                    "SELECT status, COUNT(*) AS n FROM dag_parents GROUP BY status",
+                    &[],
+                )
                 .unwrap_or_default();
             json_result(json!({
                 "app": "video-flow",

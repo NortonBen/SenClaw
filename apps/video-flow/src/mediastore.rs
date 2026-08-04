@@ -42,7 +42,9 @@ fn default_media_ext(media_type: &str) -> &'static str {
 /// returns the existing row instead of duplicating the file.
 pub async fn store_remote(core: &Core, raw_url: &str, media_type: &str) -> Result<String, String> {
     let db: &Db = &core.db;
-    if let Ok(Some(existing)) = db.query_one("SELECT id FROM media WHERE original_url = ?1", &[&raw_url]) {
+    if let Ok(Some(existing)) =
+        db.query_one("SELECT id FROM media WHERE original_url = ?1", &[&raw_url])
+    {
         return Ok(format!("/api/media/{}/file", db::str_of(&existing, "id")));
     }
 
@@ -66,7 +68,10 @@ pub async fn store_remote(core: &Core, raw_url: &str, media_type: &str) -> Resul
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let bytes = resp.bytes().await.map_err(|e| format!("download body: {e}"))?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("download body: {e}"))?;
     if bytes.is_empty() {
         return Err("empty response body".to_string());
     }
@@ -91,7 +96,12 @@ pub async fn store_remote(core: &Core, raw_url: &str, media_type: &str) -> Resul
     let dest_path = core.media_dir.join(&file_name);
     std::fs::write(&dest_path, &bytes).map_err(|e| format!("write: {e}"))?;
 
-    let mime_type = content_type.split(';').next().unwrap_or("").trim().to_string();
+    let mime_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let (w_px, h_px) = crate::media::probe_dimensions(media_type, &dest_path).await;
 
     let mut cm = Map::new();
@@ -127,7 +137,11 @@ pub async fn store_bytes(
     }
     let id = db::new_id();
     std::fs::create_dir_all(&core.media_dir).map_err(|e| format!("mkdir: {e}"))?;
-    let ext = if ext.starts_with('.') { ext.to_string() } else { format!(".{ext}") };
+    let ext = if ext.starts_with('.') {
+        ext.to_string()
+    } else {
+        format!(".{ext}")
+    };
     let file_name = format!("{id}{ext}");
     let dest_path = core.media_dir.join(&file_name);
     std::fs::write(&dest_path, bytes).map_err(|e| format!("write: {e}"))?;
@@ -137,7 +151,14 @@ pub async fn store_bytes(
     cm.insert("id".into(), json!(id));
     cm.insert("file_name".into(), json!(file_name));
     cm.insert("file_path".into(), json!(dest_path.to_string_lossy()));
-    cm.insert("mime_type".into(), json!(if media_type == "video" { "video/mp4" } else { "application/octet-stream" }));
+    cm.insert(
+        "mime_type".into(),
+        json!(if media_type == "video" {
+            "video/mp4"
+        } else {
+            "application/octet-stream"
+        }),
+    );
     cm.insert("size_bytes".into(), json!(bytes.len()));
     cm.insert("media_type".into(), json!(media_type));
     if w_px > 0 && h_px > 0 {
@@ -263,7 +284,16 @@ pub async fn localize_project(core: &Core, project_id: &str) -> LocalizeReport {
             rep.skipped += 1;
             continue;
         }
-        match localize_column(core, "character", &cid, "reference_image_url", &url, "image").await {
+        match localize_column(
+            core,
+            "character",
+            &cid,
+            "reference_image_url",
+            &url,
+            "image",
+        )
+        .await
+        {
             Some(_) => rep.downloaded += 1,
             None => {
                 rep.failed += 1;

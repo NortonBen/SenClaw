@@ -177,7 +177,10 @@ pub fn is_done(tasks: &[Task]) -> bool {
 
 pub fn load_tasks(db: &Db, parent_id: &str) -> Result<Vec<Task>, String> {
     let rows = db
-        .query("SELECT * FROM dag_tasks WHERE parent_id = ?1 ORDER BY rowid", &[&parent_id])
+        .query(
+            "SELECT * FROM dag_tasks WHERE parent_id = ?1 ORDER BY rowid",
+            &[&parent_id],
+        )
         .map_err(|e| e.to_string())?;
     Ok(rows
         .into_iter()
@@ -264,13 +267,15 @@ pub fn update_task(
     if !completed_at.is_empty() {
         fields.insert("completed_at".into(), json!(completed_at));
     }
-    db.update("dag_tasks", task_id, &fields).map_err(|e| e.to_string())
+    db.update("dag_tasks", task_id, &fields)
+        .map_err(|e| e.to_string())
 }
 
 pub fn update_parent_status(db: &Db, parent_id: &str, status: &str) -> Result<(), String> {
     let mut fields = Map::new();
     fields.insert("status".into(), json!(status));
-    db.update("dag_parents", parent_id, &fields).map_err(|e| e.to_string())
+    db.update("dag_parents", parent_id, &fields)
+        .map_err(|e| e.to_string())
 }
 
 // ---- engine (engine.go) ----
@@ -349,7 +354,14 @@ impl Engine {
             for (t, dep) in blocked_tasks(&p.tasks) {
                 let now = db::now();
                 let msg = format!("blocked: {dep} failed");
-                let _ = update_task(db, &t.id, Status::Error, Some(json!({"error": msg})), &now, &now);
+                let _ = update_task(
+                    db,
+                    &t.id,
+                    Status::Error,
+                    Some(json!({"error": msg})),
+                    &now,
+                    &now,
+                );
                 eng.emit_agent_state(&p.id, &t, "error", Some(&msg), None);
                 eprintln!("[dag] task {} blocked by failed dep {dep:?}", short(&t.id));
             }
@@ -378,9 +390,10 @@ impl Engine {
 
             if is_done(&p.tasks) && p.status == "active" {
                 let _ = update_parent_status(db, &p.id, "done");
-                eng.core
-                    .dash
-                    .emit("pipeline:updated", json!({"pipeline_id": p.id, "status": "done"}));
+                eng.core.dash.emit(
+                    "pipeline:updated",
+                    json!({"pipeline_id": p.id, "status": "done"}),
+                );
             }
         }
     }
@@ -392,7 +405,10 @@ impl Engine {
         t: Task,
     ) {
         let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
-        self.active.lock().unwrap().insert(t.id.clone(), ActiveEntry::Running(cancel_tx));
+        self.active
+            .lock()
+            .unwrap()
+            .insert(t.id.clone(), ActiveEntry::Running(cancel_tx));
         let db = self.core.db.clone();
 
         // Skip disabled built-ins as done/skipped.
@@ -406,20 +422,35 @@ impl Engine {
                 &now,
                 &now,
             );
-            self.emit_agent_state(&p.id, &t, "done", None, Some("skipped: agent disabled in settings"));
+            self.emit_agent_state(
+                &p.id,
+                &t,
+                "done",
+                None,
+                Some("skipped: agent disabled in settings"),
+            );
             self.emit_pipeline_progress(&p.id);
             self.active.lock().unwrap().remove(&t.id);
             return;
         }
 
-        eprintln!("[dag] start task {} label={} agent={}", short(&t.id), t.label, t.agent_type);
+        eprintln!(
+            "[dag] start task {} label={} agent={}",
+            short(&t.id),
+            t.label,
+            t.agent_type
+        );
         let now = db::now();
         let _ = update_task(&db, &t.id, Status::Active, None, &now, "");
         self.emit_agent_state(&p.id, &t, "active", None, None);
 
         // Upstream results for prompt injection (token-conscious):
         // input_from when non-empty (explicit override), else depends_on labels.
-        let want: &[String] = if !t.input_from.is_empty() { &t.input_from } else { &t.depends_on };
+        let want: &[String] = if !t.input_from.is_empty() {
+            &t.input_from
+        } else {
+            &t.depends_on
+        };
         let mut upstream: HashMap<String, String> = HashMap::new();
         for sib in &p.tasks {
             if sib.status != Status::Done || sib.result.is_empty() {
@@ -483,19 +514,40 @@ impl Engine {
             }
             Outcome::Failed(e) => {
                 eprintln!("[dag] task {} error: {e}", short(&t.id));
-                let _ = update_task(&db, &t.id, Status::Error, Some(json!({"error": e})), "", &done_at);
+                let _ = update_task(
+                    &db,
+                    &t.id,
+                    Status::Error,
+                    Some(json!({"error": e})),
+                    "",
+                    &done_at,
+                );
                 self.emit_agent_state(&p.id, &t, "error", Some(&e), None);
             }
             Outcome::Cancelled => {
                 let msg = "task cancelled".to_string();
                 eprintln!("[dag] task {} cancelled", short(&t.id));
-                let _ = update_task(&db, &t.id, Status::Error, Some(json!({"error": msg})), "", &done_at);
+                let _ = update_task(
+                    &db,
+                    &t.id,
+                    Status::Error,
+                    Some(json!({"error": msg})),
+                    "",
+                    &done_at,
+                );
                 self.emit_agent_state(&p.id, &t, "error", Some(&msg), None);
             }
             Outcome::TimedOut => {
                 let msg = format!("task timeout after {}s", t.timeout_seconds);
                 eprintln!("[dag] task {} timeout", short(&t.id));
-                let _ = update_task(&db, &t.id, Status::Timeout, Some(json!({"error": msg})), "", &done_at);
+                let _ = update_task(
+                    &db,
+                    &t.id,
+                    Status::Timeout,
+                    Some(json!({"error": msg})),
+                    "",
+                    &done_at,
+                );
                 self.emit_agent_state(&p.id, &t, "timeout", Some(&msg), None);
             }
         }
@@ -585,8 +637,11 @@ mod tests {
             t("b", &["a"], Status::Registered),
         ];
         let sorted = topological_sort(&tasks).unwrap();
-        let pos: HashMap<&str, usize> =
-            sorted.iter().enumerate().map(|(i, x)| (x.label.as_str(), i)).collect();
+        let pos: HashMap<&str, usize> = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, x)| (x.label.as_str(), i))
+            .collect();
         assert!(pos["a"] < pos["b"]);
         assert!(pos["b"] < pos["c"]);
         assert_eq!(sorted.len(), 3);
@@ -594,7 +649,10 @@ mod tests {
 
     #[test]
     fn topological_sort_detects_cycle() {
-        let tasks = vec![t("a", &["b"], Status::Registered), t("b", &["a"], Status::Registered)];
+        let tasks = vec![
+            t("a", &["b"], Status::Registered),
+            t("b", &["a"], Status::Registered),
+        ];
         assert!(topological_sort(&tasks).is_err());
     }
 
