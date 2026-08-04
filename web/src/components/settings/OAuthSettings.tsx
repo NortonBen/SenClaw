@@ -553,7 +553,13 @@ export const OAuthSettings: React.FC = () => {
 
       <Collapse
         ghost
-        style={{ marginTop: 12, marginBottom: 20 }}
+        style={{
+          marginTop: 12,
+          marginBottom: 20,
+          background: token.colorWarningBg,
+          border: `1px solid ${token.colorWarningBorder}`,
+          borderRadius: token.borderRadiusLG,
+        }}
         items={[
           {
             key: 'risk',
@@ -576,12 +582,6 @@ export const OAuthSettings: React.FC = () => {
             ),
           },
         ]}
-        style={{
-          background: token.colorWarningBg,
-          border: `1px solid ${token.colorWarningBorder}`,
-          borderRadius: token.borderRadiusLG,
-          marginBottom: 20,
-        }}
       />
 
       {/* ---- Subscription providers ---- */}
