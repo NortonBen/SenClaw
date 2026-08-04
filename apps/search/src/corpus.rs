@@ -73,7 +73,8 @@ pub fn extract(filename: &str, bytes: &[u8]) -> Result<Extracted> {
 /// PDF text layer. A scan has none — that must be an error, because a document
 /// stored with no text silently answers every future query with nothing.
 fn from_pdf(bytes: &[u8]) -> Result<Extracted> {
-    let text = pdf_extract::extract_text_from_mem(bytes).map_err(|e| anyhow!("đọc PDF lỗi: {e}"))?;
+    let text =
+        pdf_extract::extract_text_from_mem(bytes).map_err(|e| anyhow!("đọc PDF lỗi: {e}"))?;
     let trimmed = text.trim();
     if trimmed.chars().count() < 20 {
         bail!(
@@ -360,7 +361,10 @@ mod tests {
         let viet = "lãi suất điều hành ".repeat(400);
         for c in chunk(&viet) {
             assert!(c.is_char_boundary(0));
-            assert!(!c.contains('\u{FFFD}'), "replacement char = split codepoint");
+            assert!(
+                !c.contains('\u{FFFD}'),
+                "replacement char = split codepoint"
+            );
         }
     }
 

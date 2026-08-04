@@ -30,7 +30,8 @@ const STALE_QUEUE_AFTER_HOURS: i64 = 24;
 /// Fail anything left `processing` by a crash or restart. Runs once at boot,
 /// before the poller starts, so a stale row can't occupy a concurrency slot.
 pub fn reconcile_orphans(db: &Db) {
-    match db.reconcile_orphans("Ứng dụng khởi động lại, tiến trình bị gián đoạn") {
+    match db.reconcile_orphans("Ứng dụng khởi động lại, tiến trình bị gián đoạn")
+    {
         Ok(n) if n > 0 => println!("[process] reset {n} orphaned process(es) to failed"),
         Ok(_) => {}
         Err(e) => eprintln!("[process] orphan reconcile failed: {e}"),
@@ -245,7 +246,16 @@ fn report(
 
 fn fail(core: &Arc<Core>, id: i64, message: &str) {
     eprintln!("[process {id}] failed: {message}");
-    report(core, id, status::FAILED, stage::FAILED, 0, 0, Some(message), None);
+    report(
+        core,
+        id,
+        status::FAILED,
+        stage::FAILED,
+        0,
+        0,
+        Some(message),
+        None,
+    );
 }
 
 fn cancelled(core: &Arc<Core>, id: i64) {
@@ -280,12 +290,21 @@ fn get_or_generate_chunks(db: &Db, story_id: i64) -> anyhow::Result<Vec<String>>
         .story_text(story_id)?
         .ok_or_else(|| anyhow::anyhow!("không tìm thấy truyện {story_id}"))?;
 
-    let mut min_size = db.setting_i64("hybrid_split_min_size", (crate::llm::MAX_CHUNK_CHARS as i64) * 3 / 5).max(1) as usize;
-    let mut max_size = db.setting_i64("hybrid_split_max_size", crate::llm::MAX_CHUNK_CHARS as i64).max(1) as usize;
+    let mut min_size = db
+        .setting_i64(
+            "hybrid_split_min_size",
+            (crate::llm::MAX_CHUNK_CHARS as i64) * 3 / 5,
+        )
+        .max(1) as usize;
+    let mut max_size = db
+        .setting_i64("hybrid_split_max_size", crate::llm::MAX_CHUNK_CHARS as i64)
+        .max(1) as usize;
     if min_size > max_size {
         std::mem::swap(&mut min_size, &mut max_size);
     }
-    let threshold = db.setting_f64("hybrid_split_threshold", 0.2).clamp(0.0, 1.0);
+    let threshold = db
+        .setting_f64("hybrid_split_threshold", 0.2)
+        .clamp(0.0, 1.0);
 
     let chunks = text::hybrid_split(&text_body, min_size, max_size, threshold);
     db.save_chunks(story_id, &chunks)?;
@@ -323,7 +342,16 @@ async fn run_rewrite_job(core: Arc<Core>, id: i64, token: CancelToken) {
         return;
     };
 
-    report(&core, id, status::PROCESSING, stage::ANALYZING, 0, 0, None, None);
+    report(
+        &core,
+        id,
+        status::PROCESSING,
+        stage::ANALYZING,
+        0,
+        0,
+        None,
+        None,
+    );
 
     // ---- split ----
     let chunks = match get_or_generate_chunks(&core.db, story_id) {
@@ -360,7 +388,10 @@ async fn run_rewrite_job(core: Arc<Core>, id: i64, token: CancelToken) {
     // don't move this marker.
     let resume_from = (0..total).take_while(|i| completed.contains(i)).count() as i64;
     if resume_from > 0 {
-        println!("[process {id}] resuming at chunk {}/{total}", resume_from + 1);
+        println!(
+            "[process {id}] resuming at chunk {}/{total}",
+            resume_from + 1
+        );
     }
 
     let system_instruction = proc
@@ -406,7 +437,16 @@ async fn run_rewrite_job(core: Arc<Core>, id: i64, token: CancelToken) {
         }
 
         let first = batch[0];
-        match report(&core, id, status::PROCESSING, stage::REWRITING, first, total, None, None) {
+        match report(
+            &core,
+            id,
+            status::PROCESSING,
+            stage::REWRITING,
+            first,
+            total,
+            None,
+            None,
+        ) {
             Report::Applied => {}
             Report::Superseded => return,
             Report::Failed(e) => return fail(&core, id, &format!("Lỗi cập nhật tiến độ: {e}")),
@@ -430,7 +470,10 @@ async fn run_rewrite_job(core: Arc<Core>, id: i64, token: CancelToken) {
                     creativity_ratio: proc.creativity_ratio,
                     target_length_variance: proc.target_length_variance,
                 };
-                (i, llm::rewrite_chunk(system, source, &params, max_output_tokens).await)
+                (
+                    i,
+                    llm::rewrite_chunk(system, source, &params, max_output_tokens).await,
+                )
             }
         }))
         .await;
@@ -506,13 +549,28 @@ async fn run_rewrite_job(core: Arc<Core>, id: i64, token: CancelToken) {
     }
 
     // ---- assemble & save ----
-    report(&core, id, status::PROCESSING, stage::SAVING, total, total, None, None);
+    report(
+        &core,
+        id,
+        status::PROCESSING,
+        stage::SAVING,
+        total,
+        total,
+        None,
+        None,
+    );
 
     // Reassembled from the DB rather than from memory, so a resumed run and a
     // straight-through run produce byte-identical output.
     let full = match core.db.assemble_rewrite(id, total) {
         Ok(t) if !t.is_empty() => t,
-        Ok(_) => return fail(&core, id, "Nội dung viết lại rỗng, không thể lưu truyện mới"),
+        Ok(_) => {
+            return fail(
+                &core,
+                id,
+                "Nội dung viết lại rỗng, không thể lưu truyện mới",
+            )
+        }
         Err(e) => return fail(&core, id, &format!("Lỗi ghép nội dung: {e}")),
     };
 
@@ -582,8 +640,7 @@ mod tests {
             .map(|i| format!("Đoạn {i} của câu chuyện dài này kể về nhiều sự kiện."))
             .collect::<Vec<_>>()
             .join("\n");
-        let sid = db
-            .create_story("T", &body).unwrap();
+        let sid = db.create_story("T", &body).unwrap();
         db.set_setting("hybrid_split_min_size", "200").unwrap();
         db.set_setting("hybrid_split_max_size", "400").unwrap();
 
@@ -598,8 +655,7 @@ mod tests {
     fn swapped_split_bounds_are_corrected() {
         let db = Db::open_memory().unwrap();
         let body = "Một đoạn.\nHai đoạn.\nBa đoạn.".to_string();
-        let sid = db
-            .create_story("T", &body).unwrap();
+        let sid = db.create_story("T", &body).unwrap();
         db.set_setting("hybrid_split_min_size", "900").unwrap();
         db.set_setting("hybrid_split_max_size", "100").unwrap();
 
@@ -664,8 +720,7 @@ mod tests {
     #[test]
     fn resume_scan_stops_at_the_first_gap() {
         let db = Db::open_memory().unwrap();
-        let sid = db
-            .create_story("T", "x").unwrap();
+        let sid = db.create_story("T", "x").unwrap();
         let pid = db
             .create_process(&NewProcess {
                 story_id: sid,

@@ -22,7 +22,9 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 }
 
 pub fn root_router(state: AppState) -> Router {
-    Router::new().route("/health", get(health)).with_state(state)
+    Router::new()
+        .route("/health", get(health))
+        .with_state(state)
 }
 
 pub fn api_router(state: AppState) -> Router {
@@ -188,7 +190,10 @@ async fn delete_corpus(State(state): State<AppState>, Path(id): Path<String>) ->
 /// Every file is reported individually: a batch where one PDF is a scan must
 /// say which one failed and why, not fail the whole upload or, worse, succeed
 /// silently with one document missing.
-async fn upload_corpus(State(state): State<AppState>, mut mp: axum::extract::Multipart) -> Response {
+async fn upload_corpus(
+    State(state): State<AppState>,
+    mut mp: axum::extract::Multipart,
+) -> Response {
     let mut added = Vec::new();
     let mut failed = Vec::new();
 
@@ -237,7 +242,10 @@ async fn upload_corpus(State(state): State<AppState>, mut mp: axum::extract::Mul
     }
 
     if added.is_empty() && !failed.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "added": [], "failed": failed })))
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "added": [], "failed": failed })),
+        )
             .into_response();
     }
     respond(json!({ "added": added, "failed": failed }))

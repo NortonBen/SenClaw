@@ -10,7 +10,8 @@ use serde_json::{json, Value};
 /// Every codec the app understands. `jwt` is decode-only.
 pub const CODECS: [&str; 6] = ["base64", "base64url", "hex", "url", "escape", "msgpack"];
 
-const B64: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+const B64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
 const B64URL: base64::engine::general_purpose::GeneralPurpose =
     base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
@@ -115,8 +116,7 @@ pub fn unescape_json_string(s: &str) -> Result<String, String> {
     } else {
         format!("\"{t}\"")
     };
-    serde_json::from_str::<String>(&quoted)
-        .map_err(|e| format!("chuỗi escape không hợp lệ: {e}"))
+    serde_json::from_str::<String>(&quoted).map_err(|e| format!("chuỗi escape không hợp lệ: {e}"))
 }
 
 // ---------------------------------------------------------------- MessagePack
@@ -254,7 +254,8 @@ mod tests {
     #[test]
     fn jwt_decodes_without_claiming_verification() {
         // {"alg":"HS256","typ":"JWT"} . {"sub":"1","iat":1700000000} . sig
-        let token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiaWF0IjoxNzAwMDAwMDAwfQ.abc";
+        let token =
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiaWF0IjoxNzAwMDAwMDAwfQ.abc";
         let v = jwt_decode(token).unwrap();
         assert_eq!(v["header"]["alg"], json!("HS256"));
         assert_eq!(v["payload"]["sub"], json!("1"));

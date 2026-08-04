@@ -28,7 +28,9 @@ pub struct JsonRpcRequest {
     pub params: Option<Value>,
 }
 
-pub async fn mcp_sse(State(state): State<AppState>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+pub async fn mcp_sse(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.mcp_tx.subscribe();
     let stream = async_stream::stream! {
         yield Ok(Event::default().event("endpoint").data("/api/mcp/message".to_string()));
@@ -49,7 +51,10 @@ fn error_result(text: String) -> Value {
     json!({ "isError": true, "content": [{ "type": "text", "text": text }] })
 }
 
-pub async fn mcp_message(State(state): State<AppState>, Json(req): Json<JsonRpcRequest>) -> Json<Value> {
+pub async fn mcp_message(
+    State(state): State<AppState>,
+    Json(req): Json<JsonRpcRequest>,
+) -> Json<Value> {
     let reply = |result: Value| -> Json<Value> {
         let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
         let _ = state.mcp_tx.send(resp.to_string());
@@ -62,7 +67,9 @@ pub async fn mcp_message(State(state): State<AppState>, Json(req): Json<JsonRpcR
             "serverInfo": { "name": "facebook-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -115,7 +122,9 @@ fn tools_list() -> Value {
 }
 
 fn str_arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
-    args.get(key).and_then(|x| x.as_str()).filter(|s| !s.is_empty())
+    args.get(key)
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
 }
 
 async fn call_tool(s: &AppState, name: &str, args: &Value) -> Value {
@@ -162,9 +171,16 @@ async fn call_tool(s: &AppState, name: &str, args: &Value) -> Value {
                 return error_result("thiếu 'message'".into());
             };
             let image_url = str_arg(args, "image_url").unwrap_or("");
-            let pid = str_arg(args, "page_id").map(|s| s.to_string()).or_else(|| s.db.active_page_id()).unwrap_or_default();
+            let pid = str_arg(args, "page_id")
+                .map(|s| s.to_string())
+                .or_else(|| s.db.active_page_id())
+                .unwrap_or_default();
             let d = DraftInput {
-                kind: if image_url.is_empty() { "post".into() } else { "photo".into() },
+                kind: if image_url.is_empty() {
+                    "post".into()
+                } else {
+                    "photo".into()
+                },
                 page_id: pid,
                 message: message.into(),
                 link: str_arg(args, "link").unwrap_or("").into(),
@@ -175,11 +191,23 @@ async fn call_tool(s: &AppState, name: &str, args: &Value) -> Value {
             json_result(&api::enqueue_or_send(s, d).await)
         }
         "fb_post_edit" => {
-            let (Some(post_id), Some(message)) = (str_arg(args, "post_id"), str_arg(args, "message")) else {
+            let (Some(post_id), Some(message)) =
+                (str_arg(args, "post_id"), str_arg(args, "message"))
+            else {
                 return error_result("cần 'post_id' và 'message'".into());
             };
-            let pid = str_arg(args, "page_id").map(|s| s.to_string()).or_else(|| s.db.active_page_id()).unwrap_or_default();
-            let d = DraftInput { kind: "edit".into(), page_id: pid, target_id: post_id.into(), message: message.into(), source: "agent".into(), ..Default::default() };
+            let pid = str_arg(args, "page_id")
+                .map(|s| s.to_string())
+                .or_else(|| s.db.active_page_id())
+                .unwrap_or_default();
+            let d = DraftInput {
+                kind: "edit".into(),
+                page_id: pid,
+                target_id: post_id.into(),
+                message: message.into(),
+                source: "agent".into(),
+                ..Default::default()
+            };
             json_result(&api::enqueue_or_send(s, d).await)
         }
         "fb_post_delete" => {
@@ -196,32 +224,64 @@ async fn call_tool(s: &AppState, name: &str, args: &Value) -> Value {
             json_result(&api::comments_value(s, object_id, str_arg(args, "page_id"), limit).await)
         }
         "fb_comment_create" => {
-            let (Some(object_id), Some(message)) = (str_arg(args, "object_id"), str_arg(args, "message")) else {
+            let (Some(object_id), Some(message)) =
+                (str_arg(args, "object_id"), str_arg(args, "message"))
+            else {
                 return error_result("cần 'object_id' và 'message'".into());
             };
-            let pid = str_arg(args, "page_id").map(|s| s.to_string()).or_else(|| s.db.active_page_id()).unwrap_or_default();
-            let d = DraftInput { kind: "comment".into(), page_id: pid, target_id: object_id.into(), message: message.into(), source: "agent".into(), ..Default::default() };
+            let pid = str_arg(args, "page_id")
+                .map(|s| s.to_string())
+                .or_else(|| s.db.active_page_id())
+                .unwrap_or_default();
+            let d = DraftInput {
+                kind: "comment".into(),
+                page_id: pid,
+                target_id: object_id.into(),
+                message: message.into(),
+                source: "agent".into(),
+                ..Default::default()
+            };
             json_result(&api::enqueue_or_send(s, d).await)
         }
         "fb_comment_reply" => {
             let Some(comment_id) = str_arg(args, "comment_id") else {
                 return error_result("thiếu 'comment_id'".into());
             };
-            let pid = str_arg(args, "page_id").map(|s| s.to_string()).or_else(|| s.db.active_page_id()).unwrap_or_default();
+            let pid = str_arg(args, "page_id")
+                .map(|s| s.to_string())
+                .or_else(|| s.db.active_page_id())
+                .unwrap_or_default();
             let (message, model) = match str_arg(args, "message") {
                 Some(m) => (m.to_string(), String::new()),
                 None => {
-                    let page_name = s
-                        .db
-                        .list_pages()
-                        .into_iter()
-                        .find(|p| p.get("page_id").and_then(|x| x.as_str()) == Some(&pid))
-                        .and_then(|p| p.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
-                        .unwrap_or_else(|| "Trang".into());
-                    crate::llm::compose_reply(&s.sc, &page_name, str_arg(args, "comment_text").unwrap_or(""), str_arg(args, "hint").unwrap_or("")).await
+                    let page_name =
+                        s.db.list_pages()
+                            .into_iter()
+                            .find(|p| p.get("page_id").and_then(|x| x.as_str()) == Some(&pid))
+                            .and_then(|p| {
+                                p.get("name")
+                                    .and_then(|x| x.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                            .unwrap_or_else(|| "Trang".into());
+                    crate::llm::compose_reply(
+                        &s.sc,
+                        &page_name,
+                        str_arg(args, "comment_text").unwrap_or(""),
+                        str_arg(args, "hint").unwrap_or(""),
+                    )
+                    .await
                 }
             };
-            let d = DraftInput { kind: "reply".into(), page_id: pid, target_id: comment_id.into(), message, model, source: "agent".into(), ..Default::default() };
+            let d = DraftInput {
+                kind: "reply".into(),
+                page_id: pid,
+                target_id: comment_id.into(),
+                message,
+                model,
+                source: "agent".into(),
+                ..Default::default()
+            };
             json_result(&api::enqueue_or_send(s, d).await)
         }
         "fb_like" => {
@@ -240,36 +300,98 @@ async fn call_tool(s: &AppState, name: &str, args: &Value) -> Value {
                 return error_result("thiếu 'conversation_id'".into());
             };
             let limit = args.get("limit").and_then(|x| x.as_i64()).unwrap_or(25);
-            json_result(&api::conversation_messages_value(s, cid, str_arg(args, "page_id"), limit).await)
+            json_result(
+                &api::conversation_messages_value(s, cid, str_arg(args, "page_id"), limit).await,
+            )
         }
         "fb_message_reply" => {
             let Some(recipient) = str_arg(args, "recipient_id") else {
                 return error_result("thiếu 'recipient_id'".into());
             };
-            json_result(&api::message_reply_value(s, str_arg(args, "page_id"), recipient, str_arg(args, "message"), str_arg(args, "customer_msg"), str_arg(args, "hint"), "agent").await)
+            json_result(
+                &api::message_reply_value(
+                    s,
+                    str_arg(args, "page_id"),
+                    recipient,
+                    str_arg(args, "message"),
+                    str_arg(args, "customer_msg"),
+                    str_arg(args, "hint"),
+                    "agent",
+                )
+                .await,
+            )
         }
-        "fb_analyze" => json_result(&api::analyze_value(s, str_arg(args, "post_id"), str_arg(args, "message"), str_arg(args, "page_id")).await),
-        "fb_page_insights" => json_result(&api::page_insights_value(s, str_arg(args, "page_id"), str_arg(args, "metric"), str_arg(args, "period")).await),
+        "fb_analyze" => json_result(
+            &api::analyze_value(
+                s,
+                str_arg(args, "post_id"),
+                str_arg(args, "message"),
+                str_arg(args, "page_id"),
+            )
+            .await,
+        ),
+        "fb_page_insights" => json_result(
+            &api::page_insights_value(
+                s,
+                str_arg(args, "page_id"),
+                str_arg(args, "metric"),
+                str_arg(args, "period"),
+            )
+            .await,
+        ),
         "fb_post_insights" => {
             let Some(post_id) = str_arg(args, "post_id") else {
                 return error_result("thiếu 'post_id'".into());
             };
-            json_result(&api::post_insights_value(s, post_id, str_arg(args, "page_id"), str_arg(args, "metric")).await)
+            json_result(
+                &api::post_insights_value(
+                    s,
+                    post_id,
+                    str_arg(args, "page_id"),
+                    str_arg(args, "metric"),
+                )
+                .await,
+            )
         }
         "fb_ad_accounts" => json_result(&api::ad_accounts_value(s).await),
         "fb_ad_select_account" => {
             let Some(id) = str_arg(args, "account_id") else {
                 return error_result("thiếu 'account_id'".into());
             };
-            let full = if id.starts_with("act_") { id.to_string() } else { format!("act_{id}") };
+            let full = if id.starts_with("act_") {
+                id.to_string()
+            } else {
+                format!("act_{id}")
+            };
             let _ = s.db.set_setting("active_ad_account", &full);
             json_result(&json!({ "ok": true, "active_ad_account": full }))
         }
-        "fb_ad_campaigns" => json_result(&api::ad_campaigns_value(s, str_arg(args, "account_id")).await),
-        "fb_ads_insights" => json_result(&api::ads_insights_value(s, str_arg(args, "object_id"), str_arg(args, "level"), str_arg(args, "date_preset")).await),
-        "fb_ads_analyze" => json_result(&api::ads_analyze_value(s, str_arg(args, "object_id"), str_arg(args, "level"), str_arg(args, "date_preset"), str_arg(args, "currency")).await),
+        "fb_ad_campaigns" => {
+            json_result(&api::ad_campaigns_value(s, str_arg(args, "account_id")).await)
+        }
+        "fb_ads_insights" => json_result(
+            &api::ads_insights_value(
+                s,
+                str_arg(args, "object_id"),
+                str_arg(args, "level"),
+                str_arg(args, "date_preset"),
+            )
+            .await,
+        ),
+        "fb_ads_analyze" => json_result(
+            &api::ads_analyze_value(
+                s,
+                str_arg(args, "object_id"),
+                str_arg(args, "level"),
+                str_arg(args, "date_preset"),
+                str_arg(args, "currency"),
+            )
+            .await,
+        ),
         "fb_ad_status" => {
-            let (Some(entity_id), Some(status)) = (str_arg(args, "entity_id"), str_arg(args, "status")) else {
+            let (Some(entity_id), Some(status)) =
+                (str_arg(args, "entity_id"), str_arg(args, "status"))
+            else {
                 return error_result("cần 'entity_id' và 'status'".into());
             };
             json_result(&api::ad_status_value(s, entity_id, status).await)
@@ -299,7 +421,11 @@ async fn call_tool(s: &AppState, name: &str, args: &Value) -> Value {
                 event: "new_comment".into(),
                 match_type: api::normalize_match_type(str_arg(args, "match_type")),
                 match_value: str_arg(args, "match_value").unwrap_or("").into(),
-                action: if str_arg(args, "action") == Some("notify") { "notify".into() } else { "draft_reply".into() },
+                action: if str_arg(args, "action") == Some("notify") {
+                    "notify".into()
+                } else {
+                    "draft_reply".into()
+                },
                 reply_hint: str_arg(args, "reply_hint").unwrap_or("").into(),
                 enabled: true,
             };
@@ -337,22 +463,58 @@ mod tests {
     #[test]
     fn tools_list_has_expected_tools() {
         let tools = tools_list();
-        let names: Vec<&str> = tools.as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+        let names: Vec<&str> = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
         for expected in [
-            "fb_status", "fb_connect_link", "fb_connect_token", "fb_pages", "fb_select_page",
-            "fb_post_create", "fb_post_edit", "fb_post_delete", "fb_posts", "fb_post_get",
-            "fb_comments", "fb_comment_create", "fb_comment_reply", "fb_like",
-            "fb_overview", "fb_conversations", "fb_conversation_messages", "fb_message_reply",
-            "fb_analyze", "fb_page_insights", "fb_post_insights",
-            "fb_ad_accounts", "fb_ad_select_account", "fb_ad_campaigns", "fb_ads_insights", "fb_ads_analyze", "fb_ad_status",
-            "fb_drafts", "fb_approve", "fb_reject",
-            "fb_triggers", "fb_trigger_create", "fb_trigger_delete", "fb_autonomy_set", "fb_tick",
+            "fb_status",
+            "fb_connect_link",
+            "fb_connect_token",
+            "fb_pages",
+            "fb_select_page",
+            "fb_post_create",
+            "fb_post_edit",
+            "fb_post_delete",
+            "fb_posts",
+            "fb_post_get",
+            "fb_comments",
+            "fb_comment_create",
+            "fb_comment_reply",
+            "fb_like",
+            "fb_overview",
+            "fb_conversations",
+            "fb_conversation_messages",
+            "fb_message_reply",
+            "fb_analyze",
+            "fb_page_insights",
+            "fb_post_insights",
+            "fb_ad_accounts",
+            "fb_ad_select_account",
+            "fb_ad_campaigns",
+            "fb_ads_insights",
+            "fb_ads_analyze",
+            "fb_ad_status",
+            "fb_drafts",
+            "fb_approve",
+            "fb_reject",
+            "fb_triggers",
+            "fb_trigger_create",
+            "fb_trigger_delete",
+            "fb_autonomy_set",
+            "fb_tick",
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
         // Every tool must declare an inputSchema object.
         for t in tools.as_array().unwrap() {
-            assert_eq!(t["inputSchema"]["type"], "object", "tool {} bad schema", t["name"]);
+            assert_eq!(
+                t["inputSchema"]["type"], "object",
+                "tool {} bad schema",
+                t["name"]
+            );
         }
     }
 }

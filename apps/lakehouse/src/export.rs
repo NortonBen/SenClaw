@@ -125,14 +125,7 @@ pub(crate) async fn export_dataset_at(
 
 /// Export kết quả một câu SELECT tùy ý (§8 /query/export). Slug cố định "query".
 pub async fn export_query(db: &Db, sql: &str, format: ExportFormat) -> Result<ExportReport> {
-    export_query_at(
-        &config::exports_dir(),
-        &config::lake_dir(),
-        db,
-        sql,
-        format,
-    )
-    .await
+    export_query_at(&config::exports_dir(), &config::lake_dir(), db, sql, format).await
 }
 
 pub(crate) async fn export_query_at(
@@ -159,8 +152,12 @@ async fn run_export(
 ) -> Result<ExportReport> {
     let (schema, batches) = engine::collect_all_at(lake_root, db, sql).await?;
 
-    std::fs::create_dir_all(exports_root)
-        .map_err(|e| anyhow!("tạo thư mục exports '{}' thất bại: {e}", exports_root.display()))?;
+    std::fs::create_dir_all(exports_root).map_err(|e| {
+        anyhow!(
+            "tạo thư mục exports '{}' thất bại: {e}",
+            exports_root.display()
+        )
+    })?;
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
     let fname = format!("{slug}-{ts}.{}", format.ext());
     let abspath = exports_root.join(&fname);
@@ -299,16 +296,17 @@ fn cell_value(arr: &ArrayRef, i: usize, cell_max: Option<usize>) -> Value {
     }
     let str_val = |s: &str| -> Value {
         match cell_max {
-            Some(max) if s.chars().count() > max => {
-                Value::String(s.chars().take(max).collect())
-            }
+            Some(max) if s.chars().count() > max => Value::String(s.chars().take(max).collect()),
             _ => Value::String(s.to_string()),
         }
     };
     match arr.data_type() {
-        DataType::Boolean => {
-            Value::Bool(arr.as_any().downcast_ref::<BooleanArray>().unwrap().value(i))
-        }
+        DataType::Boolean => Value::Bool(
+            arr.as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .value(i),
+        ),
         DataType::Int8 => num!(Int8Array),
         DataType::Int16 => num!(Int16Array),
         DataType::Int32 => num!(Int32Array),
@@ -318,17 +316,32 @@ fn cell_value(arr: &ArrayRef, i: usize, cell_max: Option<usize>) -> Value {
         DataType::UInt32 => num!(UInt32Array),
         DataType::UInt64 => num!(UInt64Array),
         DataType::Float32 => {
-            let v = arr.as_any().downcast_ref::<Float32Array>().unwrap().value(i) as f64;
-            serde_json::Number::from_f64(v).map(Value::Number).unwrap_or(Value::Null)
+            let v = arr
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .unwrap()
+                .value(i) as f64;
+            serde_json::Number::from_f64(v)
+                .map(Value::Number)
+                .unwrap_or(Value::Null)
         }
         DataType::Float64 => {
-            let v = arr.as_any().downcast_ref::<Float64Array>().unwrap().value(i);
-            serde_json::Number::from_f64(v).map(Value::Number).unwrap_or(Value::Null)
+            let v = arr
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(i);
+            serde_json::Number::from_f64(v)
+                .map(Value::Number)
+                .unwrap_or(Value::Null)
         }
         DataType::Utf8 => str_val(arr.as_any().downcast_ref::<StringArray>().unwrap().value(i)),
-        DataType::LargeUtf8 => {
-            str_val(arr.as_any().downcast_ref::<LargeStringArray>().unwrap().value(i))
-        }
+        DataType::LargeUtf8 => str_val(
+            arr.as_any()
+                .downcast_ref::<LargeStringArray>()
+                .unwrap()
+                .value(i),
+        ),
         // Date/Timestamp/Binary/… → cast về chuỗi hiển thị.
         _ => match cast(arr, &DataType::Utf8) {
             Ok(s) => match s.as_any().downcast_ref::<StringArray>() {
@@ -380,7 +393,9 @@ pub(crate) fn read_export_file_at(exports_root: &Path, name: &str) -> Result<Vec
         || name.contains("..")
         || Path::new(name).components().count() != 1
     {
-        return Err(anyhow!("tên file export không hợp lệ (chỉ tên file trần): '{name}'"));
+        return Err(anyhow!(
+            "tên file export không hợp lệ (chỉ tên file trần): '{name}'"
+        ));
     }
     let root = exports_root
         .canonicalize()
@@ -470,9 +485,17 @@ mod tests {
                 vec![Some(1.5), Some(2.0), None],
             )],
         );
-        let rep = export_dataset_at(exp.path(), lk.path(), &db, "raw", "orders", ExportFormat::Csv, None)
-            .await
-            .unwrap();
+        let rep = export_dataset_at(
+            exp.path(),
+            lk.path(),
+            &db,
+            "raw",
+            "orders",
+            ExportFormat::Csv,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(rep.rows, 3);
         assert!(rep.bytes > 0);
         let abs = exp.path().join(&rep.file);
@@ -497,11 +520,23 @@ mod tests {
             &db,
             "raw",
             "orders",
-            vec![batch(vec![Some(1), Some(2)], vec![Some("a"), None], vec![Some(9.0), Some(8.0)])],
+            vec![batch(
+                vec![Some(1), Some(2)],
+                vec![Some("a"), None],
+                vec![Some(9.0), Some(8.0)],
+            )],
         );
-        let rep = export_dataset_at(exp.path(), lk.path(), &db, "raw", "orders", ExportFormat::Json, None)
-            .await
-            .unwrap();
+        let rep = export_dataset_at(
+            exp.path(),
+            lk.path(),
+            &db,
+            "raw",
+            "orders",
+            ExportFormat::Json,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(rep.rows, 2);
         let text = std::fs::read_to_string(exp.path().join(&rep.file)).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
@@ -522,11 +557,23 @@ mod tests {
             &db,
             "raw",
             "orders",
-            vec![batch(vec![Some(1), Some(2), Some(3)], vec![Some("a"), Some("b"), Some("c")], vec![Some(1.0), Some(2.0), Some(3.0)])],
+            vec![batch(
+                vec![Some(1), Some(2), Some(3)],
+                vec![Some("a"), Some("b"), Some("c")],
+                vec![Some(1.0), Some(2.0), Some(3.0)],
+            )],
         );
-        let rep = export_dataset_at(exp.path(), lk.path(), &db, "raw", "orders", ExportFormat::Parquet, None)
-            .await
-            .unwrap();
+        let rep = export_dataset_at(
+            exp.path(),
+            lk.path(),
+            &db,
+            "raw",
+            "orders",
+            ExportFormat::Parquet,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(rep.rows, 3);
         // Đọc lại file parquet → đúng 3 dòng.
         let back = lake::read_parquet_file(&exp.path().join(&rep.file)).unwrap();
@@ -570,9 +617,17 @@ mod tests {
         let exp = tempfile::tempdir().unwrap();
         let lk = tempfile::tempdir().unwrap();
         let db = Db::open_memory().unwrap();
-        let err = export_dataset_at(exp.path(), lk.path(), &db, "raw", "nope", ExportFormat::Csv, None)
-            .await
-            .unwrap_err();
+        let err = export_dataset_at(
+            exp.path(),
+            lk.path(),
+            &db,
+            "raw",
+            "nope",
+            ExportFormat::Csv,
+            None,
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("không có dataset"), "{err}");
     }
 

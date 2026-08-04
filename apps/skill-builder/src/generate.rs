@@ -119,7 +119,10 @@ fn inventory_block(inv: &Inventory) -> String {
                     if td.is_empty() {
                         s.push_str(&format!("    - {tn}\n"));
                     } else {
-                        s.push_str(&format!("    - {tn}: {}\n", truncate(&td.replace('\n', " "), 120)));
+                        s.push_str(&format!(
+                            "    - {tn}: {}\n",
+                            truncate(&td.replace('\n', " "), 120)
+                        ));
                     }
                 }
             }
@@ -150,8 +153,12 @@ pub async fn draft(
     prompt.push_str("\nNow design the skill and return the JSON.");
 
     let (text, model) = bridge_llm(SYSTEM, &prompt, 3200).await?;
-    let mut draft = parse_draft(&text)
-        .ok_or_else(|| format!("could not parse skill JSON from model output:\n{}", truncate(&text, 500)))?;
+    let mut draft = parse_draft(&text).ok_or_else(|| {
+        format!(
+            "could not parse skill JSON from model output:\n{}",
+            truncate(&text, 500)
+        )
+    })?;
 
     draft.name = slugify(&draft.name);
     if draft.name.is_empty() {
@@ -179,7 +186,11 @@ fn slugify(s: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-async fn bridge_llm(system: &str, prompt: &str, max_tokens: u32) -> Result<(String, String), String> {
+async fn bridge_llm(
+    system: &str,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<(String, String), String> {
     if std::env::var("SENCLAW_SPACE_APP_ID").is_err() {
         std::env::set_var("SENCLAW_SPACE_APP_ID", "skill-builder");
     }

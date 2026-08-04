@@ -13,15 +13,16 @@ pub fn install_watcher(state: &Arc<AppState>, root: &Path) {
     let tx = state.events_tx.clone();
     let root_for_cb = root.clone();
 
-    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        let Ok(event) = res else { return };
-        let kind = match event.kind {
-            EventKind::Create(_) => "create",
-            EventKind::Modify(_) => "modify",
-            EventKind::Remove(_) => "remove",
-            _ => return,
-        };
-        let paths: Vec<String> = event
+    let mut watcher = match notify::recommended_watcher(
+        move |res: notify::Result<notify::Event>| {
+            let Ok(event) = res else { return };
+            let kind = match event.kind {
+                EventKind::Create(_) => "create",
+                EventKind::Modify(_) => "modify",
+                EventKind::Remove(_) => "remove",
+                _ => return,
+            };
+            let paths: Vec<String> = event
             .paths
             .iter()
             .filter(|p| !p.components().any(|c| {
@@ -35,11 +36,12 @@ pub fn install_watcher(state: &Arc<AppState>, root: &Path) {
                     .replace('\\', "/")
             })
             .collect();
-        if paths.is_empty() {
-            return;
-        }
-        let _ = tx.send(json!({ "kind": kind, "paths": paths }).to_string());
-    }) {
+            if paths.is_empty() {
+                return;
+            }
+            let _ = tx.send(json!({ "kind": kind, "paths": paths }).to_string());
+        },
+    ) {
         Ok(w) => w,
         Err(_) => return,
     };

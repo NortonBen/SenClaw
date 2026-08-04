@@ -12,9 +12,7 @@
 
 use serde::Serialize;
 
-use crate::lunar::{
-    jd_from_ymd, solar_term_index, solar_to_lunar, weekday_mon0, TZ_VN,
-};
+use crate::lunar::{jd_from_ymd, solar_term_index, solar_to_lunar, weekday_mon0, TZ_VN};
 
 pub const CAN: [&str; 10] = [
     "Giáp", "Ất", "Bính", "Đinh", "Mậu", "Kỷ", "Canh", "Tân", "Nhâm", "Quý",
@@ -27,15 +25,41 @@ pub const CON_GIAP: [&str; 12] = [
     "Chuột", "Trâu", "Hổ", "Mèo", "Rồng", "Rắn", "Ngựa", "Dê", "Khỉ", "Gà", "Chó", "Lợn",
 ];
 pub const THU: [&str; 7] = [
-    "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật",
+    "Thứ Hai",
+    "Thứ Ba",
+    "Thứ Tư",
+    "Thứ Năm",
+    "Thứ Sáu",
+    "Thứ Bảy",
+    "Chủ Nhật",
 ];
 
 /// 24 solar terms, index 0 = 0° ecliptic longitude (Xuân phân).
 pub const TIET_KHI: [&str; 24] = [
-    "Xuân phân", "Thanh minh", "Cốc vũ", "Lập hạ", "Tiểu mãn", "Mang chủng", "Hạ chí",
-    "Tiểu thử", "Đại thử", "Lập thu", "Xử thử", "Bạch lộ", "Thu phân", "Hàn lộ",
-    "Sương giáng", "Lập đông", "Tiểu tuyết", "Đại tuyết", "Đông chí", "Tiểu hàn",
-    "Đại hàn", "Lập xuân", "Vũ thủy", "Kinh trập",
+    "Xuân phân",
+    "Thanh minh",
+    "Cốc vũ",
+    "Lập hạ",
+    "Tiểu mãn",
+    "Mang chủng",
+    "Hạ chí",
+    "Tiểu thử",
+    "Đại thử",
+    "Lập thu",
+    "Xử thử",
+    "Bạch lộ",
+    "Thu phân",
+    "Hàn lộ",
+    "Sương giáng",
+    "Lập đông",
+    "Tiểu tuyết",
+    "Đại tuyết",
+    "Đông chí",
+    "Tiểu hàn",
+    "Đại hàn",
+    "Lập xuân",
+    "Vũ thủy",
+    "Kinh trập",
 ];
 
 /// The 12 "trực thần" (day officers), starting from Kiến on the nguyệt-kiến day.
@@ -45,9 +69,9 @@ pub const TRUC: [&str; 12] = [
 
 /// The 28 lunar mansions (Nhị Thập Bát Tú), in canonical order (0 = Giác).
 pub const TU: [&str; 28] = [
-    "Giác", "Cang", "Đê", "Phòng", "Tâm", "Vĩ", "Cơ", "Đẩu", "Ngưu", "Nữ", "Hư", "Nguy",
-    "Thất", "Bích", "Khuê", "Lâu", "Vị", "Mão", "Tất", "Chủy", "Sâm", "Tỉnh", "Quỷ",
-    "Liễu", "Tinh", "Trương", "Dực", "Chẩn",
+    "Giác", "Cang", "Đê", "Phòng", "Tâm", "Vĩ", "Cơ", "Đẩu", "Ngưu", "Nữ", "Hư", "Nguy", "Thất",
+    "Bích", "Khuê", "Lâu", "Vị", "Mão", "Tất", "Chủy", "Sâm", "Tỉnh", "Quỷ", "Liễu", "Tinh",
+    "Trương", "Dực", "Chẩn",
 ];
 /// Classical good(true)/bad(false) attribute of each mansion, same index as `TU`.
 const TU_TOT: [bool; 28] = [
@@ -59,8 +83,18 @@ const TU_TOT: [bool; 28] = [
 
 /// The 12 gods of the hoàng-đạo/hắc-đạo cycle, in order from Thanh Long.
 const GODS: [&str; 12] = [
-    "Thanh Long", "Minh Đường", "Thiên Hình", "Chu Tước", "Kim Quỹ", "Bảo Quang", "Bạch Hổ",
-    "Ngọc Đường", "Thiên Lao", "Nguyên Vũ", "Tư Mệnh", "Câu Trận",
+    "Thanh Long",
+    "Minh Đường",
+    "Thiên Hình",
+    "Chu Tước",
+    "Kim Quỹ",
+    "Bảo Quang",
+    "Bạch Hổ",
+    "Ngọc Đường",
+    "Thiên Lao",
+    "Nguyên Vũ",
+    "Tư Mệnh",
+    "Câu Trận",
 ];
 /// Positions in `GODS` that are auspicious (hoàng đạo). The rest are hắc đạo.
 const GOD_GOOD_POS: [usize; 6] = [0, 1, 4, 5, 7, 10];
@@ -78,16 +112,36 @@ const GIO_HD: [&str; 6] = [
 
 /// 30 nạp-âm five-elements (each covers 2 consecutive sexagenary pillars).
 const NAP_AM: [(&str, &str); 30] = [
-    ("Hải Trung Kim", "Kim"), ("Lư Trung Hỏa", "Hỏa"), ("Đại Lâm Mộc", "Mộc"),
-    ("Lộ Bàng Thổ", "Thổ"), ("Kiếm Phong Kim", "Kim"), ("Sơn Đầu Hỏa", "Hỏa"),
-    ("Giản Hạ Thủy", "Thủy"), ("Thành Đầu Thổ", "Thổ"), ("Bạch Lạp Kim", "Kim"),
-    ("Dương Liễu Mộc", "Mộc"), ("Tuyền Trung Thủy", "Thủy"), ("Ốc Thượng Thổ", "Thổ"),
-    ("Tích Lịch Hỏa", "Hỏa"), ("Tùng Bách Mộc", "Mộc"), ("Trường Lưu Thủy", "Thủy"),
-    ("Sa Trung Kim", "Kim"), ("Sơn Hạ Hỏa", "Hỏa"), ("Bình Địa Mộc", "Mộc"),
-    ("Bích Thượng Thổ", "Thổ"), ("Kim Bạch Kim", "Kim"), ("Phú Đăng Hỏa", "Hỏa"),
-    ("Thiên Hà Thủy", "Thủy"), ("Đại Trạch Thổ", "Thổ"), ("Thoa Xuyến Kim", "Kim"),
-    ("Tang Đố Mộc", "Mộc"), ("Đại Khê Thủy", "Thủy"), ("Sa Trung Thổ", "Thổ"),
-    ("Thiên Thượng Hỏa", "Hỏa"), ("Thạch Lựu Mộc", "Mộc"), ("Đại Hải Thủy", "Thủy"),
+    ("Hải Trung Kim", "Kim"),
+    ("Lư Trung Hỏa", "Hỏa"),
+    ("Đại Lâm Mộc", "Mộc"),
+    ("Lộ Bàng Thổ", "Thổ"),
+    ("Kiếm Phong Kim", "Kim"),
+    ("Sơn Đầu Hỏa", "Hỏa"),
+    ("Giản Hạ Thủy", "Thủy"),
+    ("Thành Đầu Thổ", "Thổ"),
+    ("Bạch Lạp Kim", "Kim"),
+    ("Dương Liễu Mộc", "Mộc"),
+    ("Tuyền Trung Thủy", "Thủy"),
+    ("Ốc Thượng Thổ", "Thổ"),
+    ("Tích Lịch Hỏa", "Hỏa"),
+    ("Tùng Bách Mộc", "Mộc"),
+    ("Trường Lưu Thủy", "Thủy"),
+    ("Sa Trung Kim", "Kim"),
+    ("Sơn Hạ Hỏa", "Hỏa"),
+    ("Bình Địa Mộc", "Mộc"),
+    ("Bích Thượng Thổ", "Thổ"),
+    ("Kim Bạch Kim", "Kim"),
+    ("Phú Đăng Hỏa", "Hỏa"),
+    ("Thiên Hà Thủy", "Thủy"),
+    ("Đại Trạch Thổ", "Thổ"),
+    ("Thoa Xuyến Kim", "Kim"),
+    ("Tang Đố Mộc", "Mộc"),
+    ("Đại Khê Thủy", "Thủy"),
+    ("Sa Trung Thổ", "Thổ"),
+    ("Thiên Thượng Hỏa", "Hỏa"),
+    ("Thạch Lựu Mộc", "Mộc"),
+    ("Đại Hải Thủy", "Thủy"),
 ];
 
 /// Xuất-hành fortune (Lý Thuần Phong / Lục Diệu), 6-state cycle by lunar day.
@@ -203,7 +257,9 @@ fn hour_range(chi_idx: usize) -> String {
 
 /// Sexagenary index (0 = Giáp Tý … 59) from a Can and Chi index.
 fn sexagenary(can: usize, chi: usize) -> usize {
-    (0..60).find(|&n| n % 10 == can && n % 12 == chi).unwrap_or(0)
+    (0..60)
+        .find(|&n| n % 10 == can && n % 12 == chi)
+        .unwrap_or(0)
 }
 
 /// Compute the whole almanac for a Gregorian date.
@@ -241,7 +297,11 @@ pub fn day_info(dd: i64, mm: i64, yy: i64) -> DayInfo {
     let hours: Vec<HourInfo> = (0..12)
         .map(|h| {
             let good = pattern.as_bytes()[h] == b'1';
-            HourInfo { chi: CHI[h].to_string(), range: hour_range(h), good }
+            HourInfo {
+                chi: CHI[h].to_string(),
+                range: hour_range(h),
+                good,
+            }
         })
         .collect();
     let good_hours = hours
@@ -253,20 +313,20 @@ pub fn day_info(dd: i64, mm: i64, yy: i64) -> DayInfo {
 
     // -- Directions by day Can (Hỷ Thần / Tài Thần) --
     let hy_than = match day_can {
-        0 | 5 => "Đông Bắc",          // Giáp, Kỷ
-        1 | 6 => "Tây Nam",           // Ất, Canh
-        2 | 7 => "Tây Bắc",           // Bính, Tân
-        3 | 8 => "Chính Nam",         // Đinh, Nhâm
-        _ => "Đông Nam",              // Mậu, Quý
+        0 | 5 => "Đông Bắc",  // Giáp, Kỷ
+        1 | 6 => "Tây Nam",   // Ất, Canh
+        2 | 7 => "Tây Bắc",   // Bính, Tân
+        3 | 8 => "Chính Nam", // Đinh, Nhâm
+        _ => "Đông Nam",      // Mậu, Quý
     };
     let tai_than = match day_can {
-        0 | 1 => "Đông Nam",          // Giáp, Ất
-        2 | 3 => "Chính Đông",        // Bính, Đinh
-        4 => "Chính Bắc",             // Mậu
-        5 => "Chính Nam",             // Kỷ
-        6 | 7 => "Tây Nam",           // Canh, Tân
-        8 => "Chính Tây",             // Nhâm
-        _ => "Tây Bắc",               // Quý
+        0 | 1 => "Đông Nam",   // Giáp, Ất
+        2 | 3 => "Chính Đông", // Bính, Đinh
+        4 => "Chính Bắc",      // Mậu
+        5 => "Chính Nam",      // Kỷ
+        6 | 7 => "Tây Nam",    // Canh, Tân
+        8 => "Chính Tây",      // Nhâm
+        _ => "Tây Bắc",        // Quý
     };
 
     // -- Xuất hành (Lý Thuần Phong): 6-state cycle by lunar day --
@@ -284,7 +344,11 @@ pub fn day_info(dd: i64, mm: i64, yy: i64) -> DayInfo {
 
     // -- Overall verdict --
     let verdict = if hoang_dao {
-        if warnings.is_empty() { Verdict::Tot } else { Verdict::Binh }
+        if warnings.is_empty() {
+            Verdict::Tot
+        } else {
+            Verdict::Binh
+        }
     } else if warnings.is_empty() {
         Verdict::Binh
     } else {
@@ -348,7 +412,9 @@ fn build_advice(hoang_dao: bool, warnings: &[String], good_hours: &str) -> Strin
     if hoang_dao {
         s.push_str("Ngày Hoàng Đạo — thuận cho các việc trọng đại (cưới hỏi, khai trương, xuất hành, động thổ). ");
     } else {
-        s.push_str("Ngày Hắc Đạo — nên thận trọng, tránh khởi sự việc lớn; ưu tiên việc thường ngày. ");
+        s.push_str(
+            "Ngày Hắc Đạo — nên thận trọng, tránh khởi sự việc lớn; ưu tiên việc thường ngày. ",
+        );
     }
     if !warnings.is_empty() {
         s.push_str(&format!("Lưu ý phạm: {}. ", warnings.join(", ")));

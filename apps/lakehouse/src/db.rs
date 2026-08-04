@@ -506,8 +506,14 @@ impl Db {
     pub fn dataset_delete(&self, id: i64) -> Result<usize> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM dataset_file WHERE dataset_id = ?1", params![id])?;
-        tx.execute("DELETE FROM schema_version WHERE dataset_id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM dataset_file WHERE dataset_id = ?1",
+            params![id],
+        )?;
+        tx.execute(
+            "DELETE FROM schema_version WHERE dataset_id = ?1",
+            params![id],
+        )?;
         let n = tx.execute("DELETE FROM dataset WHERE id = ?1", params![id])?;
         tx.commit()?;
         Ok(n)
@@ -553,8 +559,14 @@ impl Db {
                                            row_count, byte_size, stats, state, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8)",
                 params![
-                    dataset_id, f.path, run_id, f.partition, f.row_count, f.byte_size,
-                    f.stats, ts
+                    dataset_id,
+                    f.path,
+                    run_id,
+                    f.partition,
+                    f.row_count,
+                    f.byte_size,
+                    f.stats,
+                    ts
                 ],
             )?;
         }
@@ -612,8 +624,14 @@ impl Db {
                                            row_count, byte_size, stats, state, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8)",
                 params![
-                    dataset_id, f.path, run_id, f.partition, f.row_count, f.byte_size,
-                    f.stats, ts
+                    dataset_id,
+                    f.path,
+                    run_id,
+                    f.partition,
+                    f.row_count,
+                    f.byte_size,
+                    f.stats,
+                    ts
                 ],
             )?;
         }
@@ -651,8 +669,14 @@ impl Db {
                                            row_count, byte_size, stats, state, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8)",
                 params![
-                    dataset_id, f.path, run_id, f.partition, f.row_count, f.byte_size,
-                    f.stats, ts
+                    dataset_id,
+                    f.path,
+                    run_id,
+                    f.partition,
+                    f.row_count,
+                    f.byte_size,
+                    f.stats,
+                    ts
                 ],
             )?;
         }
@@ -691,8 +715,14 @@ impl Db {
                                            row_count, byte_size, stats, state, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8)",
                 params![
-                    dataset_id, f.path, run_id, f.partition, f.row_count, f.byte_size,
-                    f.stats, ts
+                    dataset_id,
+                    f.path,
+                    run_id,
+                    f.partition,
+                    f.row_count,
+                    f.byte_size,
+                    f.stats,
+                    ts
                 ],
             )?;
         }
@@ -735,8 +765,7 @@ impl Db {
     /// Mọi file (mọi state) của một run — boot reconcile đối chiếu đĩa vs manifest.
     pub fn manifest_files_for_run(&self, run_id: &str) -> Result<Vec<DatasetFile>> {
         self.with_conn(|c| {
-            let mut st =
-                c.prepare(&format!("{FILE_SELECT} WHERE run_id = ?1 ORDER BY id"))?;
+            let mut st = c.prepare(&format!("{FILE_SELECT} WHERE run_id = ?1 ORDER BY id"))?;
             let rows = st.query_map(params![run_id], file_from_row)?;
             rows.collect()
         })
@@ -873,8 +902,12 @@ impl Db {
 
     pub fn flow_get(&self, id: &str) -> Result<Option<FlowRow>> {
         self.with_conn(|c| {
-            c.query_row(&format!("{FLOW_SELECT} WHERE id = ?1"), params![id], flow_from_row)
-                .optional()
+            c.query_row(
+                &format!("{FLOW_SELECT} WHERE id = ?1"),
+                params![id],
+                flow_from_row,
+            )
+            .optional()
         })
     }
 
@@ -1121,7 +1154,16 @@ impl Db {
                     ended_at     = CASE WHEN ?7 THEN COALESCE(step_run.ended_at, ?6)
                                         ELSE step_run.ended_at END,
                     error        = excluded.error",
-                params![run_id, step_id, status, rows_read, rows_written, ts, ended, error],
+                params![
+                    run_id,
+                    step_id,
+                    status,
+                    rows_read,
+                    rows_written,
+                    ts,
+                    ended,
+                    error
+                ],
             )
         })?;
         Ok(())
@@ -1158,7 +1200,15 @@ impl Db {
                 "INSERT OR REPLACE INTO step_interval
                     (flow_id, step_id, def_version, interval_start, interval_end, run_id, status)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![flow_id, step_id, def_version, interval_start, interval_end, run_id, status],
+                params![
+                    flow_id,
+                    step_id,
+                    def_version,
+                    interval_start,
+                    interval_end,
+                    run_id,
+                    status
+                ],
             )
         })?;
         Ok(())
@@ -1242,7 +1292,14 @@ impl Db {
                     updated_at      = excluded.updated_at
                  WHERE stream_state.last_value IS NULL
                     OR stream_state.last_value < excluded.last_value",
-                params![flow_id, step_id, cursor_column, last_value, boundary_hashes, now()],
+                params![
+                    flow_id,
+                    step_id,
+                    cursor_column,
+                    last_value,
+                    boundary_hashes,
+                    now()
+                ],
             )
         })?;
         Ok(n == 1)
@@ -1512,7 +1569,8 @@ mod tests {
         {
             let db = Db::open(&path).unwrap();
             assert_eq!(db.setting_i64("max_concurrent", 0), 2, "seed mặc định");
-            db.dataset_upsert("raw", "đơn_hàng", None, None, None).unwrap();
+            db.dataset_upsert("raw", "đơn_hàng", None, None, None)
+                .unwrap();
             db.set_setting("max_concurrent", "5").unwrap();
         }
         // Mở lần 2: schema idempotent, seed không đè giá trị user, data còn nguyên.
@@ -1521,8 +1579,7 @@ mod tests {
         assert_eq!(db.setting_i64("max_concurrent", 0), 5);
         assert_eq!(db.setting_i64("schema_version", 0), 1);
         // import_paths được seed từ config (JSON array).
-        let paths: Vec<String> =
-            serde_json::from_str(&db.setting("import_paths", "[]")).unwrap();
+        let paths: Vec<String> = serde_json::from_str(&db.setting("import_paths", "[]")).unwrap();
         assert!(!paths.is_empty());
     }
 
@@ -1563,7 +1620,10 @@ mod tests {
 
         assert!(db.run_claim(&id).unwrap(), "claim đầu phải thắng");
         assert!(!db.run_claim(&id).unwrap(), "claim thứ hai phải thua");
-        assert_eq!(db.run_get(&id).unwrap().unwrap().status, run_status::RUNNING);
+        assert_eq!(
+            db.run_get(&id).unwrap().unwrap().status,
+            run_status::RUNNING
+        );
     }
 
     #[test]
@@ -1606,7 +1666,13 @@ mod tests {
             .unwrap());
         // Tiến thì được.
         assert!(db
-            .stream_state_set_monotonic("f", "s", "updated_at", "2024-01-03 00:00:00", Some("[\"h1\"]"))
+            .stream_state_set_monotonic(
+                "f",
+                "s",
+                "updated_at",
+                "2024-01-03 00:00:00",
+                Some("[\"h1\"]")
+            )
             .unwrap());
         let st = db.stream_state_get("f", "s").unwrap().unwrap();
         assert_eq!(st.last_value.as_deref(), Some("2024-01-03 00:00:00"));
@@ -1616,13 +1682,17 @@ mod tests {
     #[test]
     fn manifest_active_to_tombstone_updates_aggregates() {
         let db = Db::open_memory().unwrap();
-        let ds = db.dataset_upsert("raw", "orders", None, None, None).unwrap();
+        let ds = db
+            .dataset_upsert("raw", "orders", None, None, None)
+            .unwrap();
 
         db.manifest_add_files(
             ds,
             "run-1",
-            &[file("raw/orders/part-run-1-0.parquet", 10, 100),
-              file("raw/orders/part-run-1-1.parquet", 5, 50)],
+            &[
+                file("raw/orders/part-run-1-0.parquet", 10, 100),
+                file("raw/orders/part-run-1-1.parquet", 5, 50),
+            ],
         )
         .unwrap();
         let active = db.manifest_active_files(ds).unwrap();
@@ -1652,7 +1722,9 @@ mod tests {
     #[test]
     fn dataset_owner_is_exclusive() {
         let db = Db::open_memory().unwrap();
-        let ds = db.dataset_upsert("raw", "orders", None, None, None).unwrap();
+        let ds = db
+            .dataset_upsert("raw", "orders", None, None, None)
+            .unwrap();
 
         assert!(db.dataset_set_owner(ds, Some("f1")).unwrap());
         // Idempotent với cùng flow.
@@ -1660,7 +1732,11 @@ mod tests {
         // Flow thứ hai trỏ vào cùng target phải bị từ chối (§6.1).
         assert!(!db.dataset_set_owner(ds, Some("f2")).unwrap());
         assert_eq!(
-            db.dataset_get_by_id(ds).unwrap().unwrap().owner_flow_id.as_deref(),
+            db.dataset_get_by_id(ds)
+                .unwrap()
+                .unwrap()
+                .owner_flow_id
+                .as_deref(),
             Some("f1")
         );
         // Thả ownership rồi flow khác nhận được.
@@ -1675,7 +1751,9 @@ mod tests {
             .dataset_upsert("raw", "orders", Some("parquet"), None, Some("[\"date\"]"))
             .unwrap();
         // Upsert lần 2 cùng (ns, name) trả cùng id, không đổi format có sẵn (§2.2).
-        let b = db.dataset_upsert("raw", "orders", Some("delta"), Some("bronze"), None).unwrap();
+        let b = db
+            .dataset_upsert("raw", "orders", Some("delta"), Some("bronze"), None)
+            .unwrap();
         assert_eq!(a, b);
         let got = db.dataset_get("raw", "orders").unwrap().unwrap();
         assert_eq!(got.format, "parquet");
@@ -1686,20 +1764,29 @@ mod tests {
     #[test]
     fn schema_versions_increment_and_track_current() {
         let db = Db::open_memory().unwrap();
-        let ds = db.dataset_upsert("raw", "orders", None, None, None).unwrap();
+        let ds = db
+            .dataset_upsert("raw", "orders", None, None, None)
+            .unwrap();
         assert!(db.schema_version_current(ds).unwrap().is_none());
 
         let v1 = db
             .schema_version_add(ds, "[{\"name\":\"id\",\"type\":\"Int64\"}]", Some("init"))
             .unwrap();
         let v2 = db
-            .schema_version_add(ds, "[{\"name\":\"id\"},{\"name\":\"tên\"}]", Some("add tên"))
+            .schema_version_add(
+                ds,
+                "[{\"name\":\"id\"},{\"name\":\"tên\"}]",
+                Some("add tên"),
+            )
             .unwrap();
         assert_eq!((v1, v2), (1, 2));
         assert_eq!(db.schema_version_current(ds).unwrap().unwrap().version, 2);
         assert_eq!(db.schema_version_history(ds).unwrap().len(), 2);
         assert_eq!(
-            db.dataset_get_by_id(ds).unwrap().unwrap().current_schema_version,
+            db.dataset_get_by_id(ds)
+                .unwrap()
+                .unwrap()
+                .current_schema_version,
             Some(2)
         );
     }
@@ -1709,7 +1796,10 @@ mod tests {
         let db = Db::open_memory().unwrap();
         db.step_interval_upsert("f", "s", 1, "2024-01-01", "2024-01-02", "r1", "failed")
             .unwrap();
-        assert!(db.step_interval_list_success("f", "s", 1).unwrap().is_empty());
+        assert!(db
+            .step_interval_list_success("f", "s", 1)
+            .unwrap()
+            .is_empty());
 
         // Run sau đè cùng interval (INSERT OR REPLACE theo PK).
         db.step_interval_upsert("f", "s", 1, "2024-01-01", "2024-01-02", "r2", "success")
@@ -1718,13 +1808,19 @@ mod tests {
         assert_eq!(ok.len(), 1);
         assert_eq!(ok[0].run_id, "r2");
         // def_version khác không được skip-lookup thấy.
-        assert!(db.step_interval_list_success("f", "s", 2).unwrap().is_empty());
+        assert!(db
+            .step_interval_list_success("f", "s", 2)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn settings_validation_rejects_bad_keys_and_values() {
         assert!(validate_setting("nonsense", "1").is_err());
-        assert!(validate_setting("schema_version", "9").is_err(), "key nội bộ");
+        assert!(
+            validate_setting("schema_version", "9").is_err(),
+            "key nội bộ"
+        );
         assert!(validate_setting("max_concurrent", "lots").is_err());
         assert!(validate_setting("max_concurrent", "0").is_err());
         assert!(validate_setting("max_concurrent", "9").is_err());
@@ -1746,7 +1842,8 @@ mod tests {
     fn run_log_tail_clamps_to_500_and_orders_ascending() {
         let db = Db::open_memory().unwrap();
         for i in 1..=600 {
-            db.run_log_append("r1", "info", None, &format!("dòng {i}")).unwrap();
+            db.run_log_append("r1", "info", None, &format!("dòng {i}"))
+                .unwrap();
         }
         let t = db.run_log_tail("r1", 9_999).unwrap();
         assert_eq!(t.len(), 500, "clamp 500");
@@ -1754,7 +1851,10 @@ mod tests {
         assert_eq!(t.last().unwrap().seq, 600);
 
         let t = db.run_log_tail("r1", 3).unwrap();
-        assert_eq!(t.iter().map(|l| l.seq).collect::<Vec<_>>(), vec![598, 599, 600]);
+        assert_eq!(
+            t.iter().map(|l| l.seq).collect::<Vec<_>>(),
+            vec![598, 599, 600]
+        );
         assert_eq!(t.last().unwrap().message, "dòng 600");
 
         // tail=0 clamp lên 1, không phải câu SQL LIMIT 0.
@@ -1764,7 +1864,8 @@ mod tests {
     #[test]
     fn run_log_sweep_removes_only_old_lines() {
         let db = Db::open_memory().unwrap();
-        db.run_log_append("r1", "info", Some("s1"), "dòng mới").unwrap();
+        db.run_log_append("r1", "info", Some("s1"), "dòng mới")
+            .unwrap();
         // Chèn thẳng 1 dòng cũ (append luôn stamp now nên phải đi cửa sau).
         db.with_conn(|c| {
             c.execute(
@@ -1784,12 +1885,16 @@ mod tests {
     #[test]
     fn stats_counts_datasets_and_runs() {
         let db = Db::open_memory().unwrap();
-        let ds = db.dataset_upsert("raw", "orders", None, None, None).unwrap();
-        db.manifest_add_files(ds, "run-1", &[file("p.parquet", 7, 70)]).unwrap();
+        let ds = db
+            .dataset_upsert("raw", "orders", None, None, None)
+            .unwrap();
+        db.manifest_add_files(ds, "run-1", &[file("p.parquet", 7, 70)])
+            .unwrap();
         let id = created_id(db.run_create("f1", trigger::MANUAL).unwrap());
         let done = created_id(db.run_create("f2", trigger::MANUAL).unwrap());
         db.run_claim(&done).unwrap();
-        db.run_update_status_guarded(&done, run_status::SUCCESS, None).unwrap();
+        db.run_update_status_guarded(&done, run_status::SUCCESS, None)
+            .unwrap();
 
         let s = db.stats().unwrap();
         assert_eq!(s.datasets, 1);
@@ -1804,7 +1909,9 @@ mod tests {
     #[test]
     fn manifest_swap_replaces_active_atomically() {
         let db = Db::open_memory().unwrap();
-        let ds = db.dataset_upsert("raw", "orders", None, None, None).unwrap();
+        let ds = db
+            .dataset_upsert("raw", "orders", None, None, None)
+            .unwrap();
         // Lần 1: 2 file active (10 + 5 dòng).
         db.manifest_add_files(
             ds,
@@ -1823,21 +1930,32 @@ mod tests {
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].run_id, "run-2");
         let got = db.dataset_get_by_id(ds).unwrap().unwrap();
-        assert_eq!((got.row_count, got.byte_size), (7, 70), "aggregate = chỉ file active mới");
+        assert_eq!(
+            (got.row_count, got.byte_size),
+            (7, 70),
+            "aggregate = chỉ file active mới"
+        );
     }
 
     #[test]
     fn flow_upsert_keeps_def_version_on_update() {
         let db = Db::open_memory().unwrap();
-        db.flow_upsert("f1", Some("Shop"), "{\"flow\":\"f1\"}", false, None).unwrap();
+        db.flow_upsert("f1", Some("Shop"), "{\"flow\":\"f1\"}", false, None)
+            .unwrap();
         let f = db.flow_get("f1").unwrap().unwrap();
         assert_eq!(f.def_version, 1);
         assert!(!f.enabled);
 
         db.flow_bump_def_version("f1").unwrap();
         // Upsert (edit) không được reset def_version về 1.
-        db.flow_upsert("f1", Some("Shop"), "{\"flow\":\"f1\",\"v\":2}", true, Some("{\"every_minutes\":5}"))
-            .unwrap();
+        db.flow_upsert(
+            "f1",
+            Some("Shop"),
+            "{\"flow\":\"f1\",\"v\":2}",
+            true,
+            Some("{\"every_minutes\":5}"),
+        )
+        .unwrap();
         let f = db.flow_get("f1").unwrap().unwrap();
         assert_eq!(f.def_version, 2, "update giữ def_version đã bump");
         assert!(f.enabled);
@@ -1874,9 +1992,18 @@ mod tests {
         let cutoff = "2020-06-01 00:00:00";
         assert_eq!(db.run_fail_stuck_running(cutoff, "kẹt").unwrap(), 1);
         assert_eq!(db.run_cancel_stale_queued(cutoff, "bỏ rơi").unwrap(), 1);
-        assert_eq!(db.run_get(&stuck).unwrap().unwrap().status, run_status::FAILED);
-        assert_eq!(db.run_get(&stale).unwrap().unwrap().status, run_status::CANCELLED);
-        assert_eq!(db.run_get(&fresh).unwrap().unwrap().status, run_status::QUEUED);
+        assert_eq!(
+            db.run_get(&stuck).unwrap().unwrap().status,
+            run_status::FAILED
+        );
+        assert_eq!(
+            db.run_get(&stale).unwrap().unwrap().status,
+            run_status::CANCELLED
+        );
+        assert_eq!(
+            db.run_get(&fresh).unwrap().unwrap().status,
+            run_status::QUEUED
+        );
         assert_eq!(db.run_list_queued(10).unwrap(), vec![fresh]);
     }
 
@@ -1894,7 +2021,12 @@ mod tests {
         assert!(got.last_ok_at.is_none());
 
         db.connection_mark_ok("pg_main").unwrap();
-        assert!(db.connection_get("pg_main").unwrap().unwrap().last_ok_at.is_some());
+        assert!(db
+            .connection_get("pg_main")
+            .unwrap()
+            .unwrap()
+            .last_ok_at
+            .is_some());
 
         assert_eq!(db.connection_delete("pg_main").unwrap(), 1);
         assert!(db.connection_get("pg_main").unwrap().is_none());
@@ -1905,28 +2037,38 @@ mod tests {
         let db = Db::open_memory().unwrap();
         let a = created_id(db.run_create("f1", trigger::MANUAL).unwrap());
         db.run_claim(&a).unwrap();
-        db.run_update_status_guarded(&a, run_status::SUCCESS, None).unwrap();
+        db.run_update_status_guarded(&a, run_status::SUCCESS, None)
+            .unwrap();
         let _b = created_id(db.run_create("f1", trigger::SCHEDULE).unwrap());
         let _c = created_id(db.run_create("f2", trigger::MANUAL).unwrap());
 
         assert_eq!(db.run_list(None, None, 100, 0).unwrap().len(), 3);
         assert_eq!(db.run_list(Some("f1"), None, 100, 0).unwrap().len(), 2);
         assert_eq!(
-            db.run_list(Some("f1"), Some(run_status::SUCCESS), 100, 0).unwrap().len(),
+            db.run_list(Some("f1"), Some(run_status::SUCCESS), 100, 0)
+                .unwrap()
+                .len(),
             1
         );
-        assert_eq!(db.run_list(None, Some(run_status::QUEUED), 100, 0).unwrap().len(), 2);
+        assert_eq!(
+            db.run_list(None, Some(run_status::QUEUED), 100, 0)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
     fn step_run_upsert_keeps_started_at_and_sets_ended_at() {
         let db = Db::open_memory().unwrap();
-        db.step_run_upsert("r1", "s1", "running", 0, 0, None).unwrap();
+        db.step_run_upsert("r1", "s1", "running", 0, 0, None)
+            .unwrap();
         let first = db.step_runs_for("r1").unwrap()[0].clone();
         assert!(first.started_at.is_some());
         assert!(first.ended_at.is_none());
 
-        db.step_run_upsert("r1", "s1", "success", 100, 100, None).unwrap();
+        db.step_run_upsert("r1", "s1", "success", 100, 100, None)
+            .unwrap();
         let done = db.step_runs_for("r1").unwrap()[0].clone();
         assert_eq!(done.status, "success");
         assert_eq!(done.started_at, first.started_at, "started_at giữ lần đầu");

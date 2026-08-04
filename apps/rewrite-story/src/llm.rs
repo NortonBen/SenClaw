@@ -94,9 +94,18 @@ pub async fn bridge_llm(
         };
         return match v.get("status").and_then(|x| x.as_str()) {
             Some("ok") => Ok((
-                v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("finish").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                v.get("text")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                v.get("model")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                v.get("finish")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             )),
             Some("pending") => Err("bridge LLM chưa được bật trong daemon này".to_string()),
             _ => Err(v
@@ -352,7 +361,10 @@ mod tests {
         p.target_length_variance = 10;
         let prompt = build_rewrite_prompt(&chunk, &p);
 
-        assert!(prompt.contains("tối thiểu 900"), "missing lower bound: {prompt}");
+        assert!(
+            prompt.contains("tối thiểu 900"),
+            "missing lower bound: {prompt}"
+        );
         assert!(prompt.contains("tối đa 1100"), "missing upper bound");
         assert!(prompt.contains("KHÔNG tóm tắt"));
         // Restated at the end, where models weight instructions most heavily.

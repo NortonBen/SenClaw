@@ -196,7 +196,12 @@ fn get_words(text: &str, n: usize, from_start: bool) -> String {
 /// * `min_size` — a chunk is only eligible for a semantic break past this size.
 /// * `max_size` — hard upper bound (bytes); paragraphs longer than this are cut safely.
 /// * `sim_threshold` — cosine similarity below which a topic shift is declared.
-pub fn hybrid_split(text: &str, min_size: usize, max_size: usize, sim_threshold: f64) -> Vec<String> {
+pub fn hybrid_split(
+    text: &str,
+    min_size: usize,
+    max_size: usize,
+    sim_threshold: f64,
+) -> Vec<String> {
     let text = text.replace("\r\n", "\n");
 
     let mut chunks: Vec<String> = Vec::new();
@@ -326,7 +331,10 @@ mod tests {
 
     #[test]
     fn continuity_tail_handles_text_with_no_paragraph_breaks() {
-        assert_eq!(continuity_tail("  Một dòng duy nhất.  "), "Một dòng duy nhất.");
+        assert_eq!(
+            continuity_tail("  Một dòng duy nhất.  "),
+            "Một dòng duy nhất."
+        );
     }
 
     /// Ported from `TestHybridSplit_V2Rules/Rule_2` — a system bracket must never
@@ -386,15 +394,24 @@ mod tests {
     #[test]
     fn size_bounds_are_measured_in_characters() {
         let para = "Đây là một đoạn văn tiếng Việt có dấu đầy đủ để đo đơn vị kích thước.";
-        assert!(para.len() > para.chars().count(), "test text must be multibyte");
+        assert!(
+            para.len() > para.chars().count(),
+            "test text must be multibyte"
+        );
         let text = vec![para; 40].join("\n");
 
         // Threshold 0.0 disables semantic splitting, isolating the size bound.
         let chunks = hybrid_split(&text, 500, 2000, 0.0);
 
         let longest = chunks.iter().map(|c| c.chars().count()).max().unwrap();
-        assert!(longest > 1500, "chunks came out far short of 2000 chars: {longest}");
-        assert!(longest <= 2000, "chunk exceeded the character bound: {longest}");
+        assert!(
+            longest > 1500,
+            "chunks came out far short of 2000 chars: {longest}"
+        );
+        assert!(
+            longest <= 2000,
+            "chunk exceeded the character bound: {longest}"
+        );
     }
 
     /// A chapter heading in Vietnamese can exceed 100 *bytes* while being well
@@ -402,7 +419,8 @@ mod tests {
     #[test]
     fn long_vietnamese_chapter_heading_is_still_detected() {
         // 108 bytes, 77 characters.
-        let heading = "Chương 12: Đường về cố hương mịt mù khói lửa và những kẻ đã khuất bóng năm ấy";
+        let heading =
+            "Chương 12: Đường về cố hương mịt mù khói lửa và những kẻ đã khuất bóng năm ấy";
         assert!(heading.len() > 100, "heading must exceed 100 bytes");
         assert!(heading.chars().count() < 100, "but stay under 100 chars");
 
@@ -420,7 +438,11 @@ mod tests {
 
         assert!(chunks.len() > 1, "expected the text to be split");
         let rejoined: String = chunks.concat();
-        assert_eq!(rejoined.chars().count(), 500, "characters were lost or mangled");
+        assert_eq!(
+            rejoined.chars().count(),
+            500,
+            "characters were lost or mangled"
+        );
         assert!(chunks.iter().all(|c| c.chars().all(|ch| ch == 'à')));
     }
 

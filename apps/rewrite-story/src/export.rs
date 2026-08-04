@@ -153,7 +153,12 @@ pub fn to_markdown(b: &ExportBundle) -> String {
         b.name, kind, b.total_chars, b.total_scenes
     );
     for s in &b.scenes {
-        out.push_str(&format!("## Cảnh {} — {}\n\n{}\n\n", s.index, s.heading, s.text.trim()));
+        out.push_str(&format!(
+            "## Cảnh {} — {}\n\n{}\n\n",
+            s.index,
+            s.heading,
+            s.text.trim()
+        ));
     }
     out
 }
@@ -205,7 +210,11 @@ pub fn slug(name: &str) -> String {
     if s.is_empty() {
         "truyen".to_string()
     } else {
-        s.chars().take(60).collect::<String>().trim_matches('-').to_string()
+        s.chars()
+            .take(60)
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string()
     }
 }
 
@@ -242,7 +251,10 @@ mod tests {
 
         let h1 = md.lines().filter(|l| l.starts_with("# ")).count();
         assert_eq!(h1, b.total_scenes);
-        assert!(md.starts_with("<!--"), "metadata must not be YAML front-matter");
+        assert!(
+            md.starts_with("<!--"),
+            "metadata must not be YAML front-matter"
+        );
         assert!(md.contains("# Cảnh 1 — "));
     }
 
@@ -252,7 +264,11 @@ mod tests {
         let md = to_screenplay(&b);
         for s in &b.scenes {
             let first_line = s.text.lines().next().unwrap();
-            assert!(md.contains(first_line), "scene {} missing from export", s.index);
+            assert!(
+                md.contains(first_line),
+                "scene {} missing from export",
+                s.index
+            );
         }
     }
 
@@ -260,7 +276,11 @@ mod tests {
     fn headings_stay_short_and_are_derived_from_the_text() {
         let b = bundle(1, "T", "ai", 1, &sample(), 400);
         for s in &b.scenes {
-            assert!(s.heading.chars().count() <= 61, "heading too long: {}", s.heading);
+            assert!(
+                s.heading.chars().count() <= 61,
+                "heading too long: {}",
+                s.heading
+            );
             assert!(!s.heading.contains('\n'));
         }
     }

@@ -351,15 +351,17 @@ pub fn learned_cards(
     let tz = srs::parse_tz(&s.timezone);
     let now = Utc::now();
 
-    let today_range = (period == Some("today"))
-        .then(|| (srs::start_of_day(tz, now), srs::end_of_day(tz, now)));
+    let today_range =
+        (period == Some("today")).then(|| (srs::start_of_day(tz, now), srs::end_of_day(tz, now)));
 
     let mut seen = std::collections::HashSet::new();
     let mut cards = Vec::new();
     for (card, prow) in db.progress_with_cards()? {
         let level_ok = match (min_level, max_level) {
             (None, None) => prow.data.level > 0,
-            (min, max) => prow.data.level >= min.unwrap_or(0) && prow.data.level <= max.unwrap_or(7),
+            (min, max) => {
+                prow.data.level >= min.unwrap_or(0) && prow.data.level <= max.unwrap_or(7)
+            }
         };
         if !level_ok {
             continue;
@@ -397,8 +399,16 @@ pub fn learned_cards(
     }
 
     let total = cards.len() as i64;
-    let total_pages = if total == 0 { 0 } else { (total + limit - 1) / limit };
-    let page = if total_pages > 0 { page.min(total_pages) } else { 1 };
+    let total_pages = if total == 0 {
+        0
+    } else {
+        (total + limit - 1) / limit
+    };
+    let page = if total_pages > 0 {
+        page.min(total_pages)
+    } else {
+        1
+    };
     let start = ((page - 1) * limit) as usize;
     let paged: Vec<Value> = cards.into_iter().skip(start).take(limit as usize).collect();
 
@@ -568,9 +578,7 @@ fn select_practice_pool(
     let others: Vec<usize> = pool
         .iter()
         .enumerate()
-        .filter(|(i, (c, p))| {
-            !exclude.contains(&c.id) && p.data.level > 3 && !priority.contains(i)
-        })
+        .filter(|(i, (c, p))| !exclude.contains(&c.id) && p.data.level > 3 && !priority.contains(i))
         .map(|(i, _)| i)
         .take(5)
         .collect();
@@ -599,9 +607,7 @@ pub fn review_session(db: &Db, allow_repeat: bool, lesson_id: Option<&str>) -> R
     let pool: Vec<_> = db
         .progress_with_cards()?
         .into_iter()
-        .filter(|(c, p)| {
-            p.data.level > 0 && lesson_id.map_or(true, |id| c.lesson_id == id)
-        })
+        .filter(|(c, p)| p.data.level > 0 && lesson_id.map_or(true, |id| c.lesson_id == id))
         .collect();
 
     let exclude = if allow_repeat {
@@ -610,8 +616,10 @@ pub fn review_session(db: &Db, allow_repeat: bool, lesson_id: Option<&str>) -> R
         db.recently_reviewed_ids(one_day_ago)?
     };
 
-    let mut picked: Vec<&(Card, crate::db::ProgressRow)> =
-        select_practice_pool(&pool, &exclude).into_iter().map(|i| &pool[i]).collect();
+    let mut picked: Vec<&(Card, crate::db::ProgressRow)> = select_practice_pool(&pool, &exclude)
+        .into_iter()
+        .map(|i| &pool[i])
+        .collect();
 
     // Everything was seen recently → fall back to the 15 longest-unreviewed
     // learned cards (kaizen's global-review fallback) so the page never dead-ends.
@@ -714,7 +722,8 @@ pub fn game_session(db: &Db) -> Result<Value> {
         // kaizen's matching fallback: re-select ignoring the 24h marks.
         idx = select_practice_pool(&pool, &Default::default());
     }
-    let mut picked: Vec<&(Card, crate::db::ProgressRow)> = idx.into_iter().map(|i| &pool[i]).collect();
+    let mut picked: Vec<&(Card, crate::db::ProgressRow)> =
+        idx.into_iter().map(|i| &pool[i]).collect();
     picked.shuffle(&mut rand::thread_rng());
     let cards: Vec<Value> = picked
         .iter()
@@ -775,10 +784,22 @@ pub fn lessons_page(db: &Db, search: Option<&str>, page: i64, limit: i64) -> Res
         None => all,
     };
     let total = filtered.len() as i64;
-    let total_pages = if total == 0 { 0 } else { (total + limit - 1) / limit };
-    let page = if total_pages > 0 { page.min(total_pages) } else { 1 };
+    let total_pages = if total == 0 {
+        0
+    } else {
+        (total + limit - 1) / limit
+    };
+    let page = if total_pages > 0 {
+        page.min(total_pages)
+    } else {
+        1
+    };
     let start = ((page - 1) * limit) as usize;
-    let items: Vec<_> = filtered.into_iter().skip(start).take(limit as usize).collect();
+    let items: Vec<_> = filtered
+        .into_iter()
+        .skip(start)
+        .take(limit as usize)
+        .collect();
     Ok(json!({
         "lessons": items,
         "total": total,
@@ -803,7 +824,9 @@ pub fn lesson_json(db: &Db, lesson_id: &str, with_cards: bool) -> Result<Value> 
             .iter()
             .map(|c| card_json(c, None))
             .collect();
-        v.as_object_mut().unwrap().insert("cards".into(), json!(cards));
+        v.as_object_mut()
+            .unwrap()
+            .insert("cards".into(), json!(cards));
     }
     Ok(v)
 }
@@ -851,7 +874,9 @@ pub fn import_lesson(db: &Db, title: &str, raw_text: &str, separator: &str) -> R
             part_of_speech.copied(),
             examples.as_ref(),
             explain,
-            (!meanings.is_empty()).then(|| Value::Object(meanings)).as_ref(),
+            (!meanings.is_empty())
+                .then(|| Value::Object(meanings))
+                .as_ref(),
         )?;
         count += 1;
     }
@@ -967,8 +992,17 @@ mod tests {
         let db = db();
         let l1 = seed_lesson(&db, 1);
         let l2 = db.create_lesson("Dup", None).unwrap();
-        db.insert_card(&l2.id, "word0", None, None, None, None, "dup of word0", None)
-            .unwrap();
+        db.insert_card(
+            &l2.id,
+            "word0",
+            None,
+            None,
+            None,
+            None,
+            "dup of word0",
+            None,
+        )
+        .unwrap();
         for lesson in [&l1, &l2.id] {
             for c in db.cards_of_lesson(lesson).unwrap() {
                 submit_review(&db, &c.id, "REMEMBER", "FLIP").unwrap();
@@ -994,7 +1028,11 @@ mod tests {
         assert_eq!(o["library"]["cards"], 4);
         assert!(o["snoozedUntil"].is_null());
         // Study slots default to 08:00/20:00 → the next one is always resolvable.
-        assert!(o["nextSlot"].is_string(), "next slot instant: {:?}", o["nextSlot"]);
+        assert!(
+            o["nextSlot"].is_string(),
+            "next slot instant: {:?}",
+            o["nextSlot"]
+        );
 
         // Grading a card makes it due in 30 minutes (not now) and starts a streak.
         submit_review(&db, &cards[0].id, "REMEMBER", "FLIP").unwrap();
@@ -1010,7 +1048,10 @@ mod tests {
         snooze(&db, 2).unwrap();
         assert!(overview(&db).unwrap()["snoozedUntil"].is_string());
         snooze(&db, 0).unwrap();
-        assert!(overview(&db).unwrap()["snoozedUntil"].is_null(), "expired snooze is hidden");
+        assert!(
+            overview(&db).unwrap()["snoozedUntil"].is_null(),
+            "expired snooze is hidden"
+        );
     }
 
     #[test]
@@ -1061,7 +1102,10 @@ mod tests {
             words.contains(&cards[1].word),
             "wrongly-answered card must re-enter the pool: {words:?}"
         );
-        assert!(!words.contains(&cards[0].word), "confirmed card stays hidden");
+        assert!(
+            !words.contains(&cards[0].word),
+            "confirmed card stays hidden"
+        );
 
         // allowRepeat wipes the marks — everything is available again.
         let s3 = review_session(&db, true, None).unwrap();
@@ -1081,14 +1125,18 @@ mod tests {
         game_submit(&db, &card_id, false).unwrap();
 
         let after = db.get_progress(&card_id).unwrap().unwrap();
-        assert_eq!(before.data, after.data, "games must not alter SRS scheduling");
+        assert_eq!(
+            before.data, after.data,
+            "games must not alter SRS scheduling"
+        );
     }
 
     #[test]
     fn lessons_page_searches_and_paginates() {
         let db = db();
         db.create_lesson("Du lịch", None).unwrap();
-        db.create_lesson("Công sở", Some("từ vựng văn phòng")).unwrap();
+        db.create_lesson("Công sở", Some("từ vựng văn phòng"))
+            .unwrap();
         let all = lessons_page(&db, None, 1, 1).unwrap();
         assert_eq!(all["total"], 2);
         assert_eq!(all["lessons"].as_array().unwrap().len(), 1);

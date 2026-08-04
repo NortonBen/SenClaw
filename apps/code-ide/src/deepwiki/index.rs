@@ -23,10 +23,28 @@ pub struct IndexReport {
 /// Build-artifact / generated paths skipped by default so the index reflects
 /// real source, not minified bundles or vendored deps.
 const DEFAULT_EXCLUDES: &[&str] = &[
-    "**/node_modules/**", "**/target/**", "**/dist/**", "**/build/**", "**/release/**",
-    "**/.next/**", "**/.nuxt/**", "**/.svelte-kit/**", "**/web_dist/**", "**/vendor/**",
-    "**/coverage/**", "**/out/**", "**/.git/**", "**/__pycache__/**", "**/.venv/**", "**/venv/**",
-    "**/*.min.js", "**/*.min.css", "**/*.bundle.js", "**/*.map", "**/*.d.ts", "**/*.gen.*",
+    "**/node_modules/**",
+    "**/target/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/release/**",
+    "**/.next/**",
+    "**/.nuxt/**",
+    "**/.svelte-kit/**",
+    "**/web_dist/**",
+    "**/vendor/**",
+    "**/coverage/**",
+    "**/out/**",
+    "**/.git/**",
+    "**/__pycache__/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/*.min.js",
+    "**/*.min.css",
+    "**/*.bundle.js",
+    "**/*.map",
+    "**/*.d.ts",
+    "**/*.gen.*",
 ];
 
 /// The factory exclude list (what Settings seeds + the "reset" target).
@@ -104,7 +122,10 @@ fn looks_minified(src: &str, max_line_threshold: usize) -> bool {
 }
 
 fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn hash_str(s: &str) -> String {
@@ -128,7 +149,10 @@ pub fn index_repo(db: &Db, root: &Path) -> Result<IndexReport> {
         db.set_meta("root", &root_str)?;
     }
 
-    let mut report = IndexReport { root: root_str.clone(), ..Default::default() };
+    let mut report = IndexReport {
+        root: root_str.clone(),
+        ..Default::default()
+    };
     let mut seen: HashSet<String> = HashSet::new();
 
     // Exclude globs from settings (configurable defaults + custom).
@@ -154,8 +178,14 @@ pub fn index_repo(db: &Db, root: &Path) -> Result<IndexReport> {
             continue;
         }
         let path = dent.path();
-        let rel = path.strip_prefix(&root).unwrap_or(path).to_string_lossy().to_string();
-        let Some(lang_name) = lang::lang_for_path(&rel) else { continue };
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+        let Some(lang_name) = lang::lang_for_path(&rel) else {
+            continue;
+        };
         // Skip build artifacts / minified / excluded paths. Not added to `seen`,
         // so any previously-indexed junk is pruned below.
         if excluder.is_match(&rel) {
@@ -187,7 +217,13 @@ pub fn index_repo(db: &Db, root: &Path) -> Result<IndexReport> {
                 .query_row(
                     "SELECT id, mtime, hash FROM files WHERE path=?1",
                     [&rel],
-                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)),
+                    |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    },
                 )
                 .ok();
             Ok(row)

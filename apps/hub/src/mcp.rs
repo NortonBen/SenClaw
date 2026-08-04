@@ -63,7 +63,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "hub-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or(json!({}));

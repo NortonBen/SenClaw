@@ -150,7 +150,9 @@ impl Db {
         for m in MIGRATIONS {
             let _ = conn.execute(m, []); // ignore "duplicate column" on existing DBs
         }
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     fn with<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -186,7 +188,13 @@ impl Db {
     }
 
     /// Create a map plus its root node (text = title). Returns (map_id, root_id).
-    pub fn create_map(&self, title: &str, description: &str, layout: &str, now: i64) -> Result<(i64, i64)> {
+    pub fn create_map(
+        &self,
+        title: &str,
+        description: &str,
+        layout: &str,
+        now: i64,
+    ) -> Result<(i64, i64)> {
         self.with(|c| {
             c.execute(
                 "INSERT INTO maps(title, description, layout, created_at, updated_at) VALUES(?1,?2,?3,?4,?4)",
@@ -263,7 +271,10 @@ impl Db {
     }
 
     fn touch(c: &Connection, map_id: i64, now: i64) -> Result<()> {
-        c.execute("UPDATE maps SET updated_at=?2 WHERE id=?1", params![map_id, now])?;
+        c.execute(
+            "UPDATE maps SET updated_at=?2 WHERE id=?1",
+            params![map_id, now],
+        )?;
         Ok(())
     }
 
@@ -307,9 +318,13 @@ impl Db {
     }
 
     fn map_of_node(c: &Connection, node_id: i64) -> Result<i64> {
-        c.query_row("SELECT map_id FROM nodes WHERE id=?1", params![node_id], |r| r.get(0))
-            .optional()?
-            .ok_or_else(|| anyhow!("node {node_id} not found"))
+        c.query_row(
+            "SELECT map_id FROM nodes WHERE id=?1",
+            params![node_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("node {node_id} not found"))
     }
 
     fn next_ord(c: &Connection, parent_id: i64) -> Result<i64> {
@@ -324,7 +339,14 @@ impl Db {
     }
 
     /// Add a child under `parent_id`. Returns the new node id.
-    pub fn add_node(&self, parent_id: i64, text: &str, note: &str, color: Option<&str>, now: i64) -> Result<i64> {
+    pub fn add_node(
+        &self,
+        parent_id: i64,
+        text: &str,
+        note: &str,
+        color: Option<&str>,
+        now: i64,
+    ) -> Result<i64> {
         self.with(|c| {
             let map_id = Self::map_of_node(c, parent_id)?;
             let ord = Self::next_ord(c, parent_id)?;
@@ -363,19 +385,31 @@ impl Db {
                 c.execute("UPDATE nodes SET note=?2 WHERE id=?1", params![node_id, n])?;
             }
             if let Some(col) = color {
-                c.execute("UPDATE nodes SET color=?2 WHERE id=?1", params![node_id, col])?;
+                c.execute(
+                    "UPDATE nodes SET color=?2 WHERE id=?1",
+                    params![node_id, col],
+                )?;
             }
             if let Some(sh) = shape {
-                c.execute("UPDATE nodes SET shape=?2 WHERE id=?1", params![node_id, sh])?;
+                c.execute(
+                    "UPDATE nodes SET shape=?2 WHERE id=?1",
+                    params![node_id, sh],
+                )?;
             }
             if let Some(f) = fill {
-                c.execute("UPDATE nodes SET fill=?2 WHERE id=?1", params![node_id, f as i64])?;
+                c.execute(
+                    "UPDATE nodes SET fill=?2 WHERE id=?1",
+                    params![node_id, f as i64],
+                )?;
             }
             if let Some(ic) = icon {
                 c.execute("UPDATE nodes SET icon=?2 WHERE id=?1", params![node_id, ic])?;
             }
             if let Some(cl) = collapsed {
-                c.execute("UPDATE nodes SET collapsed=?2 WHERE id=?1", params![node_id, cl as i64])?;
+                c.execute(
+                    "UPDATE nodes SET collapsed=?2 WHERE id=?1",
+                    params![node_id, cl as i64],
+                )?;
             }
             Self::touch(c, map_id, now)?;
             Ok(())
@@ -386,8 +420,11 @@ impl Db {
     pub fn delete_node(&self, node_id: i64, now: i64) -> Result<()> {
         self.with(|c| {
             let map_id = Self::map_of_node(c, node_id)?;
-            let parent: Option<i64> =
-                c.query_row("SELECT parent_id FROM nodes WHERE id=?1", params![node_id], |r| r.get(0))?;
+            let parent: Option<i64> = c.query_row(
+                "SELECT parent_id FROM nodes WHERE id=?1",
+                params![node_id],
+                |r| r.get(0),
+            )?;
             if parent.is_none() {
                 return Err(anyhow!("cannot delete the root node of a map"));
             }
@@ -441,7 +478,12 @@ impl Db {
 
     /// Replace a node's children entirely with `children` (delete existing subtrees
     /// first). Used when regenerating. Returns count added.
-    pub fn replace_children(&self, parent_id: i64, children: &[GenNode], now: i64) -> Result<usize> {
+    pub fn replace_children(
+        &self,
+        parent_id: i64,
+        children: &[GenNode],
+        now: i64,
+    ) -> Result<usize> {
         self.with(|c| {
             let map_id = Self::map_of_node(c, parent_id)?;
             let all = Self::nodes_of_conn(c, map_id)?;
@@ -480,7 +522,10 @@ impl Db {
     /// Clear all custom positions in a map (back to auto-layout).
     pub fn clear_positions(&self, map_id: i64, now: i64) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE nodes SET pos_x=NULL, pos_y=NULL WHERE map_id=?1", params![map_id])?;
+            c.execute(
+                "UPDATE nodes SET pos_x=NULL, pos_y=NULL WHERE map_id=?1",
+                params![map_id],
+            )?;
             Self::touch(c, map_id, now)?;
             Ok(())
         })
@@ -488,7 +533,13 @@ impl Db {
 
     /// Replace a map's entire node set with `nodes` (preserving ids) and set its
     /// layout. Used by undo/redo to restore a snapshot atomically.
-    pub fn restore_map(&self, map_id: i64, nodes: &[RestoreNode], layout: &str, now: i64) -> Result<()> {
+    pub fn restore_map(
+        &self,
+        map_id: i64,
+        nodes: &[RestoreNode],
+        layout: &str,
+        now: i64,
+    ) -> Result<()> {
         if nodes.is_empty() {
             return Err(anyhow!("refusing to restore an empty map"));
         }
@@ -540,8 +591,12 @@ impl Db {
 
     pub fn node_text(&self, node_id: i64) -> Result<String> {
         self.with(|c| {
-            c.query_row("SELECT text FROM nodes WHERE id=?1", params![node_id], |r| r.get(0))
-                .map_err(|e| anyhow!(e))
+            c.query_row(
+                "SELECT text FROM nodes WHERE id=?1",
+                params![node_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| anyhow!(e))
         })
     }
 
@@ -604,7 +659,10 @@ impl Db {
 
     pub fn rename_session(&self, id: i64, title: &str) -> Result<()> {
         self.with(|c| {
-            c.execute("UPDATE chat_sessions SET title=?2 WHERE id=?1", params![id, title])?;
+            c.execute(
+                "UPDATE chat_sessions SET title=?2 WHERE id=?1",
+                params![id, title],
+            )?;
             Ok(())
         })
     }
@@ -639,7 +697,14 @@ impl Db {
         })
     }
 
-    pub fn add_message(&self, session_id: i64, role: &str, content: &str, model: Option<&str>, now: i64) -> Result<i64> {
+    pub fn add_message(
+        &self,
+        session_id: i64,
+        role: &str,
+        content: &str,
+        model: Option<&str>,
+        now: i64,
+    ) -> Result<i64> {
         self.with(|c| {
             c.execute(
                 "INSERT INTO chat_messages(session_id, role, content, model, created_at) VALUES(?1,?2,?3,?4,?5)",
@@ -653,8 +718,12 @@ impl Db {
     /// The map a session belongs to (for outline grounding / validation).
     pub fn session_map(&self, session_id: i64) -> Result<i64> {
         self.with(|c| {
-            c.query_row("SELECT map_id FROM chat_sessions WHERE id=?1", params![session_id], |r| r.get(0))
-                .map_err(|e| anyhow!(e))
+            c.query_row(
+                "SELECT map_id FROM chat_sessions WHERE id=?1",
+                params![session_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| anyhow!(e))
         })
     }
 }
@@ -767,7 +836,10 @@ fn build_subtree(id: i64, all: &[Node]) -> TreeNode {
         pos_x: n.pos_x,
         pos_y: n.pos_y,
         collapsed: n.collapsed,
-        children: children.into_iter().map(|c| build_subtree(c.id, all)).collect(),
+        children: children
+            .into_iter()
+            .map(|c| build_subtree(c.id, all))
+            .collect(),
     }
 }
 

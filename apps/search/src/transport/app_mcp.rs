@@ -173,10 +173,7 @@ impl AppMcp {
                         .unwrap_or("/mcp")
                         .to_string(),
                     mcp_name: mcp.get("name").and_then(Value::as_str).map(String::from),
-                    enabled: app
-                        .get("enabled")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(true),
+                    enabled: app.get("enabled").and_then(Value::as_bool).unwrap_or(true),
                 },
             );
         }

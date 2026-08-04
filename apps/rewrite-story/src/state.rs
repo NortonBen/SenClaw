@@ -160,7 +160,10 @@ mod tests {
 
         assert!(result.is_err(), "the panic should have propagated");
         assert_eq!(core.running_count(), 0, "slot must have been released");
-        assert!(core.job_guard(42).is_some(), "process must be runnable again");
+        assert!(
+            core.job_guard(42).is_some(),
+            "process must be runnable again"
+        );
     }
 
     /// Regression: the poller must not be able to start a second task for a
@@ -171,7 +174,10 @@ mod tests {
 
         let first = core.register_job(7);
         assert!(first.is_some());
-        assert!(core.register_job(7).is_none(), "second registration must fail");
+        assert!(
+            core.register_job(7).is_none(),
+            "second registration must fail"
+        );
 
         // Once the original task exits, the slot frees up.
         core.finish_job(7);

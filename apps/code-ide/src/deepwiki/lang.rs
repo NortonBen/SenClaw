@@ -52,6 +52,21 @@ pub fn grammar(name: &str) -> Option<Language> {
 }
 
 pub const SUPPORTED: &[&str] = &[
-    "rust", "python", "javascript", "typescript", "tsx", "go", "bash", "c", "cpp", "csharp",
-    "java", "ruby", "php", "scala", "ocaml", "haskell", "julia",
+    "rust",
+    "python",
+    "javascript",
+    "typescript",
+    "tsx",
+    "go",
+    "bash",
+    "c",
+    "cpp",
+    "csharp",
+    "java",
+    "ruby",
+    "php",
+    "scala",
+    "ocaml",
+    "haskell",
+    "julia",
 ];

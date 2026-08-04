@@ -125,7 +125,12 @@ pub fn create_story(db: &Db, body: &Value) -> Result<Value> {
 }
 
 fn replace_steps(db: &Db, story_id: &str, steps: &[Value]) -> Result<()> {
-    db.with(|c| c.execute("DELETE FROM story_steps WHERE story_id = ?1", params![story_id]))?;
+    db.with(|c| {
+        c.execute(
+            "DELETE FROM story_steps WHERE story_id = ?1",
+            params![story_id],
+        )
+    })?;
     for s in steps {
         let step_type = s["stepType"].as_str().unwrap_or("STEP1");
         let lang = s["primaryLanguage"].as_str().unwrap_or("en");
@@ -157,7 +162,12 @@ pub fn update_story(db: &Db, id: &str, body: &Value) -> Result<Value> {
                topic = COALESCE(?3, topic),
                description = COALESCE(?4, description)
              WHERE id = ?1",
-            params![id, body["title"].as_str(), body["topic"].as_str(), body["description"].as_str()],
+            params![
+                id,
+                body["title"].as_str(),
+                body["topic"].as_str(),
+                body["description"].as_str()
+            ],
         )
     })?;
     if let Some(steps) = body["steps"].as_array().filter(|s| !s.is_empty()) {
@@ -240,7 +250,11 @@ pub fn update_progress(db: &Db, story_id: &str, dto: &Value) -> Result<Value> {
     let merge = |key: &str| -> Vec<String> {
         let mut set: Vec<String> = existing[key]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         if let Some(new) = dto[key].as_array() {
             for v in new.iter().filter_map(Value::as_str) {
@@ -322,12 +336,7 @@ pub fn parse_story_response(text: &str) -> (String, String, String) {
         if start < end {
             if let Ok(v) = serde_json::from_str::<Value>(&text[start..=end]) {
                 if v.get("step1").is_some() {
-                    let get = |k: &str| {
-                        v[k]["content"]
-                            .as_str()
-                            .unwrap_or("")
-                            .to_string()
-                    };
+                    let get = |k: &str| v[k]["content"].as_str().unwrap_or("").to_string();
                     let (s1, s2, s3) = (get("step1"), get("step2"), get("step3"));
                     if !s1.is_empty() {
                         return (s1, s2, s3);
@@ -407,7 +416,9 @@ pub async fn generate_story(
         .await
         .map_err(|e| anyhow!(e))?;
     if finish == "length" {
-        return Err(anyhow!("model cắt output giữa chừng (finish=length) — thử lesson ít từ hơn"));
+        return Err(anyhow!(
+            "model cắt output giữa chừng (finish=length) — thử lesson ít từ hơn"
+        ));
     }
     let (s1, s2, s3) = parse_story_response(&text);
 
@@ -481,19 +492,31 @@ mod tests {
         let (db, lesson_id) = seeded_db();
         let id = make_story(&db, &lesson_id);
 
-        update_progress(&db, &id, &json!({ "currentStep": 2, "viewedVocabIds": ["c1"] })).unwrap();
+        update_progress(
+            &db,
+            &id,
+            &json!({ "currentStep": 2, "viewedVocabIds": ["c1"] }),
+        )
+        .unwrap();
         let p = update_progress(
             &db,
             &id,
             &json!({ "viewedVocabIds": ["c2", "c1"], "additionalReadingTime": 30 }),
         )
         .unwrap();
-        assert_eq!(p["viewedVocabIds"].as_array().unwrap().len(), 2, "merged, deduped");
+        assert_eq!(
+            p["viewedVocabIds"].as_array().unwrap().len(),
+            2,
+            "merged, deduped"
+        );
         assert_eq!(p["currentStep"], 2, "unspecified fields keep prior value");
         assert_eq!(p["totalReadingTime"], 30);
 
         let done = update_progress(&db, &id, &json!({ "completedSteps": [1, 2, 3] })).unwrap();
-        assert!(done["completedAt"].is_string(), "3 steps done → completedAt");
+        assert!(
+            done["completedAt"].is_string(),
+            "3 steps done → completedAt"
+        );
 
         // The learned-in-story set feeds the vocab session generator.
         let learned = story_learned_card_ids(&db).unwrap();
@@ -517,7 +540,11 @@ mod tests {
     #[test]
     fn story_prompt_lists_every_vocab_word() {
         let vocab = vec![
-            ("apple".to_string(), "quả táo".to_string(), "noun".to_string()),
+            (
+                "apple".to_string(),
+                "quả táo".to_string(),
+                "noun".to_string(),
+            ),
             ("run".to_string(), "chạy".to_string(), "verb".to_string()),
         ];
         let p = build_story_prompt("My day", "", &vocab, "vi");

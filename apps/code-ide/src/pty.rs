@@ -23,7 +23,12 @@ pub async fn terminal_ws(State(s): State<Arc<AppState>>, ws: WebSocketUpgrade) -
 
 async fn handle(socket: WebSocket, root: Option<PathBuf>) {
     let pty_system = native_pty_system();
-    let pair = match pty_system.openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }) {
+    let pair = match pty_system.openpty(PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
         Ok(p) => p,
         Err(_) => return,
     };

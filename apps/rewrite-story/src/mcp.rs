@@ -68,7 +68,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "rewrite-story-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -308,11 +310,23 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 let Ok(Some(story)) = db.get_story(id) else {
                     return error_result(format!("không tìm thấy truyện {id}"));
                 };
-                let min = db.setting_i64("hybrid_split_min_size", (crate::llm::MAX_CHUNK_CHARS as i64) * 3 / 5).max(1) as usize;
-                let max = db.setting_i64("hybrid_split_max_size", crate::llm::MAX_CHUNK_CHARS as i64).max(1) as usize;
+                let min = db
+                    .setting_i64(
+                        "hybrid_split_min_size",
+                        (crate::llm::MAX_CHUNK_CHARS as i64) * 3 / 5,
+                    )
+                    .max(1) as usize;
+                let max = db
+                    .setting_i64("hybrid_split_max_size", crate::llm::MAX_CHUNK_CHARS as i64)
+                    .max(1) as usize;
                 let (min, max) = if min > max { (max, min) } else { (min, max) };
-                let th = db.setting_f64("hybrid_split_threshold", 0.2).clamp(0.0, 1.0);
-                (text::hybrid_split(&story.original_text, min, max, th), false)
+                let th = db
+                    .setting_f64("hybrid_split_threshold", 0.2)
+                    .clamp(0.0, 1.0);
+                (
+                    text::hybrid_split(&story.original_text, min, max, th),
+                    false,
+                )
             } else {
                 (stored, true)
             };
@@ -336,8 +350,12 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 return error_result(format!("không đọc được nội dung truyện {id}"));
             };
 
-            let scene_chars =
-                int(args, "scene_chars", crate::export::DEFAULT_SCENE_CHARS as i64).max(1) as usize;
+            let scene_chars = int(
+                args,
+                "scene_chars",
+                crate::export::DEFAULT_SCENE_CHARS as i64,
+            )
+            .max(1) as usize;
             let bundle = crate::export::bundle(
                 meta.id,
                 &meta.name,
@@ -649,8 +667,7 @@ mod tests {
     async fn story_get_paginates_instead_of_dumping_the_whole_novel() {
         let db = crate::db::Db::open_memory().unwrap();
         let body = "à".repeat(50_000);
-        let sid = db
-            .create_story("T", &body).unwrap();
+        let sid = db.create_story("T", &body).unwrap();
         let core = std::sync::Arc::new(crate::state::Core::for_test(db));
         let (mcp_tx, _) = tokio::sync::broadcast::channel(8);
         let state = AppState { core, mcp_tx };

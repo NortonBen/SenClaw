@@ -60,7 +60,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "docx-editor-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -193,7 +195,9 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                     }
                     match state.db.find_by_title(title) {
                         Ok(Some(i)) => i,
-                        Ok(None) => return error_result(format!("no document titled \"{}\"", title)),
+                        Ok(None) => {
+                            return error_result(format!("no document titled \"{}\"", title))
+                        }
                         Err(e) => return error_result(e.to_string()),
                     }
                 }
@@ -220,12 +224,7 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             match state.db.get_doc(id) {
                 Ok(Some(doc)) => {
                     let total = doc.content_text.chars().count();
-                    let slice: String = doc
-                        .content_text
-                        .chars()
-                        .skip(offset)
-                        .take(limit)
-                        .collect();
+                    let slice: String = doc.content_text.chars().skip(offset).take(limit).collect();
                     let end = (offset + slice.chars().count()).min(total);
                     text_result(format!(
                         "[{}..{} of {} chars]\n{}",
@@ -281,7 +280,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                         Ok(b) => b,
                         Err(e) => return error_result(e.to_string()),
                     };
-                    match state.db.save_doc(id, None, &new_content, Some(&blob), now()) {
+                    match state
+                        .db
+                        .save_doc(id, None, &new_content, Some(&blob), now())
+                    {
                         Ok(()) => text_result(format!(
                             "Appended {} chars. Document id={} is now {} chars.",
                             extra.chars().count(),
@@ -330,7 +332,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                         Ok(b) => b,
                         Err(e) => return error_result(e.to_string()),
                     };
-                    match state.db.save_doc(id, None, &new_content, Some(&blob), now()) {
+                    match state
+                        .db
+                        .save_doc(id, None, &new_content, Some(&blob), now())
+                    {
                         Ok(()) => text_result(format!("Replaced {} occurrence(s).", count)),
                         Err(e) => error_result(e.to_string()),
                     }

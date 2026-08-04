@@ -37,7 +37,10 @@ fn err(e: impl std::fmt::Display) -> ApiError {
 }
 
 pub fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 pub fn make_state() -> Arc<AppState> {
@@ -60,7 +63,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/doc/:id/raw", get(get_raw).put(put_raw))
         .route("/chat", post(chat_handler))
         .route("/chat/apply", post(chat_apply))
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state)
@@ -90,9 +96,15 @@ async fn create_doc(
     if title.is_empty() {
         return Err(bad("title required"));
     }
-    let id = state.db.create_doc(title, &body.content, now()).map_err(err)?;
+    let id = state
+        .db
+        .create_doc(title, &body.content, now())
+        .map_err(err)?;
     let blob = docx::build_docx(&body.content).map_err(err)?;
-    state.db.save_doc(id, None, &body.content, Some(&blob), now()).map_err(err)?;
+    state
+        .db
+        .save_doc(id, None, &body.content, Some(&blob), now())
+        .map_err(err)?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -127,7 +139,13 @@ async fn save_doc(
     let blob = docx::build_docx(&body.content).map_err(err)?;
     state
         .db
-        .save_doc(body.id, body.title.as_deref(), &body.content, Some(&blob), now())
+        .save_doc(
+            body.id,
+            body.title.as_deref(),
+            &body.content,
+            Some(&blob),
+            now(),
+        )
         .map_err(err)?;
     Ok(Json(json!({ "ok": true, "size_bytes": blob.len() })))
 }
@@ -182,7 +200,9 @@ async fn upload_doc(
         .db
         .save_doc(id, None, &text, Some(&bytes), now())
         .map_err(err)?;
-    Ok(Json(json!({ "id": id, "title": title, "chars": text.chars().count() })))
+    Ok(Json(
+        json!({ "id": id, "title": title, "chars": text.chars().count() }),
+    ))
 }
 
 fn strip_docx_ext(name: &str) -> String {
@@ -204,7 +224,10 @@ async fn download_doc(
         Some(b) => b,
         None => docx::build_docx(&doc.content_text).map_err(err)?,
     };
-    let disposition = format!("attachment; filename=\"{}.docx\"", sanitize_filename(&doc.title));
+    let disposition = format!(
+        "attachment; filename=\"{}.docx\"",
+        sanitize_filename(&doc.title)
+    );
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header(
@@ -218,7 +241,13 @@ async fn download_doc(
 
 fn sanitize_filename(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_control() || "\\/:*?\"<>|".contains(c) { '_' } else { c })
+        .map(|c| {
+            if c.is_control() || "\\/:*?\"<>|".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -262,7 +291,9 @@ async fn put_raw(
         .db
         .save_doc(id, None, &text, Some(&bytes), now())
         .map_err(err)?;
-    Ok(Json(json!({ "ok": true, "size_bytes": bytes.len(), "chars": text.chars().count() })))
+    Ok(Json(
+        json!({ "ok": true, "size_bytes": bytes.len(), "chars": text.chars().count() }),
+    ))
 }
 
 /// POST /chat — one turn in the in-app Agent panel. Grounded in the current

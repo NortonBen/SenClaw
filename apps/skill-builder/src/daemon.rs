@@ -30,8 +30,8 @@ pub struct Inventory {
 
 impl Daemon {
     pub fn from_env() -> Self {
-        let base = std::env::var("SENCLAW_BASE_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:18788".into());
+        let base =
+            std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
         Self {
             base_url: base.trim_end_matches('/').to_string(),
             http: reqwest::Client::new(),

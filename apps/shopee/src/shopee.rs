@@ -70,7 +70,10 @@ pub struct Client {
 
 impl Client {
     pub fn new(cfg: Config) -> Self {
-        Self { cfg, http: reqwest::Client::new() }
+        Self {
+            cfg,
+            http: reqwest::Client::new(),
+        }
     }
 
     // ---- OAuth (public, unsigned-token endpoints) ----
@@ -193,7 +196,8 @@ impl Client {
 
     /// Basic shop profile — a cheap call to confirm the token works.
     pub async fn get_shop_info(&self, access_token: &str) -> Result<Value> {
-        self.get("/api/v2/shop/get_shop_info", access_token, &[]).await
+        self.get("/api/v2/shop/get_shop_info", access_token, &[])
+            .await
     }
 
     /// Recent orders. `time_from`/`time_to` are unix seconds (≤15-day window).
@@ -218,7 +222,11 @@ impl Client {
 
     /// Full detail for up to 50 orders by `order_sn`. Used to ground a CSKH
     /// reply in the real order (status, total, items) instead of guessing.
-    pub async fn get_order_detail(&self, access_token: &str, order_sns: &[String]) -> Result<Value> {
+    pub async fn get_order_detail(
+        &self,
+        access_token: &str,
+        order_sns: &[String],
+    ) -> Result<Value> {
         let list = order_sns.join(",");
         self.get(
             "/api/v2/order/get_order_detail",
@@ -240,7 +248,11 @@ impl Client {
         self.get(
             "/api/v2/sellerchat/get_conversation_list",
             access_token,
-            &[("direction", "latest".into()), ("type", "all".into()), ("page_size", "25".into())],
+            &[
+                ("direction", "latest".into()),
+                ("type", "all".into()),
+                ("page_size", "25".into()),
+            ],
         )
         .await
     }
@@ -254,7 +266,10 @@ impl Client {
         self.get(
             "/api/v2/sellerchat/get_message",
             access_token,
-            &[("conversation_id", conversation_id.to_string()), ("page_size", "30".into())],
+            &[
+                ("conversation_id", conversation_id.to_string()),
+                ("page_size", "30".into()),
+            ],
         )
         .await
     }
@@ -262,12 +277,7 @@ impl Client {
     /// Send a text reply to a buyer. This is the ONLY messaging this app does:
     /// a reply to a customer of *this* shop, gated by the draft-approve queue in
     /// the caller. There is no mass/broadcast messaging endpoint and we add none.
-    pub async fn send_message(
-        &self,
-        access_token: &str,
-        to_id: i64,
-        text: &str,
-    ) -> Result<Value> {
+    pub async fn send_message(&self, access_token: &str, to_id: i64, text: &str) -> Result<Value> {
         self.post(
             "/api/v2/sellerchat/send_message",
             access_token,
@@ -305,7 +315,11 @@ impl Client {
 
     /// Full info for up to 50 items. `item_ids` are joined into `item_id_list`.
     pub async fn get_item_base_info(&self, access_token: &str, item_ids: &[i64]) -> Result<Value> {
-        let list = item_ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let list = item_ids
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         self.get(
             "/api/v2/product/get_item_base_info",
             access_token,
@@ -317,7 +331,12 @@ impl Client {
     /// Update the stock of one item (single-variant shape: `model_id = 0`).
     /// A write to the seller's own shop — exposed as an explicit action, never
     /// automated by the heartbeat.
-    pub async fn update_stock(&self, access_token: &str, item_id: i64, stock: i64) -> Result<Value> {
+    pub async fn update_stock(
+        &self,
+        access_token: &str,
+        item_id: i64,
+        stock: i64,
+    ) -> Result<Value> {
         self.post(
             "/api/v2/product/update_stock",
             access_token,
@@ -330,7 +349,12 @@ impl Client {
     }
 
     /// Update the price of one item (single-variant shape: `model_id = 0`).
-    pub async fn update_price(&self, access_token: &str, item_id: i64, price: f64) -> Result<Value> {
+    pub async fn update_price(
+        &self,
+        access_token: &str,
+        item_id: i64,
+        price: f64,
+    ) -> Result<Value> {
         self.post(
             "/api/v2/product/update_price",
             access_token,
@@ -382,7 +406,11 @@ impl TokenResponse {
             .unwrap_or("")
             .to_string();
         let expire_in = v.get("expire_in").and_then(|x| x.as_i64()).unwrap_or(14400);
-        Ok(Self { access_token, refresh_token, expire_in })
+        Ok(Self {
+            access_token,
+            refresh_token,
+            expire_in,
+        })
     }
 }
 
@@ -423,7 +451,11 @@ mod tests {
     fn item_base_info_joins_ids() {
         // Regression: item_id_list must be a comma-joined string, no spaces.
         let ids = [111i64, 222, 333];
-        let joined = ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let joined = ids
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         assert_eq!(joined, "111,222,333");
     }
 

@@ -22,8 +22,8 @@ use futures_util::StreamExt;
 
 use crate::api::AppState;
 use crate::config;
-use crate::connectors::{self, SourceRel};
 use crate::connectors::ExtractSpec;
+use crate::connectors::{self, SourceRel};
 use crate::db::{run_status, Db, FlowRow, RunCreate};
 use crate::flow::{self, FlowDef, SourceStep};
 use crate::sync::{self, LandParams, SyncMode};
@@ -247,7 +247,8 @@ pub fn watchdog_tick(db: &Db) -> Result<(usize, usize)> {
         .format(fmt)
         .to_string();
     let failed = db.run_fail_stuck_running(&running_cutoff, "watchdog: running kẹt >60 phút")?;
-    let cancelled = db.run_cancel_stale_queued(&queued_cutoff, "watchdog: queued bỏ rơi >24 giờ")?;
+    let cancelled =
+        db.run_cancel_stale_queued(&queued_cutoff, "watchdog: queued bỏ rơi >24 giờ")?;
     Ok((failed, cancelled))
 }
 
@@ -278,12 +279,7 @@ impl Drop for RegGuard {
 /// Chạy một run end-to-end (không phát sự kiện — CHỈ dùng bởi test; runtime đi qua
 /// `execute_run_at_hub` để phát WS). `#[cfg(test)]` nên không cảnh báo dead-code ở bin.
 #[cfg(test)]
-pub async fn execute_run_at(
-    root: &Path,
-    db: &Db,
-    run_id: &str,
-    cancel: CancelToken,
-) -> Result<()> {
+pub async fn execute_run_at(root: &Path, db: &Db, run_id: &str, cancel: CancelToken) -> Result<()> {
     execute_run_at_hub(root, db, run_id, cancel, None).await
 }
 
@@ -320,8 +316,13 @@ pub async fn execute_run_at_hub(
         }
     };
 
-    db.run_log_append(run_id, "info", None, &format!("bắt đầu flow '{}'", run.flow_id))
-        .ok();
+    db.run_log_append(
+        run_id,
+        "info",
+        None,
+        &format!("bắt đầu flow '{}'", run.flow_id),
+    )
+    .ok();
     let result = run_flow(root, db, run_id, &flow_row, &cancel, hub).await;
 
     let final_status = match result {
@@ -367,7 +368,13 @@ async fn run_flow(
         anyhow!("flow không hợp lệ: {joined}")
     })?;
     let order = flow::derive_dag(&def).map_err(|errs| {
-        anyhow!("DAG lỗi: {}", errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; "))
+        anyhow!(
+            "DAG lỗi: {}",
+            errs.iter()
+                .map(|e| e.message.clone())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
     })?;
 
     for step_id in order {
@@ -375,8 +382,7 @@ async fn run_flow(
             return Err(anyhow!("hủy trước step '{step_id}'"));
         }
         if let Some(src) = def.sources.iter().find(|s| s.id == step_id) {
-            if let Err(e) =
-                execute_source(root, db, run_id, flow_row, &def, src, cancel, hub).await
+            if let Err(e) = execute_source(root, db, run_id, flow_row, &def, src, cancel, hub).await
             {
                 db.step_run_upsert(run_id, &step_id, "failed", 0, 0, Some(&e.to_string()))
                     .ok();
@@ -396,7 +402,12 @@ async fn run_flow(
                     if let Some(h) = hub {
                         let (ns, name) = crate::flow::transform_target(t);
                         if let Ok(Some(d)) = db.dataset_get(&ns, &name) {
-                            h.emit_dataset_updated(&ns, &name, d.current_schema_version, d.row_count);
+                            h.emit_dataset_updated(
+                                &ns,
+                                &name,
+                                d.current_schema_version,
+                                d.row_count,
+                            );
                         }
                     }
                 }
@@ -410,7 +421,8 @@ async fn run_flow(
             // Export step: file (csv/json/parquet) HOẶC DB-load qua connection (§5 Phase 5).
             match execute_export(root, db, run_id, &def, e).await {
                 Ok((msg, rows)) => {
-                    db.step_run_upsert(run_id, &step_id, "success", rows, rows, None).ok();
+                    db.step_run_upsert(run_id, &step_id, "success", rows, rows, None)
+                        .ok();
                     db.run_log_append(run_id, "info", Some(&step_id), &msg).ok();
                 }
                 Err(err) => {
@@ -451,7 +463,11 @@ async fn execute_export(
         .ok_or_else(|| anyhow!("export input '{}' không phải step trong flow", step.input))?;
 
     // ---- Nhánh DB-load (connection + table) ----
-    if step.connection.as_deref().is_some_and(|c| !c.trim().is_empty()) {
+    if step
+        .connection
+        .as_deref()
+        .is_some_and(|c| !c.trim().is_empty())
+    {
         let table = step
             .table
             .as_deref()
@@ -459,7 +475,12 @@ async fn execute_export(
             .ok_or_else(|| anyhow!("export step '{}' thiếu table cho DB-load", step.id))?;
         let conn = db
             .connection_get(step.connection.as_deref().unwrap())?
-            .ok_or_else(|| anyhow!("connection '{}' không tồn tại", step.connection.as_deref().unwrap()))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "connection '{}' không tồn tại",
+                    step.connection.as_deref().unwrap()
+                )
+            })?;
         let mode = connectors::LoadMode::from_export(&step.mode, step.keys.clone())?;
 
         // Đọc TOÀN BỘ dataset input ra RecordBatch (không clamp).
@@ -556,7 +577,9 @@ async fn execute_source(
 
     // merge dùng cursor để kéo incremental; snapshot không dùng cursor để extract.
     let extract_cursor_col = match src.mode.as_str() {
-        "incremental_append" | "incremental_merge" => src.cursor.as_ref().map(|c| c.column.as_str()),
+        "incremental_append" | "incremental_merge" => {
+            src.cursor.as_ref().map(|c| c.column.as_str())
+        }
         _ => None,
     };
     let initial = src.cursor.as_ref().and_then(|c| c.initial.as_ref());
@@ -592,10 +615,20 @@ async fn execute_source(
         .ok_or_else(|| anyhow!("dataset id {ds_id} biến mất"))?;
     let applied = apply_source(root, db, &dataset, run_id, flow_id, step_id, src, &batches)?;
 
-    db.step_run_upsert(run_id, step_id, "success", rows_read, applied.rows_written, None)?;
+    db.step_run_upsert(
+        run_id,
+        step_id,
+        "success",
+        rows_read,
+        applied.rows_written,
+        None,
+    )?;
     db.lineage_add(run_id, step_id, "out", ds_id, applied.schema_version)?;
     // Interval thô: [started_at run, now]. Đủ để skip-lookup nhận diện đã xong.
-    let started = db.run_get(run_id)?.and_then(|r| r.started_at).unwrap_or_default();
+    let started = db
+        .run_get(run_id)?
+        .and_then(|r| r.started_at)
+        .unwrap_or_default();
     let ended = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     db.step_interval_upsert(
         flow_id,
@@ -662,11 +695,21 @@ pub async fn backfill_run(
     flow::validate(&def).map_err(|errs| {
         anyhow!(
             "flow không hợp lệ: {}",
-            errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; ")
+            errs.iter()
+                .map(|e| e.message.clone())
+                .collect::<Vec<_>>()
+                .join("; ")
         )
     })?;
-    let order = flow::derive_dag(&def)
-        .map_err(|errs| anyhow!("DAG lỗi: {}", errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; ")))?;
+    let order = flow::derive_dag(&def).map_err(|errs| {
+        anyhow!(
+            "DAG lỗi: {}",
+            errs.iter()
+                .map(|e| e.message.clone())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    })?;
 
     let start_dt = crate::transform::parse_boundary(start)
         .ok_or_else(|| anyhow!("start '{start}' không phải mốc thời gian hợp lệ"))?;
@@ -687,7 +730,15 @@ pub async fn backfill_run(
             match t.kind.as_str() {
                 "incremental_by_time" => {
                     let o = crate::transform::run_incremental_range(
-                        root, db, &def, t, &run_id, flow_id, flow_row.def_version, start_dt, end_dt,
+                        root,
+                        db,
+                        &def,
+                        t,
+                        &run_id,
+                        flow_id,
+                        flow_row.def_version,
+                        start_dt,
+                        end_dt,
                     )
                     .await?;
                     out.intervals_run += o.intervals_run;
@@ -697,7 +748,8 @@ pub async fn backfill_run(
                 _ => {
                     // Full transform: chỉ rebuild mới chạy (full-refresh-equivalent).
                     if rebuilding(&step_id) {
-                        let a = crate::transform::run_full(root, db, &def, t, &run_id, flow_id).await?;
+                        let a =
+                            crate::transform::run_full(root, db, &def, t, &run_id, flow_id).await?;
                         out.rows_written += a.rows_written;
                         out.steps_run.push(step_id);
                     } else {
@@ -754,7 +806,16 @@ fn apply_source(
             let cursor_col = src.cursor.as_ref().map(|c| c.column.as_str());
             sync::apply_land_at(
                 root,
-                LandParams { db, dataset, run_id, flow_id, step_id, mode, cursor_col, schema_policy },
+                LandParams {
+                    db,
+                    dataset,
+                    run_id,
+                    flow_id,
+                    step_id,
+                    mode,
+                    cursor_col,
+                    schema_policy,
+                },
                 batches,
             )
         }
@@ -765,7 +826,8 @@ fn apply_source(
                 .as_ref()
                 .and_then(|t| t.partition_by.clone())
                 .unwrap_or_default();
-            let strategy = sync::MergeStrategy::from_str(src.strategy.as_deref().unwrap_or("delete_insert"));
+            let strategy =
+                sync::MergeStrategy::from_str(src.strategy.as_deref().unwrap_or("delete_insert"));
             let cursor_col = src.cursor.as_ref().map(|c| c.column.as_str());
             let applied = sync::apply_merge_at(
                 root,
@@ -785,7 +847,12 @@ fn apply_source(
             )?;
             // Đẩy watermark theo max cursor incoming (extract lần sau kéo từ đây).
             if let Some(col) = cursor_col {
-                let plan = sync::prepare_incremental(batches, col, None, &std::collections::HashSet::new())?;
+                let plan = sync::prepare_incremental(
+                    batches,
+                    col,
+                    None,
+                    &std::collections::HashSet::new(),
+                )?;
                 if let Some(wm) = &plan.new_watermark {
                     let hashes = serde_json::to_string(&plan.new_boundary_hashes).ok();
                     db.stream_state_set_monotonic(flow_id, step_id, col, wm, hashes.as_deref())?;
@@ -797,11 +864,15 @@ fn apply_source(
             let primary_key = src.primary_key.clone().unwrap_or_default();
             let strategy = match src.strategy.as_deref().unwrap_or("check") {
                 "timestamp" => sync::SnapshotStrategy::Timestamp(
-                    src.cursor.as_ref().map(|c| c.column.clone()).unwrap_or_default(),
+                    src.cursor
+                        .as_ref()
+                        .map(|c| c.column.clone())
+                        .unwrap_or_default(),
                 ),
                 _ => sync::SnapshotStrategy::Check(src.check_columns.clone().unwrap_or_default()),
             };
-            let hard_deletes = sync::HardDeletes::from_str(src.hard_deletes.as_deref().unwrap_or("ignore"));
+            let hard_deletes =
+                sync::HardDeletes::from_str(src.hard_deletes.as_deref().unwrap_or("ignore"));
             sync::apply_snapshot_at(
                 root,
                 sync::SnapshotParams {
@@ -854,8 +925,11 @@ mod tests {
         conn.execute_batch("CREATE TABLE IF NOT EXISTS events (id INTEGER, label TEXT);")
             .unwrap();
         for (id, label) in rows {
-            conn.execute("INSERT INTO events (id, label) VALUES (?1, ?2)", rusqlite::params![id, label])
-                .unwrap();
+            conn.execute(
+                "INSERT INTO events (id, label) VALUES (?1, ?2)",
+                rusqlite::params![id, label],
+            )
+            .unwrap();
         }
     }
 
@@ -905,8 +979,10 @@ mod tests {
         seed_sqlite(src_path.to_str().unwrap(), &[(1, "a"), (2, "b"), (3, "c")]);
 
         let db = Db::open_memory().unwrap();
-        db.connection_add("src", "sqlite", src_path.to_str().unwrap()).unwrap();
-        db.flow_upsert("ev", None, &full_refresh_def(), true, None).unwrap();
+        db.connection_add("src", "sqlite", src_path.to_str().unwrap())
+            .unwrap();
+        db.flow_upsert("ev", None, &full_refresh_def(), true, None)
+            .unwrap();
 
         let id = match enqueue(&db, "ev", "manual").unwrap() {
             EnqueueOutcome::Created(id) => id,
@@ -915,7 +991,10 @@ mod tests {
         let cancel: CancelToken = Arc::new(AtomicBool::new(false));
         execute_run_at(&root, &db, &id, cancel).await.unwrap();
 
-        assert_eq!(db.run_get(&id).unwrap().unwrap().status, run_status::SUCCESS);
+        assert_eq!(
+            db.run_get(&id).unwrap().unwrap().status,
+            run_status::SUCCESS
+        );
         assert_eq!(count_rows(&root, &db).await, 3);
     }
 
@@ -927,8 +1006,10 @@ mod tests {
         seed_sqlite(src_path.to_str().unwrap(), &[(1, "a"), (2, "b"), (3, "c")]);
 
         let db = Db::open_memory().unwrap();
-        db.connection_add("src", "sqlite", src_path.to_str().unwrap()).unwrap();
-        db.flow_upsert("ev", None, &full_refresh_def(), true, None).unwrap();
+        db.connection_add("src", "sqlite", src_path.to_str().unwrap())
+            .unwrap();
+        db.flow_upsert("ev", None, &full_refresh_def(), true, None)
+            .unwrap();
 
         for _ in 0..2 {
             let id = match enqueue(&db, "ev", "manual").unwrap() {
@@ -952,7 +1033,8 @@ mod tests {
 
         let db = Db::open_memory().unwrap();
         db.connection_add("src", "sqlite", &sp).unwrap();
-        db.flow_upsert("ev", None, &incremental_def(), true, None).unwrap();
+        db.flow_upsert("ev", None, &incremental_def(), true, None)
+            .unwrap();
 
         // Run 1 → 3 dòng, watermark = "3".
         let id1 = match enqueue(&db, "ev", "manual").unwrap() {
@@ -1002,7 +1084,8 @@ mod tests {
         let dp = dest_path.to_str().unwrap().to_string();
 
         let db = Db::open_memory().unwrap();
-        db.connection_add("src", "sqlite", src_path.to_str().unwrap()).unwrap();
+        db.connection_add("src", "sqlite", src_path.to_str().unwrap())
+            .unwrap();
         db.connection_add("dst", "sqlite", &dp).unwrap();
 
         let def = json!({
@@ -1028,7 +1111,10 @@ mod tests {
         execute_run_at(&root, &db, &id, Arc::new(AtomicBool::new(false)))
             .await
             .unwrap();
-        assert_eq!(db.run_get(&id).unwrap().unwrap().status, run_status::SUCCESS);
+        assert_eq!(
+            db.run_get(&id).unwrap().unwrap().status,
+            run_status::SUCCESS
+        );
 
         // Bảng đích tự tạo (create_if_missing) + đúng 3 dòng.
         let conn = rusqlite::Connection::open(&dp).unwrap();
@@ -1039,7 +1125,10 @@ mod tests {
 
         // step_run 'out' success với rows_written = 3.
         let steps = db.step_runs_for(&id).unwrap();
-        let out = steps.iter().find(|s| s.step_id == "out").expect("có step out");
+        let out = steps
+            .iter()
+            .find(|s| s.step_id == "out")
+            .expect("có step out");
         assert_eq!(out.status, "success");
         assert_eq!(out.rows_written, 3);
     }
@@ -1051,8 +1140,10 @@ mod tests {
         let src_path = dir.path().join("src.sqlite");
         seed_sqlite(src_path.to_str().unwrap(), &[(1, "a")]);
         let db = Db::open_memory().unwrap();
-        db.connection_add("src", "sqlite", src_path.to_str().unwrap()).unwrap();
-        db.flow_upsert("ev", None, &full_refresh_def(), true, None).unwrap();
+        db.connection_add("src", "sqlite", src_path.to_str().unwrap())
+            .unwrap();
+        db.flow_upsert("ev", None, &full_refresh_def(), true, None)
+            .unwrap();
 
         let id = match enqueue(&db, "ev", "manual").unwrap() {
             EnqueueOutcome::Created(id) => id,
@@ -1061,7 +1152,10 @@ mod tests {
         execute_run_at(&root, &db, &id, Arc::new(AtomicBool::new(false)))
             .await
             .unwrap();
-        assert_eq!(db.run_get(&id).unwrap().unwrap().status, run_status::SUCCESS);
+        assert_eq!(
+            db.run_get(&id).unwrap().unwrap().status,
+            run_status::SUCCESS
+        );
         // Chạy lại cùng id: đã terminal → claim thất bại → no-op, không lỗi, không nhân đôi.
         execute_run_at(&root, &db, &id, Arc::new(AtomicBool::new(false)))
             .await
@@ -1076,8 +1170,10 @@ mod tests {
         let src_path = dir.path().join("src.sqlite");
         seed_sqlite(src_path.to_str().unwrap(), &[(1, "a"), (2, "b")]);
         let db = Db::open_memory().unwrap();
-        db.connection_add("src", "sqlite", src_path.to_str().unwrap()).unwrap();
-        db.flow_upsert("ev", None, &full_refresh_def(), true, None).unwrap();
+        db.connection_add("src", "sqlite", src_path.to_str().unwrap())
+            .unwrap();
+        db.flow_upsert("ev", None, &full_refresh_def(), true, None)
+            .unwrap();
 
         let id = match enqueue(&db, "ev", "manual").unwrap() {
             EnqueueOutcome::Created(id) => id,
@@ -1086,7 +1182,10 @@ mod tests {
         // Token đã set true trước khi chạy → bail cancelled ở check đầu.
         let cancel: CancelToken = Arc::new(AtomicBool::new(true));
         execute_run_at(&root, &db, &id, cancel).await.unwrap();
-        assert_eq!(db.run_get(&id).unwrap().unwrap().status, run_status::CANCELLED);
+        assert_eq!(
+            db.run_get(&id).unwrap().unwrap().status,
+            run_status::CANCELLED
+        );
     }
 
     #[test]
@@ -1098,13 +1197,19 @@ mod tests {
             EnqueueOutcome::Created(_)
         ));
         // Cùng flow f1 khi run trước còn active → FlowBusy.
-        assert_eq!(enqueue_with_cap(&db, "f1", "manual", 2).unwrap(), EnqueueOutcome::FlowBusy);
+        assert_eq!(
+            enqueue_with_cap(&db, "f1", "manual", 2).unwrap(),
+            EnqueueOutcome::FlowBusy
+        );
         assert!(matches!(
             enqueue_with_cap(&db, "f2", "manual", 2).unwrap(),
             EnqueueOutcome::Created(_)
         ));
         // Đã đủ 2 active → f3 Backpressure.
-        assert_eq!(enqueue_with_cap(&db, "f3", "manual", 2).unwrap(), EnqueueOutcome::Backpressure);
+        assert_eq!(
+            enqueue_with_cap(&db, "f3", "manual", 2).unwrap(),
+            EnqueueOutcome::Backpressure
+        );
     }
 
     // ---- backfill (§6.2) ----
@@ -1127,7 +1232,11 @@ mod tests {
         let ev = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(StringArray::from(vec!["2024-01-01", "2024-01-02", "2024-01-03"])),
+                Arc::new(StringArray::from(vec![
+                    "2024-01-01",
+                    "2024-01-02",
+                    "2024-01-03",
+                ])),
                 Arc::new(Int64Array::from(vec![5, 7, 3])),
             ],
         )
@@ -1140,7 +1249,8 @@ mod tests {
             note: "t".into(),
             rows: 3,
         };
-        crate::lake::create_dataset_from_ingested_at(root, &db, "raw", "events", &t, "seed").unwrap();
+        crate::lake::create_dataset_from_ingested_at(root, &db, "raw", "events", &t, "seed")
+            .unwrap();
 
         let def = json!({
             "flow": "ev",
@@ -1156,16 +1266,34 @@ mod tests {
         .to_string();
         db.flow_upsert("ev", None, &def, true, None).unwrap();
 
-        let out = backfill_run(root, &db, "ev", "2024-01-01", "2024-01-04", None, &[], false)
-            .await
-            .unwrap();
+        let out = backfill_run(
+            root,
+            &db,
+            "ev",
+            "2024-01-01",
+            "2024-01-04",
+            None,
+            &[],
+            false,
+        )
+        .await
+        .unwrap();
         assert_eq!(out.intervals_run, 3, "3 ngày trong range");
         assert!(out.steps_run.contains(&"daily".to_string()));
-        assert!(out.steps_skipped.contains(&"events".to_string()), "source SKIP mặc định");
+        assert!(
+            out.steps_skipped.contains(&"events".to_string()),
+            "source SKIP mặc định"
+        );
 
-        let page = crate::engine::query_page_at(root, &db, "SELECT COUNT(*) AS n FROM marts.daily", None, None)
-            .await
-            .unwrap();
+        let page = crate::engine::query_page_at(
+            root,
+            &db,
+            "SELECT COUNT(*) AS n FROM marts.daily",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(page.rows[0][0].as_i64().unwrap(), 3);
     }
 
@@ -1189,19 +1317,38 @@ mod tests {
         db.flow_upsert("mg", None, &def, true, None).unwrap();
 
         // Mặc định: merge source SKIP.
-        let out = backfill_run(root, &db, "mg", "2024-01-01", "2024-02-01", None, &[], false)
-            .await
-            .unwrap();
+        let out = backfill_run(
+            root,
+            &db,
+            "mg",
+            "2024-01-01",
+            "2024-02-01",
+            None,
+            &[],
+            false,
+        )
+        .await
+        .unwrap();
         assert!(out.steps_skipped.contains(&"orders".to_string()));
         assert!(out.steps_run.is_empty());
 
         // Rebuild merge không confirm → lỗi.
         let err = backfill_run(
-            root, &db, "mg", "2024-01-01", "2024-02-01", None, &["orders".to_string()], false,
+            root,
+            &db,
+            "mg",
+            "2024-01-01",
+            "2024-02-01",
+            None,
+            &["orders".to_string()],
+            false,
         )
         .await
         .unwrap_err();
-        assert!(err.to_string().contains("confirm"), "rebuild merge cần confirm");
+        assert!(
+            err.to_string().contains("confirm"),
+            "rebuild merge cần confirm"
+        );
     }
 
     // ---- scheduler (§6.6) ----
@@ -1226,17 +1373,29 @@ mod tests {
 
     #[test]
     fn schedule_due_daily_at() {
-        let sch = flow::Schedule::Daily { daily_at: "03:00".into() };
+        let sch = flow::Schedule::Daily {
+            daily_at: "03:00".into(),
+        };
         // Trước slot hôm nay → chưa.
         assert!(!schedule_due(&sch, None, dt("2024-01-01 02:59:00")));
         // Qua slot, chưa chạy → đến hạn.
         assert!(schedule_due(&sch, None, dt("2024-01-01 03:00:00")));
         // Đã chạy slot hôm nay → không lặp trong ngày.
-        assert!(!schedule_due(&sch, Some("2024-01-01 03:00:05"), dt("2024-01-01 09:00:00")));
+        assert!(!schedule_due(
+            &sch,
+            Some("2024-01-01 03:00:05"),
+            dt("2024-01-01 09:00:00")
+        ));
         // Sang ngày mới, qua slot → đến hạn lại.
-        assert!(schedule_due(&sch, Some("2024-01-01 03:00:05"), dt("2024-01-02 03:01:00")));
+        assert!(schedule_due(
+            &sch,
+            Some("2024-01-01 03:00:05"),
+            dt("2024-01-02 03:01:00")
+        ));
         // daily_at hỏng → không bao giờ đến hạn (không panic).
-        let bad = flow::Schedule::Daily { daily_at: "25:99".into() };
+        let bad = flow::Schedule::Daily {
+            daily_at: "25:99".into(),
+        };
         assert!(!schedule_due(&bad, None, dt("2024-01-01 12:00:00")));
     }
 
@@ -1251,7 +1410,8 @@ mod tests {
         })
         .to_string();
         let sched = serde_json::to_string(&flow::Schedule::Every { every_minutes: 10 }).unwrap();
-        db.flow_upsert("sch", None, &def, true, Some(&sched)).unwrap();
+        db.flow_upsert("sch", None, &def, true, Some(&sched))
+            .unwrap();
 
         let now = dt("2024-01-01 12:00:00");
         let fired = scheduler_tick_at(&db, now).unwrap();
@@ -1261,7 +1421,10 @@ mod tests {
         assert_eq!(f.last_scheduled_at.as_deref(), Some("2024-01-01 12:00:00"));
         // Run active → dù có tick lại cũng FlowBusy, không tạo run mới.
         let again = scheduler_tick_at(&db, dt("2024-01-01 12:20:00")).unwrap();
-        assert!(again.is_empty(), "flow đang chạy → FlowBusy, không enqueue thêm");
+        assert!(
+            again.is_empty(),
+            "flow đang chạy → FlowBusy, không enqueue thêm"
+        );
     }
 
     #[test]
@@ -1269,7 +1432,8 @@ mod tests {
         let db = Db::open_memory().unwrap();
         // Disabled dù có schedule.
         let d1 = json!({"flow": "off", "sources": [{"id":"e","connection":"c","table":"t","mode":"full_refresh"}], "schedule": {"every_minutes": 1}}).to_string();
-        db.flow_upsert("off", None, &d1, false, Some("{\"every_minutes\":1}")).unwrap();
+        db.flow_upsert("off", None, &d1, false, Some("{\"every_minutes\":1}"))
+            .unwrap();
         // Enabled nhưng không lịch.
         let d2 = json!({"flow": "manual", "sources": [{"id":"e","connection":"c","table":"t","mode":"full_refresh"}]}).to_string();
         db.flow_upsert("manual", None, &d2, true, None).unwrap();
@@ -1296,6 +1460,9 @@ mod tests {
         .unwrap();
         let (failed, _cancelled) = watchdog_tick(&db).unwrap();
         assert_eq!(failed, 1);
-        assert_eq!(db.run_get(&stuck).unwrap().unwrap().status, run_status::FAILED);
+        assert_eq!(
+            db.run_get(&stuck).unwrap().unwrap().status,
+            run_status::FAILED
+        );
     }
 }

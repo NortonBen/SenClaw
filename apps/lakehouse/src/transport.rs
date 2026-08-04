@@ -52,22 +52,36 @@ pub async fn llm_request(system: &str, prompt: &str, max_tokens: u32) -> Result<
 pub fn parse_llm_reply(v: &Value) -> Result<LlmReply> {
     match v.get("status").and_then(|x| x.as_str()) {
         Some("ok") => {
-            let finish = v.get("finish").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let finish = v
+                .get("finish")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             if finish == "length" {
                 return Err(anyhow!(
                     "bridge llm.request bị cắt (finish=length) — tăng maxTokens hoặc rút gọn yêu cầu"
                 ));
             }
             Ok(LlmReply {
-                text: v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                model: v.get("model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                text: v
+                    .get("text")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                model: v
+                    .get("model")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 finish,
             })
         }
         Some("pending") => Err(anyhow!("bridge LLM chưa được bật trong daemon này")),
         _ => Err(anyhow!(
             "bridge llm.request lỗi: {}",
-            v.get("message").and_then(|x| x.as_str()).unwrap_or("không rõ")
+            v.get("message")
+                .and_then(|x| x.as_str())
+                .unwrap_or("không rõ")
         )),
     }
 }

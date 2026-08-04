@@ -8,7 +8,12 @@ use app_space_sdk::SpaceClient;
 /// Compose a short, polite Vietnamese reply to a Facebook comment. Returns
 /// `(reply_text, model)`. Best-effort: on any bridge error returns an empty
 /// string so the caller falls back to a draft the human fills in.
-pub async fn compose_reply(sc: &SpaceClient, page_name: &str, comment: &str, hint: &str) -> (String, String) {
+pub async fn compose_reply(
+    sc: &SpaceClient,
+    page_name: &str,
+    comment: &str,
+    hint: &str,
+) -> (String, String) {
     let system = format!(
         "Bạn là quản trị viên Fanpage \"{page_name}\" trên Facebook. Trả lời bình luận của \
          người dùng: ngắn gọn, lịch sự, thân thiện, đúng trọng tâm. Chỉ dựa trên thông tin \
@@ -32,9 +37,8 @@ pub async fn analyze_post(sc: &SpaceClient, message: &str, engagement: &str) -> 
         và đưa nhận xét NGẮN GỌN, có cấu trúc: (1) điểm mạnh, (2) điểm yếu, (3) gợi ý cải thiện \
         cụ thể (tiêu đề/CTA/hình ảnh/thời điểm đăng), (4) đánh giá mức tương tác. Dựa trên dữ liệu \
         thật được cung cấp, không bịa số.";
-    let prompt = format!(
-        "Nội dung bài viết:\n{message}\n\nSố liệu tương tác:\n{engagement}\n\nPhân tích:"
-    );
+    let prompt =
+        format!("Nội dung bài viết:\n{message}\n\nSố liệu tương tác:\n{engagement}\n\nPhân tích:");
     match sc.llm_request(system, &prompt, 700).await {
         Ok((text, model)) => (text.trim().to_string(), model),
         Err(e) => (format!("(không phân tích được: {e})"), String::new()),

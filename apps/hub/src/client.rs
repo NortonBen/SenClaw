@@ -441,9 +441,7 @@ impl HubClient {
             .cloned()
             .unwrap_or_default()
             .iter()
-            .filter(|r| {
-                field.is_empty() || r["key"].as_str().map(|k| k == field).unwrap_or(false)
-            })
+            .filter(|r| field.is_empty() || r["key"].as_str().map(|k| k == field).unwrap_or(false))
             .map(|r| TelemetryPoint {
                 ts: r["time"].as_str().unwrap_or("").to_string(),
                 field: r["key"].as_str().unwrap_or("").to_string(),
@@ -486,7 +484,9 @@ impl HubClient {
         // The command was accepted by the hub; delivery to the device happens
         // asynchronously (Redis device/command → MQTT v1/action).
         let detail = if ok {
-            format!("Hub đã nhận lệnh '{command}' cho thiết bị {id} (đẩy xuống qua MQTT v1/action).")
+            format!(
+                "Hub đã nhận lệnh '{command}' cho thiết bị {id} (đẩy xuống qua MQTT v1/action)."
+            )
         } else {
             format!("Hub từ chối lệnh '{command}' cho thiết bị {id}.")
         };

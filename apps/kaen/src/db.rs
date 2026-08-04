@@ -248,7 +248,12 @@ impl Db {
         })
     }
 
-    pub fn update_lesson(&self, id: &str, title: Option<&str>, description: Option<&str>) -> Result<bool> {
+    pub fn update_lesson(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<bool> {
         let n = self.with(|c| {
             c.execute(
                 "UPDATE lessons SET title = COALESCE(?2, title), description = COALESCE(?3, description) WHERE id = ?1",
@@ -300,7 +305,11 @@ impl Db {
         })
     }
 
-    pub fn update_card_fields(&self, card_id: &str, fields: &serde_json::Map<String, serde_json::Value>) -> Result<bool> {
+    pub fn update_card_fields(
+        &self,
+        card_id: &str,
+        fields: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<bool> {
         // Whitelisted camelCase → column mapping; unknown keys are ignored.
         let map = [
             ("word", "word"),
@@ -418,13 +427,22 @@ impl Db {
     }
 
     pub fn remove_progress(&self, card_id: &str) -> Result<()> {
-        self.with(|c| c.execute("DELETE FROM card_progress WHERE card_id = ?1", params![card_id]))?;
+        self.with(|c| {
+            c.execute(
+                "DELETE FROM card_progress WHERE card_id = ?1",
+                params![card_id],
+            )
+        })?;
         Ok(())
     }
 
     pub fn learned_count(&self) -> Result<i64> {
         self.with(|c| {
-            c.query_row("SELECT COUNT(*) FROM card_progress WHERE level > 0", [], |r| r.get(0))
+            c.query_row(
+                "SELECT COUNT(*) FROM card_progress WHERE level > 0",
+                [],
+                |r| r.get(0),
+            )
         })
     }
 
@@ -471,7 +489,8 @@ impl Db {
                  FROM card_progress p JOIN cards ON cards.id = p.card_id
                  ORDER BY p.last_reviewed DESC",
             )?;
-            let rows = stmt.query_map([], |row| Ok((card_from_row(row)?, progress_from_row(row)?)))?;
+            let rows =
+                stmt.query_map([], |row| Ok((card_from_row(row)?, progress_from_row(row)?)))?;
             rows.collect()
         })
     }
@@ -488,8 +507,10 @@ impl Db {
             let mut stmt = c.prepare(&format!(
                 "SELECT {PROGRESS_COLS} FROM card_progress WHERE card_id IN ({placeholders})"
             ))?;
-            let p: Vec<&dyn rusqlite::ToSql> =
-                card_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+            let p: Vec<&dyn rusqlite::ToSql> = card_ids
+                .iter()
+                .map(|id| id as &dyn rusqlite::ToSql)
+                .collect();
             let rows = stmt.query_map(p.as_slice(), progress_from_row)?;
             rows.collect()
         })
@@ -497,8 +518,9 @@ impl Db {
 
     pub fn level_histogram(&self) -> Result<Vec<(i64, i64)>> {
         self.with(|c| {
-            let mut stmt =
-                c.prepare("SELECT level, COUNT(*) FROM card_progress GROUP BY level ORDER BY level")?;
+            let mut stmt = c.prepare(
+                "SELECT level, COUNT(*) FROM card_progress GROUP BY level ORDER BY level",
+            )?;
             let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
             rows.collect()
         })
@@ -547,7 +569,10 @@ impl Db {
     }
 
     /// Card ids seen in any practice mode since `since`.
-    pub fn recently_reviewed_ids(&self, since: DateTime<Utc>) -> Result<std::collections::HashSet<String>> {
+    pub fn recently_reviewed_ids(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<std::collections::HashSet<String>> {
         self.with(|c| {
             let mut stmt =
                 c.prepare("SELECT DISTINCT card_id FROM review_sessions WHERE reviewed_at > ?1")?;

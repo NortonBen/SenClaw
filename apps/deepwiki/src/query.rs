@@ -29,7 +29,8 @@ pub fn stats(db: &Db) -> Result<IndexStats> {
         let files: i64 = c.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
         let symbols: i64 = c.query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))?;
         let edges: i64 = c.query_row("SELECT COUNT(*) FROM edges", [], |r| r.get(0))?;
-        let mut stmt = c.prepare("SELECT lang, COUNT(*) FROM files GROUP BY lang ORDER BY 2 DESC")?;
+        let mut stmt =
+            c.prepare("SELECT lang, COUNT(*) FROM files GROUP BY lang ORDER BY 2 DESC")?;
         let by_lang = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -40,15 +41,21 @@ pub fn stats(db: &Db) -> Result<IndexStats> {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        Ok(IndexStats { files, symbols, edges, by_lang, last_indexed })
+        Ok(IndexStats {
+            files,
+            symbols,
+            edges,
+            by_lang,
+            last_indexed,
+        })
     })
 }
 
 /// Common words that carry no signal when matching against symbol names.
 const STOPWORDS: &[&str] = &[
-    "how", "does", "do", "is", "are", "the", "a", "an", "of", "to", "in", "on", "for", "and",
-    "or", "what", "where", "when", "why", "this", "that", "it", "work", "works", "use", "used",
-    "using", "get", "set", "with", "by", "from", "into",
+    "how", "does", "do", "is", "are", "the", "a", "an", "of", "to", "in", "on", "for", "and", "or",
+    "what", "where", "when", "why", "this", "that", "it", "work", "works", "use", "used", "using",
+    "get", "set", "with", "by", "from", "into",
 ];
 
 /// Alphanumeric query tokens (lowercased, len ≥ 2) for name-relevance scoring.
@@ -96,7 +103,11 @@ fn rank_matches(mut v: Vec<Symbol>, q: &str) -> Vec<Symbol> {
         return v;
     }
     v.sort_by_key(|s| {
-        let exact = if s.name.eq_ignore_ascii_case(q) { 1000 } else { 0 };
+        let exact = if s.name.eq_ignore_ascii_case(q) {
+            1000
+        } else {
+            0
+        };
         std::cmp::Reverse(exact + name_score(&s.name, &tokens) + kind_bonus(&s.kind))
     });
     v
@@ -333,7 +344,10 @@ pub fn snippet(db: &Db, path: &str, start: i64, end: i64, context: i64) -> Resul
     let lines: Vec<&str> = text.lines().collect();
     let from = (start - 1 - context).max(0) as usize;
     let to = ((end + context).max(start) as usize).min(lines.len());
-    let body = lines.get(from..to).map(|s| s.join("\n")).unwrap_or_default();
+    let body = lines
+        .get(from..to)
+        .map(|s| s.join("\n"))
+        .unwrap_or_default();
     Ok(serde_json::json!({
         "path": path,
         "start_line": from as i64 + 1,
@@ -494,7 +508,14 @@ pub fn investigate(db: &Db, query: &str, depth: u32) -> Result<Investigation> {
         let top = &matches[0];
         nodes.insert(
             f.clone(),
-            GraphNode { id: f.clone(), kind: top.kind.clone(), path: top.path.clone(), line: top.start_line, depth: 0, external: false },
+            GraphNode {
+                id: f.clone(),
+                kind: top.kind.clone(),
+                path: top.path.clone(),
+                line: top.start_line,
+                depth: 0,
+                external: false,
+            },
         );
 
         // Downstream: callees.
@@ -502,24 +523,43 @@ pub fn investigate(db: &Db, query: &str, depth: u32) -> Result<Investigation> {
         for d in 1..=depth {
             let mut next = Vec::new();
             for n in &frontier {
-                if nodes.len() >= MAX_NODES { break; }
+                if nodes.len() >= MAX_NODES {
+                    break;
+                }
                 for c in callees(db, n, PER)? {
                     let ext = c.path == "<external>" || c.kind == "external";
                     if !nodes.contains_key(&c.name) && nodes.len() < MAX_NODES {
-                        nodes.insert(c.name.clone(), GraphNode {
-                            id: c.name.clone(),
-                            kind: if ext { "external".into() } else { c.kind.clone() },
-                            path: c.path.clone(), line: c.start_line, depth: d, external: ext,
-                        });
-                        if !ext { next.push(c.name.clone()); }
+                        nodes.insert(
+                            c.name.clone(),
+                            GraphNode {
+                                id: c.name.clone(),
+                                kind: if ext {
+                                    "external".into()
+                                } else {
+                                    c.kind.clone()
+                                },
+                                path: c.path.clone(),
+                                line: c.start_line,
+                                depth: d,
+                                external: ext,
+                            },
+                        );
+                        if !ext {
+                            next.push(c.name.clone());
+                        }
                     }
                     if eset.insert((n.clone(), c.name.clone())) {
-                        edges.push(GraphEdge { from: n.clone(), to: c.name.clone() });
+                        edges.push(GraphEdge {
+                            from: n.clone(),
+                            to: c.name.clone(),
+                        });
                     }
                 }
             }
             frontier = next;
-            if frontier.is_empty() { break; }
+            if frontier.is_empty() {
+                break;
+            }
         }
 
         // Upstream: callers.
@@ -527,23 +567,39 @@ pub fn investigate(db: &Db, query: &str, depth: u32) -> Result<Investigation> {
         for d in 1..=depth {
             let mut next = Vec::new();
             for n in &frontier {
-                if nodes.len() >= MAX_NODES { break; }
+                if nodes.len() >= MAX_NODES {
+                    break;
+                }
                 for c in callers(db, n, PER)? {
-                    if c.name == "<file scope>" { continue; }
+                    if c.name == "<file scope>" {
+                        continue;
+                    }
                     if !nodes.contains_key(&c.name) && nodes.len() < MAX_NODES {
-                        nodes.insert(c.name.clone(), GraphNode {
-                            id: c.name.clone(), kind: kind_of(db, &c.name),
-                            path: c.path.clone(), line: c.start_line, depth: -d, external: false,
-                        });
+                        nodes.insert(
+                            c.name.clone(),
+                            GraphNode {
+                                id: c.name.clone(),
+                                kind: kind_of(db, &c.name),
+                                path: c.path.clone(),
+                                line: c.start_line,
+                                depth: -d,
+                                external: false,
+                            },
+                        );
                         next.push(c.name.clone());
                     }
                     if eset.insert((c.name.clone(), n.clone())) {
-                        edges.push(GraphEdge { from: c.name.clone(), to: n.clone() });
+                        edges.push(GraphEdge {
+                            from: c.name.clone(),
+                            to: n.clone(),
+                        });
                     }
                 }
             }
             frontier = next;
-            if frontier.is_empty() { break; }
+            if frontier.is_empty() {
+                break;
+            }
         }
     }
 
@@ -599,7 +655,12 @@ pub fn file_graph(db: &Db) -> Result<FileGraph> {
         )?;
         let nodes = ns
             .query_map([], |r| {
-                Ok(FileNode { path: r.get(0)?, lang: r.get(1)?, loc: r.get(2)?, symbols: r.get(3)? })
+                Ok(FileNode {
+                    path: r.get(0)?,
+                    lang: r.get(1)?,
+                    loc: r.get(2)?,
+                    symbols: r.get(3)?,
+                })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
@@ -615,7 +676,11 @@ pub fn file_graph(db: &Db) -> Result<FileGraph> {
         )?;
         let edges = es
             .query_map([], |r| {
-                Ok(FileEdge { from: r.get(0)?, to: r.get(1)?, weight: r.get(2)? })
+                Ok(FileEdge {
+                    from: r.get(0)?,
+                    to: r.get(1)?,
+                    weight: r.get(2)?,
+                })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
@@ -655,7 +720,12 @@ pub fn symbol_graph(db: &Db) -> Result<SymbolGraph> {
         )?;
         let nodes = ns
             .query_map([], |r| {
-                Ok(SymGraphNode { name: r.get(0)?, kind: r.get(1)?, path: r.get(2)?, line: r.get(3)? })
+                Ok(SymGraphNode {
+                    name: r.get(0)?,
+                    kind: r.get(1)?,
+                    path: r.get(2)?,
+                    line: r.get(3)?,
+                })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
@@ -667,7 +737,11 @@ pub fn symbol_graph(db: &Db) -> Result<SymbolGraph> {
         )?;
         let edges = es
             .query_map([], |r| {
-                Ok(FileEdge { from: r.get(0)?, to: r.get(1)?, weight: 1 })
+                Ok(FileEdge {
+                    from: r.get(0)?,
+                    to: r.get(1)?,
+                    weight: 1,
+                })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 

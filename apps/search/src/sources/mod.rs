@@ -243,7 +243,11 @@ mod tests {
     fn disabled_sources_drop_out_of_the_default_selection() {
         let mut r = registry();
         assert!(r.set_config("wiki", Some(false), None, None, None));
-        let ids: Vec<_> = r.select(None).iter().map(|s| s.source.id().to_string()).collect();
+        let ids: Vec<_> = r
+            .select(None)
+            .iter()
+            .map(|s| s.source.id().to_string())
+            .collect();
         assert_eq!(ids, vec!["web"]);
     }
 

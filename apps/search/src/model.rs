@@ -108,12 +108,7 @@ impl Evidence {
             Some(u) => crate::fusion::canonicalize_url(u),
             None => (None, None),
         };
-        let id = crate::fusion::evidence_id(
-            canonical_url.as_deref(),
-            &source_id,
-            &title,
-            &snippet,
-        );
+        let id = crate::fusion::evidence_id(canonical_url.as_deref(), &source_id, &title, &snippet);
         Self {
             id,
             title,
@@ -201,8 +196,12 @@ pub enum SourceHealth {
     Ready,
     /// Usable but with a known caveat (e.g. social replay search is `not_wired`
     /// upstream, so it will return nothing for some platforms).
-    Degraded { reason: String },
-    Unavailable { reason: String },
+    Degraded {
+        reason: String,
+    },
+    Unavailable {
+        reason: String,
+    },
 }
 
 impl SourceHealth {

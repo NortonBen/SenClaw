@@ -15,7 +15,9 @@ use crate::ops;
 use crate::state::AppState;
 
 pub fn root_router(state: AppState) -> Router {
-    Router::new().route("/health", get(health)).with_state(state)
+    Router::new()
+        .route("/health", get(health))
+        .with_state(state)
 }
 
 pub fn api_router(state: AppState) -> Router {
@@ -29,17 +31,26 @@ pub fn api_router(state: AppState) -> Router {
         .route("/study/session", get(get_session))
         .route("/study/review/:card_id", post(post_review))
         .route("/study/review-batch", post(post_review_batch))
-        .route("/study/spaced-repetition/review/:card_id", post(post_review))
+        .route(
+            "/study/spaced-repetition/review/:card_id",
+            post(post_review),
+        )
         .route("/study/log", post(post_study_log))
         .route("/study/snooze", post(post_snooze))
-        .route("/study/spaced-repetition/:notification_id", get(get_due_session))
+        .route(
+            "/study/spaced-repetition/:notification_id",
+            get(get_due_session),
+        )
         .route("/study/overview", get(get_overview))
         .route("/study/learned-cards", get(get_learned_cards))
         .route("/study/statistics/level", get(get_stats_level))
         .route("/study/statistics/today", get(get_stats_today))
         // Review practice (24h anti-repeat pool)
         .route("/review/session", get(get_review_session))
-        .route("/review/session/lesson/:lesson_id", get(get_review_session_lesson))
+        .route(
+            "/review/session/lesson/:lesson_id",
+            get(get_review_session_lesson),
+        )
         .route("/review/submit/batch", post(post_review_submit_batch))
         .route("/review/submit/:card_id", post(post_review_submit))
         // Matching / Listening / Writing games (record-only submits)
@@ -55,18 +66,36 @@ pub fn api_router(state: AppState) -> Router {
         .route("/lessons/ai-draft", post(ai_draft_vocab))
         .route("/lessons/my", get(list_lessons))
         .route("/lessons/my-and-marked", get(list_lessons))
-        .route("/lessons/:id", get(get_lesson).patch(patch_lesson).delete(delete_lesson))
+        .route(
+            "/lessons/:id",
+            get(get_lesson).patch(patch_lesson).delete(delete_lesson),
+        )
         .route("/lessons/:id/cards", get(get_lesson_cards).post(add_card))
-        .route("/lessons/:id/cards/:card_id", axum::routing::patch(patch_card).delete(remove_card))
+        .route(
+            "/lessons/:id/cards/:card_id",
+            axum::routing::patch(patch_card).delete(remove_card),
+        )
         // Stories (Phase 3)
         .route("/stories", get(list_stories).post(create_story))
         .route("/stories/public", get(list_stories))
         .route("/stories/generate", post(generate_story))
-        .route("/stories/:id", get(get_story).patch(patch_story).delete(delete_story))
-        .route("/stories/:id/progress", get(get_story_progress).post(post_story_progress))
+        .route(
+            "/stories/:id",
+            get(get_story).patch(patch_story).delete(delete_story),
+        )
+        .route(
+            "/stories/:id/progress",
+            get(get_story_progress).post(post_story_progress),
+        )
         // Dictation (Phase 3)
-        .route("/dictation-lessons", get(list_dictation).post(create_dictation_lesson))
-        .route("/dictation-lessons/topics", get(dictation_topics).post(create_dictation_topic))
+        .route(
+            "/dictation-lessons",
+            get(list_dictation).post(create_dictation_lesson),
+        )
+        .route(
+            "/dictation-lessons/topics",
+            get(dictation_topics).post(create_dictation_topic),
+        )
         .route(
             "/dictation-topics/:id",
             axum::routing::patch(patch_dictation_topic).delete(delete_dictation_topic),
@@ -81,8 +110,14 @@ pub fn api_router(state: AppState) -> Router {
                 .patch(patch_dictation_lesson)
                 .delete(delete_dictation_lesson),
         )
-        .route("/dictation-lessons/:id/progress", get(get_dictation_progress).post(post_dictation_progress))
-        .route("/dictation-lessons/:id/audio/segment", get(dictation_audio_segment))
+        .route(
+            "/dictation-lessons/:id/progress",
+            get(get_dictation_progress).post(post_dictation_progress),
+        )
+        .route(
+            "/dictation-lessons/:id/audio/segment",
+            get(dictation_audio_segment),
+        )
         // Dictionary (Phase 3)
         .route("/dictionary/lookup", get(dictionary_lookup))
         .route("/dictionary/audio", get(dictionary_audio))
@@ -92,15 +127,29 @@ pub fn api_router(state: AppState) -> Router {
         .route("/grammar/export", get(export_grammar))
         .route("/grammar/import", post(import_grammar))
         .route("/grammar/ai-draft", post(ai_draft_grammar))
-        .route("/grammar/:id_or_slug", get(view_grammar).patch(patch_grammar).delete(delete_grammar))
+        .route(
+            "/grammar/:id_or_slug",
+            get(view_grammar)
+                .patch(patch_grammar)
+                .delete(delete_grammar),
+        )
         .route("/grammar-topics", get(list_grammar_topics))
-        .route("/grammar-topics/for-lesson/:grammar_slug", get(topic_for_lesson))
-        .route("/grammar-test/results/:session_id", get(grammar_test_result))
+        .route(
+            "/grammar-topics/for-lesson/:grammar_slug",
+            get(topic_for_lesson),
+        )
+        .route(
+            "/grammar-test/results/:session_id",
+            get(grammar_test_result),
+        )
         .route("/grammar-test/generate", post(generate_grammar_test))
         .route("/grammar-test/submit", post(submit_grammar_test))
         .route("/grammar-test/:topic_id", get(grammar_test_questions))
         // MCP
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -250,7 +299,10 @@ fn is_true(v: &Option<String>) -> bool {
     v.as_deref() == Some("true")
 }
 
-async fn get_review_session(State(s): State<AppState>, Query(q): Query<AllowRepeatQuery>) -> Response {
+async fn get_review_session(
+    State(s): State<AppState>,
+    Query(q): Query<AllowRepeatQuery>,
+) -> Response {
     respond(ops::review_session(&s.db, is_true(&q.allow_repeat), None))
 }
 
@@ -259,7 +311,11 @@ async fn get_review_session_lesson(
     Path(lesson_id): Path<String>,
     Query(q): Query<AllowRepeatQuery>,
 ) -> Response {
-    respond(ops::review_session(&s.db, is_true(&q.allow_repeat), Some(&lesson_id)))
+    respond(ops::review_session(
+        &s.db,
+        is_true(&q.allow_repeat),
+        Some(&lesson_id),
+    ))
 }
 
 async fn post_review_submit(
@@ -267,7 +323,11 @@ async fn post_review_submit(
     Path(card_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    respond(ops::review_submit(&s.db, &card_id, body["isCorrect"].as_bool().unwrap_or(false)))
+    respond(ops::review_submit(
+        &s.db,
+        &card_id,
+        body["isCorrect"].as_bool().unwrap_or(false),
+    ))
 }
 
 async fn post_review_submit_batch(State(s): State<AppState>, Json(body): Json<Value>) -> Response {
@@ -285,7 +345,11 @@ async fn post_game_submit(
     Path(card_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    respond(ops::game_submit(&s.db, &card_id, body["isCorrect"].as_bool().unwrap_or(false)))
+    respond(ops::game_submit(
+        &s.db,
+        &card_id,
+        body["isCorrect"].as_bool().unwrap_or(false),
+    ))
 }
 
 async fn get_due_session(State(s): State<AppState>, Path(_id): Path<String>) -> Response {
@@ -335,11 +399,10 @@ async fn generate_story(State(s): State<AppState>, Json(body): Json<Value>) -> R
     if lesson_id.is_empty() {
         return fail(anyhow::anyhow!("Thiếu lessonId"));
     }
-    let native = s
-        .db
-        .settings()
-        .map(|st| st.native_language)
-        .unwrap_or_else(|_| "vi".into());
+    let native =
+        s.db.settings()
+            .map(|st| st.native_language)
+            .unwrap_or_else(|_| "vi".into());
     respond(
         crate::story::generate_story(
             &s.db,
@@ -362,7 +425,10 @@ struct DictationListQuery {
     page: Option<i64>,
 }
 
-async fn list_dictation(State(s): State<AppState>, Query(q): Query<DictationListQuery>) -> Response {
+async fn list_dictation(
+    State(s): State<AppState>,
+    Query(q): Query<DictationListQuery>,
+) -> Response {
     respond(crate::dictation::list_lessons(
         &s.db,
         q.topic.as_deref().filter(|v| !v.is_empty()),
@@ -420,7 +486,10 @@ struct DictLookupQuery {
     target_lang: Option<String>,
 }
 
-async fn dictionary_lookup(State(s): State<AppState>, Query(q): Query<DictLookupQuery>) -> Response {
+async fn dictionary_lookup(
+    State(s): State<AppState>,
+    Query(q): Query<DictLookupQuery>,
+) -> Response {
     let Some(word) = q.word.filter(|w| !w.trim().is_empty()) else {
         return fail(anyhow::anyhow!("Thiếu word"));
     };
@@ -517,7 +586,9 @@ async fn ai_draft_dictation(State(s): State<AppState>, Json(body): Json<Value>) 
     } else {
         let topic = body["topic"].as_str().unwrap_or("").trim().to_string();
         if topic.is_empty() {
-            return fail(anyhow::anyhow!("Cần 'text' để tách đoạn hoặc 'topic' để AI viết bài"));
+            return fail(anyhow::anyhow!(
+                "Cần 'text' để tách đoạn hoặc 'topic' để AI viết bài"
+            ));
         }
         let level = body["level"].as_str().unwrap_or("A2");
         let sentences = body["sentences"].as_u64().unwrap_or(6) as u32;
@@ -618,18 +689,27 @@ struct TopicQuery {
 }
 
 async fn list_grammar_topics(State(s): State<AppState>, Query(q): Query<TopicQuery>) -> Response {
-    respond(crate::grammar::list_topics(&s.db, q.level.as_deref().filter(|v| !v.is_empty())))
+    respond(crate::grammar::list_topics(
+        &s.db,
+        q.level.as_deref().filter(|v| !v.is_empty()),
+    ))
 }
 
 async fn topic_for_lesson(State(s): State<AppState>, Path(slug): Path<String>) -> Response {
     respond(crate::grammar::topic_for_lesson(&s.db, &slug))
 }
 
-async fn grammar_test_questions(State(s): State<AppState>, Path(topic_id): Path<String>) -> Response {
+async fn grammar_test_questions(
+    State(s): State<AppState>,
+    Path(topic_id): Path<String>,
+) -> Response {
     respond(crate::grammar::questions_for_topic(&s.db, &topic_id))
 }
 
-async fn grammar_test_result(State(s): State<AppState>, Path(session_id): Path<String>) -> Response {
+async fn grammar_test_result(
+    State(s): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Response {
     respond(crate::grammar::session_result(&s.db, &session_id))
 }
 
@@ -731,7 +811,10 @@ async fn patch_lesson(
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    match s.db.update_lesson(&id, body["title"].as_str(), body["description"].as_str()) {
+    match s
+        .db
+        .update_lesson(&id, body["title"].as_str(), body["description"].as_str())
+    {
         Ok(true) => respond(ops::lesson_json(&s.db, &id, false)),
         Ok(false) => fail(anyhow::anyhow!("Không tìm thấy bài học")),
         Err(e) => fail(e),

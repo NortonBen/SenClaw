@@ -29,7 +29,11 @@ pub struct AppState {
 pub fn make_state() -> AppState {
     let db = Arc::new(Db::open_default().expect("open shopee db"));
     let (mcp_tx, _) = tokio::sync::broadcast::channel(100);
-    AppState { db, sc: SpaceClient::from_env(), mcp_tx }
+    AppState {
+        db,
+        sc: SpaceClient::from_env(),
+        mcp_tx,
+    }
 }
 
 /// Assemble a signed client from the stored settings, or `None` if partner
@@ -40,19 +44,34 @@ pub(crate) fn client_from_settings(db: &Db) -> Option<Client> {
     if partner_key.is_empty() {
         return None;
     }
-    let shop_id = db.get_setting("shop_id").and_then(|s| s.parse().ok()).unwrap_or(0);
-    let host = db.get_setting("host").filter(|h| !h.is_empty()).unwrap_or_else(|| shopee::DEFAULT_HOST.into());
-    Some(Client::new(Config { host, partner_id, partner_key, shop_id }))
+    let shop_id = db
+        .get_setting("shop_id")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let host = db
+        .get_setting("host")
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| shopee::DEFAULT_HOST.into());
+    Some(Client::new(Config {
+        host,
+        partner_id,
+        partner_key,
+        shop_id,
+    }))
 }
 
 /// The configured shop id, or `None` if not authorized yet.
 pub(crate) fn shop_id(db: &Db) -> Option<i64> {
-    db.get_setting("shop_id").and_then(|x| x.parse::<i64>().ok()).filter(|x| *x != 0)
+    db.get_setting("shop_id")
+        .and_then(|x| x.parse::<i64>().ok())
+        .filter(|x| *x != 0)
 }
 
 /// Get a fresh access token for the configured shop, refreshing if stale.
 pub(crate) async fn fresh_token(db: &Db, client: &Client, shop_id: i64) -> Result<String, String> {
-    let tok = db.get_token(shop_id).ok_or_else(|| "shop chưa authorize".to_string())?;
+    let tok = db
+        .get_token(shop_id)
+        .ok_or_else(|| "shop chưa authorize".to_string())?;
     if !tok.is_stale() {
         return Ok(tok.access_token);
     }
@@ -60,8 +79,13 @@ pub(crate) async fn fresh_token(db: &Db, client: &Client, shop_id: i64) -> Resul
         .refresh_token(&tok.refresh_token, shop_id)
         .await
         .map_err(|e| format!("refresh token thất bại: {e}"))?;
-    db.save_token(shop_id, &refreshed.access_token, &refreshed.refresh_token, refreshed.expire_in)
-        .map_err(|e| e.to_string())?;
+    db.save_token(
+        shop_id,
+        &refreshed.access_token,
+        &refreshed.refresh_token,
+        refreshed.expire_in,
+    )
+    .map_err(|e| e.to_string())?;
     db.log("token", "refreshed access token", &shop_id.to_string());
     Ok(refreshed.access_token)
 }
@@ -86,7 +110,10 @@ pub(crate) async fn enqueue_or_send(
             llm::compose_reply(&s.sc, &shop, customer_msg, context).await
         }
     };
-    let draft_id = match s.db.add_draft(conversation_id, to_id, to_name, &content, source, &model) {
+    let draft_id = match s
+        .db
+        .add_draft(conversation_id, to_id, to_name, &content, source, &model)
+    {
         Ok(id) => id,
         Err(e) => return json!({ "error": e.to_string() }),
     };
@@ -117,7 +144,10 @@ pub fn api_router(state: AppState) -> Router {
         .route("/products/price", post(update_price_h))
         .route("/engine/tick", post(engine_tick))
         // MCP (HTTP + SSE), same shape as the other Space Apps.
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -128,7 +158,9 @@ async fn status(State(s): State<AppState>) -> Json<Value> {
 
 pub(crate) fn status_value(s: &AppState) -> Value {
     let connected = client_from_settings(&s.db).is_some()
-        && shop_id(&s.db).map(|id| s.db.get_token(id).is_some()).unwrap_or(false);
+        && shop_id(&s.db)
+            .map(|id| s.db.get_token(id).is_some())
+            .unwrap_or(false);
     json!({
         "ok": true,
         "app": "shopee",
@@ -152,13 +184,26 @@ struct SettingsIn {
 }
 
 async fn set_settings(State(s): State<AppState>, Json(body): Json<SettingsIn>) -> Json<Value> {
-    if let Some(v) = body.partner_id { let _ = s.db.set_setting("partner_id", &v); }
-    if let Some(v) = body.partner_key { if !v.is_empty() { let _ = s.db.set_setting("partner_key", &v); } }
-    if let Some(v) = body.shop_id { let _ = s.db.set_setting("shop_id", &v); }
-    if let Some(v) = body.host { let _ = s.db.set_setting("host", &v); }
+    if let Some(v) = body.partner_id {
+        let _ = s.db.set_setting("partner_id", &v);
+    }
+    if let Some(v) = body.partner_key {
+        if !v.is_empty() {
+            let _ = s.db.set_setting("partner_key", &v);
+        }
+    }
+    if let Some(v) = body.shop_id {
+        let _ = s.db.set_setting("shop_id", &v);
+    }
+    if let Some(v) = body.host {
+        let _ = s.db.set_setting("host", &v);
+    }
     if let Some(v) = body.autonomy {
         // observe | draft | live only.
-        let v = match v.as_str() { "observe" | "draft" | "live" => v, _ => "draft".into() };
+        let v = match v.as_str() {
+            "observe" | "draft" | "live" => v,
+            _ => "draft".into(),
+        };
         let _ = s.db.set_setting("autonomy", &v);
     }
     Json(s.db.settings_public())
@@ -192,7 +237,10 @@ async fn oauth_link(State(s): State<AppState>, Query(q): Query<LinkQuery>) -> Js
     }
 }
 
-async fn oauth_callback(State(s): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+async fn oauth_callback(
+    State(s): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Json<Value> {
     let Some(code) = q.get("code") else {
         return Json(json!({ "error": "thiếu code" }));
     };
@@ -205,7 +253,9 @@ async fn oauth_callback(State(s): State<AppState>, Query(q): Query<HashMap<Strin
     match client.token_by_code(code, sid).await {
         Ok(tr) => {
             let _ = s.db.set_setting("shop_id", &sid.to_string());
-            if let Err(e) = s.db.save_token(sid, &tr.access_token, &tr.refresh_token, tr.expire_in) {
+            if let Err(e) =
+                s.db.save_token(sid, &tr.access_token, &tr.refresh_token, tr.expire_in)
+            {
                 return Json(json!({ "error": e.to_string() }));
             }
             s.db.log("oauth", "authorized shop", &sid.to_string());
@@ -220,7 +270,10 @@ pub(crate) async fn orders_value(s: &AppState) -> Value {
     let (Some(client), Some(sid)) = (client_from_settings(&s.db), shop_id(&s.db)) else {
         return json!({ "error": "chưa kết nối shop" });
     };
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
     match fresh_token(&s.db, &client, sid).await {
         Ok(tok) => match client.get_order_list(&tok, now - 14 * 86400, now).await {
             Ok(v) => v,
@@ -263,15 +316,25 @@ pub(crate) async fn order_context(s: &AppState, order_sn: &str) -> String {
     let Some(o) = order else {
         return String::new();
     };
-    let status = o.get("order_status").and_then(|x| x.as_str()).unwrap_or("?");
+    let status = o
+        .get("order_status")
+        .and_then(|x| x.as_str())
+        .unwrap_or("?");
     let total = o.get("total_amount").map(val_str).unwrap_or_default();
-    let tracking = o.get("tracking_number").and_then(|x| x.as_str()).unwrap_or("");
+    let tracking = o
+        .get("tracking_number")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
     let items: Vec<String> = o
         .get("item_list")
         .and_then(|x| x.as_array())
         .map(|a| {
             a.iter()
-                .filter_map(|it| it.get("item_name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                .filter_map(|it| {
+                    it.get("item_name")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -302,13 +365,12 @@ struct OrderDetailQuery {
 }
 
 async fn order_detail(State(s): State<AppState>, Query(q): Query<OrderDetailQuery>) -> Json<Value> {
-    let sns: Vec<String> = q
-        .sn
-        .unwrap_or_default()
-        .split(',')
-        .map(|x| x.trim().to_string())
-        .filter(|x| !x.is_empty())
-        .collect();
+    let sns: Vec<String> =
+        q.sn.unwrap_or_default()
+            .split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect();
     if sns.is_empty() {
         return Json(json!({ "error": "thiếu ?sn=<order_sn,...>" }));
     }
@@ -365,7 +427,11 @@ async fn chat_reply(State(s): State<AppState>, Json(body): Json<ReplyIn>) -> Jso
 
 /// Prepend real order data (if an order_sn is given) to any caller-provided
 /// context. Shared by the REST reply and the MCP draft tool.
-pub(crate) async fn grounded_context(s: &AppState, order_sn: Option<&str>, extra: Option<&str>) -> String {
+pub(crate) async fn grounded_context(
+    s: &AppState,
+    order_sn: Option<&str>,
+    extra: Option<&str>,
+) -> String {
     let order = match order_sn {
         Some(sn) if !sn.trim().is_empty() => order_context(s, sn).await,
         _ => String::new(),
@@ -409,7 +475,11 @@ pub(crate) async fn send_draft(s: &AppState, draft_id: i64) -> Value {
     match client.send_message(&tok, draft.to_id, &draft.content).await {
         Ok(_) => {
             let _ = s.db.decide_draft(draft_id, "sent", "");
-            s.db.log("chat", &format!("đã gửi trả lời khách {}", draft.to_name), &draft.conversation_id);
+            s.db.log(
+                "chat",
+                &format!("đã gửi trả lời khách {}", draft.to_name),
+                &draft.conversation_id,
+            );
             json!({ "ok": true, "draft_id": draft_id, "status": "sent" })
         }
         Err(e) => {
@@ -444,7 +514,10 @@ where
 pub(crate) async fn products_value(s: &AppState, status: &str) -> Value {
     let status = status.to_string();
     with_token(s, |client, tok| async move {
-        client.get_item_list(&tok, 0, 50, &status).await.map_err(|e| e.to_string())
+        client
+            .get_item_list(&tok, 0, 50, &status)
+            .await
+            .map_err(|e| e.to_string())
     })
     .await
 }
@@ -452,29 +525,46 @@ pub(crate) async fn products_value(s: &AppState, status: &str) -> Value {
 pub(crate) async fn product_info_value(s: &AppState, ids: &[i64]) -> Value {
     let ids = ids.to_vec();
     with_token(s, |client, tok| async move {
-        client.get_item_base_info(&tok, &ids).await.map_err(|e| e.to_string())
+        client
+            .get_item_base_info(&tok, &ids)
+            .await
+            .map_err(|e| e.to_string())
     })
     .await
 }
 
 pub(crate) async fn update_stock_value(s: &AppState, item_id: i64, stock: i64) -> Value {
     let v = with_token(s, |client, tok| async move {
-        client.update_stock(&tok, item_id, stock).await.map_err(|e| e.to_string())
+        client
+            .update_stock(&tok, item_id, stock)
+            .await
+            .map_err(|e| e.to_string())
     })
     .await;
     if v.get("error").is_none() {
-        s.db.log("product", &format!("cập nhật tồn kho item {item_id} = {stock}"), &item_id.to_string());
+        s.db.log(
+            "product",
+            &format!("cập nhật tồn kho item {item_id} = {stock}"),
+            &item_id.to_string(),
+        );
     }
     v
 }
 
 pub(crate) async fn update_price_value(s: &AppState, item_id: i64, price: f64) -> Value {
     let v = with_token(s, |client, tok| async move {
-        client.update_price(&tok, item_id, price).await.map_err(|e| e.to_string())
+        client
+            .update_price(&tok, item_id, price)
+            .await
+            .map_err(|e| e.to_string())
     })
     .await;
     if v.get("error").is_none() {
-        s.db.log("product", &format!("cập nhật giá item {item_id} = {price}"), &item_id.to_string());
+        s.db.log(
+            "product",
+            &format!("cập nhật giá item {item_id} = {price}"),
+            &item_id.to_string(),
+        );
     }
     v
 }

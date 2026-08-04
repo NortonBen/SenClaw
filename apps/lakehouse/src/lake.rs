@@ -64,8 +64,11 @@ pub(crate) fn land_batches_at(
     batches: &[RecordBatch],
     stats_cols: Option<&[String]>,
 ) -> Result<Vec<NewDatasetFile>> {
-    let nonempty: Vec<RecordBatch> =
-        batches.iter().filter(|b| b.num_rows() > 0).cloned().collect();
+    let nonempty: Vec<RecordBatch> = batches
+        .iter()
+        .filter(|b| b.num_rows() > 0)
+        .cloned()
+        .collect();
     if nonempty.is_empty() {
         return Ok(Vec::new());
     }
@@ -105,8 +108,11 @@ pub(crate) fn land_partition_at(
     part_label: &str,
     batches: &[RecordBatch],
 ) -> Result<Vec<NewDatasetFile>> {
-    let nonempty: Vec<RecordBatch> =
-        batches.iter().filter(|b| b.num_rows() > 0).cloned().collect();
+    let nonempty: Vec<RecordBatch> = batches
+        .iter()
+        .filter(|b| b.num_rows() > 0)
+        .cloned()
+        .collect();
     if nonempty.is_empty() {
         return Ok(Vec::new());
     }
@@ -265,10 +271,8 @@ pub(crate) fn compact_at(root: &Path, db: &Db, dataset_id: i64) -> Result<Compac
         groups.entry(f.partition.clone()).or_default().push(f);
     }
     // Chỉ giữ partition có >1 file (nhóm 1 file đã "compact" — idempotent skip).
-    let plan: Vec<(Option<String>, Vec<&crate::db::DatasetFile>)> = groups
-        .into_iter()
-        .filter(|(_, g)| g.len() > 1)
-        .collect();
+    let plan: Vec<(Option<String>, Vec<&crate::db::DatasetFile>)> =
+        groups.into_iter().filter(|(_, g)| g.len() > 1).collect();
     if plan.is_empty() {
         return Ok(CompactionReport::default());
     }
@@ -332,7 +336,8 @@ pub fn boot_reconcile(_state: &AppState) {
             return;
         }
     };
-    if let Err(e) = db.run_reconcile_orphans("daemon restart — run mồ côi đánh dấu failed") {
+    if let Err(e) = db.run_reconcile_orphans("daemon restart — run mồ côi đánh dấu failed")
+    {
         eprintln!("lakehouse reconcile: đánh dấu run mồ côi thất bại: {e}");
     }
     match reconcile_orphan_files_at(&config::lake_dir(), &db) {
@@ -393,7 +398,11 @@ fn collect_parquet_files(dir: &Path, out: &mut Vec<PathBuf>) {
 // parquet I/O
 // ---------------------------------------------------------------------------
 
-pub(crate) fn write_parquet(path: &Path, schema: SchemaRef, batches: &[RecordBatch]) -> Result<u64> {
+pub(crate) fn write_parquet(
+    path: &Path,
+    schema: SchemaRef,
+    batches: &[RecordBatch],
+) -> Result<u64> {
     use datafusion::parquet::arrow::ArrowWriter;
     use datafusion::parquet::basic::{Compression, ZstdLevel};
     use datafusion::parquet::file::properties::WriterProperties;
@@ -671,10 +680,20 @@ mod tests {
     #[test]
     fn land_writes_parquet_and_computes_stats() {
         let dir = tempfile::tempdir().unwrap();
-        let b = batch_ids_names(vec![Some(3), Some(1), Some(2)], vec![Some("a"), None, Some("c")]);
+        let b = batch_ids_names(
+            vec![Some(3), Some(1), Some(2)],
+            vec![Some("a"), None, Some("c")],
+        );
         let stats_cols = vec!["id".to_string()];
-        let files =
-            land_batches_at(dir.path(), "raw", "orders", "run-x", &[b], Some(&stats_cols)).unwrap();
+        let files = land_batches_at(
+            dir.path(),
+            "raw",
+            "orders",
+            "run-x",
+            &[b],
+            Some(&stats_cols),
+        )
+        .unwrap();
         assert_eq!(files.len(), 1);
         let f = &files[0];
         assert_eq!(f.path, "raw/orders/part-run-x-0.parquet");
@@ -703,7 +722,10 @@ mod tests {
         let t = IngestedTable {
             name: "orders".into(),
             schema: schema.clone(),
-            batches: vec![batch_ids_names(vec![Some(1), Some(2)], vec![Some("a"), Some("b")])],
+            batches: vec![batch_ids_names(
+                vec![Some(1), Some(2)],
+                vec![Some("a"), Some("b")],
+            )],
             origin: "csv",
             note: "test".into(),
             rows: 2,
@@ -787,8 +809,27 @@ mod tests {
             .unwrap();
 
         // Hai file KHÔNG partition (None), cùng dataset → hai lần append.
-        let f1 = land_batches_at(dir.path(), "raw", "o", "r1", &[batch_ids_names(vec![Some(1), Some(2)], vec![Some("a"), Some("b")])], None).unwrap();
-        let f2 = land_batches_at(dir.path(), "raw", "o", "r2", &[batch_ids_names(vec![Some(3)], vec![Some("c")])], None).unwrap();
+        let f1 = land_batches_at(
+            dir.path(),
+            "raw",
+            "o",
+            "r1",
+            &[batch_ids_names(
+                vec![Some(1), Some(2)],
+                vec![Some("a"), Some("b")],
+            )],
+            None,
+        )
+        .unwrap();
+        let f2 = land_batches_at(
+            dir.path(),
+            "raw",
+            "o",
+            "r2",
+            &[batch_ids_names(vec![Some(3)], vec![Some("c")])],
+            None,
+        )
+        .unwrap();
         db.manifest_add_files(ds, "r1", &f1).unwrap();
         db.manifest_add_files(ds, "r2", &f2).unwrap();
         assert_eq!(db.manifest_active_files(ds).unwrap().len(), 2);
@@ -808,7 +849,13 @@ mod tests {
         // Query đọc lại: đúng 3 dòng phân biệt.
         let rt = tokio::runtime::Runtime::new().unwrap();
         let page = rt
-            .block_on(crate::engine::query_page_at(dir.path(), &db, "SELECT id FROM raw.o ORDER BY id", Some(100), None))
+            .block_on(crate::engine::query_page_at(
+                dir.path(),
+                &db,
+                "SELECT id FROM raw.o ORDER BY id",
+                Some(100),
+                None,
+            ))
             .unwrap();
         assert_eq!(page.returned, 3);
         assert_eq!(page.rows[0][0], json!(1));
@@ -826,8 +873,24 @@ mod tests {
         let ds = db.dataset_upsert("raw", "o", None, None, None).unwrap();
         db.schema_version_add(ds, &schema_to_json(&schema_ids_names()), Some("init"))
             .unwrap();
-        let f1 = land_batches_at(dir.path(), "raw", "o", "r1", &[batch_ids_names(vec![Some(1)], vec![Some("a")])], None).unwrap();
-        let f2 = land_batches_at(dir.path(), "raw", "o", "r2", &[batch_ids_names(vec![Some(2)], vec![Some("b")])], None).unwrap();
+        let f1 = land_batches_at(
+            dir.path(),
+            "raw",
+            "o",
+            "r1",
+            &[batch_ids_names(vec![Some(1)], vec![Some("a")])],
+            None,
+        )
+        .unwrap();
+        let f2 = land_batches_at(
+            dir.path(),
+            "raw",
+            "o",
+            "r2",
+            &[batch_ids_names(vec![Some(2)], vec![Some("b")])],
+            None,
+        )
+        .unwrap();
         db.manifest_add_files(ds, "r1", &f1).unwrap();
         db.manifest_add_files(ds, "r2", &f2).unwrap();
 
@@ -846,13 +909,39 @@ mod tests {
     fn compact_merges_per_partition() {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open_memory().unwrap();
-        let ds = db.dataset_upsert("marts", "daily", None, None, None).unwrap();
+        let ds = db
+            .dataset_upsert("marts", "daily", None, None, None)
+            .unwrap();
         db.schema_version_add(ds, &schema_to_json(&schema_ids_names()), Some("init"))
             .unwrap();
         // Partition "2026-01-01": 2 file; partition "2026-01-02": 1 file.
-        let a1 = land_partition_at(dir.path(), "marts", "daily", "r1", "2026-01-01", &[batch_ids_names(vec![Some(1)], vec![Some("a")])]).unwrap();
-        let a2 = land_partition_at(dir.path(), "marts", "daily", "r2", "2026-01-01", &[batch_ids_names(vec![Some(2)], vec![Some("b")])]).unwrap();
-        let b1 = land_partition_at(dir.path(), "marts", "daily", "r3", "2026-01-02", &[batch_ids_names(vec![Some(3)], vec![Some("c")])]).unwrap();
+        let a1 = land_partition_at(
+            dir.path(),
+            "marts",
+            "daily",
+            "r1",
+            "2026-01-01",
+            &[batch_ids_names(vec![Some(1)], vec![Some("a")])],
+        )
+        .unwrap();
+        let a2 = land_partition_at(
+            dir.path(),
+            "marts",
+            "daily",
+            "r2",
+            "2026-01-01",
+            &[batch_ids_names(vec![Some(2)], vec![Some("b")])],
+        )
+        .unwrap();
+        let b1 = land_partition_at(
+            dir.path(),
+            "marts",
+            "daily",
+            "r3",
+            "2026-01-02",
+            &[batch_ids_names(vec![Some(3)], vec![Some("c")])],
+        )
+        .unwrap();
         db.manifest_add_files(ds, "r1", &a1).unwrap();
         db.manifest_add_files(ds, "r2", &a2).unwrap();
         db.manifest_add_files(ds, "r3", &b1).unwrap();
@@ -869,7 +958,10 @@ mod tests {
 
     #[test]
     fn parse_run_id_handles_hyphenated_ids() {
-        assert_eq!(parse_run_id("part-run-1-0.parquet").as_deref(), Some("run-1"));
+        assert_eq!(
+            parse_run_id("part-run-1-0.parquet").as_deref(),
+            Some("run-1")
+        );
         assert_eq!(
             parse_run_id("part-0190a1b2-c3d4-7abc-8def-000000000001-2.parquet").as_deref(),
             Some("0190a1b2-c3d4-7abc-8def-000000000001")

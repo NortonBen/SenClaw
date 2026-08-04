@@ -518,9 +518,7 @@ fn calamine_cell(c: &calamine::Data) -> Option<String> {
             .map(|d| {
                 let s = d.format("%Y-%m-%dT%H:%M:%S").to_string();
                 // Nửa đêm → chỉ giữ phần ngày để suy được Date32.
-                s.strip_suffix("T00:00:00")
-                    .map(str::to_string)
-                    .unwrap_or(s)
+                s.strip_suffix("T00:00:00").map(str::to_string).unwrap_or(s)
             })
             .or_else(|| non_empty(c.to_string())),
         Data::DateTimeIso(s) | Data::DurationIso(s) => non_empty(s.clone()),
@@ -983,12 +981,7 @@ mod tests {
         // Header trùng tên (hợp lệ trong CSV thô).
         let csv = "id,id,id\n1,2,3\n";
         let t = one("dup.csv", csv.as_bytes());
-        let names: Vec<String> = t
-            .schema
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect();
+        let names: Vec<String> = t.schema.fields().iter().map(|f| f.name().clone()).collect();
         assert_eq!(names, vec!["id", "id_2", "id_3"]);
     }
 

@@ -444,7 +444,10 @@ mod tests {
         match apply_review(Some(&p), true, &slots(), TZ, now) {
             ReviewAction::Update(u) => {
                 assert_eq!(u.level, 3, "early review never promotes");
-                assert!(u.next_review > now + Duration::days(6), "7d interval from now");
+                assert!(
+                    u.next_review > now + Duration::days(6),
+                    "7d interval from now"
+                );
             }
             other => panic!("expected Update, got {other:?}"),
         }

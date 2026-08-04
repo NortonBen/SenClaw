@@ -238,7 +238,11 @@ pub fn build_select(spec: &ExtractSpec, d: Dialect) -> (String, Vec<serde_json::
         let mut clauses = Vec::new();
 
         params.push(cur.from.clone());
-        clauses.push(format!("{col} {} {}", cur.op.sql(), d.placeholder.render(params.len())));
+        clauses.push(format!(
+            "{col} {} {}",
+            cur.op.sql(),
+            d.placeholder.render(params.len())
+        ));
 
         if let Some(to) = &cur.to {
             params.push(to.clone());
@@ -317,7 +321,10 @@ fn redact_keyword_dsn(dsn: &str) -> String {
     dsn.split_inclusive([' ', ';', '&'])
         .map(|tok| {
             let (body, sep) = match tok.chars().last() {
-                Some(c @ (' ' | ';' | '&')) => (&tok[..tok.len() - c.len_utf8()], &tok[tok.len() - c.len_utf8()..]),
+                Some(c @ (' ' | ';' | '&')) => (
+                    &tok[..tok.len() - c.len_utf8()],
+                    &tok[tok.len() - c.len_utf8()..],
+                ),
                 _ => (tok, ""),
             };
             match body.split_once('=') {
@@ -392,7 +399,10 @@ impl LoadFlavor {
         match dt {
             DataType::Boolean => "BOOLEAN".into(),
             // 32-bit trở xuống → INTEGER; 64-bit/unsigned lớn → BIGINT (an toàn phạm vi).
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::UInt8
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::UInt8
             | DataType::UInt16 => "INTEGER".into(),
             DataType::Int64 | DataType::UInt32 | DataType::UInt64 => "BIGINT".into(),
             DataType::Float16 | DataType::Float32 | DataType::Float64 => match self {
@@ -444,7 +454,13 @@ pub fn build_create_table(flavor: LoadFlavor, table: &str, schema: &SchemaRef) -
     let cols = schema
         .fields()
         .iter()
-        .map(|f| format!("{} {}", quote_ident(f.name(), q), flavor.ddl_type(f.data_type())))
+        .map(|f| {
+            format!(
+                "{} {}",
+                quote_ident(f.name(), q),
+                flavor.ddl_type(f.data_type())
+            )
+        })
         .collect::<Vec<_>>()
         .join(",\n  ");
     format!(
@@ -610,7 +626,13 @@ pub fn column_cells(arr: &ArrayRef) -> Vec<Cell> {
         ($ty:ty) => {{
             let a = arr.as_any().downcast_ref::<$ty>().unwrap();
             (0..n)
-                .map(|i| if a.is_null(i) { Cell::Null } else { Cell::Int(a.value(i) as i64) })
+                .map(|i| {
+                    if a.is_null(i) {
+                        Cell::Null
+                    } else {
+                        Cell::Int(a.value(i) as i64)
+                    }
+                })
                 .collect()
         }};
     }
@@ -618,7 +640,13 @@ pub fn column_cells(arr: &ArrayRef) -> Vec<Cell> {
         DataType::Boolean => {
             let a = arr.as_any().downcast_ref::<BooleanArray>().unwrap();
             (0..n)
-                .map(|i| if a.is_null(i) { Cell::Null } else { Cell::Bool(a.value(i)) })
+                .map(|i| {
+                    if a.is_null(i) {
+                        Cell::Null
+                    } else {
+                        Cell::Bool(a.value(i))
+                    }
+                })
                 .collect()
         }
         DataType::Int8 => ints!(Int8Array),
@@ -632,37 +660,73 @@ pub fn column_cells(arr: &ArrayRef) -> Vec<Cell> {
         DataType::Float32 => {
             let a = arr.as_any().downcast_ref::<Float32Array>().unwrap();
             (0..n)
-                .map(|i| if a.is_null(i) { Cell::Null } else { Cell::Float(a.value(i) as f64) })
+                .map(|i| {
+                    if a.is_null(i) {
+                        Cell::Null
+                    } else {
+                        Cell::Float(a.value(i) as f64)
+                    }
+                })
                 .collect()
         }
         DataType::Float64 => {
             let a = arr.as_any().downcast_ref::<Float64Array>().unwrap();
             (0..n)
-                .map(|i| if a.is_null(i) { Cell::Null } else { Cell::Float(a.value(i)) })
+                .map(|i| {
+                    if a.is_null(i) {
+                        Cell::Null
+                    } else {
+                        Cell::Float(a.value(i))
+                    }
+                })
                 .collect()
         }
         DataType::Utf8 => {
             let a = arr.as_any().downcast_ref::<StringArray>().unwrap();
             (0..n)
-                .map(|i| if a.is_null(i) { Cell::Null } else { Cell::Text(a.value(i).to_string()) })
+                .map(|i| {
+                    if a.is_null(i) {
+                        Cell::Null
+                    } else {
+                        Cell::Text(a.value(i).to_string())
+                    }
+                })
                 .collect()
         }
         DataType::LargeUtf8 => {
             let a = arr.as_any().downcast_ref::<LargeStringArray>().unwrap();
             (0..n)
-                .map(|i| if a.is_null(i) { Cell::Null } else { Cell::Text(a.value(i).to_string()) })
+                .map(|i| {
+                    if a.is_null(i) {
+                        Cell::Null
+                    } else {
+                        Cell::Text(a.value(i).to_string())
+                    }
+                })
                 .collect()
         }
         DataType::Binary => {
             let a = arr.as_any().downcast_ref::<BinaryArray>().unwrap();
             (0..n)
-                .map(|i| if a.is_null(i) { Cell::Null } else { Cell::Bytes(a.value(i).to_vec()) })
+                .map(|i| {
+                    if a.is_null(i) {
+                        Cell::Null
+                    } else {
+                        Cell::Bytes(a.value(i).to_vec())
+                    }
+                })
                 .collect()
         }
         DataType::LargeBinary => {
             let a = arr.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
             (0..n)
-                .map(|i| if a.is_null(i) { Cell::Null } else { Cell::Bytes(a.value(i).to_vec()) })
+                .map(|i| {
+                    if a.is_null(i) {
+                        Cell::Null
+                    } else {
+                        Cell::Bytes(a.value(i).to_vec())
+                    }
+                })
                 .collect()
         }
         // Date/Timestamp/Decimal/nested… → cast Utf8, ghi chuỗi.
@@ -772,7 +836,10 @@ mod tests {
             batch_rows: 10,
         };
         let (sql, params) = build_select(&spec, Dialect::MYSQL);
-        assert_eq!(sql, "SELECT * FROM `t` WHERE `ts` >= ? AND `ts` < ? ORDER BY `ts` ASC");
+        assert_eq!(
+            sql,
+            "SELECT * FROM `t` WHERE `ts` >= ? AND `ts` < ? ORDER BY `ts` ASC"
+        );
         assert_eq!(params.len(), 2);
     }
 
@@ -810,8 +877,14 @@ mod tests {
 
     #[test]
     fn redact_no_password_untouched() {
-        assert_eq!(redact_dsn("postgres://user@host/db"), "postgres://user@host/db");
-        assert_eq!(redact_dsn("sqlite:///tmp/x.sqlite"), "sqlite:///tmp/x.sqlite");
+        assert_eq!(
+            redact_dsn("postgres://user@host/db"),
+            "postgres://user@host/db"
+        );
+        assert_eq!(
+            redact_dsn("sqlite:///tmp/x.sqlite"),
+            "sqlite:///tmp/x.sqlite"
+        );
         assert_eq!(redact_dsn("/tmp/plain.sqlite"), "/tmp/plain.sqlite");
     }
 
@@ -825,7 +898,10 @@ mod tests {
 
         // sslpassword cũng là bí mật.
         let r2 = redact_dsn("postgres://user@host/db?sslpassword=x&application_name=app");
-        assert!(!r2.contains("sslpassword=x"), "sslpassword phải bị che: {r2}");
+        assert!(
+            !r2.contains("sslpassword=x"),
+            "sslpassword phải bị che: {r2}"
+        );
         assert!(r2.contains("application_name=app"), "param khác giữ: {r2}");
     }
 
@@ -888,7 +964,10 @@ mod tests {
             Field::new("name", DataType::Utf8, true),
         ]));
         let ddl = build_create_table(LoadFlavor::Postgres, "public.dest", &schema);
-        assert!(ddl.starts_with("CREATE TABLE IF NOT EXISTS \"public\".\"dest\" ("), "{ddl}");
+        assert!(
+            ddl.starts_with("CREATE TABLE IF NOT EXISTS \"public\".\"dest\" ("),
+            "{ddl}"
+        );
         assert!(ddl.contains("\"id\" BIGINT"), "{ddl}");
         assert!(ddl.contains("\"name\" TEXT"), "{ddl}");
     }
@@ -918,7 +997,9 @@ mod tests {
         let keys = vec!["id".to_string()];
         let sql = build_insert_sql(LoadFlavor::Postgres, "t", &cols, 1, Some(&keys));
         assert!(
-            sql.ends_with(r#"ON CONFLICT ("id") DO UPDATE SET "v" = EXCLUDED."v", "w" = EXCLUDED."w""#),
+            sql.ends_with(
+                r#"ON CONFLICT ("id") DO UPDATE SET "v" = EXCLUDED."v", "w" = EXCLUDED."w""#
+            ),
             "{sql}"
         );
     }
@@ -939,7 +1020,10 @@ mod tests {
         let cols = vec!["id".to_string(), "v".to_string()];
         let keys = vec!["id".to_string()];
         let sql = build_insert_sql(LoadFlavor::Mysql, "t", &cols, 1, Some(&keys));
-        assert!(sql.ends_with("ON DUPLICATE KEY UPDATE `v` = VALUES(`v`)"), "{sql}");
+        assert!(
+            sql.ends_with("ON DUPLICATE KEY UPDATE `v` = VALUES(`v`)"),
+            "{sql}"
+        );
     }
 
     #[test]
@@ -947,7 +1031,10 @@ mod tests {
         let cols = vec!["id".to_string(), "k".to_string()];
         let keys = vec!["id".to_string(), "k".to_string()];
         let pg = build_insert_sql(LoadFlavor::Postgres, "t", &cols, 1, Some(&keys));
-        assert!(pg.ends_with(r#"ON CONFLICT ("id", "k") DO NOTHING"#), "{pg}");
+        assert!(
+            pg.ends_with(r#"ON CONFLICT ("id", "k") DO NOTHING"#),
+            "{pg}"
+        );
         let my = build_insert_sql(LoadFlavor::Mysql, "t", &cols, 1, Some(&keys));
         assert!(my.ends_with("ON DUPLICATE KEY UPDATE `id` = `id`"), "{my}");
     }
@@ -962,11 +1049,19 @@ mod tests {
 
     #[test]
     fn load_mode_parse() {
-        assert_eq!(LoadMode::from_export("full_refresh", vec![]).unwrap(), LoadMode::FullRefresh);
-        assert_eq!(LoadMode::from_export("append", vec![]).unwrap(), LoadMode::Append);
+        assert_eq!(
+            LoadMode::from_export("full_refresh", vec![]).unwrap(),
+            LoadMode::FullRefresh
+        );
+        assert_eq!(
+            LoadMode::from_export("append", vec![]).unwrap(),
+            LoadMode::Append
+        );
         assert_eq!(
             LoadMode::from_export("upsert", vec!["id".into()]).unwrap(),
-            LoadMode::Upsert { keys: vec!["id".into()] }
+            LoadMode::Upsert {
+                keys: vec!["id".into()]
+            }
         );
         // upsert thiếu keys → lỗi.
         assert!(LoadMode::from_export("upsert", vec![]).is_err());
@@ -978,7 +1073,10 @@ mod tests {
         use datafusion::arrow::array::{Float64Array, Int64Array, StringArray};
         use std::sync::Arc;
         let ints: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
-        assert_eq!(column_cells(&ints), vec![Cell::Int(1), Cell::Null, Cell::Int(3)]);
+        assert_eq!(
+            column_cells(&ints),
+            vec![Cell::Int(1), Cell::Null, Cell::Int(3)]
+        );
         let fs: ArrayRef = Arc::new(Float64Array::from(vec![Some(1.5)]));
         assert_eq!(column_cells(&fs), vec![Cell::Float(1.5)]);
         let ss: ArrayRef = Arc::new(StringArray::from(vec![Some("x"), None]));

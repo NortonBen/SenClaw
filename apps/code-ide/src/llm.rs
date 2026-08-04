@@ -50,7 +50,8 @@ fn mode_suffix(mode: &str) -> &'static str {
     }
 }
 
-const SYSTEM: &str = "You are SenClaw Code, an AI pair-programmer embedded in a VSCode-style editor. \
+const SYSTEM: &str =
+    "You are SenClaw Code, an AI pair-programmer embedded in a VSCode-style editor. \
 The user works in a local workspace and may pin specific code selections as context. \
 Ground every answer in the provided code — cite files as `path:line`. When proposing a change, \
 show the full replacement inside a fenced code block and name the target file on the line above it \
@@ -110,7 +111,10 @@ pub async fn list_models() -> Result<Value, String> {
 
 /// Set the daemon's active main model via the SDK.
 pub async fn set_active_model(id: &str) -> Result<(), String> {
-    client().set_active_model(id).await.map_err(|e| e.to_string())
+    client()
+        .set_active_model(id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// The app's single gateway to SenClaw services. Every LLM call goes through the
@@ -125,7 +129,11 @@ fn client() -> SpaceClient {
 }
 
 /// One-shot completion on SenClaw's active LLM via the SDK open API.
-pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(String, String), String> {
+pub async fn bridge_llm(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String), String> {
     client()
         .llm_request(system, user, max_tokens)
         .await

@@ -19,13 +19,17 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn open_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -41,7 +45,9 @@ impl Db {
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
         self.with_conn(|c| {
             let v = c
-                .query_row("SELECT value FROM meta WHERE key=?1", [key], |r| r.get::<_, String>(0))
+                .query_row("SELECT value FROM meta WHERE key=?1", [key], |r| {
+                    r.get::<_, String>(0)
+                })
                 .ok();
             Ok(v)
         })
@@ -78,8 +84,15 @@ pub fn wiki_db_path(root: &Path) -> PathBuf {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     root.to_string_lossy().hash(&mut h);
-    let name = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let safe: String = name.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').take(24).collect();
+    let name = root
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let safe: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .take(24)
+        .collect();
     default_data_dir("deepwiki").join(format!("ws-{safe}-{:016x}.db", h.finish()))
 }
 

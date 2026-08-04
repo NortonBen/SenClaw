@@ -107,7 +107,9 @@ fn parse_watermark(s: &str) -> Value {
     if let Ok(i) = s.parse::<i64>() {
         Value::from(i)
     } else if let Ok(f) = s.parse::<f64>() {
-        serde_json::Number::from_f64(f).map(Value::Number).unwrap_or_else(|| Value::from(s))
+        serde_json::Number::from_f64(f)
+            .map(Value::Number)
+            .unwrap_or_else(|| Value::from(s))
     } else {
         Value::from(s)
     }
@@ -359,7 +361,8 @@ fn evolve_schema(
     let current = db.schema_version_current(dataset.id)?;
     let Some(cur) = current else {
         // Dataset mới: schema batch = version 1 (không biến đổi).
-        let v = db.schema_version_add(dataset.id, &lake::schema_to_json(&incoming), Some("land"))?;
+        let v =
+            db.schema_version_add(dataset.id, &lake::schema_to_json(&incoming), Some("land"))?;
         return Ok(SchemaEvo {
             version: Some(v),
             effective: Some(incoming),
@@ -400,11 +403,7 @@ struct UnifyPlan {
 /// Unify schema hiện hành `cur` với `incoming` theo TÊN cột (§6.4). Trả schema hiệu lực.
 /// Cột chỉ-có-ở-cur giữ nguyên (file mới land NULL). Cột mới ở incoming → theo
 /// `new_columns` policy. Kiểu đổi lossless → widen; không lossless → theo `type_change`.
-fn unify_schema(
-    cur: &SchemaRef,
-    incoming: &SchemaRef,
-    policy: SchemaPolicy,
-) -> Result<UnifyPlan> {
+fn unify_schema(cur: &SchemaRef, incoming: &SchemaRef, policy: SchemaPolicy) -> Result<UnifyPlan> {
     let mut fields: Vec<Field> = cur.fields().iter().map(|f| f.as_ref().clone()).collect();
     let mut variant_bases: HashSet<String> = HashSet::new();
     let mut added = Vec::new();
@@ -460,9 +459,7 @@ fn unify_schema(
                 // Cột mới ở incoming.
                 match policy.new_columns {
                     NewColPolicy::Freeze => {
-                        anyhow::bail!(
-                            "schema drift: cột mới '{iname}' (new_columns=freeze)"
-                        );
+                        anyhow::bail!("schema drift: cột mới '{iname}' (new_columns=freeze)");
                     }
                     NewColPolicy::Discard => continue,
                     NewColPolicy::Evolve => {
@@ -526,10 +523,7 @@ fn can_widen(from: &DataType, to: &DataType) -> bool {
     if let (Some(a), Some(b)) = (uint_rank(from), uint_rank(to)) {
         return b > a;
     }
-    matches!(
-        (from, to),
-        (DataType::Float32, DataType::Float64)
-    )
+    matches!((from, to), (DataType::Float32, DataType::Float64))
 }
 
 /// Ép danh sách batch về schema hiệu lực để land (§6.4). Cột biến thể: giá trị GỐC
@@ -653,7 +647,9 @@ pub fn prepare_incremental(
             // Bỏ khi trùng biên với lần trước. So NUMERIC khi cả hai là số (đồng bộ
             // với cursor_gt bên dưới) — nếu không, cursor số "9" vs "12" bị so lexical.
             let is_boundary_dup = match (&cur_val, prev_watermark) {
-                (Some(cv), Some(pw)) => cursor_eq(Some(cv.as_str()), Some(pw)) && prev_hashes.contains(&hash),
+                (Some(cv), Some(pw)) => {
+                    cursor_eq(Some(cv.as_str()), Some(pw)) && prev_hashes.contains(&hash)
+                }
                 _ => false,
             };
             if is_boundary_dup {
@@ -665,7 +661,10 @@ pub fn prepare_incremental(
             if let Some(cv) = cur_val {
                 // So NUMERIC (không lexical): id 9 < 10 < 12; lexical "9" > "12" làm
                 // watermark tụt → re-pull vô hạn (BUG watermark lexical).
-                if max_cursor.as_deref().is_none_or(|m| cursor_gt(Some(cv.as_str()), Some(m))) {
+                if max_cursor
+                    .as_deref()
+                    .is_none_or(|m| cursor_gt(Some(cv.as_str()), Some(m)))
+                {
                     max_cursor = Some(cv.clone());
                 }
                 kept_cursor_hash.push((cv, hash));
@@ -815,16 +814,27 @@ pub fn apply_merge_at(
     let evo = evolve_schema(p.db, ds, batches, p.schema_policy)?;
     let Some(target) = evo.effective.clone() else {
         // Không có dữ liệu vào — giữ nguyên trạng thái.
-        return Ok(AppliedLand { rows_written: 0, files: 0, watermark: None, schema_version: evo.version });
+        return Ok(AppliedLand {
+            rows_written: 0,
+            files: 0,
+            watermark: None,
+            schema_version: evo.version,
+        });
     };
     let landed: Vec<RecordBatch> = conform_land_batches(batches, &evo)?
         .into_iter()
         .filter(|b| b.num_rows() > 0)
         .collect();
     if landed.is_empty() {
-        return Ok(AppliedLand { rows_written: 0, files: 0, watermark: None, schema_version: evo.version });
+        return Ok(AppliedLand {
+            rows_written: 0,
+            files: 0,
+            watermark: None,
+            schema_version: evo.version,
+        });
     }
-    let inc = concat_batches(&target, &landed).map_err(|e| anyhow!("gộp batch merge thất bại: {e}"))?;
+    let inc =
+        concat_batches(&target, &landed).map_err(|e| anyhow!("gộp batch merge thất bại: {e}"))?;
     let inc_n = inc.num_rows();
 
     let inc_pk = key_columns(&inc, p.primary_key)?;
@@ -875,7 +885,10 @@ pub fn apply_merge_at(
             if !kept.contains(&r) || existing_pks.contains(&inc_pk[r]) {
                 continue;
             }
-            part_rows.entry(inc_part[r].clone()).or_default().push(r as u32);
+            part_rows
+                .entry(inc_part[r].clone())
+                .or_default()
+                .push(r as u32);
         }
         for (part, idx) in part_rows {
             let seg = take_rows(&inc, &idx)?;
@@ -884,7 +897,12 @@ pub fn apply_merge_at(
             files += f.len();
             p.db.manifest_add_files(ds_id, p.run_id, &f)?;
         }
-        return Ok(AppliedLand { rows_written, files, watermark: None, schema_version: evo.version });
+        return Ok(AppliedLand {
+            rows_written,
+            files,
+            watermark: None,
+            schema_version: evo.version,
+        });
     }
 
     // DeleteInsert / Upsert: rewrite các partition bị ảnh hưởng.
@@ -909,14 +927,19 @@ pub fn apply_merge_at(
         // Giữ row cũ trong partition không bị PK incoming đụng tới.
         if let Some(b) = existing.get(&part) {
             let pks = &existing_pk_by_part[&part];
-            let mask: Vec<bool> = pks.iter().map(|k| !incoming_pks.contains(k.as_str())).collect();
+            let mask: Vec<bool> = pks
+                .iter()
+                .map(|k| !incoming_pks.contains(k.as_str()))
+                .collect();
             let keptb = filter_by(b, &mask)?;
             if keptb.num_rows() > 0 {
                 segs.push(keptb);
             }
         }
         // Thêm row incoming (deduped) thuộc partition này.
-        let mask: Vec<bool> = (0..inc_n).map(|r| kept.contains(&r) && inc_part[r] == part).collect();
+        let mask: Vec<bool> = (0..inc_n)
+            .map(|r| kept.contains(&r) && inc_part[r] == part)
+            .collect();
         let incb = filter_by(&inc, &mask)?;
         if incb.num_rows() > 0 {
             segs.push(incb);
@@ -928,7 +951,12 @@ pub fn apply_merge_at(
         p.db.manifest_replace_partition(ds_id, p.run_id, &part, &f)?;
     }
 
-    Ok(AppliedLand { rows_written, files, watermark: None, schema_version: evo.version })
+    Ok(AppliedLand {
+        rows_written,
+        files,
+        watermark: None,
+        schema_version: evo.version,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -976,14 +1004,24 @@ pub struct SnapshotParams<'a> {
 }
 
 /// Cột meta SCD2 (§6.2) — luôn ở CUỐI schema, sau cột business.
-const SCD2_META: &[&str] = &["_valid_from", "_valid_to", "_is_current", "_row_hash", "_is_deleted"];
+const SCD2_META: &[&str] = &[
+    "_valid_from",
+    "_valid_to",
+    "_is_current",
+    "_row_hash",
+    "_is_deleted",
+];
 /// Nhãn partition SCD2: bản hiện hành vs lịch sử (partition theo `_is_current`).
 const PART_CURRENT: &str = "current";
 const PART_HISTORY: &str = "history";
 
 /// Schema đích SCD2 = cột business + 5 cột meta.
 fn scd2_target_schema(business: &SchemaRef) -> SchemaRef {
-    let mut fields: Vec<Field> = business.fields().iter().map(|f| f.as_ref().clone()).collect();
+    let mut fields: Vec<Field> = business
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect();
     fields.push(Field::new("_valid_from", DataType::Utf8, true));
     fields.push(Field::new("_valid_to", DataType::Utf8, true));
     fields.push(Field::new("_is_current", DataType::Boolean, true));
@@ -995,7 +1033,12 @@ fn scd2_target_schema(business: &SchemaRef) -> SchemaRef {
 /// Suy schema business (bỏ 5 cột meta cuối) từ schema đích SCD2.
 fn business_from_target(target: &SchemaRef) -> SchemaRef {
     let n = target.fields().len().saturating_sub(SCD2_META.len());
-    let fields: Vec<Field> = target.fields().iter().take(n).map(|f| f.as_ref().clone()).collect();
+    let fields: Vec<Field> = target
+        .fields()
+        .iter()
+        .take(n)
+        .map(|f| f.as_ref().clone())
+        .collect();
     Arc::new(Schema::new(fields))
 }
 
@@ -1012,8 +1055,11 @@ pub fn apply_snapshot_at(
     let (ns, name, ds_id) = (&ds.namespace, &ds.name, ds.id);
     let now = now_ts();
 
-    let src_nonempty: Vec<RecordBatch> =
-        batches.iter().filter(|b| b.num_rows() > 0).cloned().collect();
+    let src_nonempty: Vec<RecordBatch> = batches
+        .iter()
+        .filter(|b| b.num_rows() > 0)
+        .cloned()
+        .collect();
 
     // Schema business: từ nguồn nếu có, else suy từ schema đích hiện có.
     let business: SchemaRef = match src_nonempty.first() {
@@ -1021,7 +1067,12 @@ pub fn apply_snapshot_at(
         None => match p.db.schema_version_current(ds_id)? {
             Some(sv) => business_from_target(&lake::schema_from_json(&sv.arrow_schema)?),
             None => {
-                return Ok(AppliedLand { rows_written: 0, files: 0, watermark: None, schema_version: None });
+                return Ok(AppliedLand {
+                    rows_written: 0,
+                    files: 0,
+                    watermark: None,
+                    schema_version: None,
+                });
             }
         },
     };
@@ -1030,7 +1081,9 @@ pub fn apply_snapshot_at(
     // Đảm bảo schema_version catalog (SCD2 = schema đích, không dùng evolve_schema).
     let schema_version = match p.db.schema_version_current(ds_id)? {
         Some(sv) => sv.version,
-        None => p.db.schema_version_add(ds_id, &lake::schema_to_json(&target), Some("snapshot"))?,
+        None => {
+            p.db.schema_version_add(ds_id, &lake::schema_to_json(&target), Some("snapshot"))?
+        }
     };
 
     // Nguồn (full extract) về schema business.
@@ -1041,7 +1094,8 @@ pub fn apply_snapshot_at(
             .iter()
             .map(|b| conform_to(b, &business))
             .collect::<Result<_>>()?;
-        concat_batches(&business, &conformed).map_err(|e| anyhow!("gộp nguồn snapshot thất bại: {e}"))?
+        concat_batches(&business, &conformed)
+            .map_err(|e| anyhow!("gộp nguồn snapshot thất bại: {e}"))?
     };
     let src_n = src.num_rows();
     let src_pk = key_columns(&src, p.primary_key)?;
@@ -1092,11 +1146,11 @@ pub fn apply_snapshot_at(
         match cur_map.get(pk.as_str()) {
             None => new_src.push(r as u32),
             Some(&ci) => {
-                let same = cur_hash.get(ci).and_then(|x| x.as_deref()) == Some(src_hash[r].as_str());
+                let same =
+                    cur_hash.get(ci).and_then(|x| x.as_deref()) == Some(src_hash[r].as_str());
                 // Bản current đang đánh dấu đã-xóa mà row xuất hiện lại ⇒ coi như ĐÃ ĐỔI
                 // (đóng bản deleted + thêm bản current mới sống lại), bất kể hash trùng.
-                let was_deleted =
-                    cur_deleted.get(ci).and_then(|x| x.as_deref()) == Some("true");
+                let was_deleted = cur_deleted.get(ci).and_then(|x| x.as_deref()) == Some("true");
                 if same && !was_deleted {
                     carry.push(ci as u32);
                 } else {
@@ -1131,8 +1185,10 @@ pub fn apply_snapshot_at(
     if !new_src.is_empty() {
         let bus = take_rows(&src, &new_src)?;
         let n = new_src.len();
-        let hashes: Vec<Option<String>> =
-            new_src.iter().map(|&r| Some(src_hash[r as usize].clone())).collect();
+        let hashes: Vec<Option<String>> = new_src
+            .iter()
+            .map(|&r| Some(src_hash[r as usize].clone()))
+            .collect();
         let seg = append_meta(
             &bus,
             &target,
@@ -1148,8 +1204,10 @@ pub fn apply_snapshot_at(
         if let Some(b) = &cur {
             let bus = project_cols(&take_rows(b, &del_marker)?, &business)?;
             let n = del_marker.len();
-            let hashes: Vec<Option<String>> =
-                del_marker.iter().map(|&r| cur_hash[r as usize].clone()).collect();
+            let hashes: Vec<Option<String>> = del_marker
+                .iter()
+                .map(|&r| cur_hash[r as usize].clone())
+                .collect();
             let seg = append_meta(
                 &bus,
                 &target,
@@ -1175,14 +1233,20 @@ pub fn apply_snapshot_at(
             let idx: Vec<u32> = close.iter().map(|(i, _)| *i).collect();
             let flags: Vec<bool> = close.iter().map(|(_, d)| *d).collect();
             let closed = close_history_rows(&take_rows(b, &idx)?, &target, &now, &flags)?;
-            let hist_files = lake::land_partition_at(root, ns, name, p.run_id, PART_HISTORY, &[closed])?;
+            let hist_files =
+                lake::land_partition_at(root, ns, name, p.run_id, PART_HISTORY, &[closed])?;
             rows_written += hist_files.iter().map(|x| x.row_count).sum::<i64>();
             files += hist_files.len();
             p.db.manifest_add_files(ds_id, p.run_id, &hist_files)?;
         }
     }
 
-    Ok(AppliedLand { rows_written, files, watermark: None, schema_version: Some(schema_version) })
+    Ok(AppliedLand {
+        rows_written,
+        files,
+        watermark: None,
+        schema_version: Some(schema_version),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1214,7 +1278,13 @@ fn col_utf8_vals(batch: &RecordBatch, name: &str) -> Result<Vec<Option<String>>>
         .map_err(|_| anyhow!("cột '{name}' không có trong batch"))?;
     let a = cast_utf8(batch.column(idx))?;
     Ok((0..a.len())
-        .map(|r| if a.is_null(r) { None } else { Some(a.value(r).to_string()) })
+        .map(|r| {
+            if a.is_null(r) {
+                None
+            } else {
+                Some(a.value(r).to_string())
+            }
+        })
         .collect())
 }
 
@@ -1262,7 +1332,13 @@ fn partition_labels(batch: &RecordBatch, cols: &[String], n: usize) -> Result<Ve
     for r in 0..n {
         let parts: Vec<String> = arrs
             .iter()
-            .map(|a| if a.is_null(r) { "__null__".to_string() } else { a.value(r).to_string() })
+            .map(|a| {
+                if a.is_null(r) {
+                    "__null__".to_string()
+                } else {
+                    a.value(r).to_string()
+                }
+            })
             .collect();
         out.push(parts.join("__"));
     }
@@ -1334,7 +1410,8 @@ fn take_rows(batch: &RecordBatch, idx: &[u32]) -> Result<RecordBatch> {
         .iter()
         .map(|c| take(c.as_ref(), &indices, None).map_err(|e| anyhow!("take thất bại: {e}")))
         .collect();
-    RecordBatch::try_new(batch.schema(), cols?).map_err(|e| anyhow!("take dựng batch thất bại: {e}"))
+    RecordBatch::try_new(batch.schema(), cols?)
+        .map_err(|e| anyhow!("take dựng batch thất bại: {e}"))
 }
 
 /// Ép batch về `target` theo TÊN cột (thiếu → NULL, kiểu khác → cast, fail → NULL).
@@ -1355,7 +1432,8 @@ fn conform_to(batch: &RecordBatch, target: &SchemaRef) -> Result<RecordBatch> {
         };
         cols.push(col);
     }
-    RecordBatch::try_new(target.clone(), cols).map_err(|e| anyhow!("ép batch về target thất bại: {e}"))
+    RecordBatch::try_new(target.clone(), cols)
+        .map_err(|e| anyhow!("ép batch về target thất bại: {e}"))
 }
 
 /// Chiếu batch xuống đúng tập cột của `schema` (theo tên, giữ nguyên mảng).
@@ -1387,7 +1465,8 @@ fn append_meta(
     cols.push(Arc::new(BooleanArray::from(is_current.to_vec())));
     cols.push(Arc::new(StringArray::from(row_hash.to_vec())));
     cols.push(Arc::new(BooleanArray::from(is_deleted.to_vec())));
-    RecordBatch::try_new(target.clone(), cols).map_err(|e| anyhow!("gắn cột meta SCD2 thất bại: {e}"))
+    RecordBatch::try_new(target.clone(), cols)
+        .map_err(|e| anyhow!("gắn cột meta SCD2 thất bại: {e}"))
 }
 
 /// Đóng các bản current (đã take về target): set `_valid_to=now`, `_is_current=false`,
@@ -1400,13 +1479,20 @@ fn close_history_rows(
 ) -> Result<RecordBatch> {
     let n = rows.num_rows();
     let mut cols: Vec<ArrayRef> = rows.columns().to_vec();
-    let vt = target.index_of("_valid_to").map_err(|e| anyhow!("thiếu _valid_to: {e}"))?;
-    let ic = target.index_of("_is_current").map_err(|e| anyhow!("thiếu _is_current: {e}"))?;
-    let idl = target.index_of("_is_deleted").map_err(|e| anyhow!("thiếu _is_deleted: {e}"))?;
+    let vt = target
+        .index_of("_valid_to")
+        .map_err(|e| anyhow!("thiếu _valid_to: {e}"))?;
+    let ic = target
+        .index_of("_is_current")
+        .map_err(|e| anyhow!("thiếu _is_current: {e}"))?;
+    let idl = target
+        .index_of("_is_deleted")
+        .map_err(|e| anyhow!("thiếu _is_deleted: {e}"))?;
     cols[vt] = Arc::new(StringArray::from(vec![Some(now.to_string()); n]));
     cols[ic] = Arc::new(BooleanArray::from(vec![false; n]));
     cols[idl] = Arc::new(BooleanArray::from(is_deleted.to_vec()));
-    RecordBatch::try_new(target.clone(), cols).map_err(|e| anyhow!("đóng bản lịch sử thất bại: {e}"))
+    RecordBatch::try_new(target.clone(), cols)
+        .map_err(|e| anyhow!("đóng bản lịch sử thất bại: {e}"))
 }
 
 /// Đọc mọi file active của dataset, ép về `schema`, gộp theo nhãn partition.
@@ -1422,7 +1508,10 @@ fn read_active_by_partition(
         let abs = root.join(&f.path);
         let part = f.partition.clone().unwrap_or_default();
         for b in lake::read_parquet_file(&abs)? {
-            grouped.entry(part.clone()).or_default().push(conform_to(&b, schema)?);
+            grouped
+                .entry(part.clone())
+                .or_default()
+                .push(conform_to(&b, schema)?);
         }
     }
     let mut out = HashMap::new();
@@ -1516,7 +1605,11 @@ mod tests {
         let labels: Vec<&str> = vec!["x"; 12];
         let b = batch(ids, labels);
         let p1 = prepare_incremental(&[b], "id", None, &HashSet::new()).unwrap();
-        assert_eq!(p1.new_watermark.as_deref(), Some("12"), "watermark phải numeric max");
+        assert_eq!(
+            p1.new_watermark.as_deref(),
+            Some("12"),
+            "watermark phải numeric max"
+        );
         assert_eq!(p1.new_boundary_hashes.len(), 1, "biên đúng 1 row id=12");
 
         // Steady-state: connector chỉ fetch cursor >= "12" (numeric) → chỉ id=12; trùng
@@ -1551,7 +1644,8 @@ mod tests {
 
         /// Land một batch qua đường IncrementalAppend (giữ file cũ → đọc được mixed).
         fn land_incr(root: &Path, db: &Db, run_id: &str, batches: &[RecordBatch]) {
-            let ds = db.dataset_get_by_id(db.dataset_upsert("raw", "t", None, None, None).unwrap())
+            let ds = db
+                .dataset_get_by_id(db.dataset_upsert("raw", "t", None, None, None).unwrap())
                 .unwrap()
                 .unwrap();
             apply_land_at(
@@ -1588,7 +1682,10 @@ mod tests {
             )
             .unwrap();
             land_incr(root, &db, "run-1", &[b1]);
-            assert_eq!(db.schema_version_current(ds_id).unwrap().unwrap().version, 1);
+            assert_eq!(
+                db.schema_version_current(ds_id).unwrap().unwrap().version,
+                1
+            );
 
             // v2: {ts, id, extra} → AddColumns.
             let s2: SchemaRef = Arc::new(Schema::new(vec![
@@ -1606,10 +1703,17 @@ mod tests {
             )
             .unwrap();
             land_incr(root, &db, "run-2", &[b2]);
-            assert_eq!(db.schema_version_current(ds_id).unwrap().unwrap().version, 2);
+            assert_eq!(
+                db.schema_version_current(ds_id).unwrap().unwrap().version,
+                2
+            );
 
             let page = crate::engine::query_page_at(
-                root, &db, "SELECT ts, id, extra FROM raw.t ORDER BY ts", None, None,
+                root,
+                &db,
+                "SELECT ts, id, extra FROM raw.t ORDER BY ts",
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1650,10 +1754,17 @@ mod tests {
             let sv = db.schema_version_current(ds_id).unwrap().unwrap();
             assert_eq!(sv.version, 2);
             let sch = crate::lake::schema_from_json(&sv.arrow_schema).unwrap();
-            assert_eq!(sch.field_with_name("id").unwrap().data_type(), &DataType::Int64);
+            assert_eq!(
+                sch.field_with_name("id").unwrap().data_type(),
+                &DataType::Int64
+            );
 
             let page = crate::engine::query_page_at(
-                root, &db, "SELECT id FROM raw.t ORDER BY ts", None, None,
+                root,
+                &db,
+                "SELECT id FROM raw.t ORDER BY ts",
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1703,11 +1814,21 @@ mod tests {
             let sv = db.schema_version_current(ds_id).unwrap().unwrap();
             assert_eq!(sv.version, 2);
             let sch = crate::lake::schema_from_json(&sv.arrow_schema).unwrap();
-            assert!(sch.field_with_name("val__v_text").is_ok(), "có cột biến thể");
-            assert_eq!(sch.field_with_name("val").unwrap().data_type(), &DataType::Int64);
+            assert!(
+                sch.field_with_name("val__v_text").is_ok(),
+                "có cột biến thể"
+            );
+            assert_eq!(
+                sch.field_with_name("val").unwrap().data_type(),
+                &DataType::Int64
+            );
 
             let page = crate::engine::query_page_at(
-                root, &db, "SELECT val, val__v_text FROM raw.t ORDER BY ts", None, None,
+                root,
+                &db,
+                "SELECT val, val__v_text FROM raw.t ORDER BY ts",
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -1721,7 +1842,8 @@ mod tests {
 
         #[test]
         fn unify_freeze_rejects_new_column() {
-            let cur: SchemaRef = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+            let cur: SchemaRef =
+                Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
             let inc: SchemaRef = Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Int64, true),
                 Field::new("b", DataType::Int64, true),
@@ -1763,9 +1885,17 @@ mod tests {
             RecordBatch::try_new(
                 irv_schema(),
                 vec![
-                    Arc::new(Int64Array::from(rows.iter().map(|r| r.0).collect::<Vec<_>>())),
-                    Arc::new(SA::from(rows.iter().map(|r| Some(r.1.to_string())).collect::<Vec<_>>())),
-                    Arc::new(Int64Array::from(rows.iter().map(|r| r.2).collect::<Vec<_>>())),
+                    Arc::new(Int64Array::from(
+                        rows.iter().map(|r| r.0).collect::<Vec<_>>(),
+                    )),
+                    Arc::new(SA::from(
+                        rows.iter()
+                            .map(|r| Some(r.1.to_string()))
+                            .collect::<Vec<_>>(),
+                    )),
+                    Arc::new(Int64Array::from(
+                        rows.iter().map(|r| r.2).collect::<Vec<_>>(),
+                    )),
                 ],
             )
             .unwrap()
@@ -1800,7 +1930,10 @@ mod tests {
         }
 
         async fn rows_of(root: &Path, db: &Db, sql: &str) -> Vec<Vec<Value>> {
-            crate::engine::query_page_at(root, db, sql, None, None).await.unwrap().rows
+            crate::engine::query_page_at(root, db, sql, None, None)
+                .await
+                .unwrap()
+                .rows
         }
 
         #[tokio::test]
@@ -1810,12 +1943,26 @@ mod tests {
             let db = Db::open_memory().unwrap();
             let ds_id = db.dataset_upsert("raw", "m", None, None, None).unwrap();
 
-            merge(root, &db, ds_id, "r1", MergeStrategy::DeleteInsert, irv(&[(1, "east", 10), (2, "west", 20)]));
+            merge(
+                root,
+                &db,
+                ds_id,
+                "r1",
+                MergeStrategy::DeleteInsert,
+                irv(&[(1, "east", 10), (2, "west", 20)]),
+            );
             let n = rows_of(root, &db, "SELECT COUNT(*) AS n FROM raw.m").await;
             assert_eq!(n[0][0], Value::from(2));
 
             // Update id=1 (val mới) trong partition east.
-            merge(root, &db, ds_id, "r2", MergeStrategy::DeleteInsert, irv(&[(1, "east", 11)]));
+            merge(
+                root,
+                &db,
+                ds_id,
+                "r2",
+                MergeStrategy::DeleteInsert,
+                irv(&[(1, "east", 11)]),
+            );
             let all = rows_of(root, &db, "SELECT id, v FROM raw.m ORDER BY id").await;
             assert_eq!(all.len(), 2, "không nhân đôi");
             assert_eq!(all[0][0], Value::from(1));
@@ -1831,14 +1978,37 @@ mod tests {
             let db = Db::open_memory().unwrap();
             let ds_id = db.dataset_upsert("raw", "m", None, None, None).unwrap();
 
-            merge(root, &db, ds_id, "r1", MergeStrategy::DeleteInsert, irv(&[(1, "east", 10), (2, "west", 20)]));
+            merge(
+                root,
+                &db,
+                ds_id,
+                "r1",
+                MergeStrategy::DeleteInsert,
+                irv(&[(1, "east", 10), (2, "west", 20)]),
+            );
             // id=1 chuyển east → west.
-            merge(root, &db, ds_id, "r2", MergeStrategy::Upsert, irv(&[(1, "west", 12)]));
+            merge(
+                root,
+                &db,
+                ds_id,
+                "r2",
+                MergeStrategy::Upsert,
+                irv(&[(1, "west", 12)]),
+            );
 
             // Không PK trùng: id=1 chỉ còn 1 dòng, ở west.
-            let cnt = rows_of(root, &db, "SELECT id, COUNT(*) AS c FROM raw.m GROUP BY id ORDER BY id").await;
+            let cnt = rows_of(
+                root,
+                &db,
+                "SELECT id, COUNT(*) AS c FROM raw.m GROUP BY id ORDER BY id",
+            )
+            .await;
             assert_eq!(cnt.len(), 2);
-            assert_eq!(cnt[0][1], Value::from(1), "id=1 chỉ 1 dòng (partition cũ đã rewrite)");
+            assert_eq!(
+                cnt[0][1],
+                Value::from(1),
+                "id=1 chỉ 1 dòng (partition cũ đã rewrite)"
+            );
             assert_eq!(cnt[1][1], Value::from(1));
             let reg = rows_of(root, &db, "SELECT region FROM raw.m WHERE id = 1").await;
             assert_eq!(reg[0][0], Value::from("west"));
@@ -1851,12 +2021,30 @@ mod tests {
             let db = Db::open_memory().unwrap();
             let ds_id = db.dataset_upsert("raw", "m", None, None, None).unwrap();
 
-            merge(root, &db, ds_id, "r1", MergeStrategy::InsertOnly, irv(&[(1, "east", 10)]));
+            merge(
+                root,
+                &db,
+                ds_id,
+                "r1",
+                MergeStrategy::InsertOnly,
+                irv(&[(1, "east", 10)]),
+            );
             // id=1 đã có → bỏ; id=3 mới → thêm.
-            merge(root, &db, ds_id, "r2", MergeStrategy::InsertOnly, irv(&[(1, "east", 99), (3, "east", 30)]));
+            merge(
+                root,
+                &db,
+                ds_id,
+                "r2",
+                MergeStrategy::InsertOnly,
+                irv(&[(1, "east", 99), (3, "east", 30)]),
+            );
             let all = rows_of(root, &db, "SELECT id, v FROM raw.m ORDER BY id").await;
             assert_eq!(all.len(), 2);
-            assert_eq!(all[0][1], Value::from(10), "id=1 giữ giá trị cũ (không upsert)");
+            assert_eq!(
+                all[0][1],
+                Value::from(10),
+                "id=1 giữ giá trị cũ (không upsert)"
+            );
             assert_eq!(all[1][0], Value::from(3));
         }
 
@@ -1873,9 +2061,19 @@ mod tests {
             RecordBatch::try_new(
                 dim_schema(),
                 vec![
-                    Arc::new(Int64Array::from(rows.iter().map(|r| r.0).collect::<Vec<_>>())),
-                    Arc::new(SA::from(rows.iter().map(|r| Some(r.1.to_string())).collect::<Vec<_>>())),
-                    Arc::new(SA::from(rows.iter().map(|r| Some(r.2.to_string())).collect::<Vec<_>>())),
+                    Arc::new(Int64Array::from(
+                        rows.iter().map(|r| r.0).collect::<Vec<_>>(),
+                    )),
+                    Arc::new(SA::from(
+                        rows.iter()
+                            .map(|r| Some(r.1.to_string()))
+                            .collect::<Vec<_>>(),
+                    )),
+                    Arc::new(SA::from(
+                        rows.iter()
+                            .map(|r| Some(r.2.to_string()))
+                            .collect::<Vec<_>>(),
+                    )),
                 ],
             )
             .unwrap()
@@ -1904,19 +2102,37 @@ mod tests {
             let db = Db::open_memory().unwrap();
             let ds_id = db.dataset_upsert("raw", "dim", None, None, None).unwrap();
 
-            snapshot(root, &db, ds_id, "r1", dim(&[(1, "a", "t1"), (2, "b", "t1")]));
+            snapshot(
+                root,
+                &db,
+                ds_id,
+                "r1",
+                dim(&[(1, "a", "t1"), (2, "b", "t1")]),
+            );
             // id=1 đổi (updated_at t2), id=2 giữ nguyên.
-            snapshot(root, &db, ds_id, "r2", dim(&[(1, "a2", "t2"), (2, "b", "t1")]));
+            snapshot(
+                root,
+                &db,
+                ds_id,
+                "r2",
+                dim(&[(1, "a2", "t2"), (2, "b", "t1")]),
+            );
 
             // Current: 2 dòng (id1 mới + id2 carry).
-            let cur = rows_of(root, &db, "SELECT id, name FROM raw.dim WHERE _is_current ORDER BY id").await;
+            let cur = rows_of(
+                root,
+                &db,
+                "SELECT id, name FROM raw.dim WHERE _is_current ORDER BY id",
+            )
+            .await;
             assert_eq!(cur.len(), 2);
             assert_eq!(cur[0][1], Value::from("a2"), "id=1 bản current mới");
             assert_eq!(cur[1][1], Value::from("b"));
 
             // History: 1 dòng (id1 cũ), _valid_to đã set.
             let hist = rows_of(
-                root, &db,
+                root,
+                &db,
                 "SELECT id, name, _valid_to FROM raw.dim WHERE NOT _is_current ORDER BY id",
             )
             .await;
@@ -1936,10 +2152,24 @@ mod tests {
             // Chạy lại y hệt (hash trùng) → không tạo version mới.
             snapshot(root, &db, ds_id, "r2", dim(&[(1, "a", "t1")]));
 
-            let cur = rows_of(root, &db, "SELECT COUNT(*) AS n FROM raw.dim WHERE _is_current").await;
+            let cur = rows_of(
+                root,
+                &db,
+                "SELECT COUNT(*) AS n FROM raw.dim WHERE _is_current",
+            )
+            .await;
             assert_eq!(cur[0][0], Value::from(1), "vẫn 1 bản current");
-            let hist = rows_of(root, &db, "SELECT COUNT(*) AS n FROM raw.dim WHERE NOT _is_current").await;
-            assert_eq!(hist[0][0], Value::from(0), "hash trùng → không đóng bản nào");
+            let hist = rows_of(
+                root,
+                &db,
+                "SELECT COUNT(*) AS n FROM raw.dim WHERE NOT _is_current",
+            )
+            .await;
+            assert_eq!(
+                hist[0][0],
+                Value::from(0),
+                "hash trùng → không đóng bản nào"
+            );
         }
 
         #[tokio::test]
@@ -1950,26 +2180,46 @@ mod tests {
             let ds_id = db.dataset_upsert("raw", "dim", None, None, None).unwrap();
 
             let ds = db.dataset_get_by_id(ds_id).unwrap().unwrap();
-            apply_snapshot_at(root, SnapshotParams {
-                db: &db, dataset: &ds, run_id: "r1",
-                primary_key: &["id".to_string()],
-                strategy: &SnapshotStrategy::Timestamp("updated_at".to_string()),
-                hard_deletes: HardDeletes::Invalidate,
-            }, &[dim(&[(1, "a", "t1"), (2, "b", "t1")])]).unwrap();
+            apply_snapshot_at(
+                root,
+                SnapshotParams {
+                    db: &db,
+                    dataset: &ds,
+                    run_id: "r1",
+                    primary_key: &["id".to_string()],
+                    strategy: &SnapshotStrategy::Timestamp("updated_at".to_string()),
+                    hard_deletes: HardDeletes::Invalidate,
+                },
+                &[dim(&[(1, "a", "t1"), (2, "b", "t1")])],
+            )
+            .unwrap();
 
             // id=2 biến mất ở nguồn → invalidate (đóng, đưa vào history).
-            apply_snapshot_at(root, SnapshotParams {
-                db: &db, dataset: &ds, run_id: "r2",
-                primary_key: &["id".to_string()],
-                strategy: &SnapshotStrategy::Timestamp("updated_at".to_string()),
-                hard_deletes: HardDeletes::Invalidate,
-            }, &[dim(&[(1, "a", "t1")])]).unwrap();
+            apply_snapshot_at(
+                root,
+                SnapshotParams {
+                    db: &db,
+                    dataset: &ds,
+                    run_id: "r2",
+                    primary_key: &["id".to_string()],
+                    strategy: &SnapshotStrategy::Timestamp("updated_at".to_string()),
+                    hard_deletes: HardDeletes::Invalidate,
+                },
+                &[dim(&[(1, "a", "t1")])],
+            )
+            .unwrap();
 
-            let cur = rows_of(root, &db, "SELECT id FROM raw.dim WHERE _is_current ORDER BY id").await;
+            let cur = rows_of(
+                root,
+                &db,
+                "SELECT id FROM raw.dim WHERE _is_current ORDER BY id",
+            )
+            .await;
             assert_eq!(cur.len(), 1, "chỉ id=1 còn current");
             assert_eq!(cur[0][0], Value::from(1));
             let del = rows_of(
-                root, &db,
+                root,
+                &db,
                 "SELECT id FROM raw.dim WHERE NOT _is_current AND _is_deleted",
             )
             .await;
@@ -2019,8 +2269,16 @@ mod tests {
             // File NULL-partition cũ phải bị tombstone → đúng 2 dòng, không double-count.
             let all = rows_of(root, &db, "SELECT id, v FROM raw.m ORDER BY id, v").await;
             assert_eq!(all.len(), 2, "NULL-partition không double-count");
-            assert_eq!(all[0], vec![Value::from(1), Value::from(11)], "id=1 cập nhật v=11");
-            assert_eq!(all[1], vec![Value::from(2), Value::from(20)], "id=2 giữ nguyên");
+            assert_eq!(
+                all[0],
+                vec![Value::from(1), Value::from(11)],
+                "id=1 cập nhật v=11"
+            );
+            assert_eq!(
+                all[1],
+                vec![Value::from(2), Value::from(20)],
+                "id=2 giữ nguyên"
+            );
         }
 
         #[tokio::test]
@@ -2049,20 +2307,28 @@ mod tests {
 
             snap("r1", dim(&[(1, "a", "t1")])); // xuất hiện
             snap("r2", dim(&[])); // biến mất → NewRecord: current row đánh dấu deleted
-            let del =
-                rows_of(root, &db, "SELECT _is_deleted FROM raw.dim WHERE _is_current AND id = 1")
-                    .await;
+            let del = rows_of(
+                root,
+                &db,
+                "SELECT _is_deleted FROM raw.dim WHERE _is_current AND id = 1",
+            )
+            .await;
             assert_eq!(del.len(), 1);
             assert_eq!(del[0][0], Value::from(true), "r2: current row deleted");
 
             snap("r3", dim(&[(1, "a", "t1")])); // sống lại (hash trùng) → reinstate
-            let cur =
-                rows_of(root, &db, "SELECT _is_deleted FROM raw.dim WHERE _is_current AND id = 1")
-                    .await;
+            let cur = rows_of(
+                root,
+                &db,
+                "SELECT _is_deleted FROM raw.dim WHERE _is_current AND id = 1",
+            )
+            .await;
             assert_eq!(cur.len(), 1, "vẫn 1 bản current");
-            assert_eq!(cur[0][0], Value::from(false), "reinstate: _is_deleted phải false");
+            assert_eq!(
+                cur[0][0],
+                Value::from(false),
+                "reinstate: _is_deleted phải false"
+            );
         }
     }
 }
-
-

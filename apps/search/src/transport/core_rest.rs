@@ -89,7 +89,13 @@ impl CoreRest {
 
     async fn post_json(&self, path: &str, body: Value, timeout: Duration) -> Result<Value> {
         let url = format!("{}{path}", self.base);
-        let resp = self.http.post(&url).timeout(timeout).json(&body).send().await?;
+        let resp = self
+            .http
+            .post(&url)
+            .timeout(timeout)
+            .json(&body)
+            .send()
+            .await?;
         if !resp.status().is_success() {
             bail!("POST {path}: HTTP {}", resp.status());
         }
@@ -110,10 +116,7 @@ impl CoreRest {
         limit: usize,
         timeout: Duration,
     ) -> Result<Vec<WikiHit>> {
-        let mut path = format!(
-            "/api/wiki/search?q={}&limit={limit}",
-            urlencode(query)
-        );
+        let mut path = format!("/api/wiki/search?q={}&limit={limit}", urlencode(query));
         if let Some(t) = tags.filter(|t| !t.is_empty()) {
             path.push_str(&format!("&tags={}", urlencode(&t.join(","))));
         }

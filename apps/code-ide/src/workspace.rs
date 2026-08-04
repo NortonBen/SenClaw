@@ -126,7 +126,14 @@ pub fn read_file(root: &Path, rel: &str) -> Result<FileContent> {
         });
     }
     let content = String::from_utf8_lossy(&bytes).into_owned();
-    Ok(FileContent { path: rel.to_string(), content, lang, too_large: false, binary: false, size })
+    Ok(FileContent {
+        path: rel.to_string(),
+        content,
+        lang,
+        too_large: false,
+        binary: false,
+        size,
+    })
 }
 
 /// Write (creating parent dirs) a text file.
@@ -196,7 +203,11 @@ pub fn search_text(root: &Path, query: &str, limit: usize) -> Result<Vec<SearchH
     let mut hits = Vec::new();
 
     let mut builder = ignore::WalkBuilder::new(root);
-    builder.hidden(false).git_ignore(true).git_global(false).parents(false);
+    builder
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .parents(false);
     for name in HARD_IGNORE {
         builder.filter_entry(move |e| e.file_name().to_string_lossy() != *name);
     }
@@ -244,7 +255,11 @@ pub fn search_text(root: &Path, query: &str, limit: usize) -> Result<Vec<SearchH
 pub fn list_all_files(root: &Path, limit: usize) -> Vec<String> {
     let mut out = Vec::new();
     let mut builder = ignore::WalkBuilder::new(root);
-    builder.hidden(false).git_ignore(true).git_global(false).parents(false);
+    builder
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(false)
+        .parents(false);
     for name in HARD_IGNORE {
         builder.filter_entry(move |e| e.file_name().to_string_lossy() != *name);
     }

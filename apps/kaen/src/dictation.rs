@@ -16,7 +16,8 @@ fn now_s() -> String {
 }
 
 fn parse_json(s: Option<String>, default: Value) -> Value {
-    s.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or(default)
+    s.and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or(default)
 }
 
 // ---- topics ----
@@ -185,7 +186,9 @@ pub fn get_lesson(db: &Db, id: i64) -> Result<Value> {
 /// Audio for a segment: the client seeks inside the full audio; this endpoint
 /// exists for URL-compat with kaizen and just points at the lesson audio.
 pub fn lesson_audio_url(db: &Db, id: i64) -> Result<Option<String>> {
-    Ok(lesson_summary(db, id)?["audioUrl"].as_str().map(String::from))
+    Ok(lesson_summary(db, id)?["audioUrl"]
+        .as_str()
+        .map(String::from))
 }
 
 // ---- progress ----
@@ -213,13 +216,15 @@ pub fn save_progress(
 ) -> Result<Value> {
     let lesson = get_lesson(db, lesson_id)?;
     let total_items = if lesson["mode"] == "pronunciation" {
-        lesson["pronunciationChallenges"].as_array().map_or(0, Vec::len)
+        lesson["pronunciationChallenges"]
+            .as_array()
+            .map_or(0, Vec::len)
     } else {
         lesson["segments"].as_array().map_or(0, Vec::len)
     };
-    let learned = segment_status
-        .as_object()
-        .map_or(0, |m| m.values().filter(|v| v.as_str() == Some("learned")).count());
+    let learned = segment_status.as_object().map_or(0, |m| {
+        m.values().filter(|v| v.as_str() == Some("learned")).count()
+    });
     let pct = if total_items == 0 {
         0
     } else {
@@ -280,7 +285,11 @@ pub fn create_topic(db: &Db, body: &Value) -> Result<Value> {
     if name.is_empty() {
         return Err(anyhow!("Thiếu tên chủ đề"));
     }
-    let slug = match body["slug"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+    let slug = match body["slug"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(s) => s.to_string(),
         None => slugify_simple(&name),
     };
@@ -288,7 +297,13 @@ pub fn create_topic(db: &Db, body: &Value) -> Result<Value> {
         c.execute(
             "INSERT INTO dictation_topics (name, slug, description, level, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![name, slug, body["description"].as_str(), body["level"].as_str(), now_s()],
+            params![
+                name,
+                slug,
+                body["description"].as_str(),
+                body["level"].as_str(),
+                now_s()
+            ],
         )
     })
     .map_err(|e| anyhow!("Không tạo được chủ đề (slug '{slug}' có thể đã tồn tại): {e}"))?;
@@ -303,7 +318,12 @@ pub fn update_topic(db: &Db, id: i64, body: &Value) -> Result<Value> {
                description = COALESCE(?3, description),
                level = COALESCE(?4, level)
              WHERE id = ?1",
-            params![id, body["name"].as_str(), body["description"].as_str(), body["level"].as_str()],
+            params![
+                id,
+                body["name"].as_str(),
+                body["description"].as_str(),
+                body["level"].as_str()
+            ],
         )
     })?;
     if n == 0 {
@@ -322,7 +342,12 @@ pub fn delete_topic(db: &Db, id: i64) -> Result<Value> {
 
 /// Write a lesson's segments, replacing whatever was there.
 fn replace_segments(db: &Db, lesson_id: i64, segments: &[Value]) -> Result<()> {
-    db.with(|c| c.execute("DELETE FROM dictation_segments WHERE lesson_id = ?1", params![lesson_id]))?;
+    db.with(|c| {
+        c.execute(
+            "DELETE FROM dictation_segments WHERE lesson_id = ?1",
+            params![lesson_id],
+        )
+    })?;
     for (i, s) in segments.iter().enumerate() {
         db.with(|c| {
             c.execute(
@@ -591,7 +616,10 @@ pub fn import_json(db: &Db, payload: &Value) -> Result<Value> {
             }
             if let Some(challenges) = l["challenges"].as_array() {
                 db.with(|c| {
-                    c.execute("DELETE FROM dictation_challenges WHERE lesson_id = ?1", params![lesson_id])
+                    c.execute(
+                        "DELETE FROM dictation_challenges WHERE lesson_id = ?1",
+                        params![lesson_id],
+                    )
                 })?;
                 for ch in challenges {
                     db.with(|c| {
@@ -659,7 +687,11 @@ mod tests {
         assert_eq!(lesson["dictationTopic"]["slug"], "short-stories");
 
         // Re-import same topic slug is idempotent for topics.
-        import_json(&db, &json!({ "topics": [{ "name": "Short Stories", "slug": "short-stories" }] })).unwrap();
+        import_json(
+            &db,
+            &json!({ "topics": [{ "name": "Short Stories", "slug": "short-stories" }] }),
+        )
+        .unwrap();
         assert_eq!(list_topics(&db).unwrap().as_array().unwrap().len(), 1);
     }
 
@@ -672,7 +704,10 @@ mod tests {
         assert_eq!(dump["lessons"].as_array().unwrap().len(), 1);
         assert_eq!(dump["lessons"][0]["topicSlug"], "short-stories");
         assert_eq!(dump["lessons"][0]["segments"].as_array().unwrap().len(), 2);
-        assert!(dump["lessons"][0].get("id").is_none(), "ids are per-install");
+        assert!(
+            dump["lessons"][0].get("id").is_none(),
+            "ids are per-install"
+        );
 
         // Restore into an empty install.
         let dst = Db::open_memory().unwrap();
@@ -690,7 +725,11 @@ mod tests {
         assert_eq!(again["lessonsUpdated"], 1);
         assert_eq!(list_lessons(&dst, None, None, 20, 1).unwrap()["total"], 1);
         let lesson = get_lesson(&dst, page["data"][0]["id"].as_i64().unwrap()).unwrap();
-        assert_eq!(lesson["segments"].as_array().unwrap().len(), 2, "segments replaced, not appended");
+        assert_eq!(
+            lesson["segments"].as_array().unwrap().len(),
+            2,
+            "segments replaced, not appended"
+        );
     }
 
     #[test]
@@ -698,7 +737,10 @@ mod tests {
         let db = Db::open_memory().unwrap();
 
         let topics = create_topic(&db, &json!({ "name": "TOEIC Part 1", "level": "B1" })).unwrap();
-        assert_eq!(topics[0]["slug"], "toeic-part-1", "slug derived from the name");
+        assert_eq!(
+            topics[0]["slug"], "toeic-part-1",
+            "slug derived from the name"
+        );
         let topic_id = topics[0]["id"].as_i64().unwrap();
 
         let lesson = create_lesson(
@@ -731,7 +773,10 @@ mod tests {
         .unwrap();
         assert_eq!(edited["title"], "Photo description (v2)");
         assert_eq!(edited["segments"].as_array().unwrap().len(), 1);
-        assert_eq!(edited["audioUrl"], "https://x/a.mp3", "unspecified fields survive");
+        assert_eq!(
+            edited["audioUrl"], "https://x/a.mp3",
+            "unspecified fields survive"
+        );
 
         update_topic(&db, topic_id, &json!({ "name": "TOEIC Nghe ảnh" })).unwrap();
         assert_eq!(list_topics(&db).unwrap()[0]["name"], "TOEIC Nghe ảnh");
@@ -740,7 +785,10 @@ mod tests {
         assert_eq!(list_lessons(&db, None, None, 20, 1).unwrap()["total"], 0);
         delete_topic(&db, topic_id).unwrap();
         assert_eq!(list_topics(&db).unwrap().as_array().unwrap().len(), 0);
-        assert!(delete_topic(&db, topic_id).is_err(), "deleting twice is an error");
+        assert!(
+            delete_topic(&db, topic_id).is_err(),
+            "deleting twice is an error"
+        );
     }
 
     #[test]

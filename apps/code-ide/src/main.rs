@@ -59,19 +59,27 @@ async fn main() {
         .nest("/api/deepwiki", deepwiki_api);
 
     if let Some(dw_dist) = deepwiki_dist(&exe_dir) {
-        let dw_serve = ServeDir::new(&dw_dist)
-            .not_found_service(ServeFile::new(dw_dist.join("index.html")));
+        let dw_serve =
+            ServeDir::new(&dw_dist).not_found_service(ServeFile::new(dw_dist.join("index.html")));
         app = app.nest_service("/deepwiki", dw_serve);
-        println!("DeepWiki UI mounted at /deepwiki (from {})", dw_dist.display());
+        println!(
+            "DeepWiki UI mounted at /deepwiki (from {})",
+            dw_dist.display()
+        );
     }
 
     let app = app
         .fallback_service(serve_dir)
         .layer(CorsLayer::permissive());
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
+    // Loopback by default. A Space App authenticates nothing of its own — the
+    // daemon reaches it over 127.0.0.1 and the UI is same-origin — so binding
+    // 0.0.0.0 hands the whole REST + MCP surface to anyone on the LAN. Set
+    // SENCLAW_BIND_HOST=0.0.0.0 to opt in to that explicitly.
+    let host = std::env::var("SENCLAW_BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}"))
         .await
         .unwrap();
-    println!("SenClaw Code (IDE) running on http://0.0.0.0:{}", port);
+    println!("SenClaw Code (IDE) running on http://{host}:{port}");
     axum::serve(listener, app).await.unwrap();
 }

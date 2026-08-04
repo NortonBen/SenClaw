@@ -17,7 +17,9 @@ pub fn spawn_reindexer(state: Arc<AppState>, mut rx: tokio::sync::mpsc::Receiver
                 }
             }
             let db = state.db();
-            let Some(root) = db.get_meta("root").ok().flatten() else { continue };
+            let Some(root) = db.get_meta("root").ok().flatten() else {
+                continue;
+            };
             let _ = tokio::task::spawn_blocking(move || {
                 let _ = crate::deepwiki::index::index_repo(&db, Path::new(&root));
             })
@@ -29,17 +31,21 @@ pub fn spawn_reindexer(state: Arc<AppState>, mut rx: tokio::sync::mpsc::Receiver
 /// (Re)install a recursive watcher on `root`, replacing any previous one.
 pub fn install_watcher(state: &Arc<AppState>, root: &Path) {
     let tx = state.watch_tx.clone();
-    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(ev) = res {
-            use notify::EventKind;
-            if matches!(ev.kind, EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)) {
-                let _ = tx.try_send(());
+    let mut watcher =
+        match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if let Ok(ev) = res {
+                use notify::EventKind;
+                if matches!(
+                    ev.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                ) {
+                    let _ = tx.try_send(());
+                }
             }
-        }
-    }) {
-        Ok(w) => w,
-        Err(_) => return,
-    };
+        }) {
+            Ok(w) => w,
+            Err(_) => return,
+        };
     if watcher.watch(root, RecursiveMode::Recursive).is_ok() {
         *state.watcher.lock().unwrap() = Some(watcher);
     }

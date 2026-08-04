@@ -29,7 +29,9 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -72,8 +74,9 @@ impl Db {
 
     pub fn recents(&self, limit: usize) -> Result<Vec<(String, String, i64)>> {
         self.with_conn(|c| {
-            let mut stmt = c
-                .prepare("SELECT path,name,opened_at FROM recents ORDER BY opened_at DESC LIMIT ?1")?;
+            let mut stmt = c.prepare(
+                "SELECT path,name,opened_at FROM recents ORDER BY opened_at DESC LIMIT ?1",
+            )?;
             let rows = stmt
                 .query_map([limit as i64], |r| {
                     Ok((

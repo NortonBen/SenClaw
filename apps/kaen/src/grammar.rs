@@ -260,9 +260,8 @@ pub fn list_grammars(
     let limit = limit.clamp(1, 100);
 
     let rows: Vec<Value> = db.with(|c| {
-        let mut stmt = c.prepare(
-            "SELECT * FROM grammars ORDER BY level ASC, idx ASC, created_at DESC",
-        )?;
+        let mut stmt =
+            c.prepare("SELECT * FROM grammars ORDER BY level ASC, idx ASC, created_at DESC")?;
         let rows = stmt.query_map([], |r| grammar_row(r, false))?;
         rows.collect()
     })?;
@@ -289,14 +288,24 @@ pub fn list_grammars(
             _ => {}
         }
         let mut g = g;
-        g.as_object_mut().unwrap().insert("studyProgress".into(), progress);
+        g.as_object_mut()
+            .unwrap()
+            .insert("studyProgress".into(), progress);
         filtered.push(g);
     }
 
     let total = filtered.len() as i64;
-    let total_pages = if total == 0 { 0 } else { (total + limit - 1) / limit };
+    let total_pages = if total == 0 {
+        0
+    } else {
+        (total + limit - 1) / limit
+    };
     let start = ((page - 1) * limit).max(0) as usize;
-    let items: Vec<Value> = filtered.into_iter().skip(start).take(limit as usize).collect();
+    let items: Vec<Value> = filtered
+        .into_iter()
+        .skip(start)
+        .take(limit as usize)
+        .collect();
     Ok(json!({
         "items": items,
         "total": total,
@@ -437,9 +446,15 @@ pub fn import_bulk(db: &Db, payload: &Value) -> Result<Value> {
         }
         let content = item["content"].as_str().unwrap_or("");
         let description = item["description"].as_str();
-        let level = item["level"].as_str().filter(|l| LEVELS.contains(l)).unwrap_or("B1");
+        let level = item["level"]
+            .as_str()
+            .filter(|l| LEVELS.contains(l))
+            .unwrap_or("B1");
         let index = item["index"].as_i64().unwrap_or(0);
-        let slug = item["slug"].as_str().map(str::trim).filter(|s| !s.is_empty());
+        let slug = item["slug"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
 
         let existing: Option<String> = match slug {
             Some(s) => db.with(|c| {
@@ -507,7 +522,10 @@ pub fn import_bulk(db: &Db, payload: &Value) -> Result<Value> {
                         )
                     })?;
                     db.with(|c| {
-                        c.execute("DELETE FROM grammar_questions WHERE topic_id = ?1", params![id])
+                        c.execute(
+                            "DELETE FROM grammar_questions WHERE topic_id = ?1",
+                            params![id],
+                        )
                     })?;
                     id
                 }
@@ -761,8 +779,12 @@ pub fn save_generated_questions(
         None => None,
     };
     let (gid, gslug) = (
-        grammar.as_ref().and_then(|g| g["id"].as_str().map(String::from)),
-        grammar.as_ref().and_then(|g| g["slug"].as_str().map(String::from)),
+        grammar
+            .as_ref()
+            .and_then(|g| g["id"].as_str().map(String::from)),
+        grammar
+            .as_ref()
+            .and_then(|g| g["slug"].as_str().map(String::from)),
     );
 
     // Find-or-create topic: linked to the grammar first, then by (name, level).
@@ -1065,8 +1087,14 @@ mod tests {
         assert_eq!(hit["total"], 1);
 
         // Nothing studied yet → "completed" is empty, "pending" has both.
-        assert_eq!(list_grammars(&db, 1, 10, None, None, Some("completed")).unwrap()["total"], 0);
-        assert_eq!(list_grammars(&db, 1, 10, None, None, Some("pending")).unwrap()["total"], 2);
+        assert_eq!(
+            list_grammars(&db, 1, 10, None, None, Some("completed")).unwrap()["total"],
+            0
+        );
+        assert_eq!(
+            list_grammars(&db, 1, 10, None, None, Some("pending")).unwrap()["total"],
+            2
+        );
 
         // View by slug bumps count and resolves prev/next within the level.
         let slug = g["slug"].as_str().unwrap();
@@ -1097,8 +1125,12 @@ mod tests {
         let topic_id = topic["topicId"].as_str().unwrap().to_string();
 
         // Re-generating appends to the SAME topic instead of forking a new one.
-        save_generated_questions(&db, "Present Simple", "A1", Some(slug), &[q("Q3?", "C")]).unwrap();
-        assert_eq!(topic_for_lesson(&db, slug).unwrap()["topicId"], topic_id.as_str());
+        save_generated_questions(&db, "Present Simple", "A1", Some(slug), &[q("Q3?", "C")])
+            .unwrap();
+        assert_eq!(
+            topic_for_lesson(&db, slug).unwrap()["topicId"],
+            topic_id.as_str()
+        );
 
         // Questions served to the client never leak the answer.
         let served = questions_for_topic(&db, &topic_id).unwrap();
@@ -1120,18 +1152,37 @@ mod tests {
     #[test]
     fn export_import_round_trips_lessons_and_questions() {
         let src = db();
-        let g = create_grammar(&src, "Present Simple", "# Nội dung\n\nDùng cho thói quen.", Some("Mô tả"), "A1", 3)
-            .unwrap();
+        let g = create_grammar(
+            &src,
+            "Present Simple",
+            "# Nội dung\n\nDùng cho thói quen.",
+            Some("Mô tả"),
+            "A1",
+            3,
+        )
+        .unwrap();
         let slug = g["slug"].as_str().unwrap().to_string();
-        save_generated_questions(&src, "Present Simple", "A1", Some(&slug), &[q("Q1?", "A"), q("Q2?", "B")])
-            .unwrap();
+        save_generated_questions(
+            &src,
+            "Present Simple",
+            "A1",
+            Some(&slug),
+            &[q("Q1?", "A"), q("Q2?", "B")],
+        )
+        .unwrap();
 
         let dump = export_all(&src).unwrap();
         assert_eq!(dump["kind"], "kaen-grammar");
         assert_eq!(dump["grammars"].as_array().unwrap().len(), 1);
         // Per-install ids must not travel; the slug is the stable key.
         assert!(dump["grammars"][0].get("id").is_none());
-        assert_eq!(dump["grammars"][0]["topic"]["questions"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            dump["grammars"][0]["topic"]["questions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
 
         // Restore into an empty install.
         let dst = db();
@@ -1145,14 +1196,24 @@ mod tests {
         assert_eq!(restored["index"], 3);
         assert!(restored["content"].as_str().unwrap().contains("thói quen"));
         let topic = topic_for_lesson(&dst, &slug).unwrap();
-        assert_eq!(topic["questionCount"], 2, "questions came back linked to the lesson");
+        assert_eq!(
+            topic["questionCount"], 2,
+            "questions came back linked to the lesson"
+        );
 
         // Re-importing the same file updates in place instead of duplicating.
         let again = import_bulk(&dst, &dump).unwrap();
         assert_eq!(again["created"], 0);
         assert_eq!(again["updated"], 1);
-        assert_eq!(list_grammars(&dst, 1, 10, None, None, None).unwrap()["total"], 1);
-        assert_eq!(topic_for_lesson(&dst, &slug).unwrap()["questionCount"], 2, "questions replaced, not stacked");
+        assert_eq!(
+            list_grammars(&dst, 1, 10, None, None, None).unwrap()["total"],
+            1
+        );
+        assert_eq!(
+            topic_for_lesson(&dst, &slug).unwrap()["questionCount"],
+            2,
+            "questions replaced, not stacked"
+        );
     }
 
     #[test]
@@ -1170,7 +1231,10 @@ mod tests {
         assert_eq!(out["skipped"], 1);
         // A missing slug is generated so the lesson is still addressable.
         let items = list_grammars(&db, 1, 10, None, None, None).unwrap();
-        assert!(items["items"][0]["slug"].as_str().unwrap().starts_with("articles-"));
+        assert!(items["items"][0]["slug"]
+            .as_str()
+            .unwrap()
+            .starts_with("articles-"));
     }
 
     #[test]
@@ -1178,8 +1242,14 @@ mod tests {
         let db = db();
         let g = create_grammar(&db, "Articles", "content", None, "A2", 0).unwrap();
         let slug = g["slug"].as_str().unwrap();
-        save_generated_questions(&db, "Articles", "A2", Some(slug), &[q("Q1?", "A"), q("Q2?", "B")])
-            .unwrap();
+        save_generated_questions(
+            &db,
+            "Articles",
+            "A2",
+            Some(slug),
+            &[q("Q1?", "A"), q("Q2?", "B")],
+        )
+        .unwrap();
         let topic = topic_for_lesson(&db, slug).unwrap();
         let topic_id = topic["topicId"].as_str().unwrap();
         let served = questions_for_topic(&db, topic_id).unwrap();
@@ -1199,7 +1269,10 @@ mod tests {
         assert_eq!(out["score"], 1);
         assert_eq!(out["total"], 2);
         assert_eq!(out["results"].as_array().unwrap().len(), 2);
-        assert!(out["results"][0]["correctAnswerId"].is_string(), "answers revealed after submit");
+        assert!(
+            out["results"][0]["correctAnswerId"].is_string(),
+            "answers revealed after submit"
+        );
 
         // Progress row exists, reminder ~7 days out, not yet due.
         let progress = study_progress_json(&db, g["id"].as_str().unwrap()).unwrap();
@@ -1214,6 +1287,9 @@ mod tests {
         assert_eq!(replay["results"].as_array().unwrap().len(), 2);
 
         // "completed" study filter now returns the grammar.
-        assert_eq!(list_grammars(&db, 1, 10, None, None, Some("completed")).unwrap()["total"], 1);
+        assert_eq!(
+            list_grammars(&db, 1, 10, None, None, Some("completed")).unwrap()["total"],
+            1
+        );
     }
 }

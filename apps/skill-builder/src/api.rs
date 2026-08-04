@@ -48,7 +48,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/generate", post(post_generate))
         .route("/install", post(post_install))
         .route("/skills/:name", delete(del_skill))
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -90,7 +93,10 @@ async fn post_generate(
     Json(body): Json<GenerateBody>,
 ) -> Result<Json<DraftSkill>, ApiError> {
     if body.requirement.trim().is_empty() {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "requirement is required".into()));
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "requirement is required".into(),
+        ));
     }
     let inv = s.daemon.inventory().await;
     let draft = generate::draft(&body.requirement, &body.when_to_run, &inv)
@@ -132,7 +138,9 @@ async fn post_install(
         )
         .await
         .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e.to_string()))?;
-    Ok(Json(json!({ "ok": true, "name": body.name.trim(), "daemon": res })))
+    Ok(Json(
+        json!({ "ok": true, "name": body.name.trim(), "daemon": res }),
+    ))
 }
 
 async fn del_skill(

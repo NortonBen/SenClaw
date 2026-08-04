@@ -44,7 +44,10 @@ impl PostgresConnector {
 impl Connector for PostgresConnector {
     async fn test(&self) -> Result<()> {
         let pool = self.pool().await?;
-        sqlx::query("SELECT 1").execute(&pool).await.context("SELECT 1")?;
+        sqlx::query("SELECT 1")
+            .execute(&pool)
+            .await
+            .context("SELECT 1")?;
         Ok(())
     }
 
@@ -122,8 +125,11 @@ impl Connector for PostgresConnector {
         }
 
         let cols: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
-        let col_types: Vec<DataType> =
-            schema.fields().iter().map(|f| f.data_type().clone()).collect();
+        let col_types: Vec<DataType> = schema
+            .fields()
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect();
         let upsert_keys: Option<Vec<String>> = match &spec.mode {
             LoadMode::Upsert { keys } => Some(keys.clone()),
             _ => None,
@@ -149,8 +155,7 @@ impl Connector for PostgresConnector {
             while start < nrows {
                 let end = (start + per_chunk).min(nrows);
                 let n = end - start;
-                let sql =
-                    build_insert_sql(flavor, &spec.table, &cols, n, upsert_keys.as_deref());
+                let sql = build_insert_sql(flavor, &spec.table, &cols, n, upsert_keys.as_deref());
                 let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
                 for r in start..end {
                     for (ci, cell) in col_cells.iter().enumerate() {
@@ -238,7 +243,10 @@ fn rows_to_batches(rows: &[PgRow], batch_rows: usize) -> Result<Vec<RecordBatch>
     let cols = rows[0].columns();
     let ncol = cols.len();
     let names: Vec<String> = cols.iter().map(|c| c.name().to_string()).collect();
-    let types: Vec<DataType> = cols.iter().map(|c| map_pg_type(c.type_info().name())).collect();
+    let types: Vec<DataType> = cols
+        .iter()
+        .map(|c| map_pg_type(c.type_info().name()))
+        .collect();
 
     let fields: Vec<Field> = names
         .iter()

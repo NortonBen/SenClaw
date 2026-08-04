@@ -190,7 +190,11 @@ pub async fn lookup(db: &Db, word: &str, target_lang: &str) -> Result<Value> {
     let mut entry = match cached_entry(db, &word)? {
         Some(e) => e,
         None => {
-            let fetched = if is_long_sentence { None } else { fetch_entry(&word).await };
+            let fetched = if is_long_sentence {
+                None
+            } else {
+                fetch_entry(&word).await
+            };
             match fetched {
                 Some(e) => {
                     save_entry(db, &e)?;
@@ -284,7 +288,10 @@ mod tests {
         assert_eq!(back["examples"][0], "Run home.");
 
         save_translation(&db, "run", "vi", "chạy").unwrap();
-        assert_eq!(cached_translation(&db, "run", "vi").unwrap().unwrap(), "chạy");
+        assert_eq!(
+            cached_translation(&db, "run", "vi").unwrap().unwrap(),
+            "chạy"
+        );
         assert!(cached_translation(&db, "run", "jp").unwrap().is_none());
     }
 

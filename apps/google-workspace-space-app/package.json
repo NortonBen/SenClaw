@@ -2,9 +2,9 @@
   "name": "google-workspace-space-app",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H ${SENCLAW_BIND_HOST:-127.0.0.1}",
     "build": "next build",
-    "start": "next start -p ${PORT:-3000}",
+    "start": "next start -H ${SENCLAW_BIND_HOST:-127.0.0.1} -p ${PORT:-3000}",
     "postbuild": "node scripts/copy-manifest.mjs",
     "pack:zip": "npm run build && node scripts/pack-zip.mjs"
   },

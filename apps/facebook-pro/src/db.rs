@@ -78,7 +78,10 @@ CREATE TABLE IF NOT EXISTS activity (
 "#;
 
 fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 impl Db {
@@ -87,7 +90,10 @@ impl Db {
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-                PathBuf::from(home).join(".senclaw").join("apps").join("facebook-pro")
+                PathBuf::from(home)
+                    .join(".senclaw")
+                    .join("apps")
+                    .join("facebook-pro")
             });
         std::fs::create_dir_all(&dir).ok();
         Self::open(dir.join("facebook-pro.db"))
@@ -97,24 +103,32 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     #[cfg(test)]
     pub fn open_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     // ---- settings (kv) ----
 
     pub fn get_setting(&self, key: &str) -> Option<String> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get(0))
-            .optional()
-            .ok()
-            .flatten()
+        conn.query_row(
+            "SELECT value FROM settings WHERE key=?1",
+            params![key],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
@@ -128,11 +142,14 @@ impl Db {
     }
 
     pub fn autonomy(&self) -> String {
-        self.get_setting("autonomy").unwrap_or_else(|| "draft".into())
+        self.get_setting("autonomy")
+            .unwrap_or_else(|| "draft".into())
     }
 
     pub fn version(&self) -> String {
-        self.get_setting("version").filter(|v| !v.is_empty()).unwrap_or_else(|| crate::fb::DEFAULT_VERSION.into())
+        self.get_setting("version")
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| crate::fb::DEFAULT_VERSION.into())
     }
 
     pub fn active_page_id(&self) -> Option<String> {
@@ -169,10 +186,14 @@ impl Db {
 
     pub fn page_token(&self, page_id: &str) -> Option<String> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT access_token FROM pages WHERE page_id=?1", params![page_id], |r| r.get(0))
-            .optional()
-            .ok()
-            .flatten()
+        conn.query_row(
+            "SELECT access_token FROM pages WHERE page_id=?1",
+            params![page_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
     }
 
     pub fn list_pages(&self) -> Vec<Value> {
@@ -228,7 +249,11 @@ impl Db {
     /// The set of `target_id`s that already have a pending draft — used by the
     /// heartbeat to avoid double-drafting a reply to the same comment.
     pub fn pending_targets(&self) -> std::collections::HashSet<String> {
-        self.list_drafts("pending").into_iter().map(|d| d.target_id).filter(|t| !t.is_empty()).collect()
+        self.list_drafts("pending")
+            .into_iter()
+            .map(|d| d.target_id)
+            .filter(|t| !t.is_empty())
+            .collect()
     }
 
     pub fn decide_draft(&self, id: i64, status: &str, result_id: &str, error: &str) -> Result<()> {
@@ -273,9 +298,15 @@ impl Db {
             })
         };
         let rows = if page_id.is_some() {
-            stmt.query_map(params![page], map).unwrap().filter_map(|r| r.ok()).collect()
+            stmt.query_map(params![page], map)
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
         } else {
-            stmt.query_map([], map).unwrap().filter_map(|r| r.ok()).collect()
+            stmt.query_map([], map)
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
         };
         rows
     }
@@ -290,11 +321,15 @@ impl Db {
 
     pub fn is_comment_seen(&self, comment_id: &str) -> bool {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT 1 FROM seen_comments WHERE comment_id=?1", params![comment_id], |_| Ok(()))
-            .optional()
-            .ok()
-            .flatten()
-            .is_some()
+        conn.query_row(
+            "SELECT 1 FROM seen_comments WHERE comment_id=?1",
+            params![comment_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .is_some()
     }
 
     pub fn mark_comment_seen(&self, comment_id: &str) {
@@ -457,8 +492,27 @@ mod tests {
     #[test]
     fn trigger_page_scoping() {
         let db = Db::open_memory().unwrap();
-        db.add_trigger(&TriggerInput { name: "global".into(), page_id: "".into(), match_type: "all".into(), action: "notify".into(), enabled: true, event: "new_comment".into(), ..Default::default() }).unwrap();
-        db.add_trigger(&TriggerInput { name: "p2".into(), page_id: "P2".into(), match_type: "keyword".into(), match_value: "giá".into(), action: "draft_reply".into(), enabled: true, event: "new_comment".into(), ..Default::default() }).unwrap();
+        db.add_trigger(&TriggerInput {
+            name: "global".into(),
+            page_id: "".into(),
+            match_type: "all".into(),
+            action: "notify".into(),
+            enabled: true,
+            event: "new_comment".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        db.add_trigger(&TriggerInput {
+            name: "p2".into(),
+            page_id: "P2".into(),
+            match_type: "keyword".into(),
+            match_value: "giá".into(),
+            action: "draft_reply".into(),
+            enabled: true,
+            event: "new_comment".into(),
+            ..Default::default()
+        })
+        .unwrap();
         // Page P1 sees only the global trigger.
         assert_eq!(db.list_triggers(Some("P1")).len(), 1);
         // Page P2 sees the global + its own.

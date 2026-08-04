@@ -14,6 +14,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 4108;
+// Loopback by default — this app authenticates nothing of its own, and the
+// daemon reaches it over 127.0.0.1. SENCLAW_BIND_HOST=0.0.0.0 opts in to LAN.
+const HOST = process.env.SENCLAW_BIND_HOST || '127.0.0.1';
 const MCP_PATH = process.env.MCP_PATH || '/api/mcp/sse';
 
 const app = express();
@@ -247,6 +250,6 @@ app.use((req, res, next) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`test-manager server listening on port ${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`test-manager server listening on http://${HOST}:${PORT}`);
 });

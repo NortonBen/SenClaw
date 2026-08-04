@@ -337,14 +337,22 @@ fn validate_source(s: &SourceStep, errs: &mut Vec<FieldError>) {
         errs.push(FieldError::new(
             id,
             "mode",
-            format!("mode không hợp lệ '{}'; hợp lệ: {}", s.mode, MODES_ALL.join(", ")),
+            format!(
+                "mode không hợp lệ '{}'; hợp lệ: {}",
+                s.mode,
+                MODES_ALL.join(", ")
+            ),
         ));
     }
 
     let is_incremental = s.mode == "incremental_append" || s.mode == "incremental_merge";
     if is_incremental {
         match &s.cursor {
-            None => errs.push(FieldError::new(id, "cursor", "bắt buộc khi mode incremental_*")),
+            None => errs.push(FieldError::new(
+                id,
+                "cursor",
+                "bắt buộc khi mode incremental_*",
+            )),
             Some(c) => {
                 if c.column.trim().is_empty() {
                     errs.push(FieldError::new(id, "cursor.column", "bắt buộc"));
@@ -359,7 +367,11 @@ fn validate_source(s: &SourceStep, errs: &mut Vec<FieldError>) {
     // merge/snapshot: primary_key bắt buộc.
     if s.mode == "incremental_merge" || s.mode == "snapshot" {
         if s.primary_key.as_ref().is_none_or(|k| k.is_empty()) {
-            errs.push(FieldError::new(id, "primary_key", "bắt buộc khi merge/snapshot"));
+            errs.push(FieldError::new(
+                id,
+                "primary_key",
+                "bắt buộc khi merge/snapshot",
+            ));
         }
     }
 
@@ -380,7 +392,10 @@ fn validate_merge(s: &SourceStep, errs: &mut Vec<FieldError>) {
             errs.push(FieldError::new(
                 id,
                 "strategy",
-                format!("strategy merge không hợp lệ '{st}'; hợp lệ: {}", MERGE_STRATEGIES.join(", ")),
+                format!(
+                    "strategy merge không hợp lệ '{st}'; hợp lệ: {}",
+                    MERGE_STRATEGIES.join(", ")
+                ),
             ));
         }
     }
@@ -418,7 +433,11 @@ fn validate_merge(s: &SourceStep, errs: &mut Vec<FieldError>) {
                 }
             }
             _ if !allow_full => {
-                errs.push(FieldError::new(id, "merge_key", "bắt buộc khi merge (trừ allow_full_rewrite)"));
+                errs.push(FieldError::new(
+                    id,
+                    "merge_key",
+                    "bắt buộc khi merge (trừ allow_full_rewrite)",
+                ));
             }
             _ => {}
         }
@@ -434,11 +453,17 @@ fn validate_snapshot(s: &SourceStep, errs: &mut Vec<FieldError>) {
         errs.push(FieldError::new(
             id,
             "strategy",
-            format!("strategy snapshot không hợp lệ '{strategy}'; hợp lệ: {}", SNAPSHOT_STRATEGIES.join(", ")),
+            format!(
+                "strategy snapshot không hợp lệ '{strategy}'; hợp lệ: {}",
+                SNAPSHOT_STRATEGIES.join(", ")
+            ),
         ));
     }
     if strategy == "timestamp"
-        && s.cursor.as_ref().map(|c| c.column.trim().is_empty()).unwrap_or(true)
+        && s.cursor
+            .as_ref()
+            .map(|c| c.column.trim().is_empty())
+            .unwrap_or(true)
     {
         errs.push(FieldError::new(
             id,
@@ -451,7 +476,10 @@ fn validate_snapshot(s: &SourceStep, errs: &mut Vec<FieldError>) {
             errs.push(FieldError::new(
                 id,
                 "hard_deletes",
-                format!("hard_deletes không hợp lệ '{hd}'; hợp lệ: {}", HARD_DELETES.join(", ")),
+                format!(
+                    "hard_deletes không hợp lệ '{hd}'; hợp lệ: {}",
+                    HARD_DELETES.join(", ")
+                ),
             ));
         }
     }
@@ -463,7 +491,11 @@ fn validate_transform(t: &TransformStep, errs: &mut Vec<FieldError>) {
         errs.push(FieldError::new(
             id,
             "kind",
-            format!("kind không hợp lệ '{}'; hợp lệ: {}", t.kind, TRANSFORM_KINDS.join(", ")),
+            format!(
+                "kind không hợp lệ '{}'; hợp lệ: {}",
+                t.kind,
+                TRANSFORM_KINDS.join(", ")
+            ),
         ));
     }
     if t.sql.trim().is_empty() {
@@ -471,7 +503,11 @@ fn validate_transform(t: &TransformStep, errs: &mut Vec<FieldError>) {
     }
     if t.kind == "incremental_by_time" {
         if t.time_column.as_deref().unwrap_or("").trim().is_empty() {
-            errs.push(FieldError::new(id, "time_column", "bắt buộc khi incremental_by_time"));
+            errs.push(FieldError::new(
+                id,
+                "time_column",
+                "bắt buộc khi incremental_by_time",
+            ));
         }
         match &t.interval {
             Some(i) if INTERVALS.contains(&i.as_str()) => {}
@@ -493,10 +529,17 @@ fn validate_export(e: &ExportStep, known: &HashSet<&str>, errs: &mut Vec<FieldEr
     if e.input.trim().is_empty() {
         errs.push(FieldError::new(id, "input", "bắt buộc"));
     } else if !known.contains(e.input.as_str()) {
-        errs.push(FieldError::new(id, "input", format!("input '{}' không phải step trong flow", e.input)));
+        errs.push(FieldError::new(
+            id,
+            "input",
+            format!("input '{}' không phải step trong flow", e.input),
+        ));
     }
     // Đúng một trong (connection+table) / format.
-    let has_conn = e.connection.as_deref().is_some_and(|c| !c.trim().is_empty());
+    let has_conn = e
+        .connection
+        .as_deref()
+        .is_some_and(|c| !c.trim().is_empty());
     let has_fmt = e.format.as_deref().is_some_and(|c| !c.trim().is_empty());
     if has_conn == has_fmt {
         errs.push(FieldError::new(
@@ -506,25 +549,38 @@ fn validate_export(e: &ExportStep, known: &HashSet<&str>, errs: &mut Vec<FieldEr
         ));
     }
     if has_conn && e.table.as_deref().unwrap_or("").trim().is_empty() {
-        errs.push(FieldError::new(id, "table", "bắt buộc khi export qua connection"));
+        errs.push(FieldError::new(
+            id,
+            "table",
+            "bắt buộc khi export qua connection",
+        ));
     }
     if !EXPORT_MODES.contains(&e.mode.as_str()) {
         errs.push(FieldError::new(
             id,
             "mode",
-            format!("mode export không hợp lệ '{}'; hợp lệ: {}", e.mode, EXPORT_MODES.join(", ")),
+            format!(
+                "mode export không hợp lệ '{}'; hợp lệ: {}",
+                e.mode,
+                EXPORT_MODES.join(", ")
+            ),
         ));
     }
     // Upsert (DB-load) cần khoá; và keys chỉ có nghĩa cho DB-load qua connection.
     if e.mode == "upsert" && e.keys.iter().all(|k| k.trim().is_empty()) {
-        errs.push(FieldError::new(id, "keys", "mode=upsert cần 'keys' không rỗng"));
+        errs.push(FieldError::new(
+            id,
+            "keys",
+            "mode=upsert cần 'keys' không rỗng",
+        ));
     }
 }
 
 fn is_valid_flow_id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
-        && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 // ---------------------------------------------------------------------------
@@ -560,7 +616,9 @@ pub fn derive_dag(def: &FlowDef) -> std::result::Result<Vec<String>, Vec<FieldEr
     }
     for e in &def.exports {
         if known.contains(e.input.as_str()) && e.input != e.id {
-            deps.entry(e.id.clone()).or_default().insert(e.input.clone());
+            deps.entry(e.id.clone())
+                .or_default()
+                .insert(e.input.clone());
         }
     }
 
@@ -601,7 +659,10 @@ pub fn derive_dag(def: &FlowDef) -> std::result::Result<Vec<String>, Vec<FieldEr
         Err(vec![FieldError::new(
             "",
             "dag",
-            format!("phát hiện chu trình phụ thuộc giữa các step: {}", stuck.join(", ")),
+            format!(
+                "phát hiện chu trình phụ thuộc giữa các step: {}",
+                stuck.join(", ")
+            ),
         )])
     }
 }
@@ -830,7 +891,9 @@ transforms:
         }))
         .unwrap();
         let errs = validate(&f).unwrap_err();
-        assert!(errs.iter().any(|e| e.field == "cursor" && e.step_id == "s1"));
+        assert!(errs
+            .iter()
+            .any(|e| e.field == "cursor" && e.step_id == "s1"));
 
         // Có cursor đủ column+initial → ok.
         let f2: FlowDef = serde_json::from_value(json!({
@@ -903,7 +966,10 @@ transforms:
             }]
         }))
         .unwrap();
-        assert!(validate(&bad2).unwrap_err().iter().any(|e| e.field == "merge_key"));
+        assert!(validate(&bad2)
+            .unwrap_err()
+            .iter()
+            .any(|e| e.field == "merge_key"));
 
         // insert_only không cần merge_key nhưng vẫn cần partition_by.
         let io: FlowDef = serde_json::from_value(json!({
@@ -932,7 +998,10 @@ transforms:
             }]
         }))
         .unwrap();
-        assert!(validate(&bad).unwrap_err().iter().any(|e| e.field == "cursor.column"));
+        assert!(validate(&bad)
+            .unwrap_err()
+            .iter()
+            .any(|e| e.field == "cursor.column"));
 
         // check strategy không cần cursor → ok.
         let ok: FlowDef = serde_json::from_value(json!({
@@ -969,7 +1038,11 @@ transforms:
         }))
         .unwrap();
         let imp = diff_impact(&old, &new);
-        assert_eq!(imp.steps_reset, vec!["b".to_string()], "đổi cursor.column → reset");
+        assert_eq!(
+            imp.steps_reset,
+            vec!["b".to_string()],
+            "đổi cursor.column → reset"
+        );
         assert_eq!(imp.steps_kept, vec!["a".to_string()], "a không đổi → kept");
         assert_eq!(imp.datasets_orphaned, vec!["raw.gone".to_string()]);
     }
@@ -993,7 +1066,11 @@ transforms:
         let old = mk(json!(["d"]));
         let new = mk(json!(["d", "region"]));
         let imp = diff_impact(&old, &new);
-        assert_eq!(imp.steps_reset, vec!["m".to_string()], "đổi partition_by → reset");
+        assert_eq!(
+            imp.steps_reset,
+            vec!["m".to_string()],
+            "đổi partition_by → reset"
+        );
         assert!(imp.steps_kept.is_empty(), "không được coi là kept");
     }
 
@@ -1040,7 +1117,9 @@ transforms:
         }))
         .unwrap();
         let errs = derive_dag(&f).unwrap_err();
-        assert!(errs.iter().any(|e| e.field == "dag" && e.message.contains("chu trình")));
+        assert!(errs
+            .iter()
+            .any(|e| e.field == "dag" && e.message.contains("chu trình")));
     }
 
     #[test]

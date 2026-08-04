@@ -65,7 +65,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "luna-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -188,14 +190,18 @@ async fn call_tool(name: &str, args: &Value) -> Value {
             let ly = args["lunar_year"].as_i64().unwrap_or(0);
             let leap = args["leap"].as_bool().unwrap_or(false);
             if ld < 1 || lm < 1 || lm > 12 || ly < 1 {
-                return error_result("lunar_day 1..30, lunar_month 1..12, lunar_year required".into());
+                return error_result(
+                    "lunar_day 1..30, lunar_month 1..12, lunar_year required".into(),
+                );
             }
             let (dd, mm, yy) = lunar_to_solar(ld, lm, ly, leap, TZ_VN);
             if (dd, mm, yy) == (0, 0, 0) {
                 return error_result("that leap month does not exist in that lunar year".into());
             }
             let info = day_info(dd, mm, yy);
-            json_result(json!({ "solar": info.solar_date, "summary": render_facts(&info), "info": info }))
+            json_result(
+                json!({ "solar": info.solar_date, "summary": render_facts(&info), "info": info }),
+            )
         }
         "luna_good_days" => {
             let year = args["year"].as_i64().unwrap_or(0);
@@ -207,13 +213,17 @@ async fn call_tool(name: &str, args: &Value) -> Value {
             let list: Vec<Value> = (1..=days_in_month(month, year))
                 .map(|d| day_info(d, month, year))
                 .filter(|i| if want_bad { !i.hoang_dao } else { i.hoang_dao })
-                .map(|i| json!({
-                    "solar": i.solar_date, "lunar": i.lunar_date, "weekday": i.weekday,
-                    "dayCanChi": i.day_can_chi, "god": i.day_god, "goodHours": i.good_hours,
-                    "warnings": i.warnings,
-                }))
+                .map(|i| {
+                    json!({
+                        "solar": i.solar_date, "lunar": i.lunar_date, "weekday": i.weekday,
+                        "dayCanChi": i.day_can_chi, "god": i.day_god, "goodHours": i.good_hours,
+                        "warnings": i.warnings,
+                    })
+                })
                 .collect();
-            json_result(json!({ "year": year, "month": month, "kind": if want_bad {"hac-dao"} else {"hoang-dao"}, "count": list.len(), "days": list }))
+            json_result(
+                json!({ "year": year, "month": month, "kind": if want_bad {"hac-dao"} else {"hoang-dao"}, "count": list.len(), "days": list }),
+            )
         }
         "luna_advise" => {
             let activity = args["activity"].as_str().unwrap_or("").trim();
@@ -227,7 +237,9 @@ async fn call_tool(name: &str, args: &Value) -> Value {
             let info = day_info(d, m, y);
             let facts = render_facts(&info);
             match crate::llm::advise(&facts, activity).await {
-                Ok((text, model)) => json_result(json!({ "advice": text, "model": model, "facts": facts })),
+                Ok((text, model)) => {
+                    json_result(json!({ "advice": text, "model": model, "facts": facts }))
+                }
                 Err(e) => error_result(e),
             }
         }

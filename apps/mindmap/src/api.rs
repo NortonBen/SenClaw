@@ -33,7 +33,10 @@ fn gateway(e: impl std::fmt::Display) -> ApiError {
 }
 
 pub fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 pub fn make_state() -> Arc<AppState> {
@@ -72,7 +75,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/chat/messages", get(session_messages))
         .route("/models", get(models))
         .route("/model-active", post(model_active))
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -108,10 +114,18 @@ async fn create_map(
     State(s): State<Arc<AppState>>,
     Json(b): Json<CreateMapBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let title = if b.title.trim().is_empty() { "Untitled map" } else { b.title.trim() };
+    let title = if b.title.trim().is_empty() {
+        "Untitled map"
+    } else {
+        b.title.trim()
+    };
     let layout = norm_layout(b.layout.as_deref());
-    let (map_id, root_id) = s.db.create_map(title, b.description.trim(), layout, now()).map_err(bad)?;
-    Ok(Json(json!({ "id": map_id, "rootId": root_id, "layout": layout })))
+    let (map_id, root_id) =
+        s.db.create_map(title, b.description.trim(), layout, now())
+            .map_err(bad)?;
+    Ok(Json(
+        json!({ "id": map_id, "rootId": root_id, "layout": layout }),
+    ))
 }
 
 async fn templates_list() -> Json<Value> {
@@ -132,11 +146,22 @@ async fn create_from_template(
     Json(b): Json<FromTemplateBody>,
 ) -> Result<Json<Value>, ApiError> {
     let tpl = crate::templates::find(&b.template_id).ok_or_else(|| bad("unknown template"))?;
-    let title = b.title.as_deref().map(str::trim).filter(|t| !t.is_empty()).unwrap_or(tpl.root);
-    let (map_id, root_id) = s.db.create_map(title, tpl.description, tpl.layout, now()).map_err(bad)?;
+    let title = b
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or(tpl.root);
+    let (map_id, root_id) =
+        s.db.create_map(title, tpl.description, tpl.layout, now())
+            .map_err(bad)?;
     let children = (tpl.build)();
-    let added = s.db.insert_subtree(root_id, &children, now()).map_err(bad)?;
-    Ok(Json(json!({ "id": map_id, "rootId": root_id, "layout": tpl.layout, "added": added })))
+    let added =
+        s.db.insert_subtree(root_id, &children, now())
+            .map_err(bad)?;
+    Ok(Json(
+        json!({ "id": map_id, "rootId": root_id, "layout": tpl.layout, "added": added }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -163,7 +188,10 @@ async fn get_map(
     State(s): State<Arc<AppState>>,
     Query(q): Query<MapQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let meta = s.db.map_meta(q.id).map_err(bad)?.ok_or_else(|| bad("map not found"))?;
+    let meta =
+        s.db.map_meta(q.id)
+            .map_err(bad)?
+            .ok_or_else(|| bad("map not found"))?;
     let tree = s.db.tree_of(q.id).map_err(bad)?;
     Ok(Json(json!({ "meta": meta, "tree": tree })))
 }
@@ -180,7 +208,8 @@ async fn rename_map(
     State(s): State<Arc<AppState>>,
     Json(b): Json<RenameMapBody>,
 ) -> Result<Json<Value>, ApiError> {
-    s.db.rename_map(b.id, b.title.trim(), b.description.trim(), now()).map_err(bad)?;
+    s.db.rename_map(b.id, b.title.trim(), b.description.trim(), now())
+        .map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -207,11 +236,14 @@ async fn add_node(
     State(s): State<Arc<AppState>>,
     Json(b): Json<AddNodeBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let text = if b.text.trim().is_empty() { "New idea" } else { b.text.trim() };
-    let id = s
-        .db
-        .add_node(b.parent_id, text, b.note.trim(), b.color.as_deref(), now())
-        .map_err(bad)?;
+    let text = if b.text.trim().is_empty() {
+        "New idea"
+    } else {
+        b.text.trim()
+    };
+    let id =
+        s.db.add_node(b.parent_id, text, b.note.trim(), b.color.as_deref(), now())
+            .map_err(bad)?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -242,19 +274,18 @@ async fn update_node(
     let color = b.color.as_ref().map(|o| o.as_deref());
     let shape = b.shape.as_ref().map(|o| o.as_deref());
     let icon = b.icon.as_ref().map(|o| o.as_deref());
-    s.db
-        .update_node(
-            b.id,
-            b.text.as_deref(),
-            b.note.as_deref(),
-            color,
-            shape,
-            b.fill,
-            icon,
-            b.collapsed,
-            now(),
-        )
-        .map_err(bad)?;
+    s.db.update_node(
+        b.id,
+        b.text.as_deref(),
+        b.note.as_deref(),
+        color,
+        shape,
+        b.fill,
+        icon,
+        b.collapsed,
+        now(),
+    )
+    .map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -299,9 +330,18 @@ async fn ai_note(
     let path = s.db.ancestor_path(b.node_id).unwrap_or_default();
     let (note, model) = llm::ai_note(&text, &path).await.map_err(gateway)?;
     let note = note.trim();
-    s.db
-        .update_node(b.node_id, None, Some(note), None, None, None, None, None, now())
-        .map_err(bad)?;
+    s.db.update_node(
+        b.node_id,
+        None,
+        Some(note),
+        None,
+        None,
+        None,
+        None,
+        None,
+        now(),
+    )
+    .map_err(bad)?;
     Ok(Json(json!({ "note": note, "model": model })))
 }
 
@@ -349,7 +389,8 @@ async fn restore_map(
     Json(b): Json<RestoreBody>,
 ) -> Result<Json<Value>, ApiError> {
     let layout = norm_layout(b.layout.as_deref());
-    s.db.restore_map(b.map_id, &b.nodes, layout, now()).map_err(bad)?;
+    s.db.restore_map(b.map_id, &b.nodes, layout, now())
+        .map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -368,11 +409,19 @@ async fn import_map(
     State(s): State<Arc<AppState>>,
     Json(b): Json<ImportBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let title = if b.title.trim().is_empty() { "Sơ đồ nhập" } else { b.title.trim() };
+    let title = if b.title.trim().is_empty() {
+        "Sơ đồ nhập"
+    } else {
+        b.title.trim()
+    };
     let layout = norm_layout(b.layout.as_deref());
     let (map_id, root_id) = s.db.create_map(title, "", layout, now()).map_err(bad)?;
-    let added = s.db.insert_subtree(root_id, &b.children, now()).map_err(bad)?;
-    Ok(Json(json!({ "id": map_id, "rootId": root_id, "added": added })))
+    let added =
+        s.db.insert_subtree(root_id, &b.children, now())
+            .map_err(bad)?;
+    Ok(Json(
+        json!({ "id": map_id, "rootId": root_id, "added": added }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -410,9 +459,11 @@ async fn generate(
         .await
         .map_err(gateway)?;
     let added = if b.replace {
-        s.db.replace_children(b.parent_id, &gen.children, now()).map_err(bad)?
+        s.db.replace_children(b.parent_id, &gen.children, now())
+            .map_err(bad)?
     } else {
-        s.db.insert_subtree(b.parent_id, &gen.children, now()).map_err(bad)?
+        s.db.insert_subtree(b.parent_id, &gen.children, now())
+            .map_err(bad)?
     };
     // Find the map id via reload so the client can refetch the tree.
     Ok(Json(json!({ "added": added, "model": gen.model })))
@@ -441,15 +492,26 @@ async fn chat(
     let history = s.db.session_messages(b.session_id).map_err(bad)?;
     let mut messages: Vec<llm::ChatMessage> = history
         .into_iter()
-        .map(|m| llm::ChatMessage { role: m.role, content: m.content })
+        .map(|m| llm::ChatMessage {
+            role: m.role,
+            content: m.content,
+        })
         .collect();
-    messages.push(llm::ChatMessage { role: "user".into(), content: content.to_string() });
-    s.db.add_message(b.session_id, "user", content, None, now()).map_err(bad)?;
+    messages.push(llm::ChatMessage {
+        role: "user".into(),
+        content: content.to_string(),
+    });
+    s.db.add_message(b.session_id, "user", content, None, now())
+        .map_err(bad)?;
 
-    let body = ChatBody { messages, map_outline: b.map_outline };
+    let body = ChatBody {
+        messages,
+        map_outline: b.map_outline,
+    };
     match llm::chat(&body).await {
         Ok((text, model)) => {
-            s.db.add_message(b.session_id, "assistant", &text, Some(&model), now()).map_err(bad)?;
+            s.db.add_message(b.session_id, "assistant", &text, Some(&model), now())
+                .map_err(bad)?;
             Ok(Json(json!({ "text": text, "model": model })))
         }
         Err(e) => Err(gateway(e)),
@@ -479,7 +541,12 @@ async fn create_session(
     State(s): State<Arc<AppState>>,
     Json(b): Json<CreateSessionBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let title = b.title.as_deref().map(str::trim).filter(|t| !t.is_empty()).unwrap_or("Hội thoại mới");
+    let title = b
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("Hội thoại mới");
     let id = s.db.create_session(b.map_id, title, now()).map_err(bad)?;
     Ok(Json(json!({ "id": id, "title": title })))
 }
@@ -494,7 +561,11 @@ async fn rename_session(
     State(s): State<Arc<AppState>>,
     Json(b): Json<RenameSessionBody>,
 ) -> Result<Json<Value>, ApiError> {
-    let title = if b.title.trim().is_empty() { "Hội thoại" } else { b.title.trim() };
+    let title = if b.title.trim().is_empty() {
+        "Hội thoại"
+    } else {
+        b.title.trim()
+    };
     s.db.rename_session(b.id, title).map_err(bad)?;
     Ok(Json(json!({ "success": true })))
 }
@@ -516,7 +587,10 @@ async fn session_messages(
     State(s): State<Arc<AppState>>,
     Query(q): Query<SessionIdQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!(s.db.session_messages(q.session_id).map_err(bad)?)))
+    Ok(Json(json!(s
+        .db
+        .session_messages(q.session_id)
+        .map_err(bad)?)))
 }
 
 /// Accept an uploaded file, extract its text (OCR for images via the daemon),
@@ -540,7 +614,9 @@ async fn import_file(mut multipart: axum::extract::Multipart) -> Result<Json<Val
         .await
         .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
     let name = filename.rsplit('/').next().unwrap_or(&filename).to_string();
-    Ok(Json(json!({ "text": text, "name": name, "chars": text.chars().count(), "ocr": ocr })))
+    Ok(Json(
+        json!({ "text": text, "name": name, "chars": text.chars().count(), "ocr": ocr }),
+    ))
 }
 
 async fn models() -> Result<Json<Value>, ApiError> {
@@ -559,7 +635,8 @@ async fn model_active(Json(b): Json<ModelActiveBody>) -> Result<Json<Value>, Api
 
 /// Which SenClaw LLM the bridge will use (probes the daemon's llm-config).
 async fn llm_info() -> Json<Value> {
-    let base = std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
+    let base =
+        std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
     let url = format!("{}/api/llm-config", base.trim_end_matches('/'));
     let fetch = reqwest::Client::new()
         .get(&url)
@@ -571,14 +648,19 @@ async fn llm_info() -> Json<Value> {
             Ok(v) => {
                 let active = v.get("activeId").and_then(|x| x.as_str()).unwrap_or("");
                 let cfg = v.get("configs").and_then(|a| a.as_array()).and_then(|a| {
-                    a.iter().find(|c| c.get("id").and_then(|x| x.as_str()) == Some(active))
+                    a.iter()
+                        .find(|c| c.get("id").and_then(|x| x.as_str()) == Some(active))
                 });
-                let model = cfg.and_then(|c| c.get("modelName")).and_then(|x| x.as_str());
+                let model = cfg
+                    .and_then(|c| c.get("modelName"))
+                    .and_then(|x| x.as_str());
                 Json(json!({ "ok": model.is_some(), "daemon": base, "model": model }))
             }
             Err(e) => Json(json!({ "ok": false, "daemon": base, "error": format!("parse: {e}") })),
         },
-        Err(e) => Json(json!({ "ok": false, "daemon": base, "error": format!("Không kết nối daemon: {e}") })),
+        Err(e) => Json(
+            json!({ "ok": false, "daemon": base, "error": format!("Không kết nối daemon: {e}") }),
+        ),
     }
 }
 

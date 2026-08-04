@@ -17,12 +17,12 @@ use rusqlite::types::{Value as SqlValue, ValueRef};
 use rusqlite::Connection;
 use std::sync::Arc;
 
+#[cfg(test)]
+use super::SourceRel;
 use super::{
     build_create_table, build_insert_sql, build_select, chunk_rows, column_cells, Cell, ColumnInfo,
     Connector, Dialect, ExtractSpec, LoadFlavor, LoadMode, LoadSpec, TableInfo,
 };
-#[cfg(test)]
-use super::SourceRel;
 
 /// Connector đọc file SQLite. `dsn` chấp nhận `sqlite:///path`, `sqlite://path`,
 /// `file:path` hoặc đường dẫn trần.
@@ -118,7 +118,8 @@ fn load_blocking(conn: &mut Connection, spec: &LoadSpec, batches: &[RecordBatch]
 
     if spec.create_if_missing {
         let ddl = build_create_table(flavor, &spec.table, &schema);
-        conn.execute_batch(&ddl).with_context(|| format!("CREATE TABLE: {ddl}"))?;
+        conn.execute_batch(&ddl)
+            .with_context(|| format!("CREATE TABLE: {ddl}"))?;
     }
 
     let cols: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
@@ -264,7 +265,9 @@ fn extract_blocking(conn: &Connection, spec: &ExtractSpec) -> Result<Vec<RecordB
     let param_refs: Vec<&dyn rusqlite::ToSql> =
         bound.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
 
-    let mut stmt = conn.prepare(&sql).with_context(|| format!("prepare: {sql}"))?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .with_context(|| format!("prepare: {sql}"))?;
     let ncol = stmt.column_count();
     let col_names: Vec<String> = (0..ncol)
         .map(|i| stmt.column_name(i).unwrap_or("").to_string())
@@ -284,9 +287,7 @@ fn extract_blocking(conn: &Connection, spec: &ExtractSpec) -> Result<Vec<RecordB
     }
 
     // Quyết định kiểu Arrow từng cột theo giá trị quan sát được.
-    let col_types: Vec<DataType> = (0..ncol)
-        .map(|i| infer_col_type(&all_rows, i))
-        .collect();
+    let col_types: Vec<DataType> = (0..ncol).map(|i| infer_col_type(&all_rows, i)).collect();
 
     let fields: Vec<Field> = col_names
         .iter()
@@ -302,9 +303,7 @@ fn extract_blocking(conn: &Connection, spec: &ExtractSpec) -> Result<Vec<RecordB
     if all_rows.is_empty() {
         // Batch rỗng vẫn trả một RecordBatch 0 dòng để giữ schema.
         let cols = build_empty_columns(&col_types);
-        batches.push(
-            RecordBatch::try_new(schema.clone(), cols).context("RecordBatch rỗng")?,
-        );
+        batches.push(RecordBatch::try_new(schema.clone(), cols).context("RecordBatch rỗng")?);
         return Ok(batches);
     }
 
@@ -314,8 +313,7 @@ fn extract_blocking(conn: &Connection, spec: &ExtractSpec) -> Result<Vec<RecordB
         let slice = &all_rows[start..end];
         let cols = build_columns(&col_types, slice);
         batches.push(
-            RecordBatch::try_new(schema.clone(), cols)
-                .context("dựng RecordBatch từ SQLite")?,
+            RecordBatch::try_new(schema.clone(), cols).context("dựng RecordBatch từ SQLite")?,
         );
         start = end;
     }
@@ -637,7 +635,9 @@ mod tests {
     /// Đọc lại (id,label) từ file sqlite đích, sắp theo id.
     fn read_back(path: &str) -> Vec<(i64, String)> {
         let conn = Connection::open(path).unwrap();
-        let mut stmt = conn.prepare("SELECT id, label FROM dest ORDER BY id").unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, label FROM dest ORDER BY id")
+            .unwrap();
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
             .unwrap();
@@ -654,7 +654,11 @@ mod tests {
         // Bảng chưa có → create_if_missing tự tạo, Append 2 dòng.
         let n = c
             .load(
-                LoadSpec { table: "dest".into(), mode: LoadMode::Append, create_if_missing: true },
+                LoadSpec {
+                    table: "dest".into(),
+                    mode: LoadMode::Append,
+                    create_if_missing: true,
+                },
                 vec![batch(&[1, 2], &["a", "b"])],
             )
             .await
@@ -665,7 +669,11 @@ mod tests {
         // Append thêm → cộng dồn.
         let n2 = c
             .load(
-                LoadSpec { table: "dest".into(), mode: LoadMode::Append, create_if_missing: true },
+                LoadSpec {
+                    table: "dest".into(),
+                    mode: LoadMode::Append,
+                    create_if_missing: true,
+                },
                 vec![batch(&[3], &["c"])],
             )
             .await
@@ -679,7 +687,11 @@ mod tests {
         // Kiểu cột đúng: id INTEGER (affinity), label TEXT.
         let conn = Connection::open(&ps).unwrap();
         let ty: String = conn
-            .query_row("SELECT type FROM pragma_table_info('dest') WHERE name='id'", [], |r| r.get(0))
+            .query_row(
+                "SELECT type FROM pragma_table_info('dest') WHERE name='id'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(ty, "BIGINT");
     }
@@ -696,9 +708,14 @@ mod tests {
             mode: LoadMode::FullRefresh,
             create_if_missing: true,
         };
-        c.load(spec(), vec![batch(&[1, 2, 3], &["a", "b", "c"])]).await.unwrap();
+        c.load(spec(), vec![batch(&[1, 2, 3], &["a", "b", "c"])])
+            .await
+            .unwrap();
         // Chạy lần 2 (dữ liệu khác) → DELETE + INSERT, KHÔNG nhân đôi.
-        let n = c.load(spec(), vec![batch(&[7, 8], &["x", "y"])]).await.unwrap();
+        let n = c
+            .load(spec(), vec![batch(&[7, 8], &["x", "y"])])
+            .await
+            .unwrap();
         assert_eq!(n, 2);
         assert_eq!(read_back(&ps), vec![(7, "x".into()), (8, "y".into())]);
     }
@@ -718,14 +735,20 @@ mod tests {
         let c = SqliteConnector::new(ps.clone());
         let upsert = || LoadSpec {
             table: "dest".into(),
-            mode: LoadMode::Upsert { keys: vec!["id".into()] },
+            mode: LoadMode::Upsert {
+                keys: vec!["id".into()],
+            },
             // Bảng đã tồn tại (có PK) → không tạo lại.
             create_if_missing: false,
         };
 
-        c.load(upsert(), vec![batch(&[1, 2], &["a", "b"])]).await.unwrap();
+        c.load(upsert(), vec![batch(&[1, 2], &["a", "b"])])
+            .await
+            .unwrap();
         // id=2 cập nhật, id=3 chèn mới → không nhân dòng id=2.
-        c.load(upsert(), vec![batch(&[2, 3], &["B", "c"])]).await.unwrap();
+        c.load(upsert(), vec![batch(&[2, 3], &["B", "c"])])
+            .await
+            .unwrap();
         assert_eq!(
             read_back(&ps),
             vec![(1, "a".into()), (2, "B".into()), (3, "c".into())]

@@ -90,7 +90,11 @@ pub async fn generate(
     source: Option<&str>,
 ) -> Result<Generated, String> {
     let has_source = source.map(|s| !s.trim().is_empty()).unwrap_or(false);
-    let system = if has_source { GEN_FROM_SOURCE_SYSTEM } else { GEN_SYSTEM };
+    let system = if has_source {
+        GEN_FROM_SOURCE_SYSTEM
+    } else {
+        GEN_SYSTEM
+    };
 
     let mut prompt = String::new();
     if !topic.trim().is_empty() {
@@ -108,19 +112,27 @@ pub async fn generate(
         if !src.trim().is_empty() {
             // Cap the source so we never blow the model's context.
             let capped = truncate(src.trim(), 8000);
-            prompt.push_str(&format!("\nSource content to structure:\n\"\"\"\n{capped}\n\"\"\"\n"));
+            prompt.push_str(&format!(
+                "\nSource content to structure:\n\"\"\"\n{capped}\n\"\"\"\n"
+            ));
         }
     }
     prompt.push_str("\nReturn the JSON now.");
 
     let (text, model) = bridge_llm(system, &prompt, 2600).await?;
     let root = parse_gen(&text).ok_or_else(|| {
-        format!("could not parse mind-map JSON from model output:\n{}", truncate(&text, 400))
+        format!(
+            "could not parse mind-map JSON from model output:\n{}",
+            truncate(&text, 400)
+        )
     })?;
     if root.children.is_empty() {
         return Err("model returned an empty mind map".into());
     }
-    Ok(Generated { children: root.children, model })
+    Ok(Generated {
+        children: root.children,
+        model,
+    })
 }
 
 /// Extract a JSON object from possibly-fenced / chatty model output.
@@ -294,7 +306,10 @@ pub async fn list_models() -> Result<Value, String> {
 }
 
 pub async fn set_active_model(id: &str) -> Result<(), String> {
-    client().set_active_model(id).await.map_err(|e| e.to_string())
+    client()
+        .set_active_model(id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// The app's single gateway to SenClaw services. Every LLM call goes through the
@@ -308,7 +323,11 @@ fn client() -> SpaceClient {
 }
 
 /// One-shot completion on SenClaw's active LLM via the SDK open API.
-pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(String, String), String> {
+pub async fn bridge_llm(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String), String> {
     client()
         .llm_request(system, user, max_tokens)
         .await

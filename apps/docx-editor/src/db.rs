@@ -60,7 +60,9 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn list_docs(&self) -> Result<Vec<DocMeta>> {
@@ -128,7 +130,14 @@ impl Db {
         Ok(blob.flatten())
     }
 
-    pub fn save_doc(&self, id: i64, title: Option<&str>, text: &str, blob: Option<&[u8]>, now: i64) -> Result<()> {
+    pub fn save_doc(
+        &self,
+        id: i64,
+        title: Option<&str>,
+        text: &str,
+        blob: Option<&[u8]>,
+        now: i64,
+    ) -> Result<()> {
         let c = self.conn.lock().unwrap();
         if let Some(t) = title {
             c.execute(

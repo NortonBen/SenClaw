@@ -16,7 +16,9 @@ pub fn spawn_reindexer(db: Arc<Db>, mut rx: tokio::sync::mpsc::Receiver<()>) {
                     msg = rx.recv() => { if msg.is_none() { return; } }
                 }
             }
-            let Some(root) = db.get_meta("root").ok().flatten() else { continue };
+            let Some(root) = db.get_meta("root").ok().flatten() else {
+                continue;
+            };
             let db2 = db.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 let _ = crate::index::index_repo(&db2, Path::new(&root));
@@ -29,17 +31,21 @@ pub fn spawn_reindexer(db: Arc<Db>, mut rx: tokio::sync::mpsc::Receiver<()>) {
 /// (Re)install a recursive watcher on `root`, replacing any previous one.
 pub fn install_watcher(state: &Arc<AppState>, root: &Path) {
     let tx = state.watch_tx.clone();
-    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(ev) = res {
-            use notify::EventKind;
-            if matches!(ev.kind, EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)) {
-                let _ = tx.try_send(());
+    let mut watcher =
+        match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if let Ok(ev) = res {
+                use notify::EventKind;
+                if matches!(
+                    ev.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                ) {
+                    let _ = tx.try_send(());
+                }
             }
-        }
-    }) {
-        Ok(w) => w,
-        Err(_) => return,
-    };
+        }) {
+            Ok(w) => w,
+            Err(_) => return,
+        };
     if watcher.watch(root, RecursiveMode::Recursive).is_ok() {
         *state.watcher.lock().unwrap() = Some(watcher);
     }

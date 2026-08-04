@@ -29,7 +29,10 @@ fn db_path() -> PathBuf {
         return p.join("hub.db");
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let dir = PathBuf::from(home).join(".senclaw").join("apps").join("hub");
+    let dir = PathBuf::from(home)
+        .join(".senclaw")
+        .join("apps")
+        .join("hub");
     std::fs::create_dir_all(&dir).ok();
     dir.join("hub.db")
 }
@@ -83,8 +86,9 @@ impl Store {
 
     pub fn list_panels(&self) -> Result<Vec<HtmlPanel>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare("SELECT id, name, html, updated_at FROM html_panels ORDER BY updated_at DESC")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, html, updated_at FROM html_panels ORDER BY updated_at DESC",
+        )?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(HtmlPanel {

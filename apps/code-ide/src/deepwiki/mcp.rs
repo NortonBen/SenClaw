@@ -1,9 +1,9 @@
+use crate::deepwiki::query;
 use axum::{
     extract::State,
     response::sse::{Event, Sse},
     Json,
 };
-use crate::deepwiki::query;
 use futures_util::stream::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -61,7 +61,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "deepwiki-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -182,7 +184,8 @@ fn tools_list() -> Value {
 }
 
 async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
-    let __dbo = state.db(); let db = &__dbo;
+    let __dbo = state.db();
+    let db = &__dbo;
     match name {
         "deepwiki_index" => {
             let p = args["path"].as_str().unwrap_or("");
@@ -228,13 +231,17 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let defs = query::symbols_by_name(db, n).unwrap_or_default();
             let callers = query::callers(db, n, 100).unwrap_or_default();
             let callees = query::callees(db, n, 100).unwrap_or_default();
-            json_result(json!({ "name": n, "definitions": defs, "callers": callers, "callees": callees }))
+            json_result(
+                json!({ "name": n, "definitions": defs, "callers": callers, "callees": callees }),
+            )
         }
         "deepwiki_impact" => {
             let n = args["name"].as_str().unwrap_or("");
             let depth = args["depth"].as_u64().unwrap_or(4) as u32;
             match query::blast_radius(db, n, depth) {
-                Ok(rows) => json_result(json!({ "name": n, "blast_radius": rows, "count": rows.len() })),
+                Ok(rows) => {
+                    json_result(json!({ "name": n, "blast_radius": rows, "count": rows.len() }))
+                }
                 Err(e) => error_result(format!("impact failed: {e}")),
             }
         }

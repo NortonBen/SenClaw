@@ -19,7 +19,9 @@ const CADENCE: Duration = Duration::from_secs(180);
 
 /// Run one pass. Returns a JSON summary (also used by the manual tick route).
 pub async fn tick(s: &AppState) -> Value {
-    let autonomy = s.db.get_setting("autonomy").unwrap_or_else(|| "draft".into());
+    let autonomy =
+        s.db.get_setting("autonomy")
+            .unwrap_or_else(|| "draft".into());
     if autonomy == "observe" {
         return json!({ "ok": true, "skipped": "autonomy=observe" });
     }
@@ -33,12 +35,11 @@ pub async fn tick(s: &AppState) -> Value {
     }
 
     // Don't double-draft: skip conversations that already have a pending draft.
-    let already: HashSet<String> = s
-        .db
-        .list_drafts("pending")
-        .into_iter()
-        .map(|d| d.conversation_id)
-        .collect();
+    let already: HashSet<String> =
+        s.db.list_drafts("pending")
+            .into_iter()
+            .map(|d| d.conversation_id)
+            .collect();
 
     let list = convs
         .get("conversations")
@@ -89,7 +90,11 @@ pub async fn tick(s: &AppState) -> Value {
     }
 
     if drafted > 0 {
-        s.db.log("heartbeat", &format!("soạn {drafted} bản nháp trả lời khách"), "");
+        s.db.log(
+            "heartbeat",
+            &format!("soạn {drafted} bản nháp trả lời khách"),
+            "",
+        );
     }
     json!({ "ok": true, "conversations": list.len(), "drafted": drafted, "autonomy": autonomy })
 }

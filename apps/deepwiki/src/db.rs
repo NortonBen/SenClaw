@@ -19,13 +19,17 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn open_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
@@ -41,7 +45,9 @@ impl Db {
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
         self.with_conn(|c| {
             let v = c
-                .query_row("SELECT value FROM meta WHERE key=?1", [key], |r| r.get::<_, String>(0))
+                .query_row("SELECT value FROM meta WHERE key=?1", [key], |r| {
+                    r.get::<_, String>(0)
+                })
                 .ok();
             Ok(v)
         })

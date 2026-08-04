@@ -49,8 +49,8 @@ pub struct Config {
 
 /// `appsecret_proof` — HMAC-SHA256(app_secret, access_token) as lowercase hex.
 pub fn appsecret_proof(app_secret: &str, access_token: &str) -> String {
-    let mut mac =
-        HmacSha256::new_from_slice(app_secret.as_bytes()).expect("HMAC accepts a key of any length");
+    let mut mac = HmacSha256::new_from_slice(app_secret.as_bytes())
+        .expect("HMAC accepts a key of any length");
     mac.update(access_token.as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }
@@ -63,7 +63,10 @@ pub struct Client {
 
 impl Client {
     pub fn new(cfg: Config) -> Self {
-        Self { cfg, http: reqwest::Client::new() }
+        Self {
+            cfg,
+            http: reqwest::Client::new(),
+        }
     }
 
     fn base(&self) -> String {
@@ -121,8 +124,12 @@ impl Client {
 
     /// The Pages this user administers, each with its Page Access Token.
     pub async fn get_pages(&self, user_token: &str) -> Result<Value> {
-        self.get("/me/accounts", user_token, &[("fields", "id,name,access_token,category,tasks".into())])
-            .await
+        self.get(
+            "/me/accounts",
+            user_token,
+            &[("fields", "id,name,access_token,category,tasks".into())],
+        )
+        .await
     }
 
     // ---- Read ----
@@ -151,12 +158,20 @@ impl Client {
     }
 
     /// Comments on a post (or replies on a comment).
-    pub async fn list_comments(&self, object_id: &str, page_token: &str, limit: i64) -> Result<Value> {
+    pub async fn list_comments(
+        &self,
+        object_id: &str,
+        page_token: &str,
+        limit: i64,
+    ) -> Result<Value> {
         self.get(
             &format!("/{object_id}/comments"),
             page_token,
             &[
-                ("fields", "id,message,from,created_time,like_count,comment_count".into()),
+                (
+                    "fields",
+                    "id,message,from,created_time,like_count,comment_count".into(),
+                ),
                 ("order", "reverse_chronological".into()),
                 ("limit", limit.clamp(1, 100).to_string()),
             ],
@@ -167,13 +182,21 @@ impl Client {
     // ---- Messaging (Page inbox — needs pages_messaging) ----
 
     /// The Page's Messenger conversations (most recently updated first).
-    pub async fn list_conversations(&self, page_id: &str, page_token: &str, limit: i64) -> Result<Value> {
+    pub async fn list_conversations(
+        &self,
+        page_id: &str,
+        page_token: &str,
+        limit: i64,
+    ) -> Result<Value> {
         self.get(
             &format!("/{page_id}/conversations"),
             page_token,
             &[
                 ("platform", "messenger".into()),
-                ("fields", "id,snippet,updated_time,message_count,unread_count,participants".into()),
+                (
+                    "fields",
+                    "id,snippet,updated_time,message_count,unread_count,participants".into(),
+                ),
                 ("limit", limit.clamp(1, 50).to_string()),
             ],
         )
@@ -181,18 +204,35 @@ impl Client {
     }
 
     /// Messages inside one conversation (thread), newest last.
-    pub async fn conversation_messages(&self, conversation_id: &str, page_token: &str, limit: i64) -> Result<Value> {
+    pub async fn conversation_messages(
+        &self,
+        conversation_id: &str,
+        page_token: &str,
+        limit: i64,
+    ) -> Result<Value> {
         self.get(
             &format!("/{conversation_id}"),
             page_token,
-            &[("fields", format!("messages.limit({}){{id,message,from,created_time}}", limit.clamp(1, 50)))],
+            &[(
+                "fields",
+                format!(
+                    "messages.limit({}){{id,message,from,created_time}}",
+                    limit.clamp(1, 50)
+                ),
+            )],
         )
         .await
     }
 
     /// Send a text message to a user via the Send API (a RESPONSE to the user's
     /// own message — no broadcasting). `recipient_psid` is the user's page-scoped id.
-    pub async fn send_message(&self, page_id: &str, page_token: &str, recipient_psid: &str, text: &str) -> Result<Value> {
+    pub async fn send_message(
+        &self,
+        page_id: &str,
+        page_token: &str,
+        recipient_psid: &str,
+        text: &str,
+    ) -> Result<Value> {
         self.post(
             &format!("/{page_id}/messages"),
             page_token,
@@ -206,17 +246,31 @@ impl Client {
     }
 
     /// Page-level insights. `metrics` is a comma-joined metric list.
-    pub async fn page_insights(&self, page_id: &str, page_token: &str, metrics: &str, period: &str) -> Result<Value> {
+    pub async fn page_insights(
+        &self,
+        page_id: &str,
+        page_token: &str,
+        metrics: &str,
+        period: &str,
+    ) -> Result<Value> {
         self.get(
             &format!("/{page_id}/insights"),
             page_token,
-            &[("metric", metrics.to_string()), ("period", period.to_string())],
+            &[
+                ("metric", metrics.to_string()),
+                ("period", period.to_string()),
+            ],
         )
         .await
     }
 
     /// Post-level insights.
-    pub async fn post_insights(&self, post_id: &str, page_token: &str, metrics: &str) -> Result<Value> {
+    pub async fn post_insights(
+        &self,
+        post_id: &str,
+        page_token: &str,
+        metrics: &str,
+    ) -> Result<Value> {
         self.get(
             &format!("/{post_id}/insights"),
             page_token,
@@ -232,7 +286,10 @@ impl Client {
         self.get(
             "/me/adaccounts",
             user_token,
-            &[("fields", "account_id,id,name,account_status,currency,amount_spent".into())],
+            &[(
+                "fields",
+                "account_id,id,name,account_status,currency,amount_spent".into(),
+            )],
         )
         .await
     }
@@ -243,7 +300,10 @@ impl Client {
             &format!("/{act_id}/campaigns"),
             user_token,
             &[
-                ("fields", "id,name,status,effective_status,objective,daily_budget,lifetime_budget".into()),
+                (
+                    "fields",
+                    "id,name,status,effective_status,objective,daily_budget,lifetime_budget".into(),
+                ),
                 ("limit", "50".into()),
             ],
         )
@@ -254,7 +314,13 @@ impl Client {
     /// ad id — broken down by `level` (account|campaign|adset|ad). `date_preset`
     /// is e.g. `last_7d`, `last_30d`, `today`, `maximum`. Returns rows with
     /// impressions/clicks/spend/ctr/cpc/cpm/reach + actions + purchase_roas.
-    pub async fn ad_insights(&self, object_id: &str, user_token: &str, level: &str, date_preset: &str) -> Result<Value> {
+    pub async fn ad_insights(
+        &self,
+        object_id: &str,
+        user_token: &str,
+        level: &str,
+        date_preset: &str,
+    ) -> Result<Value> {
         let name_field = match level {
             "campaign" => ",campaign_name",
             "adset" => ",adset_name",
@@ -278,25 +344,48 @@ impl Client {
     /// Pause or resume a campaign / adset / ad by setting its `status`
     /// (ACTIVE | PAUSED). Needs `ads_management`. This is the seller's OWN ad
     /// entity — an explicit action, never automated.
-    pub async fn set_entity_status(&self, entity_id: &str, user_token: &str, status: &str) -> Result<Value> {
-        self.post(&format!("/{entity_id}"), user_token, json!({ "status": status })).await
+    pub async fn set_entity_status(
+        &self,
+        entity_id: &str,
+        user_token: &str,
+        status: &str,
+    ) -> Result<Value> {
+        self.post(
+            &format!("/{entity_id}"),
+            user_token,
+            json!({ "status": status }),
+        )
+        .await
     }
 
     // ---- Write (all gated by the caller's draft-approve queue) ----
 
     /// Publish a text/link post to a Page. Returns `{ "id": "<post-id>" }`.
-    pub async fn create_post(&self, page_id: &str, page_token: &str, message: &str, link: Option<&str>) -> Result<Value> {
+    pub async fn create_post(
+        &self,
+        page_id: &str,
+        page_token: &str,
+        message: &str,
+        link: Option<&str>,
+    ) -> Result<Value> {
         let mut body = json!({ "message": message });
         if let Some(l) = link {
             if !l.trim().is_empty() {
                 body["link"] = json!(l);
             }
         }
-        self.post(&format!("/{page_id}/feed"), page_token, body).await
+        self.post(&format!("/{page_id}/feed"), page_token, body)
+            .await
     }
 
     /// Publish a photo post by image URL. Returns `{ "id", "post_id" }`.
-    pub async fn create_photo(&self, page_id: &str, page_token: &str, image_url: &str, caption: &str) -> Result<Value> {
+    pub async fn create_photo(
+        &self,
+        page_id: &str,
+        page_token: &str,
+        image_url: &str,
+        caption: &str,
+    ) -> Result<Value> {
         self.post(
             &format!("/{page_id}/photos"),
             page_token,
@@ -307,7 +396,15 @@ impl Client {
 
     /// Publish a photo post from LOCAL image bytes via multipart `source` (for
     /// files the user uploaded, not a public URL). Returns `{ "id", "post_id" }`.
-    pub async fn create_photo_bytes(&self, page_id: &str, page_token: &str, bytes: Vec<u8>, filename: &str, mime: &str, caption: &str) -> Result<Value> {
+    pub async fn create_photo_bytes(
+        &self,
+        page_id: &str,
+        page_token: &str,
+        bytes: Vec<u8>,
+        filename: &str,
+        mime: &str,
+        caption: &str,
+    ) -> Result<Value> {
         let proof = appsecret_proof(&self.cfg.app_secret, page_token);
         let part = reqwest::multipart::Part::bytes(bytes)
             .file_name(filename.to_string())
@@ -334,7 +431,12 @@ impl Client {
 
     /// Edit a post's message.
     pub async fn edit_post(&self, post_id: &str, page_token: &str, message: &str) -> Result<Value> {
-        self.post(&format!("/{post_id}"), page_token, json!({ "message": message })).await
+        self.post(
+            &format!("/{post_id}"),
+            page_token,
+            json!({ "message": message }),
+        )
+        .await
     }
 
     /// Delete a post.
@@ -361,19 +463,35 @@ impl Client {
 
     /// Comment on a post, or reply to a comment (same endpoint — `object_id` is a
     /// post id for a comment, a comment id for a reply).
-    pub async fn create_comment(&self, object_id: &str, page_token: &str, message: &str) -> Result<Value> {
-        self.post(&format!("/{object_id}/comments"), page_token, json!({ "message": message })).await
+    pub async fn create_comment(
+        &self,
+        object_id: &str,
+        page_token: &str,
+        message: &str,
+    ) -> Result<Value> {
+        self.post(
+            &format!("/{object_id}/comments"),
+            page_token,
+            json!({ "message": message }),
+        )
+        .await
     }
 
     /// Like an object (post or comment).
     pub async fn like_object(&self, object_id: &str, page_token: &str) -> Result<Value> {
-        self.post(&format!("/{object_id}/likes"), page_token, json!({})).await
+        self.post(&format!("/{object_id}/likes"), page_token, json!({}))
+            .await
     }
 
     // ---- HTTP core ----
 
     /// GET a Graph endpoint. `access_token` is added along with appsecret_proof.
-    pub async fn get(&self, path: &str, access_token: &str, extra: &[(&str, String)]) -> Result<Value> {
+    pub async fn get(
+        &self,
+        path: &str,
+        access_token: &str,
+        extra: &[(&str, String)],
+    ) -> Result<Value> {
         let proof = appsecret_proof(&self.cfg.app_secret, access_token);
         let mut url = format!(
             "{}{}?access_token={}&appsecret_proof={}",
@@ -429,7 +547,10 @@ impl Client {
 /// Graph API surfaces failures as `{ "error": { "message", "type", "code" } }`.
 fn check_api_error(v: Value) -> Result<Value> {
     if let Some(err) = v.get("error") {
-        let msg = err.get("message").and_then(|x| x.as_str()).unwrap_or("unknown");
+        let msg = err
+            .get("message")
+            .and_then(|x| x.as_str())
+            .unwrap_or("unknown");
         let code = err.get("code").and_then(|x| x.as_i64()).unwrap_or(0);
         return Err(anyhow!("Facebook API error [{code}]: {msg}"));
     }
@@ -438,7 +559,12 @@ fn check_api_error(v: Value) -> Result<Value> {
 
 /// Guess an image MIME type from a filename extension (best-effort).
 pub fn image_mime(filename: &str) -> &'static str {
-    match filename.rsplit('.').next().map(|e| e.to_ascii_lowercase()).as_deref() {
+    match filename
+        .rsplit('.')
+        .next()
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("png") => "image/png",
         Some("gif") => "image/gif",
@@ -453,7 +579,9 @@ fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
@@ -465,7 +593,11 @@ mod tests {
     use super::*;
 
     fn cfg() -> Config {
-        Config { app_id: "1234567890".into(), app_secret: "s3cr3t".into(), version: DEFAULT_VERSION.into() }
+        Config {
+            app_id: "1234567890".into(),
+            app_secret: "s3cr3t".into(),
+            version: DEFAULT_VERSION.into(),
+        }
     }
 
     #[test]

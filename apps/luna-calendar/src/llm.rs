@@ -15,10 +15,12 @@ không mê tín cực đoan. Đây là tham khảo văn hóa truyền thống, k
 /// Ask the daemon's active LLM to interpret a day for an activity. `facts` is a
 /// compact rendering of the DayInfo; `activity` is the việc the user is asking about.
 pub async fn advise(facts: &str, activity: &str) -> Result<(String, String), String> {
-    let prompt = format!(
-        "Dữ liệu ngày:\n{facts}\n\nViệc cần xem: {activity}\n\nHãy luận giải ngắn gọn."
-    );
-    client().llm_request(ADVISE_SYSTEM, &prompt, 700).await.map_err(|e| e.to_string())
+    let prompt =
+        format!("Dữ liệu ngày:\n{facts}\n\nViệc cần xem: {activity}\n\nHãy luận giải ngắn gọn.");
+    client()
+        .llm_request(ADVISE_SYSTEM, &prompt, 700)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 fn client() -> SpaceClient {

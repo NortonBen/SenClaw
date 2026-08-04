@@ -38,7 +38,10 @@ fn bad(e: impl std::fmt::Display) -> ApiError {
 
 /// Today's Gregorian date in Vietnam (UTC+7): `(dd, mm, yy)`.
 pub fn today() -> (i64, i64, i64) {
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     // Unix epoch 1970-01-01 = JD 2440588; shift into +7 local time.
     let jd = 2440588 + (secs + (TZ_VN * 3600.0) as i64).div_euclid(86400);
     jd_to_ymd(jd)
@@ -72,7 +75,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/lunar-to-solar", get(get_lunar_to_solar))
         .route("/good-days", get(get_good_days))
         .route("/advise", post(post_advise))
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -154,7 +160,9 @@ async fn get_lunar_to_solar(Query(q): Query<LunarQuery>) -> Result<Json<Value>, 
         return Err(bad("that leap month does not exist in that lunar year"));
     }
     let info = day_info(dd, mm, yy);
-    Ok(Json(json!({ "solar": { "day": dd, "month": mm, "year": yy }, "info": info })))
+    Ok(Json(
+        json!({ "solar": { "day": dd, "month": mm, "year": yy }, "info": info }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -190,7 +198,9 @@ async fn get_good_days(Query(q): Query<GoodDaysQuery>) -> Result<Json<Value>, Ap
             })
         })
         .collect();
-    Ok(Json(json!({ "year": q.year, "month": q.month, "kind": if want_bad {"hac-dao"} else {"hoang-dao"}, "days": list })))
+    Ok(Json(
+        json!({ "year": q.year, "month": q.month, "kind": if want_bad {"hac-dao"} else {"hoang-dao"}, "days": list }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -211,7 +221,9 @@ async fn post_advise(Json(b): Json<AdviseBody>) -> Result<Json<Value>, ApiError>
     let info = day_info(dd, mm, yy);
     let facts = render_facts(&info);
     match crate::llm::advise(&facts, b.activity.trim()).await {
-        Ok((text, model)) => Ok(Json(json!({ "text": text, "model": model, "facts": facts }))),
+        Ok((text, model)) => Ok(Json(
+            json!({ "text": text, "model": model, "facts": facts }),
+        )),
         Err(e) => Err(ApiError(StatusCode::BAD_GATEWAY, e)),
     }
 }
@@ -223,22 +235,38 @@ pub fn render_facts(i: &DayInfo) -> String {
         Verdict::Binh => "Bình thường",
         Verdict::Xau => "Xấu (Hắc Đạo)",
     };
-    let warn = if i.warnings.is_empty() { "không".to_string() } else { i.warnings.join(", ") };
+    let warn = if i.warnings.is_empty() {
+        "không".to_string()
+    } else {
+        i.warnings.join(", ")
+    };
     format!(
         "Dương lịch: {} ({})\nÂm lịch: {} tháng {} năm {}\nNgày {} — tháng {} — năm {} ({})\n\
 Tiết khí: {}\nTrực: {} | Sao (Nhị Thập Bát Tú): {} ({})\nNgũ hành (nạp âm): {} ({})\n\
 Đánh giá: {} — thần {}\nGiờ Hoàng Đạo: {}\nHướng xuất hành: Hỷ Thần {}, Tài Thần {}\n\
 Xuất hành (Lý Thuần Phong): {} — {}\nNgày kỵ: {}",
-        i.solar_date, i.weekday,
-        i.lunar_date, i.lunar_month, i.year_can_chi,
-        i.day_can_chi, i.month_can_chi, i.year_can_chi, i.year_animal,
+        i.solar_date,
+        i.weekday,
+        i.lunar_date,
+        i.lunar_month,
+        i.year_can_chi,
+        i.day_can_chi,
+        i.month_can_chi,
+        i.year_can_chi,
+        i.year_animal,
         i.tiet_khi,
-        i.truc, i.tu, if i.tu_good { "tốt" } else { "xấu" },
-        i.nap_am, i.ngu_hanh,
-        verdict, i.day_god,
+        i.truc,
+        i.tu,
+        if i.tu_good { "tốt" } else { "xấu" },
+        i.nap_am,
+        i.ngu_hanh,
+        verdict,
+        i.day_god,
         i.good_hours,
-        i.directions.hy_than, i.directions.tai_than,
-        i.xuat_hanh, i.xuat_hanh_detail,
+        i.directions.hy_than,
+        i.directions.tai_than,
+        i.xuat_hanh,
+        i.xuat_hanh_detail,
         warn,
     )
 }

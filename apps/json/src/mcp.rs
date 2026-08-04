@@ -73,7 +73,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "json-mcp", "version": "2.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or(json!({}));
@@ -341,7 +343,11 @@ mod tests {
     fn every_listed_tool_is_callable() {
         let tools = tools_list();
         let list = tools.as_array().unwrap();
-        assert_eq!(list.len(), 9, "tool count changed — update the docs/skill too");
+        assert_eq!(
+            list.len(),
+            9,
+            "tool count changed — update the docs/skill too"
+        );
         for tool in list {
             let name = tool["name"].as_str().unwrap();
             // Empty args are invalid input, not an unknown tool.
@@ -356,13 +362,22 @@ mod tests {
     #[test]
     fn format_modes() {
         let src = json!({ "input": "{\"b\":1,\"a\":2}" });
-        assert_eq!(text_of(&call_tool("json_format", &src)), "{\n  \"b\": 1,\n  \"a\": 2\n}");
+        assert_eq!(
+            text_of(&call_tool("json_format", &src)),
+            "{\n  \"b\": 1,\n  \"a\": 2\n}"
+        );
         let mut minify = src.clone();
         minify["mode"] = json!("minify");
-        assert_eq!(text_of(&call_tool("json_format", &minify)), r#"{"b":1,"a":2}"#);
+        assert_eq!(
+            text_of(&call_tool("json_format", &minify)),
+            r#"{"b":1,"a":2}"#
+        );
         let mut sort = src.clone();
         sort["mode"] = json!("sort");
-        assert_eq!(text_of(&call_tool("json_format", &sort)), "{\n  \"a\": 2,\n  \"b\": 1\n}");
+        assert_eq!(
+            text_of(&call_tool("json_format", &sort)),
+            "{\n  \"a\": 2,\n  \"b\": 1\n}"
+        );
     }
 
     #[test]
@@ -381,9 +396,11 @@ mod tests {
 
     #[test]
     fn stats_and_schema_tools() {
-        let s: Value =
-            serde_json::from_str(&text_of(&call_tool("json_stats", &json!({ "input": "[1,2,3]" }))))
-                .unwrap();
+        let s: Value = serde_json::from_str(&text_of(&call_tool(
+            "json_stats",
+            &json!({ "input": "[1,2,3]" }),
+        )))
+        .unwrap();
         assert_eq!(s["root_type"], json!("array"));
         assert!(s["summary"].as_str().unwrap().contains("node"));
 
@@ -426,7 +443,10 @@ mod tests {
     #[test]
     fn codec_tools_cover_every_codec() {
         for format in ["base64", "base64url", "hex", "url", "escape"] {
-            let enc = call_tool("json_encode", &json!({ "input": "xin chào", "format": format }));
+            let enc = call_tool(
+                "json_encode",
+                &json!({ "input": "xin chào", "format": format }),
+            );
             let dec = call_tool(
                 "json_decode",
                 &json!({ "input": text_of(&enc), "format": format }),

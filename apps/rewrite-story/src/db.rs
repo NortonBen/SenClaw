@@ -192,9 +192,7 @@ pub struct Db {
 }
 
 fn now() -> String {
-    chrono::Utc::now()
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string()
+    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 /// First `n` characters of `s`, char-safe, with an ellipsis when truncated.
@@ -393,8 +391,10 @@ impl Db {
     /// Existence check that does not drag the whole novel out of the DB.
     pub fn story_exists(&self, id: i64) -> Result<bool> {
         self.with_conn(|c| {
-            c.query_row("SELECT 1 FROM stories WHERE id = ?1", params![id], |_| Ok(()))
-                .optional()
+            c.query_row("SELECT 1 FROM stories WHERE id = ?1", params![id], |_| {
+                Ok(())
+            })
+            .optional()
         })
         .map(|o| o.is_some())
     }
@@ -451,8 +451,12 @@ impl Db {
 
     pub fn get_story(&self, id: i64) -> Result<Option<Story>> {
         self.with_conn(|c| {
-            c.query_row("SELECT * FROM stories WHERE id = ?1", params![id], story_from_row)
-                .optional()
+            c.query_row(
+                "SELECT * FROM stories WHERE id = ?1",
+                params![id],
+                story_from_row,
+            )
+            .optional()
         })
     }
 
@@ -593,8 +597,9 @@ impl Db {
                 rows.collect()
             }
             None => {
-                let mut st = c
-                    .prepare("SELECT * FROM rewrite_processes ORDER BY created_at DESC LIMIT 200")?;
+                let mut st = c.prepare(
+                    "SELECT * FROM rewrite_processes ORDER BY created_at DESC LIMIT 200",
+                )?;
                 let rows = st.query_map([], process_from_row)?;
                 rows.collect()
             }
@@ -776,9 +781,7 @@ impl Db {
             "created_at" => "created_at",
             other => anyhow::bail!("unsupported staleness column: {other}"),
         };
-        let sql = format!(
-            "SELECT id FROM rewrite_processes WHERE status = ?1 AND {column} < ?2"
-        );
+        let sql = format!("SELECT id FROM rewrite_processes WHERE status = ?1 AND {column} < ?2");
         self.with_conn(|c| {
             let mut st = c.prepare(&sql)?;
             let rows = st.query_map(params![status, cutoff], |r| r.get(0))?;
@@ -885,10 +888,7 @@ impl Db {
         })?;
 
         if rows.len() as i64 != total {
-            anyhow::bail!(
-                "thiếu chunk khi ghép: có {} / cần {total}",
-                rows.len()
-            );
+            anyhow::bail!("thiếu chunk khi ghép: có {} / cần {total}", rows.len());
         }
         for (expected, (actual, _)) in rows.iter().enumerate() {
             if expected as i64 != *actual {
@@ -985,8 +985,7 @@ mod tests {
     fn story_roundtrip_counts_characters_not_bytes() {
         let db = Db::open_memory().unwrap();
         // 5 Vietnamese chars, 10 UTF-8 bytes.
-        let id = db
-            .create_story("T", "đằng ẵ").unwrap();
+        let id = db.create_story("T", "đằng ẵ").unwrap();
         let s = db.get_story(id).unwrap().unwrap();
         assert_eq!(s.original_length, "đằng ẵ".chars().count() as i64);
         assert_ne!(s.original_length, "đằng ẵ".len() as i64);
@@ -1000,7 +999,10 @@ mod tests {
 
         assert!(db.claim_process(pid).unwrap(), "first claim wins");
         assert!(!db.claim_process(pid).unwrap(), "second claim must lose");
-        assert_eq!(db.get_process(pid).unwrap().unwrap().status, status::PROCESSING);
+        assert_eq!(
+            db.get_process(pid).unwrap().unwrap().status,
+            status::PROCESSING
+        );
     }
 
     #[test]
@@ -1009,15 +1011,36 @@ mod tests {
         let story = seed(&db);
         let pid = db.create_process(&new_process(story)).unwrap();
 
-        db.update_progress(pid, status::CANCELLED, stage::CANCELLED, 0, 0, 0, None, None)
-            .unwrap();
+        db.update_progress(
+            pid,
+            status::CANCELLED,
+            stage::CANCELLED,
+            0,
+            0,
+            0,
+            None,
+            None,
+        )
+        .unwrap();
         // An in-flight worker tries to report progress after the user cancelled.
         let applied = db
-            .update_progress(pid, status::PROCESSING, stage::REWRITING, 50, 2, 4, None, None)
+            .update_progress(
+                pid,
+                status::PROCESSING,
+                stage::REWRITING,
+                50,
+                2,
+                4,
+                None,
+                None,
+            )
             .unwrap();
 
         assert!(!applied, "update should be rejected");
-        assert_eq!(db.get_process(pid).unwrap().unwrap().status, status::CANCELLED);
+        assert_eq!(
+            db.get_process(pid).unwrap().unwrap().status,
+            status::CANCELLED
+        );
     }
 
     /// Regression: a task that was cancelled and then re-queued by a retry must
@@ -1031,8 +1054,17 @@ mod tests {
         db.claim_process(pid).unwrap();
 
         // User cancels; the worker is still blocked in a model call.
-        db.update_progress(pid, status::CANCELLED, stage::CANCELLED, 0, 0, 0, None, None)
-            .unwrap();
+        db.update_progress(
+            pid,
+            status::CANCELLED,
+            stage::CANCELLED,
+            0,
+            0,
+            0,
+            None,
+            None,
+        )
+        .unwrap();
         // User retries — the row goes back to queued.
         db.requeue_process(pid).unwrap();
 
@@ -1066,12 +1098,33 @@ mod tests {
         let pid = db.create_process(&new_process(story)).unwrap();
         db.claim_process(pid).unwrap();
 
-        db.update_progress(pid, status::PROCESSING, stage::REWRITING, 60, 3, 5, None, None)
-            .unwrap();
-        db.update_progress(pid, status::PROCESSING, stage::REWRITING, 20, 3, 5, None, None)
-            .unwrap();
+        db.update_progress(
+            pid,
+            status::PROCESSING,
+            stage::REWRITING,
+            60,
+            3,
+            5,
+            None,
+            None,
+        )
+        .unwrap();
+        db.update_progress(
+            pid,
+            status::PROCESSING,
+            stage::REWRITING,
+            20,
+            3,
+            5,
+            None,
+            None,
+        )
+        .unwrap();
 
-        assert_eq!(db.get_process(pid).unwrap().unwrap().progress_percentage, 60);
+        assert_eq!(
+            db.get_process(pid).unwrap().unwrap().progress_percentage,
+            60
+        );
     }
 
     #[test]
@@ -1164,8 +1217,17 @@ mod tests {
 
         assert_eq!(db.active_processes_for_story(sid).unwrap(), vec![pid]);
 
-        db.update_progress(pid, status::COMPLETED, stage::COMPLETED, 100, 0, 0, None, None)
-            .unwrap();
+        db.update_progress(
+            pid,
+            status::COMPLETED,
+            stage::COMPLETED,
+            100,
+            0,
+            0,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(db.active_processes_for_story(sid).unwrap().is_empty());
     }
 
@@ -1190,7 +1252,8 @@ mod tests {
         let parent = seed(&db);
 
         let v1 = db.next_version_number(parent).unwrap();
-        db.create_version(parent, "Truyện gốc", "v1", v1, 40, 5, 0.0).unwrap();
+        db.create_version(parent, "Truyện gốc", "v1", v1, 40, 5, 0.0)
+            .unwrap();
         let v2 = db.next_version_number(parent).unwrap();
 
         assert_eq!((v1, v2), (1, 2));
@@ -1203,6 +1266,8 @@ mod tests {
     #[test]
     fn stale_processes_rejects_an_unexpected_column() {
         let db = Db::open_memory().unwrap();
-        assert!(db.stale_processes("queued", "id; DROP TABLE stories", "x").is_err());
+        assert!(db
+            .stale_processes("queued", "id; DROP TABLE stories", "x")
+            .is_err());
     }
 }

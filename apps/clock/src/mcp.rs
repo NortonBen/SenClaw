@@ -66,7 +66,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "clock-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or(json!({}));
@@ -168,11 +170,19 @@ fn call_tool(name: &str, args: &Value) -> Value {
         }
         "clock_convert" => {
             let time = args.get("time").and_then(|v| v.as_str()).unwrap_or("");
-            let from = match args.get("from").and_then(|v| v.as_str()).and_then(|s| s.parse::<Tz>().ok()) {
+            let from = match args
+                .get("from")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<Tz>().ok())
+            {
                 Some(t) => t,
                 None => return error_result("`from` không phải múi giờ IANA hợp lệ".into()),
             };
-            let to = match args.get("to").and_then(|v| v.as_str()).and_then(|s| s.parse::<Tz>().ok()) {
+            let to = match args
+                .get("to")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<Tz>().ok())
+            {
                 Some(t) => t,
                 None => return error_result("`to` không phải múi giờ IANA hợp lệ".into()),
             };

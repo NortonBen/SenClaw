@@ -1,6 +1,6 @@
-use anyhow::Result;
 use crate::deepwiki::db::Db;
 use crate::deepwiki::query;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -36,7 +36,10 @@ pub fn migrate(db: &Db) -> Result<()> {
 }
 
 fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

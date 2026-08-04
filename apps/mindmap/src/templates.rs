@@ -91,14 +91,21 @@ fn all() -> Vec<Template> {
             build: || {
                 vec![
                     node("Sinh học tế bào", vec![leaf("Bào quan"), leaf("Phân bào")]),
-                    node("Tiến hoá", vec![leaf("Chọn lọc tự nhiên"), leaf("Hình thành loài")]),
+                    node(
+                        "Tiến hoá",
+                        vec![leaf("Chọn lọc tự nhiên"), leaf("Hình thành loài")],
+                    ),
                     node(
                         "Di truyền",
                         vec![leaf("Cấu trúc DNA"), leaf("Bảng Punnett"), leaf("Đột biến")],
                     ),
                     node(
                         "Sinh thái",
-                        vec![leaf("Chuỗi thức ăn"), leaf("Quần xã"), leaf("Chu trình vật chất")],
+                        vec![
+                            leaf("Chuỗi thức ăn"),
+                            leaf("Quần xã"),
+                            leaf("Chu trình vật chất"),
+                        ],
                     ),
                     node(
                         "Cơ thể người",
@@ -167,10 +174,22 @@ fn all() -> Vec<Template> {
             build: || {
                 vec![
                     node("GDP", vec![leaf("Định nghĩa"), leaf("Thực vs danh nghĩa")]),
-                    node("Thất nghiệp", vec![leaf("Các loại"), leaf("Tỷ lệ tự nhiên")]),
-                    node("Chính sách tiền tệ", vec![leaf("Lãi suất"), leaf("Ngân hàng TW")]),
-                    node("Lạm phát", vec![leaf("Nguyên nhân"), leaf("Đo lường (CPI)")]),
-                    node("Chính sách tài khoá", vec![leaf("Chi tiêu CP"), leaf("Thuế")]),
+                    node(
+                        "Thất nghiệp",
+                        vec![leaf("Các loại"), leaf("Tỷ lệ tự nhiên")],
+                    ),
+                    node(
+                        "Chính sách tiền tệ",
+                        vec![leaf("Lãi suất"), leaf("Ngân hàng TW")],
+                    ),
+                    node(
+                        "Lạm phát",
+                        vec![leaf("Nguyên nhân"), leaf("Đo lường (CPI)")],
+                    ),
+                    node(
+                        "Chính sách tài khoá",
+                        vec![leaf("Chi tiêu CP"), leaf("Thuế")],
+                    ),
                 ]
             },
         },
@@ -190,10 +209,17 @@ fn all() -> Vec<Template> {
                     ),
                     node("Vướng mắc", vec![leaf("Rủi ro"), leaf("Phụ thuộc")]),
                     node("Ưu tiên", vec![leaf("Mục tiêu sprint"), leaf("Deadline")]),
-                    node("Chỉ số", vec![leaf("Traffic"), leaf("Chuyển đổi"), leaf("Ticket hỗ trợ")]),
+                    node(
+                        "Chỉ số",
+                        vec![leaf("Traffic"), leaf("Chuyển đổi"), leaf("Ticket hỗ trợ")],
+                    ),
                     node(
                         "Mục hành động",
-                        vec![leaf("Workshop chiến dịch"), leaf("Newsletter"), leaf("Onboarding")],
+                        vec![
+                            leaf("Workshop chiến dịch"),
+                            leaf("Newsletter"),
+                            leaf("Onboarding"),
+                        ],
                     ),
                 ]
             },
@@ -245,8 +271,14 @@ fn all() -> Vec<Template> {
             root: "Kế hoạch dự án",
             build: || {
                 vec![
-                    node("Mục tiêu", vec![leaf("Phạm vi"), leaf("Tiêu chí thành công")]),
-                    node("Mốc thời gian", vec![leaf("Giai đoạn 1"), leaf("Giai đoạn 2"), leaf("Ra mắt")]),
+                    node(
+                        "Mục tiêu",
+                        vec![leaf("Phạm vi"), leaf("Tiêu chí thành công")],
+                    ),
+                    node(
+                        "Mốc thời gian",
+                        vec![leaf("Giai đoạn 1"), leaf("Giai đoạn 2"), leaf("Ra mắt")],
+                    ),
                     node("Nhóm & Vai trò", vec![leaf("Chủ dự án"), leaf("Thực thi")]),
                     node("Nguồn lực", vec![leaf("Ngân sách"), leaf("Công cụ")]),
                     node("Rủi ro", vec![leaf("Kỹ thuật"), leaf("Tiến độ")]),
@@ -263,12 +295,42 @@ fn all() -> Vec<Template> {
             root: "Bản đồ thấu cảm khách hàng",
             build: || {
                 vec![
-                    branch("🧠", "Nghĩ & Cảm nhận", "#a855f7", vec![leaf("Lo lắng"), leaf("Mong muốn")]),
-                    branch("👀", "Nhìn thấy", "#3b82f6", vec![leaf("Môi trường"), leaf("Đối thủ")]),
-                    branch("👂", "Nghe thấy", "#10b981", vec![leaf("Bạn bè"), leaf("Truyền thông")]),
-                    branch("💬", "Nói & Làm", "#f97316", vec![leaf("Hành vi"), leaf("Thái độ")]),
-                    branch("😖", "Nỗi đau", "#ef4444", vec![leaf("Trở ngại"), leaf("Rủi ro")]),
-                    branch("🎁", "Lợi ích", "#14b8a6", vec![leaf("Kỳ vọng"), leaf("Thước đo thành công")]),
+                    branch(
+                        "🧠",
+                        "Nghĩ & Cảm nhận",
+                        "#a855f7",
+                        vec![leaf("Lo lắng"), leaf("Mong muốn")],
+                    ),
+                    branch(
+                        "👀",
+                        "Nhìn thấy",
+                        "#3b82f6",
+                        vec![leaf("Môi trường"), leaf("Đối thủ")],
+                    ),
+                    branch(
+                        "👂",
+                        "Nghe thấy",
+                        "#10b981",
+                        vec![leaf("Bạn bè"), leaf("Truyền thông")],
+                    ),
+                    branch(
+                        "💬",
+                        "Nói & Làm",
+                        "#f97316",
+                        vec![leaf("Hành vi"), leaf("Thái độ")],
+                    ),
+                    branch(
+                        "😖",
+                        "Nỗi đau",
+                        "#ef4444",
+                        vec![leaf("Trở ngại"), leaf("Rủi ro")],
+                    ),
+                    branch(
+                        "🎁",
+                        "Lợi ích",
+                        "#14b8a6",
+                        vec![leaf("Kỳ vọng"), leaf("Thước đo thành công")],
+                    ),
                 ]
             },
         },

@@ -29,12 +29,15 @@ pub struct ParseResult {
 
 /// Parse a source file and extract its symbols and call/import edges.
 pub fn parse(lang_name: &str, src: &str) -> Result<ParseResult> {
-    let grammar = lang::grammar(lang_name).ok_or_else(|| anyhow!("unsupported language: {lang_name}"))?;
+    let grammar =
+        lang::grammar(lang_name).ok_or_else(|| anyhow!("unsupported language: {lang_name}"))?;
     let mut parser = Parser::new();
     parser
         .set_language(&grammar)
         .map_err(|e| anyhow!("set_language failed: {e}"))?;
-    let tree = parser.parse(src, None).ok_or_else(|| anyhow!("parse returned None"))?;
+    let tree = parser
+        .parse(src, None)
+        .ok_or_else(|| anyhow!("parse returned None"))?;
 
     let mut out = ParseResult::default();
     let bytes = src.as_bytes();
@@ -124,7 +127,10 @@ fn def_kind(_lang: &str, kind: &str) -> Option<&'static str> {
 
 /// True if this definition kind is a container that other symbols nest under.
 fn is_container(kind: &str) -> bool {
-    matches!(kind, "class" | "impl" | "struct" | "trait" | "interface" | "enum" | "module")
+    matches!(
+        kind,
+        "class" | "impl" | "struct" | "trait" | "interface" | "enum" | "module"
+    )
 }
 
 /// First identifier-ish descendant (last resort name extraction).
@@ -146,8 +152,12 @@ fn first_identifier(node: Node, bytes: &[u8]) -> Option<String> {
 fn declarator_name(mut decl: Node, bytes: &[u8]) -> Option<String> {
     for _ in 0..8 {
         match decl.kind() {
-            "identifier" | "field_identifier" | "type_identifier" | "destructor_name"
-            | "operator_name" | "qualified_identifier" => {
+            "identifier"
+            | "field_identifier"
+            | "type_identifier"
+            | "destructor_name"
+            | "operator_name"
+            | "qualified_identifier" => {
                 if decl.kind() == "qualified_identifier" {
                     if let Some(n) = decl.child_by_field_name("name") {
                         decl = n;
@@ -169,7 +179,10 @@ fn declarator_name(mut decl: Node, bytes: &[u8]) -> Option<String> {
 fn def_name(_lang: &str, node: Node, bytes: &[u8]) -> Option<String> {
     // Rust impl / Haskell instance key off the implemented type.
     if matches!(node.kind(), "impl_item" | "instance") {
-        if let Some(t) = node.child_by_field_name("type").or_else(|| node.child_by_field_name("name")) {
+        if let Some(t) = node
+            .child_by_field_name("type")
+            .or_else(|| node.child_by_field_name("name"))
+        {
             return Some(text(t, bytes).to_string());
         }
     }
@@ -233,7 +246,8 @@ fn call_target(node: Node, bytes: &[u8]) -> Option<String> {
             callee_name(f, bytes)
         }
         "member_call_expression" | "nullsafe_member_call_expression" | "scoped_call_expression" => {
-            node.child_by_field_name("name").map(|n| text(n, bytes).to_string())
+            node.child_by_field_name("name")
+                .map(|n| text(n, bytes).to_string())
         }
         "macro_invocation" => node
             .child_by_field_name("macro")
@@ -295,7 +309,10 @@ fn import_target(lang: &str, node: Node, bytes: &[u8]) -> Option<String> {
         | ("php", "namespace_use_declaration") => first_identifier(node, bytes),
         _ => None,
     }?;
-    Some(raw.trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string())
+    Some(
+        raw.trim_matches(|c| c == '"' || c == '\'' || c == '`')
+            .to_string(),
+    )
 }
 
 fn signature(node: Node, bytes: &[u8]) -> String {
@@ -321,7 +338,11 @@ fn doc_comment(node: Node, bytes: &[u8]) -> Option<String> {
             if t.is_empty() {
                 return None;
             }
-            return Some(if t.len() > 400 { t[..400].to_string() } else { t });
+            return Some(if t.len() > 400 {
+                t[..400].to_string()
+            } else {
+                t
+            });
         }
         if k == "attribute_item" || k == "decorator" {
             sib = sib.prev_sibling()?;
@@ -418,10 +439,9 @@ impl Calc {
         assert!(names.contains(&"Calc"));
         assert!(names.contains(&"run"));
         // call to add from inside run
-        assert!(r
-            .edges
-            .iter()
-            .any(|e| e.kind == "call" && e.target == "add" && e.src_symbol.as_deref() == Some("run")));
+        assert!(r.edges.iter().any(|e| e.kind == "call"
+            && e.target == "add"
+            && e.src_symbol.as_deref() == Some("run")));
         // doc comment captured
         let add = r.symbols.iter().find(|s| s.name == "add").unwrap();
         assert!(add.doc.as_deref().unwrap_or("").contains("adds two"));
@@ -429,7 +449,8 @@ impl Calc {
 
     #[test]
     fn python_symbols() {
-        let src = "def foo():\n    return bar()\n\nclass A:\n    def m(self):\n        return foo()\n";
+        let src =
+            "def foo():\n    return bar()\n\nclass A:\n    def m(self):\n        return foo()\n";
         let r = parse("python", src).unwrap();
         let names: Vec<_> = r.symbols.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"foo"));
@@ -437,7 +458,10 @@ impl Calc {
         assert!(names.contains(&"m"));
         let m = r.symbols.iter().find(|s| s.name == "m").unwrap();
         assert_eq!(m.parent.as_deref(), Some("A"));
-        assert!(r.edges.iter().any(|e| e.target == "bar" && e.kind == "call"));
+        assert!(r
+            .edges
+            .iter()
+            .any(|e| e.target == "bar" && e.kind == "call"));
     }
 
     #[test]
@@ -452,21 +476,33 @@ impl Calc {
 
     #[test]
     fn go_symbols() {
-        let src = "package main\nfunc Add(a int, b int) int { return a + b }\nfunc main(){ Add(1,2) }\n";
+        let src =
+            "package main\nfunc Add(a int, b int) int { return a + b }\nfunc main(){ Add(1,2) }\n";
         let r = parse("go", src).unwrap();
         let names: Vec<_> = r.symbols.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"Add"));
         assert!(names.contains(&"main"));
-        assert!(r.edges.iter().any(|e| e.target == "Add" && e.kind == "call"));
+        assert!(r
+            .edges
+            .iter()
+            .any(|e| e.target == "Add" && e.kind == "call"));
     }
 
     fn names_of(lang: &str, src: &str) -> Vec<String> {
-        parse(lang, src).unwrap().symbols.into_iter().map(|s| s.name).collect()
+        parse(lang, src)
+            .unwrap()
+            .symbols
+            .into_iter()
+            .map(|s| s.name)
+            .collect()
     }
 
     #[test]
     fn java_symbols() {
-        let n = names_of("java", "class Calc { int add(int a){ return help(a); } int help(int a){ return a; } }");
+        let n = names_of(
+            "java",
+            "class Calc { int add(int a){ return help(a); } int help(int a){ return a; } }",
+        );
         assert!(n.contains(&"Calc".to_string()));
         assert!(n.contains(&"add".to_string()));
         assert!(n.contains(&"help".to_string()));
@@ -474,16 +510,26 @@ impl Calc {
 
     #[test]
     fn c_symbols_and_calls() {
-        let r = parse("c", "int add(int a,int b){return a+b;}\nint main(){return add(1,2);}").unwrap();
+        let r = parse(
+            "c",
+            "int add(int a,int b){return a+b;}\nint main(){return add(1,2);}",
+        )
+        .unwrap();
         let n: Vec<_> = r.symbols.iter().map(|s| s.name.as_str()).collect();
         assert!(n.contains(&"add"));
         assert!(n.contains(&"main"));
-        assert!(r.edges.iter().any(|e| e.kind == "call" && e.target == "add"));
+        assert!(r
+            .edges
+            .iter()
+            .any(|e| e.kind == "call" && e.target == "add"));
     }
 
     #[test]
     fn ruby_symbols() {
-        let n = names_of("ruby", "class A\n  def run; help; end\n  def help; 1; end\nend");
+        let n = names_of(
+            "ruby",
+            "class A\n  def run; help; end\n  def help; 1; end\nend",
+        );
         assert!(n.contains(&"A".to_string()));
         assert!(n.contains(&"run".to_string()));
         assert!(n.contains(&"help".to_string()));
@@ -491,7 +537,10 @@ impl Calc {
 
     #[test]
     fn php_symbols() {
-        let n = names_of("php", "<?php\nclass U { function n(){ return g(); } }\nfunction g(){ return 1; }");
+        let n = names_of(
+            "php",
+            "<?php\nclass U { function n(){ return g(); } }\nfunction g(){ return 1; }",
+        );
         assert!(n.contains(&"U".to_string()));
         assert!(n.contains(&"g".to_string()));
     }

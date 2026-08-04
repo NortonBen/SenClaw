@@ -171,10 +171,9 @@ fn write_node(out: &mut String, tag: &str, v: &Value, depth: usize, indent: usiz
 
             if children.is_empty() {
                 match text {
-                    Some(t) => out.push_str(&format!(
-                        "{pad}<{tag}{attrs}>{}</{tag}>\n",
-                        escape_xml(&t)
-                    )),
+                    Some(t) => {
+                        out.push_str(&format!("{pad}<{tag}{attrs}>{}</{tag}>\n", escape_xml(&t)))
+                    }
                     None => out.push_str(&format!("{pad}<{tag}{attrs}/>\n")),
                 }
                 return;
@@ -298,11 +297,17 @@ pub fn xml_to_json(src: &str) -> Result<Value, String> {
     Ok(Value::Object(stack.pop().expect("checked len == 1").1))
 }
 
-fn push_attrs(obj: &mut Map<String, Value>, e: &quick_xml::events::BytesStart) -> Result<(), String> {
+fn push_attrs(
+    obj: &mut Map<String, Value>,
+    e: &quick_xml::events::BytesStart,
+) -> Result<(), String> {
     for attr in e.attributes() {
         let attr = attr.map_err(|e| e.to_string())?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-        let val = attr.unescape_value().map_err(|e| e.to_string())?.to_string();
+        let val = attr
+            .unescape_value()
+            .map_err(|e| e.to_string())?
+            .to_string();
         obj.insert(format!("@{key}"), Value::String(val));
     }
     Ok(())
@@ -380,7 +385,10 @@ pub fn to_pointer(path: &str) -> String {
     if p.starts_with('/') {
         return p.to_string();
     }
-    let p = p.strip_prefix("$.").or_else(|| p.strip_prefix('$')).unwrap_or(p);
+    let p = p
+        .strip_prefix("$.")
+        .or_else(|| p.strip_prefix('$'))
+        .unwrap_or(p);
     let mut out = String::new();
     for seg in p.replace('[', ".").replace(']', "").split('.') {
         if seg.is_empty() {
@@ -577,7 +585,10 @@ mod tests {
     #[test]
     fn xml_escapes_and_sanitizes() {
         let xml = json_to_xml(r#"{"2bad key":"a & b < c"}"#, "root", 2).unwrap();
-        assert!(xml.contains("<_2bad_key>a &amp; b &lt; c</_2bad_key>"), "{xml}");
+        assert!(
+            xml.contains("<_2bad_key>a &amp; b &lt; c</_2bad_key>"),
+            "{xml}"
+        );
         let back = xml_to_json(&xml).unwrap();
         assert_eq!(back["root"]["_2bad_key"], json!("a & b < c"));
     }

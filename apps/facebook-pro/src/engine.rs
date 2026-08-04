@@ -34,9 +34,19 @@ pub fn trigger_matches(t: &Trigger, comment: &str) -> bool {
             .any(|k| text.contains(&k)),
         "question" => {
             text.contains('?')
-                || ["giá", "bao nhiêu", "ship", "còn hàng", "sao", "thế nào", "khi nào", "ở đâu", "làm sao"]
-                    .iter()
-                    .any(|q| text.contains(q))
+                || [
+                    "giá",
+                    "bao nhiêu",
+                    "ship",
+                    "còn hàng",
+                    "sao",
+                    "thế nào",
+                    "khi nào",
+                    "ở đâu",
+                    "làm sao",
+                ]
+                .iter()
+                .any(|q| text.contains(q))
         }
         _ => false,
     }
@@ -51,7 +61,11 @@ pub async fn tick(s: &AppState) -> Value {
     let Some(page_id) = s.db.active_page_id() else {
         return json!({ "ok": true, "skipped": "chưa chọn Trang" });
     };
-    let triggers: Vec<Trigger> = s.db.list_triggers(Some(&page_id)).into_iter().filter(|t| t.enabled && t.event == "new_comment").collect();
+    let triggers: Vec<Trigger> =
+        s.db.list_triggers(Some(&page_id))
+            .into_iter()
+            .filter(|t| t.enabled && t.event == "new_comment")
+            .collect();
     if triggers.is_empty() {
         return json!({ "ok": true, "skipped": "không có trigger new_comment nào bật", "page_id": page_id });
     }
@@ -61,7 +75,11 @@ pub async fn tick(s: &AppState) -> Value {
     if let Some(err) = posts.get("error").and_then(|x| x.as_str()) {
         return json!({ "ok": false, "error": err });
     }
-    let post_list = posts.get("data").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let post_list = posts
+        .get("data")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     let pending = s.db.pending_targets();
     let page_name = trigger_page_name(s, &page_id);
@@ -74,7 +92,11 @@ pub async fn tick(s: &AppState) -> Value {
             continue;
         };
         let comments = api::comments_value(s, post_id, Some(&page_id), 25).await;
-        let clist = comments.get("data").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+        let clist = comments
+            .get("data")
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default();
         for c in &clist {
             let Some(cid) = c.get("id").and_then(|x| x.as_str()) else {
                 continue;
@@ -96,12 +118,17 @@ pub async fn tick(s: &AppState) -> Value {
             s.db.mark_comment_seen(cid);
             match t.action.as_str() {
                 "notify" => {
-                    s.db.log("notify", &format!("[{}] bình luận khớp: {}", t.name, truncate(text, 120)), cid);
+                    s.db.log(
+                        "notify",
+                        &format!("[{}] bình luận khớp: {}", t.name, truncate(text, 120)),
+                        cid,
+                    );
                     notified += 1;
                 }
                 _ => {
                     // draft_reply — compose via LLM using the trigger's hint.
-                    let (message, model) = crate::llm::compose_reply(&s.sc, &page_name, text, &t.reply_hint).await;
+                    let (message, model) =
+                        crate::llm::compose_reply(&s.sc, &page_name, text, &t.reply_hint).await;
                     let res = api::enqueue_or_send(
                         s,
                         DraftInput {
@@ -124,21 +151,31 @@ pub async fn tick(s: &AppState) -> Value {
     }
 
     if drafted > 0 || notified > 0 {
-        s.db.log("heartbeat", &format!("soạn {drafted} nháp trả lời, {notified} thông báo"), &page_id);
+        s.db.log(
+            "heartbeat",
+            &format!("soạn {drafted} nháp trả lời, {notified} thông báo"),
+            &page_id,
+        );
     }
     json!({ "ok": true, "page_id": page_id, "scanned": scanned, "drafted": drafted, "notified": notified, "autonomy": autonomy })
 }
 
 fn comment_from_id(c: &Value) -> Option<String> {
-    c.get("from").and_then(|f| f.get("id")).and_then(|x| x.as_str()).map(|s| s.to_string())
+    c.get("from")
+        .and_then(|f| f.get("id"))
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
 }
 
 fn trigger_page_name(s: &AppState, page_id: &str) -> String {
-    s.db
-        .list_pages()
+    s.db.list_pages()
         .into_iter()
         .find(|p| p.get("page_id").and_then(|x| x.as_str()) == Some(page_id))
-        .and_then(|p| p.get("name").and_then(|x| x.as_str()).map(|x| x.to_string()))
+        .and_then(|p| {
+            p.get("name")
+                .and_then(|x| x.as_str())
+                .map(|x| x.to_string())
+        })
         .unwrap_or_else(|| "Trang".into())
 }
 

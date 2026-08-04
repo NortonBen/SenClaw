@@ -42,12 +42,18 @@ pub fn api_router(state: AppState) -> Router {
         .route("/processes", get(list_processes).post(create_process))
         .route("/processes/:id", get(get_process).delete(delete_process))
         .route("/processes/:id/chunks", get(list_process_chunks))
-        .route("/processes/:id/cancel", put(cancel_process).post(cancel_process))
+        .route(
+            "/processes/:id/cancel",
+            put(cancel_process).post(cancel_process),
+        )
         .route("/processes/:id/retry", post(retry_process))
         // Settings
         .route("/settings", get(get_settings).put(put_settings))
         // MCP
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -229,10 +235,19 @@ async fn list_story_chunks(State(st): State<AppState>, Path(id): Path<i64>) -> R
         let Ok(Some(story)) = db.get_story(id) else {
             return err(StatusCode::NOT_FOUND, "không tìm thấy truyện");
         };
-        let min = db.setting_i64("hybrid_split_min_size", (crate::llm::MAX_CHUNK_CHARS as i64) * 3 / 5).max(1) as usize;
-        let max = db.setting_i64("hybrid_split_max_size", crate::llm::MAX_CHUNK_CHARS as i64).max(1) as usize;
+        let min = db
+            .setting_i64(
+                "hybrid_split_min_size",
+                (crate::llm::MAX_CHUNK_CHARS as i64) * 3 / 5,
+            )
+            .max(1) as usize;
+        let max = db
+            .setting_i64("hybrid_split_max_size", crate::llm::MAX_CHUNK_CHARS as i64)
+            .max(1) as usize;
         let (min, max) = if min > max { (max, min) } else { (min, max) };
-        let threshold = db.setting_f64("hybrid_split_threshold", 0.2).clamp(0.0, 1.0);
+        let threshold = db
+            .setting_f64("hybrid_split_threshold", 0.2)
+            .clamp(0.0, 1.0);
         (
             text::hybrid_split(&story.original_text, min, max, threshold),
             false,
@@ -298,8 +313,16 @@ async fn export_story(
 
     let format = q.get("format").map(String::as_str).unwrap_or("screenplay");
     let (body, mime, ext) = match format {
-        "screenplay" => (export::to_screenplay(&bundle), "text/markdown; charset=utf-8", "md"),
-        "markdown" => (export::to_markdown(&bundle), "text/markdown; charset=utf-8", "md"),
+        "screenplay" => (
+            export::to_screenplay(&bundle),
+            "text/markdown; charset=utf-8",
+            "md",
+        ),
+        "markdown" => (
+            export::to_markdown(&bundle),
+            "text/markdown; charset=utf-8",
+            "md",
+        ),
         "json" => (
             serde_json::to_string_pretty(&bundle).unwrap_or_default(),
             "application/json; charset=utf-8",
@@ -335,7 +358,10 @@ async fn list_processes(
     State(st): State<AppState>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let filter = q.get("status").map(|s| s.as_str()).filter(|s| !s.is_empty());
+    let filter = q
+        .get("status")
+        .map(|s| s.as_str())
+        .filter(|s| !s.is_empty());
     match st.core.db.list_processes(filter) {
         Ok(rows) => respond(StatusCode::OK, json!(rows)),
         Err(e) => err500(e),

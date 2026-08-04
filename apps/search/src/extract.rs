@@ -34,9 +34,7 @@ Chỉ trả về JSON, không giải thích, không rào đón, không khối m�
 
 /// Numbered evidence + the JSON contract.
 pub fn build_prompt(query: &str, evidence: &[Evidence]) -> String {
-    let mut out = format!(
-        "Câu hỏi: {query}\n\nBằng chứng (chỉ dùng đúng những đoạn này):\n"
-    );
+    let mut out = format!("Câu hỏi: {query}\n\nBằng chứng (chỉ dùng đúng những đoạn này):\n");
     let mut budget = TOTAL_EVIDENCE_CHARS;
     for (i, e) in evidence.iter().enumerate() {
         // Prefer fetched page text over a SERP snippet when we have it.
@@ -45,10 +43,12 @@ pub fn build_prompt(query: &str, evidence: &[Evidence]) -> String {
         if body.trim().is_empty() && e.title.trim().is_empty() {
             continue;
         }
-        let source = e
-            .domain
-            .clone()
-            .unwrap_or_else(|| e.hits.first().map(|h| h.source_id.clone()).unwrap_or_default());
+        let source = e.domain.clone().unwrap_or_else(|| {
+            e.hits
+                .first()
+                .map(|h| h.source_id.clone())
+                .unwrap_or_default()
+        });
         let block = format!("[E{}] ({}) {}\n{}\n\n", i + 1, source, e.title, body);
         budget = budget.saturating_sub(block.chars().count());
         out.push_str(&block);
@@ -191,9 +191,10 @@ fn candidates(body: &str) -> Vec<String> {
 }
 
 fn as_index(v: &serde_json::Value) -> Option<usize> {
-    v.as_u64()
-        .map(|n| n as usize)
-        .or_else(|| v.as_str().and_then(|s| s.trim().trim_start_matches('E').parse().ok()))
+    v.as_u64().map(|n| n as usize).or_else(|| {
+        v.as_str()
+            .and_then(|s| s.trim().trim_start_matches('E').parse().ok())
+    })
 }
 
 /// Map 1-based evidence indices onto real evidence ids.
@@ -294,7 +295,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(claims.len(), 1);
-        assert_eq!(claims[0].supports, vec!["ev0".to_string(), "ev2".to_string()]);
+        assert_eq!(
+            claims[0].supports,
+            vec!["ev0".to_string(), "ev2".to_string()]
+        );
     }
 
     #[test]
@@ -365,7 +369,10 @@ mod tests {
         let evs = evidence(3);
         let (claims, _) =
             parse_response(r#"{"claims":[{"text":"A","supports":["2","E3"]}]}"#, &evs).unwrap();
-        assert_eq!(claims[0].supports, vec!["ev1".to_string(), "ev2".to_string()]);
+        assert_eq!(
+            claims[0].supports,
+            vec!["ev1".to_string(), "ev2".to_string()]
+        );
     }
 
     #[test]

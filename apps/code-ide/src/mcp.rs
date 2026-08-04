@@ -61,7 +61,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "code-ide-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -152,7 +154,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 Ok(r) if r.is_dir() => r,
                 _ => return error_result(format!("not a directory: {p}")),
             };
-            let name = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = root
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             *state.root.lock().unwrap() = Some(root.clone());
             let _ = state.db.set_meta("root", &root.to_string_lossy());
             crate::watch::install_watcher(state, &root);
@@ -169,7 +174,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
         }
         "ide_list_dir" => {
-            let root = match require_root(state) { Ok(r) => r, Err(e) => return error_result(e) };
+            let root = match require_root(state) {
+                Ok(r) => r,
+                Err(e) => return error_result(e),
+            };
             let rel = args["path"].as_str().unwrap_or("");
             match workspace::list_dir(&root, rel) {
                 Ok(v) => json_result(json!(v)),
@@ -177,7 +185,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
         }
         "ide_read_file" => {
-            let root = match require_root(state) { Ok(r) => r, Err(e) => return error_result(e) };
+            let root = match require_root(state) {
+                Ok(r) => r,
+                Err(e) => return error_result(e),
+            };
             let rel = args["path"].as_str().unwrap_or("");
             match workspace::read_file(&root, rel) {
                 Ok(v) => json_result(json!(v)),
@@ -185,7 +196,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
         }
         "ide_write_file" => {
-            let root = match require_root(state) { Ok(r) => r, Err(e) => return error_result(e) };
+            let root = match require_root(state) {
+                Ok(r) => r,
+                Err(e) => return error_result(e),
+            };
             let rel = args["path"].as_str().unwrap_or("");
             let content = args["content"].as_str().unwrap_or("");
             match workspace::write_file(&root, rel, content) {
@@ -194,7 +208,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
         }
         "ide_create" => {
-            let root = match require_root(state) { Ok(r) => r, Err(e) => return error_result(e) };
+            let root = match require_root(state) {
+                Ok(r) => r,
+                Err(e) => return error_result(e),
+            };
             let rel = args["path"].as_str().unwrap_or("");
             let dir = args["dir"].as_bool().unwrap_or(false);
             match workspace::create_path(&root, rel, dir) {
@@ -203,7 +220,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
         }
         "ide_rename" => {
-            let root = match require_root(state) { Ok(r) => r, Err(e) => return error_result(e) };
+            let root = match require_root(state) {
+                Ok(r) => r,
+                Err(e) => return error_result(e),
+            };
             let from = args["from"].as_str().unwrap_or("");
             let to = args["to"].as_str().unwrap_or("");
             match workspace::rename_path(&root, from, to) {
@@ -212,7 +232,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
         }
         "ide_delete" => {
-            let root = match require_root(state) { Ok(r) => r, Err(e) => return error_result(e) };
+            let root = match require_root(state) {
+                Ok(r) => r,
+                Err(e) => return error_result(e),
+            };
             let rel = args["path"].as_str().unwrap_or("");
             match workspace::delete_path(&root, rel) {
                 Ok(()) => json_result(json!({ "success": true })),
@@ -220,7 +243,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
         }
         "ide_search" => {
-            let root = match require_root(state) { Ok(r) => r, Err(e) => return error_result(e) };
+            let root = match require_root(state) {
+                Ok(r) => r,
+                Err(e) => return error_result(e),
+            };
             let q = args["query"].as_str().unwrap_or("").to_string();
             let limit = args["limit"].as_u64().unwrap_or(100) as usize;
             match workspace::search_text(&root, &q, limit) {

@@ -18,8 +18,7 @@ pub fn data_dir() -> PathBuf {
         return PathBuf::from(d);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let app_id =
-        std::env::var("SENCLAW_SPACE_APP_ID").unwrap_or_else(|_| APP_ID.to_string());
+    let app_id = std::env::var("SENCLAW_SPACE_APP_ID").unwrap_or_else(|_| APP_ID.to_string());
     PathBuf::from(home)
         .join(".senclaw")
         .join("space-app-data")

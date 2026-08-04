@@ -59,7 +59,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "mindmap-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -174,7 +176,9 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let desc = args["description"].as_str().unwrap_or("");
             let layout = norm_layout(args["layout"].as_str());
             match db.create_map(title, desc, layout, now()) {
-                Ok((id, root_id)) => json_result(json!({ "id": id, "rootId": root_id, "layout": layout })),
+                Ok((id, root_id)) => {
+                    json_result(json!({ "id": id, "rootId": root_id, "layout": layout }))
+                }
                 Err(e) => error_result(e.to_string()),
             }
         }
@@ -185,12 +189,18 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 Some(t) => t,
                 None => return error_result(format!("unknown template: {tid}")),
             };
-            let title = args["title"].as_str().map(str::trim).filter(|t| !t.is_empty()).unwrap_or(tpl.root);
+            let title = args["title"]
+                .as_str()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .unwrap_or(tpl.root);
             match db.create_map(title, tpl.description, tpl.layout, now()) {
                 Ok((id, root_id)) => {
                     let children = (tpl.build)();
                     match db.insert_subtree(root_id, &children, now()) {
-                        Ok(added) => json_result(json!({ "id": id, "rootId": root_id, "layout": tpl.layout, "added": added })),
+                        Ok(added) => json_result(
+                            json!({ "id": id, "rootId": root_id, "layout": tpl.layout, "added": added }),
+                        ),
                         Err(e) => error_result(e.to_string()),
                     }
                 }
@@ -259,7 +269,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 Ok(t) => t,
                 Err(e) => return error_result(e.to_string()),
             };
-            let topic = args["topic"].as_str().filter(|t| !t.trim().is_empty()).unwrap_or(&parent_text).to_string();
+            let topic = args["topic"]
+                .as_str()
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or(&parent_text)
+                .to_string();
             let instruction = args["instruction"].as_str();
             let replace = args["replace"].as_bool().unwrap_or(false);
             let path = db.ancestor_path(parent).unwrap_or_default();

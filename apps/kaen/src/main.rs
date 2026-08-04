@@ -8,11 +8,11 @@ mod dictation;
 mod dictionary;
 mod grammar;
 mod llm;
-mod story;
 mod mcp;
 mod ops;
 mod srs;
 mod state;
+mod story;
 
 use axum::response::IntoResponse;
 use tower_http::cors::CorsLayer;
@@ -68,10 +68,7 @@ async fn main() {
             }
             match tokio::fs::read(&p).await {
                 Ok(bytes) => (
-                    [(
-                        axum::http::header::CONTENT_TYPE,
-                        "text/html; charset=utf-8",
-                    )],
+                    [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
                     bytes,
                 )
                     .into_response(),
@@ -92,9 +89,14 @@ async fn main() {
         .layer(CorsLayer::permissive());
 
     let port = config::http_port();
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+    // Loopback by default. A Space App authenticates nothing of its own — the
+    // daemon reaches it over 127.0.0.1 and the UI is same-origin — so binding
+    // 0.0.0.0 hands the whole REST + MCP surface to anyone on the LAN. Set
+    // SENCLAW_BIND_HOST=0.0.0.0 to opt in to that explicitly.
+    let host = std::env::var("SENCLAW_BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}"))
         .await
         .unwrap();
-    println!("SenClaw Kaen running on http://0.0.0.0:{port}");
+    println!("SenClaw Kaen running on http://{host}:{port}");
     axum::serve(listener, app).await.unwrap();
 }

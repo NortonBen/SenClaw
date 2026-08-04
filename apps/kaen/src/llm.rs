@@ -32,7 +32,11 @@ fn describe(e: &reqwest::Error) -> String {
 }
 
 /// One completion through the daemon bridge. Returns `(text, finish)`.
-pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(String, String), String> {
+pub async fn bridge_llm(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String), String> {
     let url = format!(
         "{}/api/space/apps/{}/bridge",
         config::senclaw_base_url().trim_end_matches('/'),
@@ -64,8 +68,14 @@ pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(St
         };
         return match v.get("status").and_then(Value::as_str) {
             Some("ok") => Ok((
-                v.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
-                v.get("finish").and_then(Value::as_str).unwrap_or("").to_string(),
+                v.get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                v.get("finish")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
             )),
             Some("pending") => Err("bridge LLM chưa được bật trong daemon này".to_string()),
             _ => Err(v
@@ -222,7 +232,9 @@ pub async fn draft_vocab_list(topic: &str, level: &str, count: u32) -> Result<Ve
     );
     let (text, finish) = bridge_llm(JSON_SYSTEM, &prompt, 16_000).await?;
     if finish == "length" {
-        return Err(format!("model cắt output giữa chừng khi tạo {count} từ — giảm số lượng"));
+        return Err(format!(
+            "model cắt output giữa chừng khi tạo {count} từ — giảm số lượng"
+        ));
     }
     let items = extract_json_array(&text)?;
     let out: Vec<Value> = items
@@ -356,11 +368,15 @@ mod tests {
         let arr = r#"[{"content":"q","options":[],"correctAnswerId":"A"}]"#;
         assert_eq!(extract_json_array(arr).unwrap().len(), 1);
         assert_eq!(
-            extract_json_array(&format!("```json\n{arr}\n```")).unwrap().len(),
+            extract_json_array(&format!("```json\n{arr}\n```"))
+                .unwrap()
+                .len(),
             1
         );
         assert_eq!(
-            extract_json_array(&format!("Here are the questions:\n{arr}\nEnjoy!")).unwrap().len(),
+            extract_json_array(&format!("Here are the questions:\n{arr}\nEnjoy!"))
+                .unwrap()
+                .len(),
             1
         );
     }

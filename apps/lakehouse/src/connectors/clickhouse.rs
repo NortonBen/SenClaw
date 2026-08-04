@@ -168,7 +168,11 @@ impl Connector for ClickHouseConnector {
         let mut out = Vec::new();
         for line in json_lines(&tbl_out) {
             let v: Value = serde_json::from_str(line).context("parse dòng system.tables")?;
-            let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let name = v
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             if name.is_empty() {
                 continue;
             }
@@ -184,8 +188,16 @@ impl Connector for ClickHouseConnector {
             let mut columns = Vec::new();
             for cl in json_lines(&col_out) {
                 let cv: Value = serde_json::from_str(cl).context("parse dòng system.columns")?;
-                let cname = cv.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                let ctype = cv.get("type").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let cname = cv
+                    .get("name")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let ctype = cv
+                    .get("type")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 columns.push(ColumnInfo {
                     nullable: is_ch_nullable(&ctype),
                     name: cname,
@@ -233,7 +245,11 @@ impl Connector for ClickHouseConnector {
         let mut logical: Vec<DataType> = Vec::new();
         for line in json_lines(&desc_out) {
             let v: Value = serde_json::from_str(line).context("parse DESCRIBE")?;
-            let n = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let n = v
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
             names.push(n);
             logical.push(map_ch_type(t));
@@ -461,7 +477,7 @@ fn json_rows_to_batches(
             .map(|(t, n)| build_column(t, n, &[]))
             .collect();
         return Ok(vec![
-            RecordBatch::try_new(schema, cols).context("RecordBatch ClickHouse rỗng")?,
+            RecordBatch::try_new(schema, cols).context("RecordBatch ClickHouse rỗng")?
         ]);
     }
 
@@ -476,8 +492,7 @@ fn json_rows_to_batches(
             .map(|(t, n)| build_column(t, n, slice))
             .collect();
         batches.push(
-            RecordBatch::try_new(schema.clone(), cols)
-                .context("dựng RecordBatch từ ClickHouse")?,
+            RecordBatch::try_new(schema.clone(), cols).context("dựng RecordBatch từ ClickHouse")?,
         );
         start = end;
     }
@@ -716,7 +731,10 @@ mod tests {
             cursor: None,
             batch_rows: 100,
         };
-        assert_eq!(ch_select(&spec), "SELECT * FROM `orders` FORMAT JSONEachRow");
+        assert_eq!(
+            ch_select(&spec),
+            "SELECT * FROM `orders` FORMAT JSONEachRow"
+        );
     }
 
     #[test]
@@ -839,7 +857,10 @@ mod tests {
         assert!(ddl.contains("`ts` Nullable(DateTime64(6))"), "{ddl}");
         assert!(ddl.contains("`amount` Nullable(Decimal(12,4))"), "{ddl}");
         assert!(ddl.contains("`flag` Nullable(Bool)"), "{ddl}");
-        assert!(ddl.ends_with(") ENGINE = MergeTree ORDER BY tuple()"), "{ddl}");
+        assert!(
+            ddl.ends_with(") ENGINE = MergeTree ORDER BY tuple()"),
+            "{ddl}"
+        );
     }
 
     #[test]
@@ -971,7 +992,9 @@ mod tests {
             .load(
                 LoadSpec {
                     table: "t".into(),
-                    mode: LoadMode::Upsert { keys: vec!["id".into()] },
+                    mode: LoadMode::Upsert {
+                        keys: vec!["id".into()],
+                    },
                     create_if_missing: false,
                 },
                 vec![batch],
@@ -980,6 +1003,9 @@ mod tests {
             .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("ReplacingMergeTree"), "{msg}");
-        assert!(msg.contains("append") && msg.contains("full_refresh"), "{msg}");
+        assert!(
+            msg.contains("append") && msg.contains("full_refresh"),
+            "{msg}"
+        );
     }
 }

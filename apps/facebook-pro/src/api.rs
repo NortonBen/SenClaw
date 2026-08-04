@@ -31,7 +31,11 @@ pub struct AppState {
 pub fn make_state() -> AppState {
     let db = Arc::new(Db::open_default().expect("open facebook-pro db"));
     let (mcp_tx, _) = tokio::sync::broadcast::channel(100);
-    AppState { db, sc: SpaceClient::from_env(), mcp_tx }
+    AppState {
+        db,
+        sc: SpaceClient::from_env(),
+        mcp_tx,
+    }
 }
 
 /// Build a Graph client from the stored developer-app credentials, or `None` if
@@ -39,19 +43,29 @@ pub fn make_state() -> AppState {
 pub(crate) fn client_from_settings(db: &Db) -> Option<Client> {
     let app_id = db.get_setting("app_id").filter(|s| !s.is_empty())?;
     let app_secret = db.get_setting("app_secret").filter(|s| !s.is_empty())?;
-    Some(Client::new(Config { app_id, app_secret, version: db.version() }))
+    Some(Client::new(Config {
+        app_id,
+        app_secret,
+        version: db.version(),
+    }))
 }
 
 /// Resolve the target Page (explicit `page_id` or the active one) to a signed
 /// client + its Page Access Token.
-pub(crate) fn resolve_page(db: &Db, page_id: Option<&str>) -> Result<(Client, String, String), String> {
-    let client = client_from_settings(db).ok_or_else(|| "chưa cấu hình App ID/App Secret".to_string())?;
+pub(crate) fn resolve_page(
+    db: &Db,
+    page_id: Option<&str>,
+) -> Result<(Client, String, String), String> {
+    let client =
+        client_from_settings(db).ok_or_else(|| "chưa cấu hình App ID/App Secret".to_string())?;
     let pid = page_id
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())
         .or_else(|| db.active_page_id())
         .ok_or_else(|| "chưa chọn Trang (active page)".to_string())?;
-    let token = db.page_token(&pid).ok_or_else(|| format!("không có Page Access Token cho {pid}"))?;
+    let token = db
+        .page_token(&pid)
+        .ok_or_else(|| format!("không có Page Access Token cho {pid}"))?;
     Ok((client, pid, token))
 }
 
@@ -82,10 +96,22 @@ pub(crate) async fn send_draft(s: &AppState, draft_id: i64) -> Value {
         Err(e) => return json!({ "error": e }),
     };
     let result = match d.kind.as_str() {
-        "post" => client.create_post(&d.page_id, &token, &d.message, opt(&d.link)).await,
+        "post" => {
+            client
+                .create_post(&d.page_id, &token, &d.message, opt(&d.link))
+                .await
+        }
         "photo" => publish_photo(&client, &d.page_id, &d.image_url, &d.message, &token).await,
-        "comment" | "reply" => client.create_comment(&d.target_id, &token, &d.message).await,
-        "message" => client.send_message(&d.page_id, &token, &d.target_id, &d.message).await,
+        "comment" | "reply" => {
+            client
+                .create_comment(&d.target_id, &token, &d.message)
+                .await
+        }
+        "message" => {
+            client
+                .send_message(&d.page_id, &token, &d.target_id, &d.message)
+                .await
+        }
         "edit" => client.edit_post(&d.target_id, &token, &d.message).await,
         other => Err(anyhow::anyhow!("kind không hỗ trợ: {other}")),
     };
@@ -98,7 +124,11 @@ pub(crate) async fn send_draft(s: &AppState, draft_id: i64) -> Value {
                 .unwrap_or("")
                 .to_string();
             let _ = s.db.decide_draft(draft_id, "published", &result_id, "");
-            s.db.log(&d.kind, &format!("đã đăng ({}) trên trang {}", d.kind, d.page_id), &result_id);
+            s.db.log(
+                &d.kind,
+                &format!("đã đăng ({}) trên trang {}", d.kind, d.page_id),
+                &result_id,
+            );
             json!({ "ok": true, "draft_id": draft_id, "status": "published", "result_id": result_id, "result": v })
         }
         Err(e) => {
@@ -128,26 +158,44 @@ fn val_str(v: &Value) -> String {
 
 /// Publish a photo draft: if `image_url` points at a locally-uploaded file, send
 /// its bytes via multipart and clean the file up; otherwise post it by URL.
-async fn publish_photo(client: &Client, page_id: &str, image_url: &str, caption: &str, token: &str) -> anyhow::Result<Value> {
+async fn publish_photo(
+    client: &Client,
+    page_id: &str,
+    image_url: &str,
+    caption: &str,
+    token: &str,
+) -> anyhow::Result<Value> {
     let path = std::path::Path::new(image_url);
     if path.is_file() {
         let bytes = tokio::fs::read(path).await?;
-        let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("upload.jpg");
+        let filename = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("upload.jpg");
         let mime = crate::fb::image_mime(filename);
-        let v = client.create_photo_bytes(page_id, token, bytes, filename, mime, caption).await?;
+        let v = client
+            .create_photo_bytes(page_id, token, bytes, filename, mime, caption)
+            .await?;
         let _ = tokio::fs::remove_file(path).await; // best-effort cleanup after publish
         Ok(v)
     } else {
-        client.create_photo(page_id, token, image_url, caption).await
+        client
+            .create_photo(page_id, token, image_url, caption)
+            .await
     }
 }
 
 /// Directory for user-uploaded images awaiting publish (mirrors the DB path).
 fn uploads_dir() -> PathBuf {
-    let base = std::env::var("SENCLAW_DATA_DIR").map(PathBuf::from).unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        PathBuf::from(home).join(".senclaw").join("apps").join("facebook-pro")
-    });
+    let base = std::env::var("SENCLAW_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            PathBuf::from(home)
+                .join(".senclaw")
+                .join("apps")
+                .join("facebook-pro")
+        });
     base.join("uploads")
 }
 
@@ -207,7 +255,10 @@ pub fn api_router(state: AppState) -> Router {
         .route("/activity", get(activity))
         .route("/engine/tick", post(engine_tick))
         // MCP (HTTP + SSE), same shape as the other Space Apps.
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -220,7 +271,11 @@ async fn status(State(s): State<AppState>) -> Json<Value> {
 
 pub(crate) fn status_value(s: &AppState) -> Value {
     let configured = client_from_settings(&s.db).is_some();
-    let connected = configured && s.db.get_setting("user_token").map(|t| !t.is_empty()).unwrap_or(false);
+    let connected = configured
+        && s.db
+            .get_setting("user_token")
+            .map(|t| !t.is_empty())
+            .unwrap_or(false);
     json!({
         "ok": true,
         "app": "facebook-pro",
@@ -283,7 +338,10 @@ async fn oauth_link(State(s): State<AppState>, Query(q): Query<LinkQuery>) -> Js
     }
 }
 
-async fn oauth_callback(State(s): State<AppState>, Query(q): Query<HashMap<String, String>>) -> axum::response::Html<String> {
+async fn oauth_callback(
+    State(s): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> axum::response::Html<String> {
     if let Some(err) = q.get("error_description").or_else(|| q.get("error")) {
         return oauth_page(&json!({ "error": err }));
     }
@@ -310,7 +368,11 @@ fn oauth_page(result: &Value) -> axum::response::Html<String> {
         ("❌", "Kết nối thất bại".to_string(), err.to_string())
     } else {
         let pages = result.get("pages").and_then(|x| x.as_i64()).unwrap_or(0);
-        ("✅", "Đã kết nối Facebook".to_string(), format!("Lấy được {pages} Trang. Bạn có thể đóng tab này và quay lại app."))
+        (
+            "✅",
+            "Đã kết nối Facebook".to_string(),
+            format!("Lấy được {pages} Trang. Bạn có thể đóng tab này và quay lại app."),
+        )
     };
     let detail = detail.replace('<', "&lt;").replace('>', "&gt;");
     axum::response::Html(format!(
@@ -346,13 +408,20 @@ pub(crate) async fn connect_with_token(s: &AppState, user_token: &str) -> Value 
         return json!({ "error": "chưa cấu hình App ID/App Secret" });
     };
     // Best-effort upgrade to a long-lived token; fall back to the given token.
-    let long = client.exchange_long_lived(user_token).await.unwrap_or_else(|_| user_token.to_string());
+    let long = client
+        .exchange_long_lived(user_token)
+        .await
+        .unwrap_or_else(|_| user_token.to_string());
     let _ = s.db.set_setting("user_token", &long);
     let pages = match client.get_pages(&long).await {
         Ok(v) => v,
         Err(e) => return json!({ "error": format!("lấy danh sách Trang thất bại: {e}") }),
     };
-    let list = pages.get("data").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let list = pages
+        .get("data")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut saved = 0;
     for p in &list {
         let (Some(id), Some(tok)) = (
@@ -369,7 +438,11 @@ pub(crate) async fn connect_with_token(s: &AppState, user_token: &str) -> Value 
     }
     // Default the active page to the first one if none chosen yet.
     if s.db.active_page_id().is_none() {
-        if let Some(first) = list.first().and_then(|p| p.get("id")).and_then(|x| x.as_str()) {
+        if let Some(first) = list
+            .first()
+            .and_then(|p| p.get("id"))
+            .and_then(|x| x.as_str())
+        {
             let _ = s.db.set_setting("active_page_id", first);
         }
     }
@@ -383,10 +456,21 @@ async fn pages(State(s): State<AppState>) -> Json<Value> {
 
 /// Return stored pages; if a user token exists, refresh from Graph first.
 pub(crate) async fn pages_value(s: &AppState) -> Value {
-    if let (Some(client), Some(tok)) = (client_from_settings(&s.db), s.db.get_setting("user_token").filter(|t| !t.is_empty())) {
+    if let (Some(client), Some(tok)) = (
+        client_from_settings(&s.db),
+        s.db.get_setting("user_token").filter(|t| !t.is_empty()),
+    ) {
         if let Ok(v) = client.get_pages(&tok).await {
-            for p in v.get("data").and_then(|x| x.as_array()).cloned().unwrap_or_default() {
-                if let (Some(id), Some(t)) = (p.get("id").and_then(|x| x.as_str()), p.get("access_token").and_then(|x| x.as_str())) {
+            for p in v
+                .get("data")
+                .and_then(|x| x.as_array())
+                .cloned()
+                .unwrap_or_default()
+            {
+                if let (Some(id), Some(t)) = (
+                    p.get("id").and_then(|x| x.as_str()),
+                    p.get("access_token").and_then(|x| x.as_str()),
+                ) {
                     let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("");
                     let cat = p.get("category").and_then(|x| x.as_str()).unwrap_or("");
                     let _ = s.db.save_page(id, name, t, cat);
@@ -463,10 +547,21 @@ struct CreatePostIn {
 }
 
 async fn create_post_h(State(s): State<AppState>, Json(b): Json<CreatePostIn>) -> Json<Value> {
-    let pid = b.page_id.or_else(|| s.db.active_page_id()).unwrap_or_default();
-    let has_image = b.image_url.as_deref().map(|x| !x.trim().is_empty()).unwrap_or(false);
+    let pid = b
+        .page_id
+        .or_else(|| s.db.active_page_id())
+        .unwrap_or_default();
+    let has_image = b
+        .image_url
+        .as_deref()
+        .map(|x| !x.trim().is_empty())
+        .unwrap_or(false);
     let d = DraftInput {
-        kind: if has_image { "photo".into() } else { "post".into() },
+        kind: if has_image {
+            "photo".into()
+        } else {
+            "post".into()
+        },
         page_id: pid,
         message: b.message,
         link: b.link.unwrap_or_default(),
@@ -505,12 +600,18 @@ async fn photo_upload_h(State(s): State<AppState>, mut mp: Multipart) -> Json<Va
     if std::fs::create_dir_all(&dir).is_err() {
         return Json(json!({ "error": "không tạo được thư mục uploads" }));
     }
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let path = dir.join(format!("{stamp}.{}", safe_ext(&filename)));
     if std::fs::write(&path, &bytes).is_err() {
         return Json(json!({ "error": "không lưu được ảnh" }));
     }
-    let pid = page_id.filter(|p| !p.is_empty()).or_else(|| s.db.active_page_id()).unwrap_or_default();
+    let pid = page_id
+        .filter(|p| !p.is_empty())
+        .or_else(|| s.db.active_page_id())
+        .unwrap_or_default();
     let d = DraftInput {
         kind: "photo".into(),
         page_id: pid,
@@ -530,7 +631,10 @@ struct EditPostIn {
 }
 
 async fn edit_post_h(State(s): State<AppState>, Json(b): Json<EditPostIn>) -> Json<Value> {
-    let pid = b.page_id.or_else(|| s.db.active_page_id()).unwrap_or_default();
+    let pid = b
+        .page_id
+        .or_else(|| s.db.active_page_id())
+        .unwrap_or_default();
     let d = DraftInput {
         kind: "edit".into(),
         page_id: pid,
@@ -577,10 +681,23 @@ struct CommentsQuery {
 }
 
 async fn comments(State(s): State<AppState>, Query(q): Query<CommentsQuery>) -> Json<Value> {
-    Json(comments_value(&s, &q.object_id, q.page_id.as_deref(), q.limit.unwrap_or(25)).await)
+    Json(
+        comments_value(
+            &s,
+            &q.object_id,
+            q.page_id.as_deref(),
+            q.limit.unwrap_or(25),
+        )
+        .await,
+    )
 }
 
-pub(crate) async fn comments_value(s: &AppState, object_id: &str, page_id: Option<&str>, limit: i64) -> Value {
+pub(crate) async fn comments_value(
+    s: &AppState,
+    object_id: &str,
+    page_id: Option<&str>,
+    limit: i64,
+) -> Value {
     let (client, _pid, token) = match resolve_page(&s.db, page_id) {
         Ok(v) => v,
         Err(e) => return json!({ "error": e }),
@@ -599,7 +716,10 @@ struct CommentIn {
 }
 
 async fn create_comment_h(State(s): State<AppState>, Json(b): Json<CommentIn>) -> Json<Value> {
-    let pid = b.page_id.or_else(|| s.db.active_page_id()).unwrap_or_default();
+    let pid = b
+        .page_id
+        .or_else(|| s.db.active_page_id())
+        .unwrap_or_default();
     let d = DraftInput {
         kind: "comment".into(),
         page_id: pid,
@@ -621,13 +741,23 @@ struct ReplyIn {
 }
 
 async fn reply_comment_h(State(s): State<AppState>, Json(b): Json<ReplyIn>) -> Json<Value> {
-    let pid = b.page_id.clone().or_else(|| s.db.active_page_id()).unwrap_or_default();
+    let pid = b
+        .page_id
+        .clone()
+        .or_else(|| s.db.active_page_id())
+        .unwrap_or_default();
     // If no explicit message, compose one from the comment text.
     let (message, model) = match b.message.filter(|m| !m.trim().is_empty()) {
         Some(m) => (m, String::new()),
         None => {
             let page_name = page_name(&s.db, &pid);
-            llm::compose_reply(&s.sc, &page_name, b.comment_text.as_deref().unwrap_or(""), b.hint.as_deref().unwrap_or("")).await
+            llm::compose_reply(
+                &s.sc,
+                &page_name,
+                b.comment_text.as_deref().unwrap_or(""),
+                b.hint.as_deref().unwrap_or(""),
+            )
+            .await
         }
     };
     let d = DraftInput {
@@ -646,7 +776,11 @@ fn page_name(db: &Db, page_id: &str) -> String {
     db.list_pages()
         .into_iter()
         .find(|p| p.get("page_id").and_then(|x| x.as_str()) == Some(page_id))
-        .and_then(|p| p.get("name").and_then(|x| x.as_str()).map(|s| s.to_string()))
+        .and_then(|p| {
+            p.get("name")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_else(|| "Trang".into())
 }
 
@@ -683,7 +817,10 @@ struct ConversationsQuery {
     limit: Option<i64>,
 }
 
-async fn conversations_h(State(s): State<AppState>, Query(q): Query<ConversationsQuery>) -> Json<Value> {
+async fn conversations_h(
+    State(s): State<AppState>,
+    Query(q): Query<ConversationsQuery>,
+) -> Json<Value> {
     Json(conversations_value(&s, q.page_id.as_deref(), q.limit.unwrap_or(25)).await)
 }
 
@@ -705,16 +842,27 @@ struct ConvMessagesQuery {
     limit: Option<i64>,
 }
 
-async fn conversation_messages_h(State(s): State<AppState>, Query(q): Query<ConvMessagesQuery>) -> Json<Value> {
+async fn conversation_messages_h(
+    State(s): State<AppState>,
+    Query(q): Query<ConvMessagesQuery>,
+) -> Json<Value> {
     Json(conversation_messages_value(&s, &q.id, q.page_id.as_deref(), q.limit.unwrap_or(25)).await)
 }
 
-pub(crate) async fn conversation_messages_value(s: &AppState, conversation_id: &str, page_id: Option<&str>, limit: i64) -> Value {
+pub(crate) async fn conversation_messages_value(
+    s: &AppState,
+    conversation_id: &str,
+    page_id: Option<&str>,
+    limit: i64,
+) -> Value {
     let (client, _pid, token) = match resolve_page(&s.db, page_id) {
         Ok(v) => v,
         Err(e) => return json!({ "error": e }),
     };
-    match client.conversation_messages(conversation_id, &token, limit).await {
+    match client
+        .conversation_messages(conversation_id, &token, limit)
+        .await
+    {
         Ok(v) => v,
         Err(e) => json!({ "error": e.to_string() }),
     }
@@ -730,16 +878,39 @@ struct MessageReplyIn {
 }
 
 async fn message_reply_h(State(s): State<AppState>, Json(b): Json<MessageReplyIn>) -> Json<Value> {
-    Json(message_reply_value(&s, b.page_id.as_deref(), &b.recipient_id, b.message.as_deref(), b.customer_msg.as_deref(), b.hint.as_deref(), "user").await)
+    Json(
+        message_reply_value(
+            &s,
+            b.page_id.as_deref(),
+            &b.recipient_id,
+            b.message.as_deref(),
+            b.customer_msg.as_deref(),
+            b.hint.as_deref(),
+            "user",
+        )
+        .await,
+    )
 }
 
 /// Draft-first message reply. Composes via LLM when `message` is empty. Shared by
 /// REST + MCP.
-pub(crate) async fn message_reply_value(s: &AppState, page_id: Option<&str>, recipient_id: &str, message: Option<&str>, customer_msg: Option<&str>, hint: Option<&str>, source: &str) -> Value {
+pub(crate) async fn message_reply_value(
+    s: &AppState,
+    page_id: Option<&str>,
+    recipient_id: &str,
+    message: Option<&str>,
+    customer_msg: Option<&str>,
+    hint: Option<&str>,
+    source: &str,
+) -> Value {
     if recipient_id.trim().is_empty() {
         return json!({ "error": "thiếu recipient_id" });
     }
-    let pid = page_id.map(|s| s.to_string()).filter(|s| !s.is_empty()).or_else(|| s.db.active_page_id()).unwrap_or_default();
+    let pid = page_id
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| s.db.active_page_id())
+        .unwrap_or_default();
     let (msg, model) = match message.filter(|m| !m.trim().is_empty()) {
         Some(m) => (m.to_string(), String::new()),
         None => {
@@ -747,7 +918,19 @@ pub(crate) async fn message_reply_value(s: &AppState, page_id: Option<&str>, rec
             llm::compose_reply(&s.sc, &name, customer_msg.unwrap_or(""), hint.unwrap_or("")).await
         }
     };
-    enqueue_or_send(s, DraftInput { kind: "message".into(), page_id: pid, target_id: recipient_id.to_string(), message: msg, model, source: source.into(), ..Default::default() }).await
+    enqueue_or_send(
+        s,
+        DraftInput {
+            kind: "message".into(),
+            page_id: pid,
+            target_id: recipient_id.to_string(),
+            message: msg,
+            model,
+            source: source.into(),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 // ---- overview (interactions + comment stats) ----
@@ -763,15 +946,33 @@ pub(crate) async fn overview_value(s: &AppState) -> Value {
     if let Some(err) = posts.get("error").and_then(|x| x.as_str()) {
         return json!({ "error": err });
     }
-    let list = posts.get("data").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let list = posts
+        .get("data")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut total_reactions = 0i64;
     let mut total_comments = 0i64;
     let mut total_shares = 0i64;
     let mut rows: Vec<Value> = Vec::new();
     for p in &list {
-        let reactions = p.get("reactions").and_then(|r| r.get("summary")).and_then(|s| s.get("total_count")).and_then(|x| x.as_i64()).unwrap_or(0);
-        let comments = p.get("comments").and_then(|r| r.get("summary")).and_then(|s| s.get("total_count")).and_then(|x| x.as_i64()).unwrap_or(0);
-        let shares = p.get("shares").and_then(|r| r.get("count")).and_then(|x| x.as_i64()).unwrap_or(0);
+        let reactions = p
+            .get("reactions")
+            .and_then(|r| r.get("summary"))
+            .and_then(|s| s.get("total_count"))
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0);
+        let comments = p
+            .get("comments")
+            .and_then(|r| r.get("summary"))
+            .and_then(|s| s.get("total_count"))
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0);
+        let shares = p
+            .get("shares")
+            .and_then(|r| r.get("count"))
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0);
         total_reactions += reactions;
         total_comments += comments;
         total_shares += shares;
@@ -815,17 +1016,34 @@ struct AnalyzeIn {
 }
 
 async fn analyze_h(State(s): State<AppState>, Json(b): Json<AnalyzeIn>) -> Json<Value> {
-    Json(analyze_value(&s, b.post_id.as_deref(), b.message.as_deref(), b.page_id.as_deref()).await)
+    Json(
+        analyze_value(
+            &s,
+            b.post_id.as_deref(),
+            b.message.as_deref(),
+            b.page_id.as_deref(),
+        )
+        .await,
+    )
 }
 
-pub(crate) async fn analyze_value(s: &AppState, post_id: Option<&str>, message: Option<&str>, page_id: Option<&str>) -> Value {
+pub(crate) async fn analyze_value(
+    s: &AppState,
+    post_id: Option<&str>,
+    message: Option<&str>,
+    page_id: Option<&str>,
+) -> Value {
     // Prefer a live post fetch (real content + engagement); fall back to given text.
     let (content, engagement) = if let Some(pid) = post_id.filter(|p| !p.trim().is_empty()) {
         let v = post_get_value(s, pid, page_id).await;
         if let Some(err) = v.get("error").and_then(|x| x.as_str()) {
             return json!({ "error": err });
         }
-        let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let msg = v
+            .get("message")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
         (msg, engagement_summary(&v))
     } else {
         (message.unwrap_or("").to_string(), String::new())
@@ -840,9 +1058,20 @@ pub(crate) async fn analyze_value(s: &AppState, post_id: Option<&str>, message: 
 
 /// A compact "reactions=… comments=… shares=…" summary from a post value.
 fn engagement_summary(v: &Value) -> String {
-    let reactions = v.get("reactions").and_then(|r| r.get("summary")).and_then(|s| s.get("total_count")).and_then(|x| x.as_i64());
-    let comments = v.get("comments").and_then(|r| r.get("summary")).and_then(|s| s.get("total_count")).and_then(|x| x.as_i64());
-    let shares = v.get("shares").and_then(|r| r.get("count")).and_then(|x| x.as_i64());
+    let reactions = v
+        .get("reactions")
+        .and_then(|r| r.get("summary"))
+        .and_then(|s| s.get("total_count"))
+        .and_then(|x| x.as_i64());
+    let comments = v
+        .get("comments")
+        .and_then(|r| r.get("summary"))
+        .and_then(|s| s.get("total_count"))
+        .and_then(|x| x.as_i64());
+    let shares = v
+        .get("shares")
+        .and_then(|r| r.get("count"))
+        .and_then(|x| x.as_i64());
     let mut parts = Vec::new();
     if let Some(x) = reactions {
         parts.push(format!("reactions={x}"));
@@ -865,19 +1094,38 @@ struct PageInsightsQuery {
     period: Option<String>,
 }
 
-async fn page_insights_h(State(s): State<AppState>, Query(q): Query<PageInsightsQuery>) -> Json<Value> {
-    Json(page_insights_value(&s, q.page_id.as_deref(), q.metric.as_deref(), q.period.as_deref()).await)
+async fn page_insights_h(
+    State(s): State<AppState>,
+    Query(q): Query<PageInsightsQuery>,
+) -> Json<Value> {
+    Json(
+        page_insights_value(
+            &s,
+            q.page_id.as_deref(),
+            q.metric.as_deref(),
+            q.period.as_deref(),
+        )
+        .await,
+    )
 }
 
 const DEFAULT_PAGE_METRICS: &str = "page_impressions,page_post_engagements,page_fans";
-const DEFAULT_POST_METRICS: &str = "post_impressions,post_impressions_unique,post_clicks,post_reactions_by_type_total";
+const DEFAULT_POST_METRICS: &str =
+    "post_impressions,post_impressions_unique,post_clicks,post_reactions_by_type_total";
 
-pub(crate) async fn page_insights_value(s: &AppState, page_id: Option<&str>, metric: Option<&str>, period: Option<&str>) -> Value {
+pub(crate) async fn page_insights_value(
+    s: &AppState,
+    page_id: Option<&str>,
+    metric: Option<&str>,
+    period: Option<&str>,
+) -> Value {
     let (client, pid, token) = match resolve_page(&s.db, page_id) {
         Ok(v) => v,
         Err(e) => return json!({ "error": e }),
     };
-    let metrics = metric.filter(|m| !m.trim().is_empty()).unwrap_or(DEFAULT_PAGE_METRICS);
+    let metrics = metric
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or(DEFAULT_PAGE_METRICS);
     let period = period.filter(|p| !p.trim().is_empty()).unwrap_or("day");
     match client.page_insights(&pid, &token, metrics, period).await {
         Ok(v) => v,
@@ -892,16 +1140,26 @@ struct PostInsightsQuery {
     metric: Option<String>,
 }
 
-async fn post_insights_h(State(s): State<AppState>, Query(q): Query<PostInsightsQuery>) -> Json<Value> {
+async fn post_insights_h(
+    State(s): State<AppState>,
+    Query(q): Query<PostInsightsQuery>,
+) -> Json<Value> {
     Json(post_insights_value(&s, &q.id, q.page_id.as_deref(), q.metric.as_deref()).await)
 }
 
-pub(crate) async fn post_insights_value(s: &AppState, post_id: &str, page_id: Option<&str>, metric: Option<&str>) -> Value {
+pub(crate) async fn post_insights_value(
+    s: &AppState,
+    post_id: &str,
+    page_id: Option<&str>,
+    metric: Option<&str>,
+) -> Value {
     let (client, _pid, token) = match resolve_page(&s.db, page_id) {
         Ok(v) => v,
         Err(e) => return json!({ "error": e }),
     };
-    let metrics = metric.filter(|m| !m.trim().is_empty()).unwrap_or(DEFAULT_POST_METRICS);
+    let metrics = metric
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or(DEFAULT_POST_METRICS);
     match client.post_insights(post_id, &token, metrics).await {
         Ok(v) => v,
         Err(e) => json!({ "error": e.to_string() }),
@@ -912,8 +1170,12 @@ pub(crate) async fn post_insights_value(s: &AppState, post_id: &str, page_id: Op
 
 /// Ads calls use the USER token (with ads_read/ads_management), not a page token.
 fn ads_client_token(db: &Db) -> Result<(Client, String), String> {
-    let client = client_from_settings(db).ok_or_else(|| "chưa cấu hình App ID/App Secret".to_string())?;
-    let token = db.get_setting("user_token").filter(|t| !t.is_empty()).ok_or_else(|| "chưa kết nối (thiếu user token có quyền ads_read)".to_string())?;
+    let client =
+        client_from_settings(db).ok_or_else(|| "chưa cấu hình App ID/App Secret".to_string())?;
+    let token = db
+        .get_setting("user_token")
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "chưa kết nối (thiếu user token có quyền ads_read)".to_string())?;
     Ok((client, token))
 }
 
@@ -923,9 +1185,16 @@ fn resolve_ad_account(db: &Db, account_id: Option<&str>) -> Result<String, Strin
     let id = account_id
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| db.get_setting("active_ad_account").filter(|s| !s.is_empty()))
+        .or_else(|| {
+            db.get_setting("active_ad_account")
+                .filter(|s| !s.is_empty())
+        })
         .ok_or_else(|| "chưa chọn Tài khoản quảng cáo (ad account)".to_string())?;
-    Ok(if id.starts_with("act_") { id } else { format!("act_{id}") })
+    Ok(if id.starts_with("act_") {
+        id
+    } else {
+        format!("act_{id}")
+    })
 }
 
 async fn ad_accounts_h(State(s): State<AppState>) -> Json<Value> {
@@ -938,7 +1207,9 @@ pub(crate) async fn ad_accounts_value(s: &AppState) -> Value {
         Err(e) => return json!({ "error": e }),
     };
     match client.get_ad_accounts(&token).await {
-        Ok(v) => json!({ "accounts": v.get("data").cloned().unwrap_or(json!([])), "active_ad_account": s.db.get_setting("active_ad_account").unwrap_or_default() }),
+        Ok(v) => {
+            json!({ "accounts": v.get("data").cloned().unwrap_or(json!([])), "active_ad_account": s.db.get_setting("active_ad_account").unwrap_or_default() })
+        }
         Err(e) => json!({ "error": e.to_string() }),
     }
 }
@@ -948,8 +1219,15 @@ struct SelectAdAccountIn {
     account_id: String,
 }
 
-async fn select_ad_account_h(State(s): State<AppState>, Json(b): Json<SelectAdAccountIn>) -> Json<Value> {
-    let id = if b.account_id.starts_with("act_") { b.account_id.clone() } else { format!("act_{}", b.account_id) };
+async fn select_ad_account_h(
+    State(s): State<AppState>,
+    Json(b): Json<SelectAdAccountIn>,
+) -> Json<Value> {
+    let id = if b.account_id.starts_with("act_") {
+        b.account_id.clone()
+    } else {
+        format!("act_{}", b.account_id)
+    };
     let _ = s.db.set_setting("active_ad_account", &id);
     Json(json!({ "ok": true, "active_ad_account": id }))
 }
@@ -959,7 +1237,10 @@ struct AdCampaignsQuery {
     account_id: Option<String>,
 }
 
-async fn ad_campaigns_h(State(s): State<AppState>, Query(q): Query<AdCampaignsQuery>) -> Json<Value> {
+async fn ad_campaigns_h(
+    State(s): State<AppState>,
+    Query(q): Query<AdCampaignsQuery>,
+) -> Json<Value> {
     Json(ad_campaigns_value(&s, q.account_id.as_deref()).await)
 }
 
@@ -985,8 +1266,19 @@ struct AdsInsightsQuery {
     date_preset: Option<String>,
 }
 
-async fn ads_insights_h(State(s): State<AppState>, Query(q): Query<AdsInsightsQuery>) -> Json<Value> {
-    Json(ads_insights_value(&s, q.object_id.as_deref(), q.level.as_deref(), q.date_preset.as_deref()).await)
+async fn ads_insights_h(
+    State(s): State<AppState>,
+    Query(q): Query<AdsInsightsQuery>,
+) -> Json<Value> {
+    Json(
+        ads_insights_value(
+            &s,
+            q.object_id.as_deref(),
+            q.level.as_deref(),
+            q.date_preset.as_deref(),
+        )
+        .await,
+    )
 }
 
 /// Normalize the `level`/`date_preset` inputs to values the Marketing API accepts.
@@ -1007,7 +1299,12 @@ pub(crate) fn norm_date_preset(dp: Option<&str>) -> String {
     }
 }
 
-pub(crate) async fn ads_insights_value(s: &AppState, object_id: Option<&str>, level: Option<&str>, date_preset: Option<&str>) -> Value {
+pub(crate) async fn ads_insights_value(
+    s: &AppState,
+    object_id: Option<&str>,
+    level: Option<&str>,
+    date_preset: Option<&str>,
+) -> Value {
     let (client, token) = match ads_client_token(&s.db) {
         Ok(v) => v,
         Err(e) => return json!({ "error": e }),
@@ -1035,7 +1332,11 @@ pub(crate) async fn ads_insights_value(s: &AppState, object_id: Option<&str>, le
 /// string. Extracts a single headline "results" + cost-per-result + ROAS from the
 /// nested `actions`/`cost_per_action_type`/`purchase_roas` arrays.
 pub(crate) fn summarize_ads_rows(v: &Value) -> (Vec<Value>, String) {
-    let data = v.get("data").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let data = v
+        .get("data")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
     // Priority of "result" action types (most business-meaningful first).
     const PRIORITY: [&str; 6] = [
         "purchase",
@@ -1048,7 +1349,10 @@ pub(crate) fn summarize_ads_rows(v: &Value) -> (Vec<Value>, String) {
     let pick = |arr: &Value| -> Option<(String, String)> {
         let a = arr.as_array()?;
         for want in PRIORITY {
-            if let Some(hit) = a.iter().find(|x| x.get("action_type").and_then(|t| t.as_str()) == Some(want)) {
+            if let Some(hit) = a
+                .iter()
+                .find(|x| x.get("action_type").and_then(|t| t.as_str()) == Some(want))
+            {
                 let val = hit.get("value").map(val_str).unwrap_or_default();
                 return Some((want.to_string(), val));
             }
@@ -1056,7 +1360,10 @@ pub(crate) fn summarize_ads_rows(v: &Value) -> (Vec<Value>, String) {
         // Fall back to the first action, whatever it is.
         a.first().map(|hit| {
             (
-                hit.get("action_type").and_then(|t| t.as_str()).unwrap_or("action").to_string(),
+                hit.get("action_type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("action")
+                    .to_string(),
                 hit.get("value").map(val_str).unwrap_or_default(),
             )
         })
@@ -1074,7 +1381,11 @@ pub(crate) fn summarize_ads_rows(v: &Value) -> (Vec<Value>, String) {
             .to_string();
         let get = |k: &str| r.get(k).map(val_str).unwrap_or_default();
         let (result_type, results) = r.get("actions").and_then(|a| pick(a)).unwrap_or_default();
-        let cost_per_result = r.get("cost_per_action_type").and_then(|a| pick(a)).map(|(_, v)| v).unwrap_or_default();
+        let cost_per_result = r
+            .get("cost_per_action_type")
+            .and_then(|a| pick(a))
+            .map(|(_, v)| v)
+            .unwrap_or_default();
         let roas = r
             .get("purchase_roas")
             .and_then(|a| a.as_array())
@@ -1114,10 +1425,25 @@ struct AdsAnalyzeIn {
 }
 
 async fn ads_analyze_h(State(s): State<AppState>, Json(b): Json<AdsAnalyzeIn>) -> Json<Value> {
-    Json(ads_analyze_value(&s, b.object_id.as_deref(), b.level.as_deref(), b.date_preset.as_deref(), b.currency.as_deref()).await)
+    Json(
+        ads_analyze_value(
+            &s,
+            b.object_id.as_deref(),
+            b.level.as_deref(),
+            b.date_preset.as_deref(),
+            b.currency.as_deref(),
+        )
+        .await,
+    )
 }
 
-pub(crate) async fn ads_analyze_value(s: &AppState, object_id: Option<&str>, level: Option<&str>, date_preset: Option<&str>, currency: Option<&str>) -> Value {
+pub(crate) async fn ads_analyze_value(
+    s: &AppState,
+    object_id: Option<&str>,
+    level: Option<&str>,
+    date_preset: Option<&str>,
+    currency: Option<&str>,
+) -> Value {
     let (client, token) = match ads_client_token(&s.db) {
         Ok(v) => v,
         Err(e) => return json!({ "error": e }),
@@ -1160,7 +1486,9 @@ pub(crate) async fn ad_status_value(s: &AppState, entity_id: &str, status: &str)
     let want = match status.to_uppercase().as_str() {
         "PAUSED" | "PAUSE" | "OFF" | "TẮT" => "PAUSED",
         "ACTIVE" | "RESUME" | "ON" | "BẬT" => "ACTIVE",
-        other => return json!({ "error": format!("status phải là PAUSED hoặc ACTIVE (nhận '{other}')") }),
+        other => {
+            return json!({ "error": format!("status phải là PAUSED hoặc ACTIVE (nhận '{other}')") })
+        }
     };
     let (client, token) = match ads_client_token(&s.db) {
         Ok(v) => v,
@@ -1267,7 +1595,11 @@ mod tests {
     fn state() -> AppState {
         let db = Arc::new(Db::open_memory().unwrap());
         let (mcp_tx, _) = tokio::sync::broadcast::channel(8);
-        AppState { db, sc: SpaceClient::new("http://127.0.0.1:1", "facebook-pro"), mcp_tx }
+        AppState {
+            db,
+            sc: SpaceClient::new("http://127.0.0.1:1", "facebook-pro"),
+            mcp_tx,
+        }
     }
 
     #[tokio::test]
@@ -1280,7 +1612,13 @@ mod tests {
         // autonomy defaults to "draft" → enqueue must NOT hit the network.
         let r = enqueue_or_send(
             &s,
-            DraftInput { kind: "post".into(), page_id: "P1".into(), message: "Xin chào".into(), source: "user".into(), ..Default::default() },
+            DraftInput {
+                kind: "post".into(),
+                page_id: "P1".into(),
+                message: "Xin chào".into(),
+                source: "user".into(),
+                ..Default::default()
+            },
         )
         .await;
         assert_eq!(r["status"], "pending");
@@ -1353,7 +1691,16 @@ mod tests {
         s.db.set_setting("active_page_id", "P1").unwrap();
         // No message → LLM compose is attempted (bridge unreachable → empty), still
         // enqueues a pending 'message' draft to the recipient. Draft mode: no network send.
-        let r = message_reply_value(&s, None, "PSID123", None, Some("Ship bao lâu?"), None, "user").await;
+        let r = message_reply_value(
+            &s,
+            None,
+            "PSID123",
+            None,
+            Some("Ship bao lâu?"),
+            None,
+            "user",
+        )
+        .await;
         assert_eq!(r["status"], "pending");
         assert_eq!(r["kind"], "message");
         let d = &s.db.list_drafts("pending")[0];

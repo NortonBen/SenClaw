@@ -69,7 +69,10 @@ pub fn api_router(state: AppState) -> Router {
         .route("/status", get(status))
         .route("/health", get(status))
         .route("/datasets", get(list_datasets))
-        .route("/datasets/:ns/:name", get(get_dataset).delete(delete_dataset))
+        .route(
+            "/datasets/:ns/:name",
+            get(get_dataset).delete(delete_dataset),
+        )
         .route("/datasets/:ns/:name/preview", get(preview_dataset))
         .route("/datasets/:ns/:name/lineage", get(dataset_lineage))
         .route("/datasets/:ns/:name/compact", post(compact_dataset))
@@ -439,7 +442,8 @@ pub(crate) async fn logic_query_export(
     sql: &str,
     format: &str,
 ) -> Result<Value, ApiError> {
-    let fmt = crate::export::ExportFormat::parse(format).map_err(|e| ApiError::bad(e.to_string()))?;
+    let fmt =
+        crate::export::ExportFormat::parse(format).map_err(|e| ApiError::bad(e.to_string()))?;
     if sql.trim().is_empty() {
         return Err(ApiError::bad("sql rỗng"));
     }
@@ -457,10 +461,13 @@ pub(crate) async fn logic_dataset_export(
     format: &str,
     sql: Option<&str>,
 ) -> Result<Value, ApiError> {
-    let fmt = crate::export::ExportFormat::parse(format).map_err(|e| ApiError::bad(e.to_string()))?;
+    let fmt =
+        crate::export::ExportFormat::parse(format).map_err(|e| ApiError::bad(e.to_string()))?;
     // 404 khi dataset không tồn tại (export_dataset trả anyhow "không có dataset").
     if db.dataset_get(ns, dataset)?.is_none() {
-        return Err(ApiError::not_found(format!("không có dataset {ns}.{dataset}")));
+        return Err(ApiError::not_found(format!(
+            "không có dataset {ns}.{dataset}"
+        )));
     }
     let rep = crate::export::export_dataset(db, ns, dataset, fmt, sql)
         .await
@@ -537,8 +544,14 @@ pub(crate) fn logic_settings_put(db: &Db, body: &Value) -> Result<Value, ApiErro
 // ---------------------------------------------------------------------------
 
 /// Kind kết nối hợp lệ (khớp connectors::connector_for). Redact/enum dùng chung.
-const CONNECTION_KINDS: &[&str] =
-    &["postgres", "postgresql", "mysql", "mariadb", "sqlite", "clickhouse"];
+const CONNECTION_KINDS: &[&str] = &[
+    "postgres",
+    "postgresql",
+    "mysql",
+    "mariadb",
+    "sqlite",
+    "clickhouse",
+];
 
 /// View an toàn của một connection — DSN đã redact (§11). KHÔNG serialize thẳng
 /// ConnectionInfo (chứa DSN nguyên văn).
@@ -617,7 +630,9 @@ pub(crate) async fn logic_connection_test(db: &Db, id: &str) -> Result<Value, Ap
     match connector.test().await {
         Ok(()) => {
             db.connection_mark_ok(id)?;
-            Ok(json!({ "ok": true, "connection_id": id, "next": "Nguồn sống — dựng flow bằng lake_flow_create." }))
+            Ok(
+                json!({ "ok": true, "connection_id": id, "next": "Nguồn sống — dựng flow bằng lake_flow_create." }),
+            )
         }
         Err(e) => Err(ApiError::bad(format!("kết nối '{id}' thất bại: {e}"))),
     }
@@ -767,7 +782,13 @@ pub(crate) fn logic_flow_create(db: &Db, def: &Value, enable: bool) -> Result<Va
     }
     // Chiếm owner dataset target TRƯỚC khi lưu — nguồn xung đột thì báo 409, không lưu.
     claim_source_targets(db, &parsed)?;
-    db.flow_upsert(&parsed.flow, None, &canon, enable, schedule_json(&parsed).as_deref())?;
+    db.flow_upsert(
+        &parsed.flow,
+        None,
+        &canon,
+        enable,
+        schedule_json(&parsed).as_deref(),
+    )?;
 
     let f = db
         .flow_get(&parsed.flow)?
@@ -803,11 +824,13 @@ fn claim_source_targets(db: &Db, def: &flow::FlowDef) -> Result<(), ApiError> {
 /// côi. Logic ở flow::diff_impact; ở đây chỉ serialize sang JSON cho REST/MCP.
 fn compute_impact(old: &flow::FlowDef, new: &flow::FlowDef) -> Value {
     let imp = flow::diff_impact(old, new);
-    serde_json::to_value(&imp).unwrap_or_else(|_| json!({
-        "steps_reset": imp.steps_reset,
-        "steps_kept": imp.steps_kept,
-        "datasets_orphaned": imp.datasets_orphaned,
-    }))
+    serde_json::to_value(&imp).unwrap_or_else(|_| {
+        json!({
+            "steps_reset": imp.steps_reset,
+            "steps_kept": imp.steps_kept,
+            "datasets_orphaned": imp.datasets_orphaned,
+        })
+    })
 }
 
 /// Sửa flow (§6.3). Thay đổi state-resetting cần `confirm_reset`; thiếu → 409 kèm impact.
@@ -832,18 +855,28 @@ pub(crate) fn logic_flow_update(
     let impact = compute_impact(&old_def, &new_def);
     let reset_steps: Vec<String> = impact["steps_reset"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     if !reset_steps.is_empty() && !confirm_reset {
-        return Err(ApiError::conflict(
-            "thay đổi state-resetting cần confirm_reset=true",
-        )
-        .with_details(impact));
+        return Err(
+            ApiError::conflict("thay đổi state-resetting cần confirm_reset=true")
+                .with_details(impact),
+        );
     }
 
     let canon = flow::to_canonical_json(&new_def).map_err(ApiError::from)?;
     // Lịch lấy từ def mới (cho phép đổi schedule qua update; None = gỡ lịch).
-    db.flow_upsert(id, existing.name.as_deref(), &canon, existing.enabled, schedule_json(&new_def).as_deref())?;
+    db.flow_upsert(
+        id,
+        existing.name.as_deref(),
+        &canon,
+        existing.enabled,
+        schedule_json(&new_def).as_deref(),
+    )?;
     claim_source_targets(db, &new_def)?;
 
     if !reset_steps.is_empty() {
@@ -909,7 +942,9 @@ pub(crate) async fn logic_flow_backfill(
 
 /// Serialize `schedule` của một def sang JSON string cho cột `flow.schedule` (None = gỡ).
 fn schedule_json(def: &flow::FlowDef) -> Option<String> {
-    def.schedule.as_ref().and_then(|s| serde_json::to_string(s).ok())
+    def.schedule
+        .as_ref()
+        .and_then(|s| serde_json::to_string(s).ok())
 }
 
 /// Sinh **draft** flow từ mô tả tự nhiên (§9). Introspect connection (nếu có) → build
@@ -931,17 +966,18 @@ pub(crate) async fn logic_flow_generate(
     let system = crate::generate::system_prompt();
     let prompt = crate::generate::build_prompt(description, introspection.as_ref());
 
-    let max_tokens = db.setting_i64("generate_max_tokens", 8000).clamp(256, 32000) as u32;
+    let max_tokens = db
+        .setting_i64("generate_max_tokens", 8000)
+        .clamp(256, 32000) as u32;
     let reply = crate::transport::llm_request(&system, &prompt, max_tokens)
         .await
         .map_err(|e| ApiError::bad(format!("sinh flow qua bridge thất bại: {e}")))?;
 
-    let draft = crate::generate::parse_draft(&reply.text)
-        .map_err(|e| ApiError::bad(e.to_string()))?;
-    let canon: Value = serde_json::from_str(
-        &flow::to_canonical_json(&draft).map_err(ApiError::from)?,
-    )
-    .unwrap_or(Value::Null);
+    let draft =
+        crate::generate::parse_draft(&reply.text).map_err(|e| ApiError::bad(e.to_string()))?;
+    let canon: Value =
+        serde_json::from_str(&flow::to_canonical_json(&draft).map_err(ApiError::from)?)
+            .unwrap_or(Value::Null);
     let dag = flow::derive_dag(&draft).ok();
     Ok(json!({
         "ok": true,
@@ -954,12 +990,7 @@ pub(crate) async fn logic_flow_generate(
 
 /// Lineage up/downstream của một dataset (§4). Cạnh dataset suy từ mọi flow def
 /// (`flow::dataset_edges`) — cấu trúc, không phụ thuộc run đã chạy. BFS theo `depth`.
-pub(crate) fn logic_lineage(
-    db: &Db,
-    ns: &str,
-    name: &str,
-    depth: i64,
-) -> Result<Value, ApiError> {
+pub(crate) fn logic_lineage(db: &Db, ns: &str, name: &str, depth: i64) -> Result<Value, ApiError> {
     if db.dataset_get(ns, name)?.is_none() {
         return Err(ApiError::not_found(format!("không có dataset {ns}.{name}")));
     }
@@ -1005,7 +1036,11 @@ fn bfs_lineage(
             for (parent, child) in edges {
                 // upward: cạnh có child == node → parent là tổ tiên.
                 // downward: cạnh có parent == node → child là hậu duệ.
-                let (anchor, other) = if upward { (child, parent) } else { (parent, child) };
+                let (anchor, other) = if upward {
+                    (child, parent)
+                } else {
+                    (parent, child)
+                };
                 if anchor == node && !seen.contains(other) {
                     seen.insert(other.clone());
                     out.push(json!({
@@ -1061,7 +1096,13 @@ pub(crate) fn logic_flow_enable(db: &Db, id: &str, enabled: bool) -> Result<Valu
     let f = db
         .flow_get(id)?
         .ok_or_else(|| ApiError::not_found(format!("không có flow '{id}'")))?;
-    db.flow_upsert(id, f.name.as_deref(), &f.def, enabled, f.schedule.as_deref())?;
+    db.flow_upsert(
+        id,
+        f.name.as_deref(),
+        &f.def,
+        enabled,
+        f.schedule.as_deref(),
+    )?;
     Ok(json!({
         "ok": true,
         "flow_id": id,
@@ -1094,9 +1135,7 @@ pub(crate) fn logic_flow_run(
         EnqueueOutcome::FlowBusy => Err(ApiError::conflict(format!(
             "flow '{id}' đang có run active — chờ xong hoặc hủy trước"
         ))),
-        EnqueueOutcome::Backpressure => Err(ApiError::too_many(
-            "hàng đợi run đầy — thử lại sau",
-        )),
+        EnqueueOutcome::Backpressure => Err(ApiError::too_many("hàng đợi run đầy — thử lại sau")),
     }
 }
 
@@ -1200,7 +1239,10 @@ async fn list_datasets(State(st): State<AppState>, Query(q): Query<ListQuery>) -
     ))
 }
 
-async fn get_dataset(State(st): State<AppState>, Path((ns, name)): Path<(String, String)>) -> Response {
+async fn get_dataset(
+    State(st): State<AppState>,
+    Path((ns, name)): Path<(String, String)>,
+) -> Response {
     ok_or(logic_dataset_get(&st.db, &ns, &name))
 }
 
@@ -1615,9 +1657,16 @@ mod tests {
         let lin2 = logic_lineage(db, "raw", "events", 2).unwrap();
         let down2 = lin2["downstream"].as_array().unwrap();
         assert_eq!(down2.len(), 2);
-        assert!(down2.iter().any(|d| d["dataset"] == json!("marts.daily") && d["depth"] == json!(1)));
-        assert!(down2.iter().any(|d| d["dataset"] == json!("marts.weekly") && d["depth"] == json!(2)));
-        assert!(lin2["upstream"].as_array().unwrap().is_empty(), "source không có cha");
+        assert!(down2
+            .iter()
+            .any(|d| d["dataset"] == json!("marts.daily") && d["depth"] == json!(1)));
+        assert!(down2
+            .iter()
+            .any(|d| d["dataset"] == json!("marts.weekly") && d["depth"] == json!(2)));
+        assert!(
+            lin2["upstream"].as_array().unwrap().is_empty(),
+            "source không có cha"
+        );
 
         // depth=1 chặn lan tỏa bậc 2.
         let lin3 = logic_lineage(db, "raw", "events", 1).unwrap();

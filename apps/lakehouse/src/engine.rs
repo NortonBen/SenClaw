@@ -404,9 +404,12 @@ fn cell_json(arr: &ArrayRef, i: usize) -> Value {
         };
     }
     match arr.data_type() {
-        DataType::Boolean => {
-            Value::Bool(arr.as_any().downcast_ref::<BooleanArray>().unwrap().value(i))
-        }
+        DataType::Boolean => Value::Bool(
+            arr.as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .value(i),
+        ),
         DataType::Int8 => num!(Int8Array),
         DataType::Int16 => num!(Int16Array),
         DataType::Int32 => num!(Int32Array),
@@ -416,19 +419,34 @@ fn cell_json(arr: &ArrayRef, i: usize) -> Value {
         DataType::UInt32 => num!(UInt32Array),
         DataType::UInt64 => num!(UInt64Array),
         DataType::Float32 => {
-            let v = arr.as_any().downcast_ref::<Float32Array>().unwrap().value(i) as f64;
-            serde_json::Number::from_f64(v).map(Value::Number).unwrap_or(Value::Null)
+            let v = arr
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .unwrap()
+                .value(i) as f64;
+            serde_json::Number::from_f64(v)
+                .map(Value::Number)
+                .unwrap_or(Value::Null)
         }
         DataType::Float64 => {
-            let v = arr.as_any().downcast_ref::<Float64Array>().unwrap().value(i);
-            serde_json::Number::from_f64(v).map(Value::Number).unwrap_or(Value::Null)
+            let v = arr
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(i);
+            serde_json::Number::from_f64(v)
+                .map(Value::Number)
+                .unwrap_or(Value::Null)
         }
         DataType::Utf8 => {
             truncate_cell(arr.as_any().downcast_ref::<StringArray>().unwrap().value(i))
         }
-        DataType::LargeUtf8 => {
-            truncate_cell(arr.as_any().downcast_ref::<LargeStringArray>().unwrap().value(i))
-        }
+        DataType::LargeUtf8 => truncate_cell(
+            arr.as_any()
+                .downcast_ref::<LargeStringArray>()
+                .unwrap()
+                .value(i),
+        ),
         // Date/Timestamp/Binary/… → cast về chuỗi hiển thị rồi cắt.
         _ => match cast(arr, &DataType::Utf8) {
             Ok(s) => match s.as_any().downcast_ref::<StringArray>() {
@@ -537,7 +555,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open_memory().unwrap();
         // Tạo dataset + schema_version nhưng KHÔNG commit file vào manifest.
-        let ds = db.dataset_upsert("raw", "orders", None, None, None).unwrap();
+        let ds = db
+            .dataset_upsert("raw", "orders", None, None, None)
+            .unwrap();
         db.schema_version_add(ds, &lake::schema_to_json(&schema3()), Some("init"))
             .unwrap();
         // Land file xuống đĩa (vô hình) — không manifest_add_files.
@@ -564,7 +584,9 @@ mod tests {
         // §6.4: catalog schema có cột 'note'; file cũ thiếu cột đó → đọc NULL.
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open_memory().unwrap();
-        let ds = db.dataset_upsert("raw", "orders", None, None, None).unwrap();
+        let ds = db
+            .dataset_upsert("raw", "orders", None, None, None)
+            .unwrap();
         db.schema_version_add(ds, &lake::schema_to_json(&schema3()), Some("init"))
             .unwrap();
         // File cũ chỉ có (id, name) — thiếu 'note'.
@@ -584,9 +606,15 @@ mod tests {
             lake::land_batches_at(dir.path(), "raw", "orders", "run-old", &[old], None).unwrap();
         db.manifest_add_files(ds, "run-old", &files).unwrap();
 
-        let page = query_page_at(dir.path(), &db, "SELECT id, note FROM raw.orders", None, None)
-            .await
-            .unwrap();
+        let page = query_page_at(
+            dir.path(),
+            &db,
+            "SELECT id, note FROM raw.orders",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(page.returned, 1);
         assert_eq!(page.rows[0][0], serde_json::json!(1));
         assert_eq!(page.rows[0][1], Value::Null, "cột thiếu ở file → NULL");
@@ -616,9 +644,11 @@ mod tests {
         .await
         .is_err());
         // CREATE TABLE — DDL chặn.
-        assert!(query_page_at(dir.path(), &db, "CREATE TABLE x AS SELECT 1", None, None)
-            .await
-            .is_err());
+        assert!(
+            query_page_at(dir.path(), &db, "CREATE TABLE x AS SELECT 1", None, None)
+                .await
+                .is_err()
+        );
         // EXPLAIN ANALYZE INSERT — variant-filter tay bị lách; verify_plan bắt DML lồng.
         assert!(query_page_at(
             dir.path(),
@@ -630,13 +660,17 @@ mod tests {
         .await
         .is_err());
         // Multi-statement — parse-first chặn.
-        assert!(query_page_at(dir.path(), &db, "SELECT 1; SELECT 2", None, None)
-            .await
-            .is_err());
+        assert!(
+            query_page_at(dir.path(), &db, "SELECT 1; SELECT 2", None, None)
+                .await
+                .is_err()
+        );
         // SELECT hợp lệ vẫn chạy.
-        assert!(query_page_at(dir.path(), &db, "SELECT * FROM raw.orders", None, None)
-            .await
-            .is_ok());
+        assert!(
+            query_page_at(dir.path(), &db, "SELECT * FROM raw.orders", None, None)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -668,7 +702,15 @@ mod tests {
             ],
         )
         .unwrap();
-        import(dir.path(), &db, "raw", "orders", schema3(), vec![batch], "run-1");
+        import(
+            dir.path(),
+            &db,
+            "raw",
+            "orders",
+            schema3(),
+            vec![batch],
+            "run-1",
+        );
 
         // limit 2 → returned 2, has_more true, total_estimate None.
         let page = query_page_at(
@@ -689,9 +731,15 @@ mod tests {
         assert!(cell.starts_with("Xin chào"));
 
         // limit vượt trần 1000 → clamp; limit 0 → clamp lên 1.
-        let all = query_page_at(dir.path(), &db, "SELECT id FROM raw.orders", Some(9999), None)
-            .await
-            .unwrap();
+        let all = query_page_at(
+            dir.path(),
+            &db,
+            "SELECT id FROM raw.orders",
+            Some(9999),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(all.returned, 5);
         assert!(!all.has_more);
         let one = query_page_at(dir.path(), &db, "SELECT id FROM raw.orders", Some(0), None)

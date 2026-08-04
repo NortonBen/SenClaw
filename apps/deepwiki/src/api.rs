@@ -1,3 +1,5 @@
+use crate::db::{default_data_dir, Db};
+use crate::query;
 use axum::{
     extract::{Path as AxumPath, Query, State},
     http::StatusCode,
@@ -5,8 +7,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use crate::db::{default_data_dir, Db};
-use crate::query;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -61,7 +61,10 @@ pub fn api_router() -> Router {
         .route("/context", get(context))
         .route("/ask", post(ask))
         .route("/ask-history", get(ask_history))
-        .route("/ask-history/:id", get(ask_history_get).delete(ask_history_delete))
+        .route(
+            "/ask-history/:id",
+            get(ask_history_get).delete(ask_history_delete),
+        )
         .route("/pages", get(pages))
         .route("/page", get(get_page).post(save_page).delete(delete_page))
         .route("/generate-wiki", post(generate_wiki))
@@ -76,7 +79,10 @@ pub fn api_router() -> Router {
         .route("/files", get(files))
         .route("/snippet", get(snippet))
         // mcp
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -86,7 +92,9 @@ async fn status(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError>
     let root = s.db.get_meta("root").map_err(server)?;
     let pages = wiki::page_count(&s.db).map_err(server)?;
     let exclude = crate::index::load_settings(&s.db).custom_excludes;
-    Ok(Json(json!({ "root": root, "stats": stats, "pages": pages, "exclude": exclude })))
+    Ok(Json(
+        json!({ "root": root, "stats": stats, "pages": pages, "exclude": exclude }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -108,7 +116,11 @@ async fn index(
     }
     if let Some(ex) = &b.exclude {
         let mut st = crate::index::load_settings(&s.db);
-        st.custom_excludes = ex.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        st.custom_excludes = ex
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         let _ = crate::index::save_settings(&s.db, &st);
     }
     let db = s.db.clone();
@@ -148,7 +160,10 @@ async fn post_settings(
     Json(b): Json<SettingsBody>,
 ) -> Result<Json<Value>, ApiError> {
     let clean = |v: Vec<String>| -> Vec<String> {
-        v.into_iter().map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
+        v.into_iter()
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect()
     };
     let mut st = crate::index::load_settings(&s.db);
     if let Some(d) = b.default_excludes {
@@ -167,7 +182,8 @@ async fn post_settings(
 /// Report which SenClaw LLM the bridge will use (the active Main model), by
 /// querying the daemon's /api/llm-config. Confirms it's a real model, not a mock.
 async fn llm_info() -> Json<Value> {
-    let base = std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
+    let base =
+        std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
     let url = format!("{}/api/llm-config", base.trim_end_matches('/'));
     let fetch = reqwest::Client::new()
         .get(&url)
@@ -179,9 +195,12 @@ async fn llm_info() -> Json<Value> {
             Ok(v) => {
                 let active = v.get("activeId").and_then(|x| x.as_str()).unwrap_or("");
                 let cfg = v.get("configs").and_then(|a| a.as_array()).and_then(|a| {
-                    a.iter().find(|c| c.get("id").and_then(|x| x.as_str()) == Some(active))
+                    a.iter()
+                        .find(|c| c.get("id").and_then(|x| x.as_str()) == Some(active))
                 });
-                let model = cfg.and_then(|c| c.get("modelName")).and_then(|x| x.as_str());
+                let model = cfg
+                    .and_then(|c| c.get("modelName"))
+                    .and_then(|x| x.as_str());
                 let provider = cfg
                     .and_then(|c| c.get("provider").and_then(|x| x.as_str()))
                     .or_else(|| cfg.and_then(|c| c.get("adapt").and_then(|x| x.as_str())));
@@ -192,7 +211,9 @@ async fn llm_info() -> Json<Value> {
             }
             Err(e) => Json(json!({ "ok": false, "daemon": base, "error": format!("parse: {e}") })),
         },
-        Err(e) => Json(json!({ "ok": false, "daemon": base, "error": format!("Không kết nối daemon: {e}") })),
+        Err(e) => Json(
+            json!({ "ok": false, "daemon": base, "error": format!("Không kết nối daemon: {e}") }),
+        ),
     }
 }
 
@@ -366,9 +387,11 @@ fn build_prompt(db: &Db, q: &str, inv: &query::Investigation) -> (String, String
             std::cmp::Ordering::Equal => "focus".to_string(),
             std::cmp::Ordering::Greater => format!("callees L{d}"),
         };
-        let names = ns.iter()
+        let names = ns
+            .iter()
             .map(|n| format!("{}{}", n.id, if n.external { " (ext)" } else { "" }))
-            .collect::<Vec<_>>().join(", ");
+            .collect::<Vec<_>>()
+            .join(", ");
         u.push_str(&format!("  [{label}] {names}\n"));
     }
     if !inv.edges.is_empty() {
@@ -380,7 +403,10 @@ fn build_prompt(db: &Db, q: &str, inv: &query::Investigation) -> (String, String
 
     u.push_str("\nKey symbols:\n");
     for m in inv.matches.iter().take(8) {
-        u.push_str(&format!("- {} ({}) — {}:{}\n", m.name, m.kind, m.path, m.start_line));
+        u.push_str(&format!(
+            "- {} ({}) — {}:{}\n",
+            m.name, m.kind, m.path, m.start_line
+        ));
         if !m.signature.is_empty() {
             u.push_str(&format!("    sig: {}\n", m.signature));
         }
@@ -403,9 +429,14 @@ fn build_prompt(db: &Db, q: &str, inv: &query::Investigation) -> (String, String
 
 /// Call SenClaw's LLM through the Space-App bridge (`llm.request`).
 async fn bridge_llm(system: &str, user: &str) -> Result<(String, String), String> {
-    let base = std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
+    let base =
+        std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
     let app_id = std::env::var("SENCLAW_SPACE_APP_ID").unwrap_or_else(|_| "deepwiki".into());
-    let url = format!("{}/api/space/apps/{}/bridge", base.trim_end_matches('/'), app_id);
+    let url = format!(
+        "{}/api/space/apps/{}/bridge",
+        base.trim_end_matches('/'),
+        app_id
+    );
     let body = json!({
         "action": "llm.request",
         "payload": { "system": system, "prompt": user, "maxTokens": 1200 },
@@ -417,14 +448,27 @@ async fn bridge_llm(system: &str, user: &str) -> Result<(String, String), String
         .send()
         .await
         .map_err(|e| format!("Không gọi được SenClaw LLM ({url}): {e}"))?;
-    let v: Value = resp.json().await.map_err(|e| format!("Phản hồi LLM không hợp lệ: {e}"))?;
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Phản hồi LLM không hợp lệ: {e}"))?;
     match v.get("status").and_then(|x| x.as_str()) {
         Some("ok") => Ok((
-            v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            v.get("model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            v.get("text")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
+            v.get("model")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
         )),
         Some("pending") => Err("SenClaw bridge LLM chưa được bật trong daemon này.".into()),
-        _ => Err(v.get("message").and_then(|x| x.as_str()).unwrap_or("LLM lỗi không rõ").to_string()),
+        _ => Err(v
+            .get("message")
+            .and_then(|x| x.as_str())
+            .unwrap_or("LLM lỗi không rõ")
+            .to_string()),
     }
 }
 
@@ -439,7 +483,10 @@ async fn get_page(
 ) -> Result<Json<Value>, ApiError> {
     match wiki::get_page(&s.db, &q.slug).map_err(server)? {
         Some(p) => Ok(Json(json!(p))),
-        None => Err(ApiError(StatusCode::NOT_FOUND, format!("no page: {}", q.slug))),
+        None => Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("no page: {}", q.slug),
+        )),
     }
 }
 
@@ -478,8 +525,15 @@ async fn search(
     State(s): State<Arc<AppState>>,
     Query(q): Query<SearchQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let prefix = q.path.as_deref().map(|p| p.trim_end_matches('/').to_string());
-    let want = if prefix.is_some() { q.limit * 6 } else { q.limit };
+    let prefix = q
+        .path
+        .as_deref()
+        .map(|p| p.trim_end_matches('/').to_string());
+    let want = if prefix.is_some() {
+        q.limit * 6
+    } else {
+        q.limit
+    };
     let mut rows = query::search(&s.db, &q.q, want).map_err(server)?;
     if let Some(p) = prefix.filter(|p| !p.is_empty()) {
         rows.retain(|sym| sym.path == p || sym.path.starts_with(&format!("{p}/")));
@@ -500,7 +554,9 @@ async fn symbol(
     let defs = query::symbols_by_name(&s.db, &q.name).map_err(server)?;
     let callers = query::callers(&s.db, &q.name, 100).map_err(server)?;
     let callees = query::callees(&s.db, &q.name, 100).map_err(server)?;
-    Ok(Json(json!({ "name": q.name, "definitions": defs, "callers": callers, "callees": callees })))
+    Ok(Json(
+        json!({ "name": q.name, "definitions": defs, "callers": callers, "callees": callees }),
+    ))
 }
 
 async fn explore(
@@ -543,7 +599,9 @@ async fn file(
 ) -> Result<Json<Value>, ApiError> {
     let outline = query::file_outline(&s.db, &q.path).map_err(server)?;
     let imports = query::imports_of_file(&s.db, &q.path).map_err(server)?;
-    Ok(Json(json!({ "path": q.path, "outline": outline, "imports": imports })))
+    Ok(Json(
+        json!({ "path": q.path, "outline": outline, "imports": imports }),
+    ))
 }
 
 async fn files(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {

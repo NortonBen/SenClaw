@@ -68,7 +68,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "skill-builder-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -186,11 +188,21 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
             let triggers: Vec<String> = args["triggers"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let overwrite = args["overwrite"].as_bool().unwrap_or(false);
-            match state.daemon.create_skill(nm, desc, content, &triggers, overwrite).await {
-                Ok(_) => json_result(json!({ "installed": true, "name": nm, "triggers": triggers })),
+            match state
+                .daemon
+                .create_skill(nm, desc, content, &triggers, overwrite)
+                .await
+            {
+                Ok(_) => {
+                    json_result(json!({ "installed": true, "name": nm, "triggers": triggers }))
+                }
                 Err(e) => error_result(e.to_string()),
             }
         }

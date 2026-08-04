@@ -88,7 +88,8 @@ pub fn build_docx(text: &str) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     {
         let mut zip = ZipWriter::new(Cursor::new(&mut buf));
-        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         zip.start_file("[Content_Types].xml", opts)?;
         zip.write_all(CONTENT_TYPES.as_bytes())?;

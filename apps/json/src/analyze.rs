@@ -297,13 +297,19 @@ mod tests {
             r#"{"id":1,"ratio":0.5,"when":"2026-07-21","site":"https://x.dev","mail":"a@b.dev"}"#,
         )
         .unwrap();
-        assert_eq!(s["$schema"], json!("http://json-schema.org/draft-07/schema#"));
+        assert_eq!(
+            s["$schema"],
+            json!("http://json-schema.org/draft-07/schema#")
+        );
         assert_eq!(s["properties"]["id"]["type"], json!("integer"));
         assert_eq!(s["properties"]["ratio"]["type"], json!("number"));
         assert_eq!(s["properties"]["when"]["format"], json!("date"));
         assert_eq!(s["properties"]["site"]["format"], json!("uri"));
         assert_eq!(s["properties"]["mail"]["format"], json!("email"));
-        assert_eq!(s["required"], json!(["id", "mail", "ratio", "site", "when"]));
+        assert_eq!(
+            s["required"],
+            json!(["id", "mail", "ratio", "site", "when"])
+        );
     }
 
     #[test]
@@ -311,7 +317,10 @@ mod tests {
         // `b` is missing from the second element → optional; `a` changes type.
         let s = infer_schema(r#"[{"a":1,"b":"x"},{"a":"one"}]"#).unwrap();
         assert_eq!(s["type"], json!("array"));
-        assert_eq!(s["items"]["properties"]["a"]["type"], json!(["integer", "string"]));
+        assert_eq!(
+            s["items"]["properties"]["a"]["type"],
+            json!(["integer", "string"])
+        );
         assert_eq!(s["items"]["properties"]["b"]["type"], json!("string"));
         assert_eq!(s["items"]["required"], json!(["a"]));
     }
@@ -325,7 +334,10 @@ mod tests {
     #[test]
     fn nullable_field_keeps_both_types() {
         let s = infer_schema(r#"[{"a":"x"},{"a":null}]"#).unwrap();
-        assert_eq!(s["items"]["properties"]["a"]["type"], json!(["null", "string"]));
+        assert_eq!(
+            s["items"]["properties"]["a"]["type"],
+            json!(["null", "string"])
+        );
     }
 
     #[test]

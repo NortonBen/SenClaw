@@ -52,7 +52,10 @@ fn server(e: impl std::fmt::Display) -> ApiError {
 }
 
 fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 pub fn expand(path: &str) -> String {
@@ -116,7 +119,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/model-active", post(model_active))
         .route("/events", get(events))
         .route("/terminal", get(crate::pty::terminal_ws))
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -143,17 +149,24 @@ async fn open(
     Json(b): Json<OpenBody>,
 ) -> Result<Json<Value>, ApiError> {
     let root = PathBuf::from(expand(&b.path));
-    let root = root.canonicalize().map_err(|e| bad(format!("{}: {e}", b.path)))?;
+    let root = root
+        .canonicalize()
+        .map_err(|e| bad(format!("{}: {e}", b.path)))?;
     if !root.is_dir() {
         return Err(bad(format!("not a directory: {}", root.display())));
     }
-    let name = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let name = root
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     *s.root.lock().unwrap() = Some(root.clone());
     let _ = s.db.set_meta("root", &root.to_string_lossy());
     let _ = s.db.touch_recent(&root.to_string_lossy(), &name, now());
     crate::watch::install_watcher(&s, &root);
     let tree = workspace::list_dir(&root, "").map_err(server)?;
-    Ok(Json(json!({ "root": root.to_string_lossy(), "name": name, "tree": tree })))
+    Ok(Json(
+        json!({ "root": root.to_string_lossy(), "name": name, "tree": tree }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -166,7 +179,11 @@ struct BrowseQuery {
 /// Returns the canonical path, its parent (if any), and immediate child dirs.
 async fn browse(Query(q): Query<BrowseQuery>) -> Result<Json<Value>, ApiError> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-    let start = q.path.map(|p| expand(&p)).filter(|p| !p.is_empty()).unwrap_or_else(|| home.clone());
+    let start = q
+        .path
+        .map(|p| expand(&p))
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| home.clone());
     let dir = PathBuf::from(&start)
         .canonicalize()
         .unwrap_or_else(|_| PathBuf::from(&home));
@@ -186,10 +203,16 @@ async fn browse(Query(q): Query<BrowseQuery>) -> Result<Json<Value>, ApiError> {
         }
     }
     dirs.sort_by(|a, b| {
-        a["name"].as_str().unwrap_or("").to_lowercase().cmp(&b["name"].as_str().unwrap_or("").to_lowercase())
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .to_lowercase()
+            .cmp(&b["name"].as_str().unwrap_or("").to_lowercase())
     });
     let parent = dir.parent().map(|p| p.to_string_lossy().to_string());
-    Ok(Json(json!({ "path": dir.to_string_lossy(), "parent": parent, "dirs": dirs })))
+    Ok(Json(
+        json!({ "path": dir.to_string_lossy(), "parent": parent, "dirs": dirs }),
+    ))
 }
 
 async fn recents(State(s): State<Arc<AppState>>) -> Json<Value> {
@@ -213,7 +236,9 @@ async fn tree(
     Query(q): Query<PathQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let root = s.root()?;
-    Ok(Json(json!(workspace::list_dir(&root, &q.path).map_err(bad)?)))
+    Ok(Json(json!(
+        workspace::list_dir(&root, &q.path).map_err(bad)?
+    )))
 }
 
 async fn file(
@@ -221,7 +246,9 @@ async fn file(
     Query(q): Query<PathQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let root = s.root()?;
-    Ok(Json(json!(workspace::read_file(&root, &q.path).map_err(bad)?)))
+    Ok(Json(json!(
+        workspace::read_file(&root, &q.path).map_err(bad)?
+    )))
 }
 
 /// Flat list of workspace files for the chat `@`-mention picker.
@@ -241,10 +268,19 @@ async fn raw(
     let root = s.root()?;
     let path = workspace::safe_join(&root, &q.path).map_err(bad)?;
     if !path.is_file() {
-        return Err(ApiError(StatusCode::NOT_FOUND, format!("not a file: {}", q.path)));
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("not a file: {}", q.path),
+        ));
     }
     let bytes = tokio::fs::read(&path).await.map_err(server)?;
-    let ct = match path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase().as_str() {
+    let ct = match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -376,7 +412,10 @@ async fn git_out(root: &std::path::Path, args: &[&str]) -> Result<String, ApiErr
         .await
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("git: {e}")))?;
     if !out.status.success() {
-        return Err(ApiError(StatusCode::BAD_REQUEST, String::from_utf8_lossy(&out.stderr).trim().to_string()));
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
@@ -395,15 +434,21 @@ async fn git_filediff(
 ) -> Result<Json<Value>, ApiError> {
     let root = s.root()?;
     // Original = HEAD version (empty if the file is new / untracked).
-    let original = git_out(&root, &["show", &format!("HEAD:{}", q.path)]).await.unwrap_or_default();
+    let original = git_out(&root, &["show", &format!("HEAD:{}", q.path)])
+        .await
+        .unwrap_or_default();
     // Modified = staged (index) copy or the working-tree file.
     let modified = if q.staged {
-        git_out(&root, &["show", &format!(":{}", q.path)]).await.unwrap_or_default()
+        git_out(&root, &["show", &format!(":{}", q.path)])
+            .await
+            .unwrap_or_default()
     } else {
         let p = workspace::safe_join(&root, &q.path).map_err(bad)?;
         tokio::fs::read_to_string(&p).await.unwrap_or_default()
     };
-    Ok(Json(json!({ "path": q.path, "original": original, "modified": modified })))
+    Ok(Json(
+        json!({ "path": q.path, "original": original, "modified": modified }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -411,7 +456,10 @@ struct GitPathsBody {
     paths: Vec<String>,
 }
 
-async fn git_stage(State(s): State<Arc<AppState>>, Json(b): Json<GitPathsBody>) -> Result<Json<Value>, ApiError> {
+async fn git_stage(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<GitPathsBody>,
+) -> Result<Json<Value>, ApiError> {
     let root = s.root()?;
     let mut args = vec!["add", "--"];
     args.extend(b.paths.iter().map(|s| s.as_str()));
@@ -419,7 +467,10 @@ async fn git_stage(State(s): State<Arc<AppState>>, Json(b): Json<GitPathsBody>) 
     Ok(Json(json!({ "success": true })))
 }
 
-async fn git_unstage(State(s): State<Arc<AppState>>, Json(b): Json<GitPathsBody>) -> Result<Json<Value>, ApiError> {
+async fn git_unstage(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<GitPathsBody>,
+) -> Result<Json<Value>, ApiError> {
     let root = s.root()?;
     let mut args = vec!["reset", "-q", "HEAD", "--"];
     args.extend(b.paths.iter().map(|s| s.as_str()));
@@ -427,7 +478,10 @@ async fn git_unstage(State(s): State<Arc<AppState>>, Json(b): Json<GitPathsBody>
     Ok(Json(json!({ "success": true })))
 }
 
-async fn git_discard(State(s): State<Arc<AppState>>, Json(b): Json<GitPathsBody>) -> Result<Json<Value>, ApiError> {
+async fn git_discard(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<GitPathsBody>,
+) -> Result<Json<Value>, ApiError> {
     let root = s.root()?;
     let mut args = vec!["checkout", "--"];
     args.extend(b.paths.iter().map(|s| s.as_str()));
@@ -440,7 +494,10 @@ struct GitCommitBody {
     message: String,
 }
 
-async fn git_commit(State(s): State<Arc<AppState>>, Json(b): Json<GitCommitBody>) -> Result<Json<Value>, ApiError> {
+async fn git_commit(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<GitCommitBody>,
+) -> Result<Json<Value>, ApiError> {
     let root = s.root()?;
     if b.message.trim().is_empty() {
         return Err(bad("commit message trống"));
@@ -451,7 +508,11 @@ async fn git_commit(State(s): State<Arc<AppState>>, Json(b): Json<GitCommitBody>
 
 async fn git_head(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
     let root = s.root()?;
-    let branch = git_out(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).await.unwrap_or_default().trim().to_string();
+    let branch = git_out(&root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     Ok(Json(json!({ "branch": branch })))
 }
 
@@ -473,7 +534,13 @@ async fn git_log(
     let fmt = "%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s";
     let text = git_out(
         &root,
-        &["log", "--all", "--date-order", &format!("-n{}", q.limit), &format!("--pretty=format:{fmt}")],
+        &[
+            "log",
+            "--all",
+            "--date-order",
+            &format!("-n{}", q.limit),
+            &format!("--pretty=format:{fmt}"),
+        ],
     )
     .await
     .unwrap_or_default();
@@ -514,7 +581,10 @@ async fn chat(
 
 /// List the daemon's configured LLM models (id + display name).
 async fn models() -> Result<Json<Value>, ApiError> {
-    llm::list_models().await.map(Json).map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))
+    llm::list_models()
+        .await
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))
 }
 
 #[derive(Deserialize)]
@@ -524,7 +594,9 @@ struct ModelActiveBody {
 
 /// Set the daemon's active main model.
 async fn model_active(Json(b): Json<ModelActiveBody>) -> Result<Json<Value>, ApiError> {
-    llm::set_active_model(&b.id).await.map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
+    llm::set_active_model(&b.id)
+        .await
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(json!({ "success": true, "activeId": b.id })))
 }
 
@@ -547,7 +619,8 @@ async fn events(
 
 /// Which SenClaw LLM the bridge will use (mirrors DeepWiki's llm-info probe).
 async fn llm_info() -> Json<Value> {
-    let base = std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
+    let base =
+        std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
     let url = format!("{}/api/llm-config", base.trim_end_matches('/'));
     let fetch = reqwest::Client::new()
         .get(&url)
@@ -559,13 +632,18 @@ async fn llm_info() -> Json<Value> {
             Ok(v) => {
                 let active = v.get("activeId").and_then(|x| x.as_str()).unwrap_or("");
                 let cfg = v.get("configs").and_then(|a| a.as_array()).and_then(|a| {
-                    a.iter().find(|c| c.get("id").and_then(|x| x.as_str()) == Some(active))
+                    a.iter()
+                        .find(|c| c.get("id").and_then(|x| x.as_str()) == Some(active))
                 });
-                let model = cfg.and_then(|c| c.get("modelName")).and_then(|x| x.as_str());
+                let model = cfg
+                    .and_then(|c| c.get("modelName"))
+                    .and_then(|x| x.as_str());
                 Json(json!({ "ok": model.is_some(), "daemon": base, "model": model }))
             }
             Err(e) => Json(json!({ "ok": false, "daemon": base, "error": format!("parse: {e}") })),
         },
-        Err(e) => Json(json!({ "ok": false, "daemon": base, "error": format!("Không kết nối daemon: {e}") })),
+        Err(e) => Json(
+            json!({ "ok": false, "daemon": base, "error": format!("Không kết nối daemon: {e}") }),
+        ),
     }
 }

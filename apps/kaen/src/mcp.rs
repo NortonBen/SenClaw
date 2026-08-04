@@ -65,7 +65,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "kaen-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -300,7 +302,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             .unwrap_or_else(|_| "vi".into());
         let lang = {
             let l = s(args, "native_language");
-            if l.is_empty() { native } else { l }
+            if l.is_empty() {
+                native
+            } else {
+                l
+            }
         };
         return match crate::story::generate_story(
             db,
@@ -322,7 +328,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         }
         let lang = {
             let l = s(args, "target_lang");
-            if l.is_empty() { "vi".to_string() } else { l }
+            if l.is_empty() {
+                "vi".to_string()
+            } else {
+                l
+            }
         };
         return match crate::dictionary::lookup(db, &word, &lang).await {
             Ok(v) => json_result(v),
@@ -336,7 +346,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         }
         let level = {
             let l = s(args, "level");
-            if l.is_empty() { "A1".to_string() } else { l }
+            if l.is_empty() {
+                "A1".to_string()
+            } else {
+                l
+            }
         };
         let count = int(args, "count", 10).clamp(1, 50) as u32;
         let link = s(args, "grammar_slug");
@@ -345,12 +359,22 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             .as_deref()
             .and_then(|l| crate::grammar::grammar_content(db, l).ok().flatten())
             .map(|(_, _, c)| c);
-        return match crate::llm::generate_grammar_questions(&topic, &level, count, content.as_deref())
-            .await
+        return match crate::llm::generate_grammar_questions(
+            &topic,
+            &level,
+            count,
+            content.as_deref(),
+        )
+        .await
         {
             Ok(items) => {
-                match crate::grammar::save_generated_questions(db, &topic, &level, link.as_deref(), &items)
-                {
+                match crate::grammar::save_generated_questions(
+                    db,
+                    &topic,
+                    &level,
+                    link.as_deref(),
+                    &items,
+                ) {
                     Ok(v) => json_result(v),
                     Err(e) => error_result(e.to_string()),
                 }
@@ -359,64 +383,63 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         };
     }
 
-    let r: anyhow::Result<Value> = (|| {
-        match name {
-            "kaen_status" => {
-                let settings = db.settings()?;
-                let lessons = db.list_lessons()?;
-                let total_cards: i64 = lessons.iter().map(|l| l.card_count).sum();
-                Ok(json!({
-                    "lessons": lessons.len(),
-                    "totalCards": total_cards,
-                    "learnedWords": db.learned_count()?,
-                    "dueNow": db.due_count(chrono::Utc::now())?,
-                    "grammarDueForReview": crate::grammar::due_reminder_count(db)?,
-                    "currentStreak": settings.current_streak,
-                    "totalXP": settings.total_xp,
-                    "snoozeUntil": settings.snooze_until,
-                    "dailyWordGoal": settings.daily_word_goal,
-                }))
+    let r: anyhow::Result<Value> = (|| match name {
+        "kaen_status" => {
+            let settings = db.settings()?;
+            let lessons = db.list_lessons()?;
+            let total_cards: i64 = lessons.iter().map(|l| l.card_count).sum();
+            Ok(json!({
+                "lessons": lessons.len(),
+                "totalCards": total_cards,
+                "learnedWords": db.learned_count()?,
+                "dueNow": db.due_count(chrono::Utc::now())?,
+                "grammarDueForReview": crate::grammar::due_reminder_count(db)?,
+                "currentStreak": settings.current_streak,
+                "totalXP": settings.total_xp,
+                "snoozeUntil": settings.snooze_until,
+                "dailyWordGoal": settings.daily_word_goal,
+            }))
+        }
+        "kaen_grammar_list" => {
+            let level = s(args, "level");
+            let search = s(args, "search");
+            let study = s(args, "study");
+            crate::grammar::list_grammars(
+                db,
+                1,
+                100,
+                (!level.is_empty()).then_some(level.as_str()),
+                (!search.is_empty()).then_some(search.as_str()),
+                (!study.is_empty()).then_some(study.as_str()),
+            )
+        }
+        "kaen_grammar_show" => crate::grammar::view_grammar(db, &s(args, "id_or_slug")),
+        "kaen_grammar_create" => {
+            let title = s(args, "title");
+            let content = s(args, "content");
+            if title.is_empty() || content.is_empty() {
+                anyhow::bail!("Thiếu title hoặc content");
             }
-            "kaen_grammar_list" => {
-                let level = s(args, "level");
-                let search = s(args, "search");
-                let study = s(args, "study");
-                crate::grammar::list_grammars(
-                    db,
-                    1,
-                    100,
-                    (!level.is_empty()).then_some(level.as_str()),
-                    (!search.is_empty()).then_some(search.as_str()),
-                    (!study.is_empty()).then_some(study.as_str()),
-                )
+            let desc = s(args, "description");
+            let level = s(args, "level");
+            crate::grammar::create_grammar(
+                db,
+                &title,
+                &content,
+                (!desc.is_empty()).then_some(desc.as_str()),
+                if level.is_empty() { "B1" } else { &level },
+                int(args, "index", 0),
+            )
+        }
+        "kaen_grammar_test_questions" => {
+            crate::grammar::questions_for_topic(db, &s(args, "topic_id"))
+        }
+        "kaen_grammar_test_submit" => {
+            let topic_id = s(args, "topic_id");
+            if topic_id.is_empty() {
+                anyhow::bail!("Thiếu topic_id");
             }
-            "kaen_grammar_show" => crate::grammar::view_grammar(db, &s(args, "id_or_slug")),
-            "kaen_grammar_create" => {
-                let title = s(args, "title");
-                let content = s(args, "content");
-                if title.is_empty() || content.is_empty() {
-                    anyhow::bail!("Thiếu title hoặc content");
-                }
-                let desc = s(args, "description");
-                let level = s(args, "level");
-                crate::grammar::create_grammar(
-                    db,
-                    &title,
-                    &content,
-                    (!desc.is_empty()).then_some(desc.as_str()),
-                    if level.is_empty() { "B1" } else { &level },
-                    int(args, "index", 0),
-                )
-            }
-            "kaen_grammar_test_questions" => {
-                crate::grammar::questions_for_topic(db, &s(args, "topic_id"))
-            }
-            "kaen_grammar_test_submit" => {
-                let topic_id = s(args, "topic_id");
-                if topic_id.is_empty() {
-                    anyhow::bail!("Thiếu topic_id");
-                }
-                let answers: Vec<Value> = args["answers"]
+            let answers: Vec<Value> = args["answers"]
                     .as_array()
                     .map(|arr| {
                         arr.iter()
@@ -429,121 +452,128 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                             .collect()
                     })
                     .unwrap_or_default();
-                if answers.is_empty() {
-                    anyhow::bail!("Thiếu answers");
-                }
-                crate::grammar::submit_test(db, &topic_id, &answers)
+            if answers.is_empty() {
+                anyhow::bail!("Thiếu answers");
             }
-            "kaen_lesson_list" => Ok(json!(db.list_lessons()?)),
-            "kaen_lesson_show" => ops::lesson_json(db, &s(args, "lesson_id"), true),
-            "kaen_lesson_create" => {
-                let title = s(args, "title");
-                if title.is_empty() {
-                    anyhow::bail!("Thiếu title");
-                }
-                let desc = s(args, "description");
-                Ok(json!(db.create_lesson(&title, (!desc.is_empty()).then_some(desc.as_str()))?))
-            }
-            "kaen_import_text" => {
-                let title = s(args, "title");
-                let raw = s(args, "raw_text");
-                if title.is_empty() || raw.is_empty() {
-                    anyhow::bail!("Thiếu title hoặc raw_text");
-                }
-                let sep = s(args, "separator");
-                ops::import_lesson(db, &title, &raw, if sep.is_empty() { "|" } else { &sep })
-            }
-            "kaen_card_add" => {
-                let lesson_id = s(args, "lesson_id");
-                let word = s(args, "word");
-                if lesson_id.is_empty() || word.is_empty() {
-                    anyhow::bail!("Thiếu lesson_id hoặc word");
-                }
-                if db.get_lesson(&lesson_id)?.is_none() {
-                    anyhow::bail!("Không tìm thấy bài học");
-                }
-                let meaning = s(args, "meaning_vi");
-                let meanings = (!meaning.is_empty()).then(|| json!({ "vi": meaning }));
-                let example = s(args, "example");
-                let examples = (!example.is_empty()).then(|| json!([example]));
-                let ipa = s(args, "ipa");
-                let pos = s(args, "part_of_speech");
-                Ok(json!(db.insert_card(
-                    &lesson_id,
-                    &word,
-                    None,
-                    (!ipa.is_empty()).then_some(ipa.as_str()),
-                    (!pos.is_empty()).then_some(pos.as_str()),
-                    examples.as_ref(),
-                    &s(args, "explain"),
-                    meanings.as_ref(),
-                )?))
-            }
-            "kaen_study_session" => {
-                let lesson_id = s(args, "lesson_id");
-                if lesson_id.is_empty() {
-                    ops::session(db)
-                } else {
-                    ops::lesson_session(db, &lesson_id)
-                }
-            }
-            "kaen_review_submit" => {
-                let card_id = s(args, "card_id");
-                let result = s(args, "result");
-                if card_id.is_empty() || result.is_empty() {
-                    anyhow::bail!("Thiếu card_id hoặc result");
-                }
-                let mode = s(args, "mode");
-                ops::submit_review(db, &card_id, &result, if mode.is_empty() { "FLIP" } else { &mode })
-            }
-            "kaen_due_count" => Ok(json!({ "dueNow": db.due_count(chrono::Utc::now())? })),
-            "kaen_snooze" => ops::snooze(db, int(args, "hours", 1)),
-            "kaen_stats" => {
-                let settings = db.settings()?;
-                let mut v = ops::stats_level(db)?;
-                let today = ops::stats_today(db)?;
-                let obj = v.as_object_mut().unwrap();
-                obj.insert("today".into(), today);
-                obj.insert("currentStreak".into(), json!(settings.current_streak));
-                obj.insert("totalXP".into(), json!(settings.total_xp));
-                Ok(v)
-            }
-            "kaen_story_list" => crate::story::list_stories(db),
-            "kaen_story_show" => crate::story::get_story(db, &s(args, "story_id")),
-            "kaen_dictation_list" => {
-                let topic = s(args, "topic");
-                crate::dictation::list_lessons(
-                    db,
-                    (!topic.is_empty()).then_some(topic.as_str()),
-                    None,
-                    int(args, "limit", 20),
-                    int(args, "page", 1),
-                )
-            }
-            "kaen_dictation_import" => {
-                let payload: Value = serde_json::from_str(&s(args, "json"))
-                    .map_err(|e| anyhow::anyhow!("JSON không hợp lệ: {e}"))?;
-                crate::dictation::import_json(db, &payload)
-            }
-            "kaen_settings_get" => Ok(json!(db.settings()?)),
-            "kaen_settings_set" => {
-                let mut patch = serde_json::Map::new();
-                if let Some(slots) = args.get("study_slots").filter(|v| v.is_array()) {
-                    patch.insert("studySlots".into(), slots.clone());
-                }
-                if args["timezone"].is_string() {
-                    patch.insert("timezone".into(), args["timezone"].clone());
-                }
-                if args["daily_word_goal"].is_i64() {
-                    patch.insert("dailyWordGoal".into(), args["daily_word_goal"].clone());
-                }
-                if args["native_language"].is_string() {
-                    patch.insert("nativeLanguage".into(), args["native_language"].clone());
-                }
-                ops::update_profile(db, &Value::Object(patch))
-            }
-            other => anyhow::bail!("Tool không tồn tại: {other}"),
+            crate::grammar::submit_test(db, &topic_id, &answers)
         }
+        "kaen_lesson_list" => Ok(json!(db.list_lessons()?)),
+        "kaen_lesson_show" => ops::lesson_json(db, &s(args, "lesson_id"), true),
+        "kaen_lesson_create" => {
+            let title = s(args, "title");
+            if title.is_empty() {
+                anyhow::bail!("Thiếu title");
+            }
+            let desc = s(args, "description");
+            Ok(json!(db.create_lesson(
+                &title,
+                (!desc.is_empty()).then_some(desc.as_str())
+            )?))
+        }
+        "kaen_import_text" => {
+            let title = s(args, "title");
+            let raw = s(args, "raw_text");
+            if title.is_empty() || raw.is_empty() {
+                anyhow::bail!("Thiếu title hoặc raw_text");
+            }
+            let sep = s(args, "separator");
+            ops::import_lesson(db, &title, &raw, if sep.is_empty() { "|" } else { &sep })
+        }
+        "kaen_card_add" => {
+            let lesson_id = s(args, "lesson_id");
+            let word = s(args, "word");
+            if lesson_id.is_empty() || word.is_empty() {
+                anyhow::bail!("Thiếu lesson_id hoặc word");
+            }
+            if db.get_lesson(&lesson_id)?.is_none() {
+                anyhow::bail!("Không tìm thấy bài học");
+            }
+            let meaning = s(args, "meaning_vi");
+            let meanings = (!meaning.is_empty()).then(|| json!({ "vi": meaning }));
+            let example = s(args, "example");
+            let examples = (!example.is_empty()).then(|| json!([example]));
+            let ipa = s(args, "ipa");
+            let pos = s(args, "part_of_speech");
+            Ok(json!(db.insert_card(
+                &lesson_id,
+                &word,
+                None,
+                (!ipa.is_empty()).then_some(ipa.as_str()),
+                (!pos.is_empty()).then_some(pos.as_str()),
+                examples.as_ref(),
+                &s(args, "explain"),
+                meanings.as_ref(),
+            )?))
+        }
+        "kaen_study_session" => {
+            let lesson_id = s(args, "lesson_id");
+            if lesson_id.is_empty() {
+                ops::session(db)
+            } else {
+                ops::lesson_session(db, &lesson_id)
+            }
+        }
+        "kaen_review_submit" => {
+            let card_id = s(args, "card_id");
+            let result = s(args, "result");
+            if card_id.is_empty() || result.is_empty() {
+                anyhow::bail!("Thiếu card_id hoặc result");
+            }
+            let mode = s(args, "mode");
+            ops::submit_review(
+                db,
+                &card_id,
+                &result,
+                if mode.is_empty() { "FLIP" } else { &mode },
+            )
+        }
+        "kaen_due_count" => Ok(json!({ "dueNow": db.due_count(chrono::Utc::now())? })),
+        "kaen_snooze" => ops::snooze(db, int(args, "hours", 1)),
+        "kaen_stats" => {
+            let settings = db.settings()?;
+            let mut v = ops::stats_level(db)?;
+            let today = ops::stats_today(db)?;
+            let obj = v.as_object_mut().unwrap();
+            obj.insert("today".into(), today);
+            obj.insert("currentStreak".into(), json!(settings.current_streak));
+            obj.insert("totalXP".into(), json!(settings.total_xp));
+            Ok(v)
+        }
+        "kaen_story_list" => crate::story::list_stories(db),
+        "kaen_story_show" => crate::story::get_story(db, &s(args, "story_id")),
+        "kaen_dictation_list" => {
+            let topic = s(args, "topic");
+            crate::dictation::list_lessons(
+                db,
+                (!topic.is_empty()).then_some(topic.as_str()),
+                None,
+                int(args, "limit", 20),
+                int(args, "page", 1),
+            )
+        }
+        "kaen_dictation_import" => {
+            let payload: Value = serde_json::from_str(&s(args, "json"))
+                .map_err(|e| anyhow::anyhow!("JSON không hợp lệ: {e}"))?;
+            crate::dictation::import_json(db, &payload)
+        }
+        "kaen_settings_get" => Ok(json!(db.settings()?)),
+        "kaen_settings_set" => {
+            let mut patch = serde_json::Map::new();
+            if let Some(slots) = args.get("study_slots").filter(|v| v.is_array()) {
+                patch.insert("studySlots".into(), slots.clone());
+            }
+            if args["timezone"].is_string() {
+                patch.insert("timezone".into(), args["timezone"].clone());
+            }
+            if args["daily_word_goal"].is_i64() {
+                patch.insert("dailyWordGoal".into(), args["daily_word_goal"].clone());
+            }
+            if args["native_language"].is_string() {
+                patch.insert("nativeLanguage".into(), args["native_language"].clone());
+            }
+            ops::update_profile(db, &Value::Object(patch))
+        }
+        other => anyhow::bail!("Tool không tồn tại: {other}"),
     })();
     match r {
         Ok(v) => json_result(v),

@@ -84,7 +84,9 @@ fn next_boundary(start: NaiveDateTime, iv: Interval) -> NaiveDateTime {
             } else {
                 (d.year(), d.month() + 1)
             };
-            NaiveDate::from_ymd_opt(y, m, 1).unwrap().and_time(NaiveTime::MIN)
+            NaiveDate::from_ymd_opt(y, m, 1)
+                .unwrap()
+                .and_time(NaiveTime::MIN)
         }
     }
 }
@@ -110,7 +112,9 @@ fn prev_boundary(start: NaiveDateTime, iv: Interval) -> NaiveDateTime {
             } else {
                 (d.year(), d.month() - 1)
             };
-            NaiveDate::from_ymd_opt(y, m, 1).unwrap().and_time(NaiveTime::MIN)
+            NaiveDate::from_ymd_opt(y, m, 1)
+                .unwrap()
+                .and_time(NaiveTime::MIN)
         }
     }
 }
@@ -278,9 +282,8 @@ pub async fn run_incremental_range(
             .dataset_get_by_id(ds_id)?
             .ok_or_else(|| anyhow!("dataset id {ds_id} biến mất"))?;
         let part = label(b0, iv);
-        let applied = sync::apply_land_partition_at(
-            root, db, &dataset, run_id, &part, &batches, None,
-        )?;
+        let applied =
+            sync::apply_land_partition_at(root, db, &dataset, run_id, &part, &batches, None)?;
         // Verify time_column có trong output (bucket đúng partition) — nhẹ, chỉ khi có dòng.
         let _ = time_col;
         outcome.intervals_run += 1;
@@ -345,7 +348,15 @@ pub async fn run_incremental_auto(
     let end = next_boundary(floor_to(max_t, iv), iv);
 
     run_incremental_range(
-        root, db, def, step, run_id, flow_id, def_version, start, end,
+        root,
+        db,
+        def,
+        step,
+        run_id,
+        flow_id,
+        def_version,
+        start,
+        end,
     )
     .await
 }
@@ -371,8 +382,9 @@ async fn probe_minmax(
     // Cast cả hai cột về Utf8 rồi parse cell 0.
     let str_cell = |idx: usize| -> Option<NaiveDateTime> {
         let col = b.column(idx);
-        let s = datafusion::arrow::compute::cast(col, &datafusion::arrow::datatypes::DataType::Utf8)
-            .ok()?;
+        let s =
+            datafusion::arrow::compute::cast(col, &datafusion::arrow::datatypes::DataType::Utf8)
+                .ok()?;
         let sa = s
             .as_any()
             .downcast_ref::<datafusion::arrow::array::StringArray>()?;
@@ -407,10 +419,9 @@ pub async fn execute_transform(
             a.rows_written
         }
         "incremental_by_time" => {
-            let o = run_incremental_auto(
-                root, db, def, step, run_id, flow_id, flow_row.def_version,
-            )
-            .await?;
+            let o =
+                run_incremental_auto(root, db, def, step, run_id, flow_id, flow_row.def_version)
+                    .await?;
             o.rows_written
         }
         other => return Err(anyhow!("transform kind '{other}' chưa hỗ trợ")),
@@ -488,7 +499,10 @@ mod tests {
     fn substitute_macros_quotes_bounds() {
         let sql = "SELECT * FROM t WHERE d >= @start AND d < @end";
         let out = substitute_macros(sql, "2024-01-01", "2024-01-02");
-        assert_eq!(out, "SELECT * FROM t WHERE d >= '2024-01-01' AND d < '2024-01-02'");
+        assert_eq!(
+            out,
+            "SELECT * FROM t WHERE d >= '2024-01-01' AND d < '2024-01-02'"
+        );
     }
 
     // ---- full transform end-to-end ----
@@ -521,7 +535,15 @@ mod tests {
             ],
         )
         .unwrap();
-        import(root, &db, "raw", "orders", schema_id_amount(), vec![orders], "r1");
+        import(
+            root,
+            &db,
+            "raw",
+            "orders",
+            schema_id_amount(),
+            vec![orders],
+            "r1",
+        );
         let custs = RecordBatch::try_new(
             schema_id_name(),
             vec![
@@ -530,7 +552,15 @@ mod tests {
             ],
         )
         .unwrap();
-        import(root, &db, "raw", "customers", schema_id_name(), vec![custs], "r2");
+        import(
+            root,
+            &db,
+            "raw",
+            "customers",
+            schema_id_name(),
+            vec![custs],
+            "r2",
+        );
 
         // Flow: sources orders/customers (alias trần), transform JOIN → marts.rev.
         let def: FlowDef = serde_json::from_value(serde_json::json!({
@@ -551,10 +581,16 @@ mod tests {
         .unwrap();
 
         let step = def.transforms[0].clone();
-        run_full(root, &db, &def, &step, "run-1", "shop").await.unwrap();
+        run_full(root, &db, &def, &step, "run-1", "shop")
+            .await
+            .unwrap();
 
         let page = engine::query_page_at(
-            root, &db, "SELECT name, total FROM marts.rev ORDER BY name", None, None,
+            root,
+            &db,
+            "SELECT name, total FROM marts.rev ORDER BY name",
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -565,7 +601,9 @@ mod tests {
         assert_eq!(page.rows[1][1], serde_json::json!(5));
 
         // Chạy lại full = idempotent (swap), vẫn 2 dòng.
-        run_full(root, &db, &def, &step, "run-2", "shop").await.unwrap();
+        run_full(root, &db, &def, &step, "run-2", "shop")
+            .await
+            .unwrap();
         let page2 = engine::query_page_at(root, &db, "SELECT * FROM marts.rev", None, None)
             .await
             .unwrap();
@@ -612,9 +650,15 @@ mod tests {
     }
 
     async fn daily_count(root: &Path, db: &Db) -> i64 {
-        let page = engine::query_page_at(root, db, "SELECT COUNT(*) AS n FROM marts.daily", None, None)
-            .await
-            .unwrap();
+        let page = engine::query_page_at(
+            root,
+            db,
+            "SELECT COUNT(*) AS n FROM marts.daily",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         page.rows[0][0].as_i64().unwrap()
     }
     async fn daily_total(root: &Path, db: &Db, day: &str) -> i64 {
@@ -649,7 +693,15 @@ mod tests {
 
         // Chạy [01-01, 01-04) → 3 partition.
         let o = run_incremental_range(
-            root, &db, &def, &step, "run-1", "ev", 1, nd("2024-01-01"), nd("2024-01-04"),
+            root,
+            &db,
+            &def,
+            &step,
+            "run-1",
+            "ev",
+            1,
+            nd("2024-01-01"),
+            nd("2024-01-04"),
         )
         .await
         .unwrap();
@@ -660,17 +712,35 @@ mod tests {
 
         // Chạy lại CÙNG interval 01-02 → partition thay, KHÔNG nhân đôi.
         let o2 = run_incremental_range(
-            root, &db, &def, &step, "run-2", "ev", 1, nd("2024-01-02"), nd("2024-01-03"),
+            root,
+            &db,
+            &def,
+            &step,
+            "run-2",
+            "ev",
+            1,
+            nd("2024-01-02"),
+            nd("2024-01-03"),
         )
         .await
         .unwrap();
         assert_eq!(o2.intervals_run, 1);
-        assert_eq!(daily_count(root, &db).await, 3, "vẫn 3 ngày, không nhân đôi");
-        assert_eq!(daily_total(root, &db, "2024-01-02").await, 7, "tổng đúng, không cộng dồn");
+        assert_eq!(
+            daily_count(root, &db).await,
+            3,
+            "vẫn 3 ngày, không nhân đôi"
+        );
+        assert_eq!(
+            daily_total(root, &db, "2024-01-02").await,
+            7,
+            "tổng đúng, không cộng dồn"
+        );
 
         // step_interval ghi nhận các interval success.
         let done = db.step_interval_list_success("ev", "daily", 1).unwrap();
-        assert!(done.iter().any(|s| s.interval_start.starts_with("2024-01-02")));
+        assert!(done
+            .iter()
+            .any(|s| s.interval_start.starts_with("2024-01-02")));
     }
 
     #[tokio::test]
@@ -695,11 +765,7 @@ mod tests {
 
         // Sửa dữ liệu ngày 01-03 (giá trị mới) rồi auto run lại: prior_end = 01-04,
         // lookback=2 → start lùi về 01-02, chạy lại 01-02 + 01-03 (2 interval).
-        let ev2 = day_batch(&[
-            ("2024-01-01", 5),
-            ("2024-01-02", 7),
-            ("2024-01-03", 99),
-        ]);
+        let ev2 = day_batch(&[("2024-01-01", 5), ("2024-01-02", 7), ("2024-01-03", 99)]);
         // Full-refresh raw.events (swap) để đổi giá trị 01-03.
         let ds = db.dataset_get("raw", "events").unwrap().unwrap();
         let files = lake::land_batches_at(root, "raw", "events", "r2", &[ev2], None).unwrap();
@@ -711,6 +777,10 @@ mod tests {
         // Lookback=2 → chạy lại đúng 2 interval cuối.
         assert_eq!(o2.intervals_run, 2, "lookback=2 chạy lại 2 interval");
         assert_eq!(daily_count(root, &db).await, 3, "vẫn 3 ngày");
-        assert_eq!(daily_total(root, &db, "2024-01-03").await, 99, "giá trị mới sau restatement");
+        assert_eq!(
+            daily_total(root, &db, "2024-01-03").await,
+            99,
+            "giá trị mới sau restatement"
+        );
     }
 }

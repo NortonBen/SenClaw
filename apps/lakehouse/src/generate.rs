@@ -52,7 +52,10 @@ pub fn system_prompt() -> String {
 /// Schema đưa vào để model dùng đúng tên bảng/cột thay vì bịa.
 pub fn build_prompt(description: &str, introspection: Option<&Value>) -> String {
     let mut p = format!("YÊU CẦU:\n{}\n", description.trim());
-    if let Some(tables) = introspection.and_then(|v| v.get("tables")).and_then(|t| t.as_array()) {
+    if let Some(tables) = introspection
+        .and_then(|v| v.get("tables"))
+        .and_then(|t| t.as_array())
+    {
         p.push_str("\nSCHEMA NGUỒN (dùng đúng tên bảng/cột):\n");
         for t in tables {
             let schema = t.get("schema").and_then(|s| s.as_str());

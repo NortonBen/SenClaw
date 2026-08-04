@@ -100,10 +100,10 @@ impl Core {
                     }),
                     Some(_) => {
                         let id = spec.id.clone();
-                        self.registry.write().await.register(Arc::new(McpSource::new(
-                            spec,
-                            self.transports.apps.clone(),
-                        )));
+                        self.registry
+                            .write()
+                            .await
+                            .register(Arc::new(McpSource::new(spec, self.transports.apps.clone())));
                         report.push(SourceSyncReport {
                             id,
                             registered: true,
@@ -123,10 +123,7 @@ impl Core {
                     let id = spec.id.clone();
                     {
                         let mut reg = self.registry.write().await;
-                        reg.register(Arc::new(McpSource::new(
-                            spec,
-                            self.transports.apps.clone(),
-                        )));
+                        reg.register(Arc::new(McpSource::new(spec, self.transports.apps.clone())));
                         reg.set_config(&id, Some(enabled), None, None, None);
                     }
                     report.push(SourceSyncReport {

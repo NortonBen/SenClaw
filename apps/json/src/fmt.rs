@@ -155,7 +155,10 @@ mod tests {
         let zebra = out.find("zebra").unwrap();
         let apple = out.find("apple").unwrap();
         assert!(zebra < apple, "keys were reordered:\n{out}");
-        assert_eq!(out, "{\n  \"zebra\": 1,\n  \"apple\": 2,\n  \"mango\": 3\n}");
+        assert_eq!(
+            out,
+            "{\n  \"zebra\": 1,\n  \"apple\": 2,\n  \"mango\": 3\n}"
+        );
     }
 
     #[test]
@@ -179,7 +182,10 @@ mod tests {
     #[test]
     fn sorted_orders_keys_at_every_level() {
         let out = sorted(r#"{"z":1,"a":{"d":2,"b":3}}"#, 2).unwrap();
-        assert_eq!(out, "{\n  \"a\": {\n    \"b\": 3,\n    \"d\": 2\n  },\n  \"z\": 1\n}");
+        assert_eq!(
+            out,
+            "{\n  \"a\": {\n    \"b\": 3,\n    \"d\": 2\n  },\n  \"z\": 1\n}"
+        );
     }
 
     #[test]

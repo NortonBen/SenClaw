@@ -65,7 +65,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "shopee-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -196,7 +198,8 @@ async fn call_tool(s: &AppState, name: &str, args: &Value) -> Value {
             }
         }
         "shopee_shop_info" => {
-            let (Some(client), Some(sid)) = (api::client_from_settings(&s.db), api::shop_id(&s.db)) else {
+            let (Some(client), Some(sid)) = (api::client_from_settings(&s.db), api::shop_id(&s.db))
+            else {
                 return error_result("chưa kết nối shop".into());
             };
             match api::fresh_token(&s.db, &client, sid).await {
@@ -210,25 +213,54 @@ async fn call_tool(s: &AppState, name: &str, args: &Value) -> Value {
         "shopee_orders" => json_result(&api::orders_value(s).await),
         "shopee_conversations" => json_result(&api::conversations_value(s).await),
         "shopee_draft_reply" => {
-            let conversation_id = args.get("conversation_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let conversation_id = args
+                .get("conversation_id")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             let to_id = args.get("to_id").and_then(|x| x.as_i64()).unwrap_or(0);
             if conversation_id.is_empty() || to_id == 0 {
                 return error_result("cần 'conversation_id' và 'to_id'".into());
             }
-            let to_name = args.get("to_name").and_then(|x| x.as_str()).unwrap_or("khách").to_string();
-            let content = args.get("content").and_then(|x| x.as_str()).map(|s| s.to_string());
-            let customer_msg = args.get("customer_msg").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let to_name = args
+                .get("to_name")
+                .and_then(|x| x.as_str())
+                .unwrap_or("khách")
+                .to_string();
+            let content = args
+                .get("content")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string());
+            let customer_msg = args
+                .get("customer_msg")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             let extra = args.get("context").and_then(|x| x.as_str());
             let order_sn = args.get("order_sn").and_then(|x| x.as_str());
             let context = api::grounded_context(s, order_sn, extra).await;
-            let res = api::enqueue_or_send(s, &conversation_id, to_id, &to_name, content, &customer_msg, &context, "agent").await;
+            let res = api::enqueue_or_send(
+                s,
+                &conversation_id,
+                to_id,
+                &to_name,
+                content,
+                &customer_msg,
+                &context,
+                "agent",
+            )
+            .await;
             json_result(&res)
         }
         "shopee_order_detail" => {
             let sns: Vec<String> = args
                 .get("order_sn")
                 .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
                 .unwrap_or_default();
             if sns.is_empty() {
                 return error_result("cần 'order_sn'".into());
@@ -251,7 +283,10 @@ async fn call_tool(s: &AppState, name: &str, args: &Value) -> Value {
         }
         "shopee_tick" => json_result(&crate::engine::tick(s).await),
         "shopee_products" => {
-            let status = args.get("status").and_then(|x| x.as_str()).unwrap_or("NORMAL");
+            let status = args
+                .get("status")
+                .and_then(|x| x.as_str())
+                .unwrap_or("NORMAL");
             json_result(&api::products_value(s, status).await)
         }
         "shopee_product_info" => {

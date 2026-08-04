@@ -84,8 +84,14 @@ pub fn templates() -> Vec<SourceTemplate> {
         app_id: "social",
         tool: "social_search",
         required_args: &[
-            ("platform", "nền tảng: facebook | x | threads | instagram | tiktok"),
-            ("handle", "tài khoản đã đăng nhập dùng để tìm, ví dụ @ten_cua_ban"),
+            (
+                "platform",
+                "nền tảng: facebook | x | threads | instagram | tiktok",
+            ),
+            (
+                "handle",
+                "tài khoản đã đăng nhập dùng để tìm, ví dụ @ten_cua_ban",
+            ),
         ],
         why: "social_search tìm bằng phiên đăng nhập THẬT của một tài khoản cụ thể. \
               Không thể đoán tài khoản thay bạn — đoán sai là tìm kiếm dưới danh nghĩa người khác.",
@@ -98,14 +104,25 @@ mod tests {
 
     #[test]
     fn youtube_is_not_sent_a_limit_argument_it_does_not_accept() {
-        let yt = auto_specs().into_iter().find(|s| s.id == "youtube").unwrap();
+        let yt = auto_specs()
+            .into_iter()
+            .find(|s| s.id == "youtube")
+            .unwrap();
         assert_eq!(yt.limit_arg, None);
     }
 
     #[test]
     fn youtube_carries_a_url_template_because_it_returns_no_url() {
-        let yt = auto_specs().into_iter().find(|s| s.id == "youtube").unwrap();
-        assert!(yt.map.url_template.as_deref().unwrap().contains("{videoId}"));
+        let yt = auto_specs()
+            .into_iter()
+            .find(|s| s.id == "youtube")
+            .unwrap();
+        assert!(yt
+            .map
+            .url_template
+            .as_deref()
+            .unwrap()
+            .contains("{videoId}"));
     }
 
     #[test]

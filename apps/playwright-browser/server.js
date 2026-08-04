@@ -11,6 +11,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 4107;
+// Loopback by default — this app authenticates nothing of its own, and the
+// daemon reaches it over 127.0.0.1. SENCLAW_BIND_HOST=0.0.0.0 opts in to LAN.
+const HOST = process.env.SENCLAW_BIND_HOST || '127.0.0.1';
 const MCP_PATH = process.env.MCP_PATH || '/api/mcp/sse';
 
 const app = express();
@@ -112,8 +115,8 @@ app.post(MCP_PATH, async (req, res) => {
 const distPath = path.join(__dirname, 'web/dist');
 app.use(express.static(distPath));
 
-const server = app.listen(PORT, '127.0.0.1', () => {
-  console.log(`playwright-browser server listening on port ${PORT}`);
+const server = app.listen(PORT, HOST, () => {
+  console.log(`playwright-browser server listening on http://${HOST}:${PORT}`);
 });
 
 // Setup WebSocket for screenshot streaming

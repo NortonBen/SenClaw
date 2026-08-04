@@ -58,7 +58,10 @@ CREATE TABLE IF NOT EXISTS activity (
 "#;
 
 fn now() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 impl Db {
@@ -67,7 +70,10 @@ impl Db {
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-                PathBuf::from(home).join(".senclaw").join("apps").join("shopee")
+                PathBuf::from(home)
+                    .join(".senclaw")
+                    .join("apps")
+                    .join("shopee")
             });
         std::fs::create_dir_all(&dir).ok();
         Self::open(dir.join("shopee.db"))
@@ -77,24 +83,32 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     #[cfg(test)]
     pub fn open_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     // ---- settings (kv) ----
 
     pub fn get_setting(&self, key: &str) -> Option<String> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get(0))
-            .optional()
-            .ok()
-            .flatten()
+        conn.query_row(
+            "SELECT value FROM settings WHERE key=?1",
+            params![key],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
@@ -120,7 +134,13 @@ impl Db {
 
     // ---- tokens ----
 
-    pub fn save_token(&self, shop_id: i64, access: &str, refresh: &str, expire_in: i64) -> Result<()> {
+    pub fn save_token(
+        &self,
+        shop_id: i64,
+        access: &str,
+        refresh: &str,
+        expire_in: i64,
+    ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let expires_at = now() + expire_in;
         conn.execute(
@@ -141,12 +161,14 @@ impl Db {
         conn.query_row(
             "SELECT shop_id,access_token,refresh_token,expires_at FROM tokens WHERE shop_id=?1",
             params![shop_id],
-            |r| Ok(Token {
-                shop_id: r.get(0)?,
-                access_token: r.get(1)?,
-                refresh_token: r.get(2)?,
-                expires_at: r.get(3)?,
-            }),
+            |r| {
+                Ok(Token {
+                    shop_id: r.get(0)?,
+                    access_token: r.get(1)?,
+                    refresh_token: r.get(2)?,
+                    expires_at: r.get(3)?,
+                })
+            },
         )
         .optional()
         .ok()
@@ -155,12 +177,28 @@ impl Db {
 
     // ---- drafts ----
 
-    pub fn add_draft(&self, conversation_id: &str, to_id: i64, to_name: &str, content: &str, source: &str, model: &str) -> Result<i64> {
+    pub fn add_draft(
+        &self,
+        conversation_id: &str,
+        to_id: i64,
+        to_name: &str,
+        content: &str,
+        source: &str,
+        model: &str,
+    ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO drafts(kind,conversation_id,to_id,to_name,content,source,model,created_at)
              VALUES('chat_reply',?1,?2,?3,?4,?5,?6,?7)",
-            params![conversation_id, to_id, to_name, content, source, model, now()],
+            params![
+                conversation_id,
+                to_id,
+                to_name,
+                content,
+                source,
+                model,
+                now()
+            ],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -284,7 +322,9 @@ mod tests {
     #[test]
     fn draft_lifecycle() {
         let db = Db::open_memory().unwrap();
-        let id = db.add_draft("conv1", 42, "Khách A", "Dạ em gửi anh ạ", "user", "").unwrap();
+        let id = db
+            .add_draft("conv1", 42, "Khách A", "Dạ em gửi anh ạ", "user", "")
+            .unwrap();
         assert_eq!(db.list_drafts("pending").len(), 1);
         db.decide_draft(id, "approved", "").unwrap();
         assert_eq!(db.list_drafts("pending").len(), 0);

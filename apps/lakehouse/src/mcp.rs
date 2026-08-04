@@ -73,7 +73,10 @@ fn from_logic(r: Result<Value, ApiError>) -> Value {
     }
 }
 
-pub async fn mcp_message(State(state): State<AppState>, Json(req): Json<JsonRpcRequest>) -> Json<Value> {
+pub async fn mcp_message(
+    State(state): State<AppState>,
+    Json(req): Json<JsonRpcRequest>,
+) -> Json<Value> {
     let reply = |result: Value| -> Json<Value> {
         Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": result }))
     };
@@ -404,7 +407,8 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let ds = s(args, "dataset");
             let format = s(args, "format");
             from_logic(
-                api::logic_dataset_export(db, &ns, &ds, &format, opt_s(args, "sql").as_deref()).await,
+                api::logic_dataset_export(db, &ns, &ds, &format, opt_s(args, "sql").as_deref())
+                    .await,
             )
         }
 
@@ -416,7 +420,9 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
 
         "lake_query" => {
             let sql = s(args, "sql");
-            from_logic(api::logic_query(db, &sql, opt_int(args, "limit"), opt_int(args, "offset")).await)
+            from_logic(
+                api::logic_query(db, &sql, opt_int(args, "limit"), opt_int(args, "offset")).await,
+            )
         }
 
         "lake_query_explain" => {
@@ -426,8 +432,13 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
 
         // ---- connections ----
         "lake_connection_add" => from_logic(
-            api::logic_connection_add(db, opt_s(args, "id").as_deref(), &s(args, "kind"), &s(args, "dsn"))
-                .await,
+            api::logic_connection_add(
+                db,
+                opt_s(args, "id").as_deref(),
+                &s(args, "kind"),
+                &s(args, "dsn"),
+            )
+            .await,
         ),
         "lake_connection_list" => from_logic(api::logic_connection_list(db)),
         "lake_connection_test" => {
@@ -437,8 +448,12 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             from_logic(api::logic_connection_delete(db, &s(args, "connection_id")))
         }
         "lake_db_introspect" => from_logic(
-            api::logic_connection_introspect(db, &s(args, "connection_id"), opt_s(args, "schema").as_deref())
-                .await,
+            api::logic_connection_introspect(
+                db,
+                &s(args, "connection_id"),
+                opt_s(args, "schema").as_deref(),
+            )
+            .await,
         ),
 
         // ---- flows ----
@@ -457,20 +472,34 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         "lake_flow_get" => from_logic(api::logic_flow_get(db, &s(args, "flow_id"))),
         "lake_flow_delete" => from_logic(api::logic_flow_delete(db, &s(args, "flow_id"))),
         "lake_flow_generate" => from_logic(
-            api::logic_flow_generate(db, &s(args, "description"), opt_s(args, "connection_id").as_deref())
-                .await,
+            api::logic_flow_generate(
+                db,
+                &s(args, "description"),
+                opt_s(args, "connection_id").as_deref(),
+            )
+            .await,
         ),
-        "lake_flow_run" => {
-            from_logic(api::logic_flow_run(db, Some(&state.hub), &s(args, "flow_id")))
-        }
+        "lake_flow_run" => from_logic(api::logic_flow_run(
+            db,
+            Some(&state.hub),
+            &s(args, "flow_id"),
+        )),
         "lake_flow_backfill" => {
             let str_list = |key: &str| -> Vec<String> {
                 args[key]
                     .as_array()
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default()
             };
-            let steps = if args["steps"].is_array() { Some(str_list("steps")) } else { None };
+            let steps = if args["steps"].is_array() {
+                Some(str_list("steps"))
+            } else {
+                None
+            };
             from_logic(
                 api::logic_flow_backfill(
                     db,
@@ -494,9 +523,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             opt_int(args, "limit").unwrap_or(100),
             opt_int(args, "offset").unwrap_or(0),
         )),
-        "lake_run_cancel" => {
-            from_logic(api::logic_run_cancel(db, &state.cancels, &s(args, "run_id")))
-        }
+        "lake_run_cancel" => from_logic(api::logic_run_cancel(
+            db,
+            &state.cancels,
+            &s(args, "run_id"),
+        )),
         "lake_run_logs" => from_logic(api::logic_run_logs(
             db,
             &s(args, "run_id"),
@@ -611,7 +642,10 @@ mod tests {
         assert!(out.get("isError").is_none(), "import lỗi: {out}");
         let payload: Value =
             serde_json::from_str(out["content"][0]["text"].as_str().unwrap()).unwrap();
-        let ds = payload["datasets"][0]["dataset"].as_str().unwrap().to_string();
+        let ds = payload["datasets"][0]["dataset"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // list thấy dataset.
         let list = call_tool(&st, "lake_dataset_list", &json!({})).await;
@@ -666,8 +700,11 @@ mod tests {
         let db = Db::open_memory().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let canon = dir.path().canonicalize().unwrap();
-        db.set_setting("import_paths", &json!([canon.to_str().unwrap()]).to_string())
-            .unwrap();
+        db.set_setting(
+            "import_paths",
+            &json!([canon.to_str().unwrap()]).to_string(),
+        )
+        .unwrap();
         let fpath = canon.join("d.csv");
         std::fs::write(&fpath, b"id\n1\n").unwrap();
         let bytes = read_allowed_path(&db, fpath.to_str().unwrap()).unwrap();
@@ -733,10 +770,19 @@ mod tests {
         assert_eq!(ap["ok"], json!(true));
 
         // 2) introspect thấy bảng events + cột.
-        let intro = call_tool(&st, "lake_db_introspect", &json!({ "connection_id": "src_e2e" })).await;
+        let intro = call_tool(
+            &st,
+            "lake_db_introspect",
+            &json!({ "connection_id": "src_e2e" }),
+        )
+        .await;
         let ip = payload(&intro);
         assert!(
-            ip["tables"].as_array().unwrap().iter().any(|t| t["name"] == json!("events")),
+            ip["tables"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["name"] == json!("events")),
             "introspect phải thấy bảng events: {ip}"
         );
 
@@ -768,7 +814,11 @@ mod tests {
         // 5) poll run_status → success.
         let status = call_tool(&st, "lake_run_status", &json!({ "run_id": run_id })).await;
         let sp = payload(&status);
-        assert_eq!(sp["run"]["status"], json!("success"), "run phải success: {sp}");
+        assert_eq!(
+            sp["run"]["status"],
+            json!("success"),
+            "run phải success: {sp}"
+        );
 
         // 6) lake_query thấy đủ 3 dòng.
         let q = call_tool(
@@ -778,12 +828,19 @@ mod tests {
         )
         .await;
         let qp = payload(&q);
-        assert_eq!(qp["rows"][0][0], json!(3), "lake_query phải thấy 3 dòng: {qp}");
+        assert_eq!(
+            qp["rows"][0][0],
+            json!(3),
+            "lake_query phải thấy 3 dòng: {qp}"
+        );
 
         // 7) run_logs có dòng.
         let logs = call_tool(&st, "lake_run_logs", &json!({ "run_id": run_id })).await;
         let lp = payload(&logs);
-        assert!(lp["returned"].as_i64().unwrap() > 0, "run_logs phải có dòng: {lp}");
+        assert!(
+            lp["returned"].as_i64().unwrap() > 0,
+            "run_logs phải có dòng: {lp}"
+        );
     }
 
     /// Xóa connection bị chặn khi còn flow tham chiếu (409 → isError).
@@ -803,12 +860,23 @@ mod tests {
             }]
         });
         let created = call_tool(&st, "lake_flow_create", &json!({ "def": def })).await;
-        assert!(created.get("isError").is_none(), "flow_create lỗi: {created}");
+        assert!(
+            created.get("isError").is_none(),
+            "flow_create lỗi: {created}"
+        );
 
-        let del = call_tool(&st, "lake_connection_delete", &json!({ "connection_id": "src_ref" })).await;
+        let del = call_tool(
+            &st,
+            "lake_connection_delete",
+            &json!({ "connection_id": "src_ref" }),
+        )
+        .await;
         assert_eq!(del["isError"], json!(true), "xóa phải bị chặn");
         assert!(
-            del["content"][0]["text"].as_str().unwrap().contains("còn flow tham chiếu"),
+            del["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("còn flow tham chiếu"),
             "thông báo phải nêu flow tham chiếu: {del}"
         );
     }
@@ -829,7 +897,11 @@ mod tests {
             .iter()
             .find(|c| c["id"] == json!("pg"))
             .unwrap();
-        assert_eq!(pg["dsn"], json!("postgres://user:•••@host:5432/db"), "DSN phải redact");
+        assert_eq!(
+            pg["dsn"],
+            json!("postgres://user:•••@host:5432/db"),
+            "DSN phải redact"
+        );
         assert!(
             !pg["dsn"].as_str().unwrap().contains("secret"),
             "mật khẩu không được lộ: {pg}"

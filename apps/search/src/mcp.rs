@@ -79,7 +79,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": SERVER_NAME, "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -154,9 +156,7 @@ fn spec_from_args(args: &Value) -> Result<McpSourceSpec, String> {
     let tool = arg_str(args, "tool").ok_or("thiếu tham số `tool`")?;
 
     let target = match (arg_str(args, "app_id"), arg_str(args, "rpc_url")) {
-        (Some(_), Some(_)) => {
-            return Err("chỉ được dùng MỘT trong `app_id` hoặc `rpc_url`".into())
-        }
+        (Some(_), Some(_)) => return Err("chỉ được dùng MỘT trong `app_id` hoặc `rpc_url`".into()),
         (Some(app_id), None) => McpTarget::App { app_id },
         (None, Some(rpc_url)) => McpTarget::Url { rpc_url },
         (None, None) => return Err("cần `app_id` hoặc `rpc_url`".into()),
@@ -164,13 +164,15 @@ fn spec_from_args(args: &Value) -> Result<McpSourceSpec, String> {
 
     let kind = match arg_str(args, "kind").as_deref() {
         None => SourceKind::Custom,
-        Some(k) => serde_json::from_value(json!(k))
-            .map_err(|_| format!("`kind` không hợp lệ: `{k}` (web|internal|social|docs|code|custom)"))?,
+        Some(k) => serde_json::from_value(json!(k)).map_err(|_| {
+            format!("`kind` không hợp lệ: `{k}` (web|internal|social|docs|code|custom)")
+        })?,
     };
 
     let map: FieldMap = match args.get("map") {
-        Some(v) if !v.is_null() => serde_json::from_value(v.clone())
-            .map_err(|e| format!("`map` không hợp lệ: {e}"))?,
+        Some(v) if !v.is_null() => {
+            serde_json::from_value(v.clone()).map_err(|e| format!("`map` không hợp lệ: {e}"))?
+        }
         _ => FieldMap::default(),
     };
 
