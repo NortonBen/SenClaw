@@ -28,7 +28,11 @@ impl std::fmt::Display for MoltError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.status == 429 {
             if let Some(ra) = self.retry_after {
-                return write!(f, "Moltbook rate limit (429) — thử lại sau {ra}s: {}", self.message);
+                return write!(
+                    f,
+                    "Moltbook rate limit (429) — thử lại sau {ra}s: {}",
+                    self.message
+                );
             }
         }
         if self.status == 0 {
@@ -41,7 +45,11 @@ impl std::fmt::Display for MoltError {
 
 impl MoltError {
     fn transport(msg: impl Into<String>) -> Self {
-        Self { status: 0, message: msg.into(), retry_after: None }
+        Self {
+            status: 0,
+            message: msg.into(),
+            retry_after: None,
+        }
     }
 }
 
@@ -75,7 +83,11 @@ impl Moltbook {
             .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_default();
-        Self { base, api_key, http }
+        Self {
+            base,
+            api_key,
+            http,
+        }
     }
 
     pub fn base(&self) -> &str {
@@ -104,7 +116,10 @@ impl Moltbook {
                 }
             }
         }
-        let resp = req.send().await.map_err(|e| MoltError::transport(e.to_string()))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| MoltError::transport(e.to_string()))?;
         let status = resp.status().as_u16();
         let retry_after = resp
             .headers()
@@ -123,9 +138,17 @@ impl Moltbook {
                 .map(str::to_string)
                 .unwrap_or_else(|| {
                     let raw = value.get("raw").and_then(|r| r.as_str()).unwrap_or("");
-                    if raw.is_empty() { format!("HTTP {status}") } else { raw.chars().take(240).collect() }
+                    if raw.is_empty() {
+                        format!("HTTP {status}")
+                    } else {
+                        raw.chars().take(240).collect()
+                    }
                 });
-            Err(MoltError { status, message, retry_after })
+            Err(MoltError {
+                status,
+                message,
+                retry_after,
+            })
         }
     }
 
@@ -133,7 +156,8 @@ impl Moltbook {
         self.send(self.http.get(self.url(path)), auth).await
     }
     async fn post(&self, path: &str, body: Value, auth: bool) -> MoltResult {
-        self.send(self.http.post(self.url(path)).json(&body), auth).await
+        self.send(self.http.post(self.url(path)).json(&body), auth)
+            .await
     }
     async fn delete(&self, path: &str, auth: bool) -> MoltResult {
         self.send(self.http.delete(self.url(path)), auth).await
@@ -163,12 +187,14 @@ impl Moltbook {
 
     /// Another molty's public profile.
     pub async fn profile_of(&self, name: &str) -> MoltResult {
-        self.get(&format!("/agents/profile?name={}", urlencode(name)), true).await
+        self.get(&format!("/agents/profile?name={}", urlencode(name)), true)
+            .await
     }
 
     /// Update your own description / metadata.
     pub async fn update_me(&self, patch: Value) -> MoltResult {
-        self.send(self.http.patch(self.url("/agents/me")).json(&patch), true).await
+        self.send(self.http.patch(self.url("/agents/me")).json(&patch), true)
+            .await
     }
 
     // ---- dashboard & feeds ----
@@ -182,7 +208,11 @@ impl Moltbook {
 
     /// Personalised feed. `sort` ∈ hot|new|top; `filter` ∈ all|following.
     pub async fn feed(&self, sort: &str, filter: &str, cursor: Option<&str>) -> MoltResult {
-        let mut q = format!("/feed?sort={}&filter={}", urlencode(sort), urlencode(filter));
+        let mut q = format!(
+            "/feed?sort={}&filter={}",
+            urlencode(sort),
+            urlencode(filter)
+        );
         if let Some(c) = cursor {
             q.push_str(&format!("&cursor={}", urlencode(c)));
         }
@@ -191,9 +221,18 @@ impl Moltbook {
 
     /// The global posts feed. `sort` ∈ hot|new|top|rising. When `submolt` is set,
     /// hits the submolt's own feed instead.
-    pub async fn posts(&self, sort: &str, submolt: Option<&str>, cursor: Option<&str>) -> MoltResult {
+    pub async fn posts(
+        &self,
+        sort: &str,
+        submolt: Option<&str>,
+        cursor: Option<&str>,
+    ) -> MoltResult {
         let mut q = match submolt {
-            Some(name) => format!("/submolts/{}/feed?sort={}", urlencode(name), urlencode(sort)),
+            Some(name) => format!(
+                "/submolts/{}/feed?sort={}",
+                urlencode(name),
+                urlencode(sort)
+            ),
             None => format!("/posts?sort={}", urlencode(sort)),
         };
         if let Some(c) = cursor {
@@ -203,13 +242,19 @@ impl Moltbook {
     }
 
     pub async fn get_post(&self, post_id: &str) -> MoltResult {
-        self.get(&format!("/posts/{}", urlencode(post_id)), true).await
+        self.get(&format!("/posts/{}", urlencode(post_id)), true)
+            .await
     }
 
     /// Semantic search over posts/comments. `kind` ∈ all|posts|comments.
     pub async fn search(&self, q: &str, kind: &str, limit: i64) -> MoltResult {
         self.get(
-            &format!("/search?q={}&type={}&limit={}", urlencode(q), urlencode(kind), limit),
+            &format!(
+                "/search?q={}&type={}&limit={}",
+                urlencode(q),
+                urlencode(kind),
+                limit
+            ),
             true,
         )
         .await
@@ -248,11 +293,16 @@ impl Moltbook {
     }
 
     pub async fn delete_post(&self, post_id: &str) -> MoltResult {
-        self.delete(&format!("/posts/{}", urlencode(post_id)), true).await
+        self.delete(&format!("/posts/{}", urlencode(post_id)), true)
+            .await
     }
 
     pub async fn comments(&self, post_id: &str, sort: &str, cursor: Option<&str>) -> MoltResult {
-        let mut q = format!("/posts/{}/comments?sort={}", urlencode(post_id), urlencode(sort));
+        let mut q = format!(
+            "/posts/{}/comments?sort={}",
+            urlencode(post_id),
+            urlencode(sort)
+        );
         if let Some(c) = cursor {
             q.push_str(&format!("&cursor={}", urlencode(c)));
         }
@@ -270,17 +320,37 @@ impl Moltbook {
         if let Some(p) = parent_id.filter(|p| !p.is_empty()) {
             body["parent_id"] = json!(p);
         }
-        self.post(&format!("/posts/{}/comments", urlencode(post_id)), body, true).await
+        self.post(
+            &format!("/posts/{}/comments", urlencode(post_id)),
+            body,
+            true,
+        )
+        .await
     }
 
     pub async fn upvote_post(&self, post_id: &str) -> MoltResult {
-        self.post(&format!("/posts/{}/upvote", urlencode(post_id)), json!({}), true).await
+        self.post(
+            &format!("/posts/{}/upvote", urlencode(post_id)),
+            json!({}),
+            true,
+        )
+        .await
     }
     pub async fn downvote_post(&self, post_id: &str) -> MoltResult {
-        self.post(&format!("/posts/{}/downvote", urlencode(post_id)), json!({}), true).await
+        self.post(
+            &format!("/posts/{}/downvote", urlencode(post_id)),
+            json!({}),
+            true,
+        )
+        .await
     }
     pub async fn upvote_comment(&self, comment_id: &str) -> MoltResult {
-        self.post(&format!("/comments/{}/upvote", urlencode(comment_id)), json!({}), true).await
+        self.post(
+            &format!("/comments/{}/upvote", urlencode(comment_id)),
+            json!({}),
+            true,
+        )
+        .await
     }
 
     // ---- submolts (communities) ----
@@ -293,7 +363,8 @@ impl Moltbook {
         self.get(&q, true).await
     }
     pub async fn submolt(&self, name: &str) -> MoltResult {
-        self.get(&format!("/submolts/{}", urlencode(name)), true).await
+        self.get(&format!("/submolts/{}", urlencode(name)), true)
+            .await
     }
     pub async fn create_submolt(
         &self,
@@ -315,19 +386,31 @@ impl Moltbook {
         .await
     }
     pub async fn subscribe(&self, name: &str) -> MoltResult {
-        self.post(&format!("/submolts/{}/subscribe", urlencode(name)), json!({}), true).await
+        self.post(
+            &format!("/submolts/{}/subscribe", urlencode(name)),
+            json!({}),
+            true,
+        )
+        .await
     }
     pub async fn unsubscribe(&self, name: &str) -> MoltResult {
-        self.delete(&format!("/submolts/{}/subscribe", urlencode(name)), true).await
+        self.delete(&format!("/submolts/{}/subscribe", urlencode(name)), true)
+            .await
     }
 
     // ---- follow ----
 
     pub async fn follow(&self, molty_name: &str) -> MoltResult {
-        self.post(&format!("/agents/{}/follow", urlencode(molty_name)), json!({}), true).await
+        self.post(
+            &format!("/agents/{}/follow", urlencode(molty_name)),
+            json!({}),
+            true,
+        )
+        .await
     }
     pub async fn unfollow(&self, molty_name: &str) -> MoltResult {
-        self.delete(&format!("/agents/{}/follow", urlencode(molty_name)), true).await
+        self.delete(&format!("/agents/{}/follow", urlencode(molty_name)), true)
+            .await
     }
 
     // ---- anti-human verification ----
@@ -354,15 +437,28 @@ pub fn extract_register_fields(v: &Value) -> (String, String, String) {
     let claim = pick_str(
         v,
         &[
-            "claim_url", "claimUrl", "claim", "claim_link", "claimLink",
-            "verification_url", "verificationUrl", "verify_url", "verifyUrl",
+            "claim_url",
+            "claimUrl",
+            "claim",
+            "claim_link",
+            "claimLink",
+            "verification_url",
+            "verificationUrl",
+            "verify_url",
+            "verifyUrl",
         ],
     )
     .or_else(|| find_claim_url(v))
     .unwrap_or_default();
     let code = pick_str(
         v,
-        &["verification_code", "verificationCode", "code", "verify_code", "verifyCode"],
+        &[
+            "verification_code",
+            "verificationCode",
+            "code",
+            "verify_code",
+            "verifyCode",
+        ],
     )
     .unwrap_or_default();
     (api_key, claim, code)
@@ -372,8 +468,12 @@ pub fn extract_register_fields(v: &Value) -> (String, String, String) {
 /// few common wrapper objects.
 fn pick_str(v: &Value, keys: &[&str]) -> Option<String> {
     let get = |obj: &Value| -> Option<String> {
-        keys.iter()
-            .find_map(|k| obj.get(k).and_then(|x| x.as_str()).filter(|s| !s.is_empty()).map(str::to_string))
+        keys.iter().find_map(|k| {
+            obj.get(k)
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
     };
     if let Some(s) = get(v) {
         return Some(s);
@@ -423,9 +523,13 @@ fn extract_urls_from_str(s: &str, out: &mut Vec<String>) {
     while let Some(idx) = rest.find("http") {
         let tail = &rest[idx..];
         let end = tail
-            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>' | '|' | '\\'))
+            .find(|c: char| {
+                c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '<' | '>' | '|' | '\\')
+            })
             .unwrap_or(tail.len());
-        let url = tail[..end].trim_end_matches(|c: char| matches!(c, '.' | ',' | ')' | ']' | '}' | ';' | ':' | '!' | '?'));
+        let url = tail[..end].trim_end_matches(|c: char| {
+            matches!(c, '.' | ',' | ')' | ']' | '}' | ';' | ':' | '!' | '?')
+        });
         if url.starts_with("http://") || url.starts_with("https://") {
             out.push(url.to_string());
         }
@@ -438,7 +542,9 @@ pub fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.as_bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
@@ -479,7 +585,11 @@ mod tests {
 
     #[test]
     fn rate_limit_error_mentions_retry() {
-        let e = MoltError { status: 429, message: "slow down".into(), retry_after: Some(30) };
+        let e = MoltError {
+            status: 429,
+            message: "slow down".into(),
+            retry_after: Some(30),
+        };
         assert!(e.to_string().contains("30s"));
     }
 
@@ -488,12 +598,20 @@ mod tests {
         let snake = json!({ "api_key": "k1", "claim_url": "https://www.moltbook.com/claim/a", "verification_code": "111" });
         assert_eq!(
             extract_register_fields(&snake),
-            ("k1".into(), "https://www.moltbook.com/claim/a".into(), "111".into())
+            (
+                "k1".into(),
+                "https://www.moltbook.com/claim/a".into(),
+                "111".into()
+            )
         );
         let camel = json!({ "apiKey": "k2", "claimUrl": "https://www.moltbook.com/claim/b", "verificationCode": "222" });
         assert_eq!(
             extract_register_fields(&camel),
-            ("k2".into(), "https://www.moltbook.com/claim/b".into(), "222".into())
+            (
+                "k2".into(),
+                "https://www.moltbook.com/claim/b".into(),
+                "222".into()
+            )
         );
     }
 
@@ -517,8 +635,14 @@ mod tests {
     #[test]
     fn find_claim_url_ignores_bare_base() {
         // The base URL alone must NOT be mistaken for a claim link.
-        assert_eq!(find_claim_url(&json!({ "url": "https://www.moltbook.com" })), None);
-        assert_eq!(find_claim_url(&json!({ "site": "https://www.moltbook.com/" })), None);
+        assert_eq!(
+            find_claim_url(&json!({ "url": "https://www.moltbook.com" })),
+            None
+        );
+        assert_eq!(
+            find_claim_url(&json!({ "site": "https://www.moltbook.com/" })),
+            None
+        );
         assert_eq!(
             find_claim_url(&json!({ "x": "https://www.moltbook.com/m/general" })),
             Some("https://www.moltbook.com/m/general".into())

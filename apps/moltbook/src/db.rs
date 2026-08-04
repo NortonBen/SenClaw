@@ -92,6 +92,21 @@ CREATE TABLE IF NOT EXISTS topics (
   used_at    INTEGER,
   created_at INTEGER NOT NULL
 );
+-- Research workflows: sequences of MCP-tool steps run BEFORE composing a
+-- comment ('comment'), a new post ('post'), or either ('both'). `steps` is a
+-- JSON array (see research::Step); enabled workflows for a flow run in
+-- parallel and their outputs are synthesised into one research bundle.
+CREATE TABLE IF NOT EXISTS workflows (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  name           TEXT NOT NULL,
+  flow           TEXT NOT NULL DEFAULT 'both',
+  steps          TEXT NOT NULL DEFAULT '[]',
+  extract_prompt TEXT NOT NULL DEFAULT '',
+  enabled        INTEGER NOT NULL DEFAULT 1,
+  builtin        INTEGER NOT NULL DEFAULT 0,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS posts_cache (
   post_id       TEXT PRIMARY KEY,
   submolt       TEXT NOT NULL DEFAULT '',
@@ -107,6 +122,23 @@ CREATE TABLE IF NOT EXISTS posts_cache (
   raw           TEXT NOT NULL DEFAULT '{}'
 );
 "#;
+
+/// Additive migrations for databases created before a column existed. Errors are
+/// ignored on purpose — re-applying an existing ALTER just fails harmlessly.
+const MIGRATIONS: &[&str] = &[
+    // A post can be created on Moltbook and THEN fail its anti-human
+    // verification. Remember the pending challenge so it can be retried without
+    // re-posting (which would duplicate the post).
+    "ALTER TABLE drafts ADD COLUMN verify_post_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE drafts ADD COLUMN verify_code TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE drafts ADD COLUMN verify_challenge TEXT NOT NULL DEFAULT ''",
+    // Research trail on a draft: the synthesised bundle (JSON), the open
+    // questions gating publication (JSON array — non-empty ⇒ status
+    // 'needs_input'), and the human's answer once given.
+    "ALTER TABLE drafts ADD COLUMN research TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE drafts ADD COLUMN questions TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE drafts ADD COLUMN answer TEXT NOT NULL DEFAULT ''",
+];
 
 // ---- serializable rows ----
 
@@ -131,6 +163,30 @@ pub struct Draft {
     pub error: String,
     pub created_at: i64,
     pub decided_at: Option<i64>,
+    /// Set when the post WAS created on Moltbook but its anti-human
+    /// verification hasn't gone through yet. Retry with these instead of
+    /// re-approving (which would post a duplicate).
+    pub verify_post_id: String,
+    pub verify_code: String,
+    pub verify_challenge: String,
+    /// Research bundle (JSON) the content was grounded in ("" = no research).
+    pub research: String,
+    /// Open questions for the human (JSON array). Non-empty ⇔ status 'needs_input'.
+    pub questions: String,
+    /// The human's answer to those questions (used to re-compose).
+    pub answer: String,
+}
+
+impl Draft {
+    /// A post exists on Moltbook awaiting verification.
+    pub fn awaiting_verify(&self) -> bool {
+        !self.verify_code.is_empty() && !self.verify_post_id.is_empty()
+    }
+
+    /// The parsed `questions` list.
+    pub fn questions_list(&self) -> Vec<String> {
+        serde_json::from_str(&self.questions).unwrap_or_default()
+    }
 }
 
 /// Fields for a new draft. Only `kind` is truly required; the rest default to
@@ -153,6 +209,11 @@ pub struct DraftCreate {
     pub reason: String,
     pub source: String,
     pub model: String,
+    /// Research bundle JSON ("" = composed without research).
+    pub research: String,
+    /// Open questions for the human. Non-empty ⇒ the draft is created as
+    /// 'needs_input' and can NOT be approved/published until answered.
+    pub questions: Vec<String>,
 }
 
 /// A day's trending digest — what the agent internet was talking about.
@@ -227,6 +288,35 @@ pub fn norm_kind(k: &str) -> String {
     }
 }
 
+/// A research workflow: MCP-tool steps run before composing. `flow`:
+///   * `comment` — before replying/commenting on a post
+///   * `post`    — before drafting a new post
+///   * `both`    — either
+#[derive(Serialize, Clone, Debug)]
+pub struct Workflow {
+    pub id: i64,
+    pub name: String,
+    pub flow: String,
+    /// JSON array of steps (see `research::Step`).
+    pub steps: String,
+    /// Extra extraction instructions appended to the synthesis prompt.
+    pub extract_prompt: String,
+    pub enabled: bool,
+    /// Seeded default (still fully editable/deletable).
+    pub builtin: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Valid workflow flows; anything else is coerced to `both`.
+pub fn norm_flow(f: &str) -> String {
+    match f.trim() {
+        "comment" => "comment".into(),
+        "post" => "post".into(),
+        _ => "both".into(),
+    }
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct Activity {
     pub id: i64,
@@ -259,16 +349,23 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        for m in MIGRATIONS {
+            let _ = conn.execute(m, []);
+        }
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     // ---- settings (kv, JSON-encoded) ----
 
     pub fn get_json(&self, key: &str) -> Option<Value> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| {
-            r.get::<_, String>(0)
-        })
+        conn.query_row(
+            "SELECT value FROM settings WHERE key=?1",
+            params![key],
+            |r| r.get::<_, String>(0),
+        )
         .optional()
         .ok()
         .flatten()
@@ -293,10 +390,14 @@ impl Db {
         }
     }
     pub fn get_bool(&self, key: &str, default: bool) -> bool {
-        self.get_json(key).and_then(|v| v.as_bool()).unwrap_or(default)
+        self.get_json(key)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(default)
     }
     pub fn get_i64(&self, key: &str, default: i64) -> i64 {
-        self.get_json(key).and_then(|v| v.as_i64()).unwrap_or(default)
+        self.get_json(key)
+            .and_then(|v| v.as_i64())
+            .unwrap_or(default)
     }
 
     pub fn set_str(&self, key: &str, value: &str) -> Result<()> {
@@ -327,16 +428,47 @@ impl Db {
     // ---- drafts (the approval queue) ----
 
     pub fn create_draft(&self, d: &DraftCreate, now: i64) -> Result<i64> {
+        // Unanswered research questions park the draft as 'needs_input' — it
+        // cannot be approved (or auto-published in live mode) until the human
+        // answers or skips.
+        let status = if d.questions.is_empty() {
+            "pending"
+        } else {
+            "needs_input"
+        };
+        let questions_json = if d.questions.is_empty() {
+            String::new()
+        } else {
+            serde_json::to_string(&d.questions).unwrap_or_default()
+        };
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO drafts
                (kind,status,submolt,title,content,url,target_post_id,target_title,
-                parent_id,vote_dir,target_name,reason,source,model,created_at)
-             VALUES (?1,'pending',?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                parent_id,vote_dir,target_name,reason,source,model,created_at,research,questions)
+             VALUES (?1,?15,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?16,?17)",
             params![
-                d.kind, d.submolt, d.title, d.content, d.url, d.target_post_id, d.target_title,
-                d.parent_id, d.vote_dir, d.target_name, d.reason,
-                if d.source.is_empty() { "user" } else { &d.source }, d.model, now
+                d.kind,
+                d.submolt,
+                d.title,
+                d.content,
+                d.url,
+                d.target_post_id,
+                d.target_title,
+                d.parent_id,
+                d.vote_dir,
+                d.target_name,
+                d.reason,
+                if d.source.is_empty() {
+                    "user"
+                } else {
+                    &d.source
+                },
+                d.model,
+                now,
+                status,
+                d.research,
+                questions_json,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -348,14 +480,16 @@ impl Db {
             Some(_) => (
                 "SELECT id,kind,status,submolt,title,content,url,target_post_id,target_title,\
                         parent_id,vote_dir,target_name,reason,source,model,posted_ref,error,\
-                        created_at,decided_at \
+                        created_at,decided_at,verify_post_id,verify_code,verify_challenge,\
+                        research,questions,answer \
                  FROM drafts WHERE status=?1 ORDER BY id DESC LIMIT ?2",
                 true,
             ),
             None => (
                 "SELECT id,kind,status,submolt,title,content,url,target_post_id,target_title,\
                         parent_id,vote_dir,target_name,reason,source,model,posted_ref,error,\
-                        created_at,decided_at \
+                        created_at,decided_at,verify_post_id,verify_code,verify_challenge,\
+                        research,questions,answer \
                  FROM drafts ORDER BY id DESC LIMIT ?1",
                 false,
             ),
@@ -382,28 +516,81 @@ impl Db {
                 error: r.get(16)?,
                 created_at: r.get(17)?,
                 decided_at: r.get(18)?,
+                verify_post_id: r.get(19)?,
+                verify_code: r.get(20)?,
+                verify_challenge: r.get(21)?,
+                research: r.get(22)?,
+                questions: r.get(23)?,
+                answer: r.get(24)?,
             })
         };
         let rows = if has_filter {
-            stmt.query_map(params![status.unwrap(), limit], map)?.collect::<Result<Vec<_>, _>>()?
+            stmt.query_map(params![status.unwrap(), limit], map)?
+                .collect::<Result<Vec<_>, _>>()?
         } else {
-            stmt.query_map(params![limit], map)?.collect::<Result<Vec<_>, _>>()?
+            stmt.query_map(params![limit], map)?
+                .collect::<Result<Vec<_>, _>>()?
         };
         Ok(rows)
     }
 
     pub fn get_draft(&self, id: i64) -> Result<Option<Draft>> {
-        Ok(self.list_drafts(None, 100000)?.into_iter().find(|d| d.id == id))
+        Ok(self
+            .list_drafts(None, 100000)?
+            .into_iter()
+            .find(|d| d.id == id))
     }
 
     pub fn count_pending_drafts(&self) -> Result<i64> {
+        self.count_drafts_with_status("pending")
+    }
+
+    pub fn count_drafts_with_status(&self, status: &str) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM drafts WHERE status='pending'",
-            [],
+            "SELECT COUNT(*) FROM drafts WHERE status=?1",
+            params![status],
             |r| r.get(0),
         )?;
         Ok(n)
+    }
+
+    /// Store the human's answer on a draft (keeps status; the recompose step
+    /// clears the questions and moves it back to 'pending').
+    pub fn set_draft_answer(&self, id: i64, answer: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE drafts SET answer=?2 WHERE id=?1",
+            params![id, answer],
+        )?;
+        Ok(())
+    }
+
+    /// After a successful re-compose with the human's answer: update the
+    /// content (and title for posts), clear the gating questions, record the
+    /// model, and put the draft back into the approval queue.
+    pub fn resolve_draft_questions(
+        &self,
+        id: i64,
+        title: Option<&str>,
+        content: Option<&str>,
+        model: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(t) = title {
+            conn.execute("UPDATE drafts SET title=?2 WHERE id=?1", params![id, t])?;
+        }
+        if let Some(c) = content {
+            conn.execute("UPDATE drafts SET content=?2 WHERE id=?1", params![id, c])?;
+        }
+        if !model.is_empty() {
+            conn.execute("UPDATE drafts SET model=?2 WHERE id=?1", params![id, model])?;
+        }
+        conn.execute(
+            "UPDATE drafts SET questions='', status='pending' WHERE id=?1",
+            params![id],
+        )?;
+        Ok(())
     }
 
     pub fn set_draft_result(
@@ -418,6 +605,22 @@ impl Db {
         conn.execute(
             "UPDATE drafts SET status=?2, posted_ref=?3, error=?4, decided_at=?5 WHERE id=?1",
             params![id, status, posted_ref, error, now],
+        )?;
+        Ok(())
+    }
+
+    /// Park (or clear, with empty args) a pending verification on a draft.
+    pub fn set_draft_verify(
+        &self,
+        id: i64,
+        post_id: &str,
+        code: &str,
+        challenge: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE drafts SET verify_post_id=?2, verify_code=?3, verify_challenge=?4 WHERE id=?1",
+            params![id, post_id, code, challenge],
         )?;
         Ok(())
     }
@@ -501,11 +704,15 @@ impl Db {
 
     pub fn has_digest(&self, day: &str) -> bool {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT 1 FROM trending_digests WHERE day=?1", params![day], |_| Ok(()))
-            .optional()
-            .ok()
-            .flatten()
-            .is_some()
+        conn.query_row(
+            "SELECT 1 FROM trending_digests WHERE day=?1",
+            params![day],
+            |_| Ok(()),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .is_some()
     }
 
     // ---- tracked posts (feedback loop: comments → synthesis → wiki doc) ----
@@ -567,16 +774,23 @@ impl Db {
     }
 
     pub fn get_tracked(&self, post_id: &str) -> Result<Option<TrackedPost>> {
-        Ok(self.list_tracked(100000)?.into_iter().find(|t| t.post_id == post_id))
+        Ok(self
+            .list_tracked(100000)?
+            .into_iter()
+            .find(|t| t.post_id == post_id))
     }
 
     pub fn is_tracked(&self, post_id: &str) -> bool {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT 1 FROM tracked_posts WHERE post_id=?1", params![post_id], |_| Ok(()))
-            .optional()
-            .ok()
-            .flatten()
-            .is_some()
+        conn.query_row(
+            "SELECT 1 FROM tracked_posts WHERE post_id=?1",
+            params![post_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .is_some()
     }
 
     /// Record the outcome of a feedback check. Always bumps `checks` and
@@ -621,7 +835,10 @@ impl Db {
 
     pub fn untrack(&self, post_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM tracked_posts WHERE post_id=?1", params![post_id])?;
+        conn.execute(
+            "DELETE FROM tracked_posts WHERE post_id=?1",
+            params![post_id],
+        )?;
         Ok(())
     }
 
@@ -630,7 +847,11 @@ impl Db {
     /// "all" = engage with the whole feed; "focus" = only the listed subjects.
     pub fn topic_mode(&self) -> String {
         let m = self.get_str("topic_mode", "all");
-        if m == "focus" { m } else { "all".into() }
+        if m == "focus" {
+            m
+        } else {
+            "all".into()
+        }
     }
 
     pub fn add_topic(&self, text: &str, kind: &str, now: i64) -> Result<i64> {
@@ -679,10 +900,16 @@ impl Db {
             conn.execute("UPDATE topics SET text=?2 WHERE id=?1", params![id, t])?;
         }
         if let Some(k) = kind {
-            conn.execute("UPDATE topics SET kind=?2 WHERE id=?1", params![id, norm_kind(k)])?;
+            conn.execute(
+                "UPDATE topics SET kind=?2 WHERE id=?1",
+                params![id, norm_kind(k)],
+            )?;
         }
         if let Some(e) = enabled {
-            conn.execute("UPDATE topics SET enabled=?2 WHERE id=?1", params![id, if e { 1 } else { 0 }])?;
+            conn.execute(
+                "UPDATE topics SET enabled=?2 WHERE id=?1",
+                params![id, if e { 1 } else { 0 }],
+            )?;
         }
         Ok(())
     }
@@ -698,6 +925,114 @@ impl Db {
     pub fn mark_topic_used(&self, id: i64, now: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("UPDATE topics SET used_at=?2 WHERE id=?1", params![id, now])?;
+        Ok(())
+    }
+
+    // ---- research workflows ----
+
+    pub fn add_workflow(
+        &self,
+        name: &str,
+        flow: &str,
+        steps_json: &str,
+        extract_prompt: &str,
+        builtin: bool,
+        now: i64,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO workflows(name,flow,steps,extract_prompt,enabled,builtin,created_at,updated_at)
+             VALUES(?1,?2,?3,?4,1,?5,?6,?6)",
+            params![
+                name.trim(),
+                norm_flow(flow),
+                steps_json,
+                extract_prompt.trim(),
+                if builtin { 1 } else { 0 },
+                now
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_workflows(&self, enabled_only: bool) -> Result<Vec<Workflow>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = if enabled_only {
+            "SELECT id,name,flow,steps,extract_prompt,enabled,builtin,created_at,updated_at \
+             FROM workflows WHERE enabled=1 ORDER BY id ASC"
+        } else {
+            "SELECT id,name,flow,steps,extract_prompt,enabled,builtin,created_at,updated_at \
+             FROM workflows ORDER BY id ASC"
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(Workflow {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    flow: r.get(2)?,
+                    steps: r.get(3)?,
+                    extract_prompt: r.get(4)?,
+                    enabled: r.get::<_, i64>(5)? != 0,
+                    builtin: r.get::<_, i64>(6)? != 0,
+                    created_at: r.get(7)?,
+                    updated_at: r.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_workflow(&self, id: i64) -> Result<Option<Workflow>> {
+        Ok(self.list_workflows(false)?.into_iter().find(|w| w.id == id))
+    }
+
+    /// Patch a workflow. Any `None` field is left untouched.
+    pub fn update_workflow(
+        &self,
+        id: i64,
+        name: Option<&str>,
+        flow: Option<&str>,
+        steps_json: Option<&str>,
+        extract_prompt: Option<&str>,
+        enabled: Option<bool>,
+        now: i64,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        if let Some(n) = name.map(str::trim).filter(|n| !n.is_empty()) {
+            conn.execute("UPDATE workflows SET name=?2 WHERE id=?1", params![id, n])?;
+        }
+        if let Some(f) = flow {
+            conn.execute(
+                "UPDATE workflows SET flow=?2 WHERE id=?1",
+                params![id, norm_flow(f)],
+            )?;
+        }
+        if let Some(s) = steps_json {
+            conn.execute("UPDATE workflows SET steps=?2 WHERE id=?1", params![id, s])?;
+        }
+        if let Some(e) = extract_prompt {
+            conn.execute(
+                "UPDATE workflows SET extract_prompt=?2 WHERE id=?1",
+                params![id, e.trim()],
+            )?;
+        }
+        if let Some(e) = enabled {
+            conn.execute(
+                "UPDATE workflows SET enabled=?2 WHERE id=?1",
+                params![id, if e { 1 } else { 0 }],
+            )?;
+        }
+        conn.execute(
+            "UPDATE workflows SET updated_at=?2 WHERE id=?1",
+            params![id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_workflow(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM workflows WHERE id=?1", params![id])?;
         Ok(())
     }
 
@@ -825,19 +1160,21 @@ impl Db {
         ];
         let rows: Vec<CachedPost> = samples
             .iter()
-            .map(|(id, sub, author, title, content, score, comments)| CachedPost {
-                post_id: (*id).to_string(),
-                submolt: (*sub).to_string(),
-                author: (*author).to_string(),
-                title: (*title).to_string(),
-                content: (*content).to_string(),
-                url: String::new(),
-                score: *score,
-                comment_count: *comments,
-                posted_at: now,
-                cached_at: now,
-                demo: true,
-            })
+            .map(
+                |(id, sub, author, title, content, score, comments)| CachedPost {
+                    post_id: (*id).to_string(),
+                    submolt: (*sub).to_string(),
+                    author: (*author).to_string(),
+                    title: (*title).to_string(),
+                    content: (*content).to_string(),
+                    url: String::new(),
+                    score: *score,
+                    comment_count: *comments,
+                    posted_at: now,
+                    cached_at: now,
+                    demo: true,
+                },
+            )
             .collect();
         let n = rows.len();
         self.upsert_posts(&rows)?;
@@ -906,11 +1243,65 @@ mod tests {
         assert!(!db.already_targeting("p2"));
         let d = db.get_draft(id).unwrap().unwrap();
         assert_eq!(d.status, "pending");
-        db.set_draft_result(id, "posted", "molt_c_9", "", 200).unwrap();
+        db.set_draft_result(id, "posted", "molt_c_9", "", 200)
+            .unwrap();
         assert_eq!(db.count_pending_drafts().unwrap(), 0);
         let d = db.get_draft(id).unwrap().unwrap();
         assert_eq!(d.status, "posted");
         assert_eq!(d.posted_ref, "molt_c_9");
+    }
+
+    /// A post can exist on Moltbook while its verification failed. That state
+    /// must be recorded so we retry the verify instead of re-posting (duplicate).
+    #[test]
+    fn draft_parks_pending_verification() {
+        let db = db();
+        let id = db
+            .create_draft(
+                &DraftCreate {
+                    kind: "post".into(),
+                    title: "Bài A".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        assert!(!db.get_draft(id).unwrap().unwrap().awaiting_verify());
+
+        db.set_draft_verify(id, "post-123", "moltbook_verify_x", "2 cộng 2 là mấy?")
+            .unwrap();
+        let d = db.get_draft(id).unwrap().unwrap();
+        assert!(d.awaiting_verify());
+        assert_eq!(d.verify_post_id, "post-123");
+        assert_eq!(d.verify_challenge, "2 cộng 2 là mấy?");
+
+        // Cleared once verification finally succeeds.
+        db.set_draft_verify(id, "", "", "").unwrap();
+        assert!(!db.get_draft(id).unwrap().unwrap().awaiting_verify());
+    }
+
+    #[test]
+    fn awaiting_verify_needs_both_id_and_code() {
+        let db = db();
+        let id = db
+            .create_draft(
+                &DraftCreate {
+                    kind: "post".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        db.set_draft_verify(id, "post-1", "", "q").unwrap();
+        assert!(
+            !db.get_draft(id).unwrap().unwrap().awaiting_verify(),
+            "thiếu code thì chưa retry được"
+        );
+        db.set_draft_verify(id, "", "code", "q").unwrap();
+        assert!(
+            !db.get_draft(id).unwrap().unwrap().awaiting_verify(),
+            "thiếu post_id thì chưa retry được"
+        );
     }
 
     #[test]
@@ -918,7 +1309,11 @@ mod tests {
         let db = db();
         let id = db
             .create_draft(
-                &DraftCreate { kind: "vote".into(), target_post_id: "p9".into(), ..Default::default() },
+                &DraftCreate {
+                    kind: "vote".into(),
+                    target_post_id: "p9".into(),
+                    ..Default::default()
+                },
                 1,
             )
             .unwrap();
@@ -943,13 +1338,31 @@ mod tests {
     fn digest_is_idempotent_per_day() {
         let db = db();
         let topics = vec!["trí nhớ agent".to_string(), "MCP".to_string()];
-        db.upsert_digest("2026-07-17", "moltbook/trending/2026-07-17.md", 40, 2, "tóm tắt", &topics, 100).unwrap();
+        db.upsert_digest(
+            "2026-07-17",
+            "moltbook/trending/2026-07-17.md",
+            40,
+            2,
+            "tóm tắt",
+            &topics,
+            100,
+        )
+        .unwrap();
         assert!(db.has_digest("2026-07-17"));
         assert!(!db.has_digest("2026-07-18"));
 
         // Re-running the same day refreshes rather than duplicating.
         let topics2 = vec!["trí nhớ agent".to_string()];
-        db.upsert_digest("2026-07-17", "moltbook/trending/2026-07-17.md", 55, 1, "tóm tắt mới", &topics2, 200).unwrap();
+        db.upsert_digest(
+            "2026-07-17",
+            "moltbook/trending/2026-07-17.md",
+            55,
+            1,
+            "tóm tắt mới",
+            &topics2,
+            200,
+        )
+        .unwrap();
         let all = db.list_digests(10).unwrap();
         assert_eq!(all.len(), 1, "một ngày chỉ một digest");
         assert_eq!(all[0].runs, 2);
@@ -966,7 +1379,12 @@ mod tests {
         for d in ["2026-07-15", "2026-07-17", "2026-07-16"] {
             db.upsert_digest(d, "", 1, 1, "", &[], 1).unwrap();
         }
-        let days: Vec<String> = db.list_digests(10).unwrap().into_iter().map(|d| d.day).collect();
+        let days: Vec<String> = db
+            .list_digests(10)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.day)
+            .collect();
         assert_eq!(days, vec!["2026-07-17", "2026-07-16", "2026-07-15"]);
     }
 
@@ -991,7 +1409,8 @@ mod tests {
         assert!(t.doc_is_stale());
 
         // Doc regenerated from those 3 → no longer stale.
-        db.record_sync("p1", "tổng hợp", 3, "moltbook/posts/bai-a.md", 300).unwrap();
+        db.record_sync("p1", "tổng hợp", 3, "moltbook/posts/bai-a.md", 300)
+            .unwrap();
         let t = db.get_tracked("p1").unwrap().unwrap();
         assert!(!t.doc_is_stale());
         assert_eq!(t.synthesis, "tổng hợp");
@@ -1006,7 +1425,8 @@ mod tests {
     #[test]
     fn track_post_is_idempotent_and_preserves_known_fields() {
         let db = db();
-        db.track_post("p1", "Bài A", "general", "w/a.md", 100).unwrap();
+        db.track_post("p1", "Bài A", "general", "w/a.md", 100)
+            .unwrap();
         db.track_post("p1", "", "", "", 0).unwrap();
         let t = db.get_tracked("p1").unwrap().unwrap();
         assert_eq!(t.title, "Bài A");
@@ -1022,7 +1442,12 @@ mod tests {
         db.track_post("c", "", "", "", 3).unwrap();
         db.record_check("a", 0, 0, "", 500).unwrap();
         db.record_check("b", 0, 0, "", 100).unwrap();
-        let ids: Vec<String> = db.list_tracked(10).unwrap().into_iter().map(|t| t.post_id).collect();
+        let ids: Vec<String> = db
+            .list_tracked(10)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.post_id)
+            .collect();
         assert_eq!(ids, vec!["c", "b", "a"]); // never-checked, then oldest check
     }
 
@@ -1068,8 +1493,14 @@ mod tests {
         assert_eq!(enabled.len(), 1);
         assert_eq!(enabled[0].id, b);
 
-        db.update_topic(b, Some("hỏi về rate limit mới"), Some("both"), None).unwrap();
-        let t = db.list_topics(false).unwrap().into_iter().find(|t| t.id == b).unwrap();
+        db.update_topic(b, Some("hỏi về rate limit mới"), Some("both"), None)
+            .unwrap();
+        let t = db
+            .list_topics(false)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == b)
+            .unwrap();
         assert_eq!(t.text, "hỏi về rate limit mới");
         assert_eq!(t.kind, "both");
 
@@ -1086,9 +1517,115 @@ mod tests {
         let c = db.add_topic("c", "post", 3).unwrap();
         db.mark_topic_used(a, 500).unwrap();
         db.mark_topic_used(b, 100).unwrap();
-        let ids: Vec<i64> = db.list_topics(true).unwrap().into_iter().map(|t| t.id).collect();
+        let ids: Vec<i64> = db
+            .list_topics(true)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
         // c never used → first; then b (used longest ago); then a.
         assert_eq!(ids, vec![c, b, a]);
+    }
+
+    /// Research questions park a draft as needs_input; answering moves it back
+    /// to pending with the recomposed content.
+    #[test]
+    fn draft_with_questions_needs_input_then_resolves() {
+        let db = db();
+        let id = db
+            .create_draft(
+                &DraftCreate {
+                    kind: "comment".into(),
+                    target_post_id: "p1".into(),
+                    content: "bản nháp ban đầu".into(),
+                    research: "{\"confidence\":40}".into(),
+                    questions: vec!["Số liệu X lấy ở đâu?".into()],
+                    ..Default::default()
+                },
+                100,
+            )
+            .unwrap();
+        let d = db.get_draft(id).unwrap().unwrap();
+        assert_eq!(d.status, "needs_input");
+        assert_eq!(d.questions_list(), vec!["Số liệu X lấy ở đâu?".to_string()]);
+        assert_eq!(d.research, "{\"confidence\":40}");
+        // needs_input is not pending — it must not count as approvable.
+        assert_eq!(db.count_pending_drafts().unwrap(), 0);
+        assert_eq!(db.count_drafts_with_status("needs_input").unwrap(), 1);
+        // …but it still blocks the engine from re-targeting the same post.
+        assert!(db.already_targeting("p1"));
+
+        db.set_draft_answer(id, "Từ báo cáo Q2 nội bộ").unwrap();
+        db.resolve_draft_questions(id, None, Some("bản đã soạn lại"), "model-x")
+            .unwrap();
+        let d = db.get_draft(id).unwrap().unwrap();
+        assert_eq!(d.status, "pending");
+        assert_eq!(d.content, "bản đã soạn lại");
+        assert_eq!(d.answer, "Từ báo cáo Q2 nội bộ");
+        assert!(d.questions_list().is_empty());
+        assert_eq!(d.model, "model-x");
+    }
+
+    #[test]
+    fn draft_without_questions_stays_pending() {
+        let db = db();
+        let id = db
+            .create_draft(
+                &DraftCreate {
+                    kind: "post".into(),
+                    title: "t".into(),
+                    research: "{}".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        assert_eq!(db.get_draft(id).unwrap().unwrap().status, "pending");
+    }
+
+    #[test]
+    fn workflow_crud_and_flow_normalisation() {
+        let db = db();
+        let a = db
+            .add_workflow("Trí nhớ", "both", "[]", "", true, 10)
+            .unwrap();
+        let b = db
+            .add_workflow("Web", "post", "[{\"kind\":\"builtin\"}]", "lấy số liệu", false, 11)
+            .unwrap();
+        db.add_workflow("Lạ", "garbage", "[]", "", false, 12).unwrap();
+
+        let all = db.list_workflows(false).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].name, "Trí nhớ");
+        assert!(all[0].builtin);
+        assert_eq!(all[1].extract_prompt, "lấy số liệu");
+        assert_eq!(all[2].flow, "both", "flow lạ phải về both");
+
+        db.update_workflow(a, None, None, None, None, Some(false), 20)
+            .unwrap();
+        let enabled = db.list_workflows(true).unwrap();
+        assert_eq!(enabled.len(), 2);
+        assert!(enabled.iter().all(|w| w.id != a));
+
+        db.update_workflow(b, Some("Web+News"), Some("comment"), Some("[]"), Some(""), None, 21)
+            .unwrap();
+        let w = db.get_workflow(b).unwrap().unwrap();
+        assert_eq!(w.name, "Web+News");
+        assert_eq!(w.flow, "comment");
+        assert_eq!(w.steps, "[]");
+        assert_eq!(w.extract_prompt, "");
+        assert_eq!(w.updated_at, 21);
+
+        db.delete_workflow(b).unwrap();
+        assert!(db.get_workflow(b).unwrap().is_none());
+    }
+
+    #[test]
+    fn norm_flow_validates() {
+        assert_eq!(norm_flow("comment"), "comment");
+        assert_eq!(norm_flow("post"), "post");
+        assert_eq!(norm_flow("both"), "both");
+        assert_eq!(norm_flow("x"), "both");
     }
 
     #[test]

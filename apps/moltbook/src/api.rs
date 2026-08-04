@@ -34,6 +34,15 @@ pub fn make_state() -> Arc<AppState> {
     if db.list_cached(1).map(|c| c.is_empty()).unwrap_or(true) {
         let _ = db.seed_demo(now_ts());
     }
+    // Seed the default research workflows exactly once (a flag, not a row
+    // count, so a user who deletes them all doesn't get them back on restart).
+    if !db.get_bool("workflows_seeded", false) {
+        let now = now_ts();
+        for (name, flow, steps, extract) in crate::research::default_workflows() {
+            let _ = db.add_workflow(name, flow, &steps.to_string(), extract, true, now);
+        }
+        db.set_bool("workflows_seeded", true).ok();
+    }
     // Seed the process-wide LLM profile from stored settings.
     llm::set_profile(&db.get_str("llm_profile", ""));
     let (mcp_tx, _) = tokio::sync::broadcast::channel(100);
@@ -41,7 +50,10 @@ pub fn make_state() -> Arc<AppState> {
 }
 
 pub fn now_ts() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Build a Moltbook client from stored settings. The API key is only ever
@@ -72,7 +84,9 @@ pub async fn grounding_for(db: &Db, topic: &str) -> llm::Grounding {
         return g;
     }
     if db.get_bool("memory_enabled", true) {
-        g.memory = crate::senclaw::knowledge_recall(&memory_space(db), topic).await.unwrap_or_default();
+        g.memory = crate::senclaw::knowledge_recall(&memory_space(db), topic)
+            .await
+            .unwrap_or_default();
     }
     if db.get_bool("wiki_enabled", true) {
         g.wiki = crate::senclaw::wiki_context(topic, 2000).await;
@@ -83,7 +97,11 @@ pub async fn grounding_for(db: &Db, topic: &str) -> llm::Grounding {
 /// The persona voice injected into planner/composer prompts.
 pub fn voice(db: &Db) -> String {
     let v = db.get_str("persona_voice", "");
-    if v.trim().is_empty() { default_voice() } else { v }
+    if v.trim().is_empty() {
+        default_voice()
+    } else {
+        v
+    }
 }
 
 fn default_voice() -> String {
@@ -138,6 +156,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/drafts/compose", post(compose_reply_draft))
         .route("/drafts/compose-post", post(compose_post_draft))
         .route("/drafts/:id/approve", post(approve_draft))
+        .route("/drafts/:id/verify", post(verify_draft))
         .route("/drafts/:id/reject", post(reject_draft))
         .route("/drafts/:id", delete(delete_draft))
         .route("/actions/vote", post(action_vote))
@@ -151,15 +170,33 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/tracked/:post_id", delete(untrack_post))
         .route("/harvest", post(harvest))
         .route("/topics", get(list_topics).post(add_topic))
-        .route("/topics/:id", axum::routing::patch(patch_topic).delete(delete_topic))
+        .route(
+            "/topics/:id",
+            axum::routing::patch(patch_topic).delete(delete_topic),
+        )
         .route("/engine/run", post(engine_run))
+        .route(
+            "/research/workflows",
+            get(list_workflows_h).post(create_workflow_h),
+        )
+        .route(
+            "/research/workflows/:id",
+            axum::routing::patch(patch_workflow_h).delete(delete_workflow_h),
+        )
+        .route("/research/tools", get(research_tools_h))
+        .route("/research/run", post(research_run_h))
+        .route("/research/ai-build", post(research_ai_build_h))
+        .route("/drafts/:id/answer", post(answer_draft_h))
         .route("/integrations", get(integrations))
         .route("/memory/recall", post(memory_recall))
         .route("/memory/save", post(memory_save))
         .route("/wiki/archive", post(wiki_archive))
         .route("/demo/seed", post(demo_seed))
         .route("/models", get(get_models))
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -202,6 +239,14 @@ pub fn account_summary(db: &Db) -> Value {
         "last_post_at": db.get_i64("last_post_at", 0),
         "profile": db.get_json("profile"),
         "pending_drafts": db.count_pending_drafts().unwrap_or(0),
+        // Nghiên cứu trước khi soạn: chạy các workflow MCP → tổng hợp → nếu
+        // chưa chắc chắn thì hỏi lại người dùng (draft 'needs_input').
+        "research_enabled": db.get_bool("research_enabled", true),
+        "research_on_compose": db.get_bool("research_on_compose", true),
+        "research_ask_threshold": db.get_i64("research_ask_threshold", 60),
+        "research_extract_prompt": db.get_str("research_extract_prompt", ""),
+        "research_max_per_tick": db.get_i64("research_max_per_tick", 3),
+        "needs_input_drafts": db.count_drafts_with_status("needs_input").unwrap_or(0),
     })
 }
 
@@ -225,7 +270,10 @@ async fn register(
     }
     let base = s.db.get_str("base_url", DEFAULT_BASE);
     let mb = Moltbook::new(Some(&base), None);
-    let v = mb.register(b.name.trim(), b.description.trim()).await.map_err(upstream)?;
+    let v = mb
+        .register(b.name.trim(), b.description.trim())
+        .await
+        .map_err(upstream)?;
     let now = now_ts();
     let (api_key, claim_url, vcode) = crate::moltbook::extract_register_fields(&v);
     if !api_key.is_empty() {
@@ -238,7 +286,13 @@ async fn register(
     // Persist the raw response so the claim link is never lost, even if Moltbook
     // changes its field names.
     s.db.set_json("last_register_response", &v).ok();
-    s.db.log("register", &format!("đăng ký agent '{}' trên Moltbook", b.name.trim()), "", now).ok();
+    s.db.log(
+        "register",
+        &format!("đăng ký agent '{}' trên Moltbook", b.name.trim()),
+        "",
+        now,
+    )
+    .ok();
     Ok(Json(json!({
         "ok": true,
         "claim_url": claim_url,
@@ -275,9 +329,11 @@ async fn claim_info(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiEr
     let claimed = status
         .as_ref()
         .and_then(|v| {
-            v.get("claimed")
-                .and_then(|x| x.as_bool())
-                .or_else(|| v.get("status").and_then(|x| x.as_str()).map(|s| s == "claimed" || s == "verified"))
+            v.get("claimed").and_then(|x| x.as_bool()).or_else(|| {
+                v.get("status")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s == "claimed" || s == "verified")
+            })
         })
         .unwrap_or_else(|| s.db.get_bool("claimed", false));
     s.db.set_bool("claimed", claimed).ok();
@@ -306,7 +362,12 @@ async fn connect(
     if key.is_empty() {
         return Err(bad("api_key là bắt buộc"));
     }
-    if let Some(base) = b.base_url.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+    if let Some(base) = b
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+    {
         s.db.set_str("base_url", base).ok();
     }
     s.db.set_str("api_key", key).ok();
@@ -314,18 +375,26 @@ async fn connect(
     let mb = client(&s.db);
     match mb.me().await {
         Ok(me) => {
-            let name = me.get("name").or_else(|| me.get("agent").and_then(|a| a.get("name"))).and_then(|x| x.as_str()).unwrap_or("");
+            let name = me
+                .get("name")
+                .or_else(|| me.get("agent").and_then(|a| a.get("name")))
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
             if !name.is_empty() {
                 s.db.set_str("agent_name", name).ok();
             }
             s.db.set_json("profile", &me).ok();
             s.db.set_bool("claimed", true).ok();
-            s.db.log("connect", "kết nối agent Moltbook thành công", "", now_ts()).ok();
-            Ok(Json(json!({ "ok": true, "profile": me, "account": account_summary(&s.db) })))
+            s.db.log("connect", "kết nối agent Moltbook thành công", "", now_ts())
+                .ok();
+            Ok(Json(
+                json!({ "ok": true, "profile": me, "account": account_summary(&s.db) }),
+            ))
         }
         Err(e) => {
             // Key stored but not verified — keep it so the user can retry; report why.
-            s.db.log("error", &format!("kết nối thất bại: {e}"), "", now_ts()).ok();
+            s.db.log("error", &format!("kết nối thất bại: {e}"), "", now_ts())
+                .ok();
             Err(upstream(e))
         }
     }
@@ -338,7 +407,9 @@ async fn refresh(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError
     }
     let me = mb.me().await.map_err(upstream)?;
     s.db.set_json("profile", &me).ok();
-    Ok(Json(json!({ "ok": true, "profile": me, "account": account_summary(&s.db) })))
+    Ok(Json(
+        json!({ "ok": true, "profile": me, "account": account_summary(&s.db) }),
+    ))
 }
 
 async fn disconnect(State(s): State<Arc<AppState>>) -> Json<Value> {
@@ -346,7 +417,13 @@ async fn disconnect(State(s): State<Arc<AppState>>) -> Json<Value> {
         s.db.set_json(k, &Value::Null).ok();
     }
     s.db.set_bool("claimed", false).ok();
-    s.db.log("disconnect", "ngắt kết nối agent (xoá API key khỏi máy)", "", now_ts()).ok();
+    s.db.log(
+        "disconnect",
+        "ngắt kết nối agent (xoá API key khỏi máy)",
+        "",
+        now_ts(),
+    )
+    .ok();
     Json(account_summary(&s.db))
 }
 
@@ -374,6 +451,11 @@ struct SettingsPatch {
     topic_mode: Option<String>,
     harvest_enabled: Option<bool>,
     trending_daily: Option<bool>,
+    research_enabled: Option<bool>,
+    research_on_compose: Option<bool>,
+    research_ask_threshold: Option<i64>,
+    research_extract_prompt: Option<String>,
+    research_max_per_tick: Option<i64>,
 }
 
 async fn put_settings(
@@ -397,7 +479,8 @@ async fn put_settings(
         s.db.set_i64("engage_limit", v.clamp(0, 10)).ok();
     }
     if let Some(v) = p.default_submolt {
-        s.db.set_str("default_submolt", v.trim().trim_start_matches("m/")).ok();
+        s.db.set_str("default_submolt", v.trim().trim_start_matches("m/"))
+            .ok();
     }
     if let Some(v) = p.persona {
         s.db.set_str("persona", v.trim()).ok();
@@ -441,6 +524,21 @@ async fn put_settings(
     }
     if let Some(v) = p.trending_daily {
         s.db.set_bool("trending_daily", v).ok();
+    }
+    if let Some(v) = p.research_enabled {
+        s.db.set_bool("research_enabled", v).ok();
+    }
+    if let Some(v) = p.research_on_compose {
+        s.db.set_bool("research_on_compose", v).ok();
+    }
+    if let Some(v) = p.research_ask_threshold {
+        s.db.set_i64("research_ask_threshold", v.clamp(0, 100)).ok();
+    }
+    if let Some(v) = p.research_extract_prompt {
+        s.db.set_str("research_extract_prompt", v.trim()).ok();
+    }
+    if let Some(v) = p.research_max_per_tick {
+        s.db.set_i64("research_max_per_tick", v.clamp(0, 10)).ok();
     }
     Ok(Json(account_summary(&s.db)))
 }
@@ -499,7 +597,8 @@ async fn track_post(
     if b.post_id.trim().is_empty() {
         return Err(bad("post_id là bắt buộc"));
     }
-    s.db.track_post(b.post_id.trim(), &b.title, &b.submolt, "", now_ts()).map_err(bad)?;
+    s.db.track_post(b.post_id.trim(), &b.title, &b.submolt, "", now_ts())
+        .map_err(bad)?;
     let t = s.db.get_tracked(b.post_id.trim()).map_err(server)?;
     Ok(Json(json!({ "ok": true, "post": t })))
 }
@@ -521,11 +620,12 @@ struct HarvestBody {
 
 /// Collect other agents' comments on our posts, synthesise them, and refresh the
 /// wiki docs.
-async fn harvest(
-    State(s): State<Arc<AppState>>,
-    Json(b): Json<HarvestBody>,
-) -> Json<Value> {
-    let pid = b.post_id.as_deref().map(str::trim).filter(|p| !p.is_empty());
+async fn harvest(State(s): State<Arc<AppState>>, Json(b): Json<HarvestBody>) -> Json<Value> {
+    let pid = b
+        .post_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
     Json(engine::harvest(&s, pid).await)
 }
 
@@ -533,7 +633,9 @@ async fn harvest(
 
 async fn list_topics(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
     let topics = s.db.list_topics(false).map_err(server)?;
-    Ok(Json(json!({ "topics": topics, "topic_mode": s.db.topic_mode(), "count": topics.len() })))
+    Ok(Json(
+        json!({ "topics": topics, "topic_mode": s.db.topic_mode(), "count": topics.len() }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -550,11 +652,14 @@ async fn add_topic(
     if b.text.trim().is_empty() {
         return Err(bad("text là bắt buộc"));
     }
-    let id = s
-        .db
-        .add_topic(&b.text, b.kind.as_deref().unwrap_or("both"), now_ts())
-        .map_err(bad)?;
-    let t = s.db.list_topics(false).map_err(server)?.into_iter().find(|t| t.id == id);
+    let id =
+        s.db.add_topic(&b.text, b.kind.as_deref().unwrap_or("both"), now_ts())
+            .map_err(bad)?;
+    let t =
+        s.db.list_topics(false)
+            .map_err(server)?
+            .into_iter()
+            .find(|t| t.id == id);
     Ok(Json(json!({ "ok": true, "topic": t })))
 }
 
@@ -573,8 +678,13 @@ async fn patch_topic(
     Path(id): Path<i64>,
     Json(b): Json<PatchTopicBody>,
 ) -> Result<Json<Value>, ApiError> {
-    s.db.update_topic(id, b.text.as_deref(), b.kind.as_deref(), b.enabled).map_err(bad)?;
-    let t = s.db.list_topics(false).map_err(server)?.into_iter().find(|t| t.id == id);
+    s.db.update_topic(id, b.text.as_deref(), b.kind.as_deref(), b.enabled)
+        .map_err(bad)?;
+    let t =
+        s.db.list_topics(false)
+            .map_err(server)?
+            .into_iter()
+            .find(|t| t.id == id);
     Ok(Json(json!({ "ok": true, "topic": t })))
 }
 
@@ -607,8 +717,12 @@ async fn memory_recall(
         return Err(bad("query là bắt buộc"));
     }
     let space = memory_space(&s.db);
-    let answer = crate::senclaw::knowledge_recall(&space, b.query.trim()).await.map_err(upstream)?;
-    let hits = crate::senclaw::knowledge_search(&space, b.query.trim(), 6).await.unwrap_or_default();
+    let answer = crate::senclaw::knowledge_recall(&space, b.query.trim())
+        .await
+        .map_err(upstream)?;
+    let hits = crate::senclaw::knowledge_search(&space, b.query.trim(), 6)
+        .await
+        .unwrap_or_default();
     Ok(Json(json!({
         "space": space,
         "answer": answer,
@@ -633,11 +747,19 @@ async fn memory_save(
         return Err(bad("text là bắt buộc"));
     }
     let space = memory_space(&s.db);
-    let tags: Vec<&str> = std::iter::once("moltbook").chain(b.tags.iter().map(String::as_str)).collect();
+    let tags: Vec<&str> = std::iter::once("moltbook")
+        .chain(b.tags.iter().map(String::as_str))
+        .collect();
     crate::senclaw::knowledge_save(&space, b.text.trim(), &tags, "moltbook:manual")
         .await
         .map_err(upstream)?;
-    s.db.log("memory", &format!("ghi trí nhớ thủ công vào {space}"), "", now_ts()).ok();
+    s.db.log(
+        "memory",
+        &format!("ghi trí nhớ thủ công vào {space}"),
+        "",
+        now_ts(),
+    )
+    .ok();
     Ok(Json(json!({ "ok": true, "space": space })))
 }
 
@@ -654,7 +776,9 @@ async fn wiki_archive(
     if b.post_id.trim().is_empty() {
         return Err(bad("post_id là bắt buộc"));
     }
-    let path = engine::archive_post_to_wiki(&s, b.post_id.trim()).await.map_err(upstream)?;
+    let path = engine::archive_post_to_wiki(&s, b.post_id.trim())
+        .await
+        .map_err(upstream)?;
     Ok(Json(json!({ "ok": true, "path": path })))
 }
 
@@ -672,10 +796,7 @@ struct FeedQuery {
     limit: Option<i64>,
 }
 
-async fn get_feed(
-    State(s): State<Arc<AppState>>,
-    Query(q): Query<FeedQuery>,
-) -> Json<Value> {
+async fn get_feed(State(s): State<Arc<AppState>>, Query(q): Query<FeedQuery>) -> Json<Value> {
     let db = &s.db;
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let connected = db.connected();
@@ -719,7 +840,9 @@ async fn get_feed(
     }
 
     let posts = db.list_cached(limit).unwrap_or_default();
-    Json(json!({ "posts": posts, "source": source, "connected": connected, "warning": warning, "count": posts.len() }))
+    Json(
+        json!({ "posts": posts, "source": source, "connected": connected, "warning": warning, "count": posts.len() }),
+    )
 }
 
 async fn get_home(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
@@ -739,7 +862,10 @@ async fn get_post(
         return Err(bad("chưa kết nối agent"));
     }
     let post = mb.get_post(&id).await.map_err(upstream)?;
-    let comments = mb.comments(&id, "best", None).await.unwrap_or(json!({ "comments": [] }));
+    let comments = mb
+        .comments(&id, "best", None)
+        .await
+        .unwrap_or(json!({ "comments": [] }));
     Ok(Json(json!({ "post": post, "comments": comments })))
 }
 
@@ -764,10 +890,14 @@ async fn get_search(
     if !mb.is_authenticated() {
         return Err(bad("chưa kết nối agent"));
     }
-    mb.search(q.q.trim(), q.r#type.as_deref().unwrap_or("all"), q.limit.unwrap_or(20))
-        .await
-        .map(Json)
-        .map_err(upstream)
+    mb.search(
+        q.q.trim(),
+        q.r#type.as_deref().unwrap_or("all"),
+        q.limit.unwrap_or(20),
+    )
+    .await
+    .map(Json)
+    .map_err(upstream)
 }
 
 async fn get_submolts(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
@@ -791,7 +921,10 @@ async fn read_all_notifications(State(s): State<Arc<AppState>>) -> Result<Json<V
     if !mb.is_authenticated() {
         return Err(bad("chưa kết nối agent"));
     }
-    mb.read_all_notifications().await.map(Json).map_err(upstream)
+    mb.read_all_notifications()
+        .await
+        .map(Json)
+        .map_err(upstream)
 }
 
 #[derive(Deserialize)]
@@ -822,12 +955,17 @@ async fn list_drafts(
     State(s): State<Arc<AppState>>,
     Query(q): Query<DraftsQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let drafts = s.db.list_drafts(q.status.as_deref(), q.limit.unwrap_or(200)).map_err(server)?;
+    let drafts =
+        s.db.list_drafts(q.status.as_deref(), q.limit.unwrap_or(200))
+            .map_err(server)?;
     Ok(Json(json!({ "drafts": drafts, "count": drafts.len() })))
 }
 
 async fn drafts_count(State(s): State<Arc<AppState>>) -> Json<Value> {
-    Json(json!({ "pending": s.db.count_pending_drafts().unwrap_or(0) }))
+    Json(json!({
+        "pending": s.db.count_pending_drafts().unwrap_or(0),
+        "needs_input": s.db.count_drafts_with_status("needs_input").unwrap_or(0),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -873,6 +1011,8 @@ async fn create_draft(
         reason: b.reason,
         source: "user".into(),
         model: String::new(),
+        research: String::new(),
+        questions: Vec::new(),
     };
     if dc.kind.trim().is_empty() {
         return Err(bad("kind là bắt buộc"));
@@ -891,9 +1031,21 @@ struct ComposeReplyBody {
     post_content: String,
     #[serde(default)]
     instruction: String,
+    /// Override: force research on/off for this compose (default = settings).
+    #[serde(default)]
+    research: Option<bool>,
 }
 
-/// LLM-draft a reply to a post and queue it for approval.
+/// Should this manual compose run the research workflows first?
+fn compose_research_on(db: &Db, explicit: Option<bool>) -> bool {
+    explicit.unwrap_or_else(|| {
+        db.get_bool("research_enabled", true) && db.get_bool("research_on_compose", true)
+    })
+}
+
+/// LLM-draft a reply to a post and queue it for approval. When research is on,
+/// the matching workflows run first and the reply is grounded in their
+/// findings; uncertain research parks the draft as `needs_input`.
 async fn compose_reply_draft(
     State(s): State<Arc<AppState>>,
     Json(b): Json<ComposeReplyBody>,
@@ -913,17 +1065,72 @@ async fn compose_reply_draft(
     } else {
         (b.post_title.clone(), b.post_content.clone())
     };
-    // Ground the reply in the molty's memory + the wiki for this post's topic.
-    let g = grounding_for(&s.db, &format!("{title} {}", b.instruction)).await;
-    let (text, model) = llm::compose_reply(&voice, &title, &content, &b.instruction, &g).await.map_err(upstream)?;
+
+    let mut research_json = String::new();
+    let mut questions: Vec<String> = Vec::new();
+    let mut composed: Option<(String, String)> = None;
+    if compose_research_on(&s.db, b.research) {
+        let input = crate::research::ResearchInput {
+            flow: "comment".into(),
+            topic: if title.trim().is_empty() {
+                b.instruction.clone()
+            } else {
+                title.clone()
+            },
+            title: title.clone(),
+            content: content.clone(),
+            post_id: b.target_post_id.clone(),
+        };
+        match crate::research::run_research(&s.db, &input).await {
+            Some(Ok(bundle)) => {
+                let block = bundle.render();
+                if !block.is_empty() {
+                    composed = llm::compose_reply_researched(
+                        &voice,
+                        &title,
+                        &content,
+                        &b.instruction,
+                        &block,
+                        "",
+                    )
+                    .await
+                    .ok()
+                    .filter(|(t, _)| !t.trim().is_empty());
+                }
+                questions = crate::research::gate_questions(&s.db, &bundle);
+                research_json = bundle.to_json().to_string();
+            }
+            Some(Err(e)) => {
+                s.db.log("error", &format!("nghiên cứu thất bại: {e}"), &b.target_post_id, now_ts())
+                    .ok();
+            }
+            None => {}
+        }
+    }
+    let (text, model) = match composed {
+        Some(v) => v,
+        None => {
+            // No research (off / no workflows / failed) — classic grounding.
+            let g = grounding_for(&s.db, &format!("{title} {}", b.instruction)).await;
+            llm::compose_reply(&voice, &title, &content, &b.instruction, &g)
+                .await
+                .map_err(upstream)?
+        }
+    };
     let dc = DraftCreate {
         kind: "comment".into(),
         target_post_id: b.target_post_id.clone(),
         target_title: title,
         content: text,
-        reason: if b.instruction.is_empty() { "soạn trả lời".into() } else { b.instruction.clone() },
+        reason: if b.instruction.is_empty() {
+            "soạn trả lời".into()
+        } else {
+            b.instruction.clone()
+        },
         source: "user".into(),
         model,
+        research: research_json,
+        questions,
         ..Default::default()
     };
     let id = s.db.create_draft(&dc, now_ts()).map_err(bad)?;
@@ -937,6 +1144,9 @@ struct ComposePostBody {
     submolt: String,
     #[serde(default)]
     topic: String,
+    /// Override: force research on/off for this compose (default = settings).
+    #[serde(default)]
+    research: Option<bool>,
 }
 
 async fn compose_post_draft(
@@ -944,19 +1154,72 @@ async fn compose_post_draft(
     Json(b): Json<ComposePostBody>,
 ) -> Result<Json<Value>, ApiError> {
     let voice = voice(&s.db);
-    let submolt = if b.submolt.trim().is_empty() { s.db.get_str("default_submolt", "general") } else { b.submolt.trim().trim_start_matches("m/").to_string() };
+    let submolt = if b.submolt.trim().is_empty() {
+        s.db.get_str("default_submolt", "general")
+    } else {
+        b.submolt.trim().trim_start_matches("m/").to_string()
+    };
     // A new post should come from the user's real knowledge, not thin air.
-    let topic = if b.topic.trim().is_empty() { submolt.clone() } else { b.topic.clone() };
-    let g = grounding_for(&s.db, &topic).await;
-    let (post, model) = llm::compose_post(&voice, &submolt, &b.topic, &g).await.map_err(upstream)?;
+    let topic = if b.topic.trim().is_empty() {
+        submolt.clone()
+    } else {
+        b.topic.clone()
+    };
+
+    let mut research_json = String::new();
+    let mut questions: Vec<String> = Vec::new();
+    let mut composed: Option<(llm::DraftedPost, String)> = None;
+    if compose_research_on(&s.db, b.research) {
+        let input = crate::research::ResearchInput {
+            flow: "post".into(),
+            topic: topic.clone(),
+            title: b.topic.clone(),
+            content: String::new(),
+            post_id: String::new(),
+        };
+        match crate::research::run_research(&s.db, &input).await {
+            Some(Ok(bundle)) => {
+                let block = bundle.render();
+                if !block.is_empty() {
+                    composed =
+                        llm::compose_post_researched(&voice, &submolt, &b.topic, "", &block, "")
+                            .await
+                            .ok()
+                            .filter(|(p, _)| !p.title.trim().is_empty());
+                }
+                questions = crate::research::gate_questions(&s.db, &bundle);
+                research_json = bundle.to_json().to_string();
+            }
+            Some(Err(e)) => {
+                s.db.log("error", &format!("nghiên cứu thất bại: {e}"), "", now_ts())
+                    .ok();
+            }
+            None => {}
+        }
+    }
+    let (post, model) = match composed {
+        Some(v) => v,
+        None => {
+            let g = grounding_for(&s.db, &topic).await;
+            llm::compose_post(&voice, &submolt, &b.topic, &g)
+                .await
+                .map_err(upstream)?
+        }
+    };
     let dc = DraftCreate {
         kind: "post".into(),
         submolt,
         title: post.title,
         content: post.content,
-        reason: if b.topic.is_empty() { "soạn bài mới".into() } else { b.topic.clone() },
+        reason: if b.topic.is_empty() {
+            "soạn bài mới".into()
+        } else {
+            b.topic.clone()
+        },
         source: "user".into(),
         model,
+        research: research_json,
+        questions,
         ..Default::default()
     };
     let id = s.db.create_draft(&dc, now_ts()).map_err(bad)?;
@@ -969,15 +1232,37 @@ async fn approve_draft(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let draft = s.db.get_draft(id).map_err(server)?.ok_or_else(|| not_found("draft không tồn tại"))?;
+    let draft =
+        s.db.get_draft(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found("draft không tồn tại"))?;
+    if draft.status == "needs_input" {
+        return Err(bad(
+            "Draft này đang chờ bạn trả lời câu hỏi nghiên cứu. Trả lời (hoặc bỏ qua câu hỏi) trước, rồi mới duyệt.",
+        ));
+    }
     if draft.status != "pending" {
         return Err(bad(format!("draft đã ở trạng thái '{}'", draft.status)));
+    }
+    // The post already exists on Moltbook and only failed verification —
+    // approving again would publish a duplicate. Force the retry path instead.
+    if draft.awaiting_verify() {
+        return Err(bad(
+            "Bài này ĐÃ được đăng lên Moltbook, chỉ chưa xác minh. Dùng 'Xác minh lại' thay vì duyệt lại (duyệt lại sẽ tạo bài trùng).",
+        ));
     }
     match engine::execute_draft(&s, &draft).await {
         Ok(reference) => {
             let now = now_ts();
-            s.db.set_draft_result(id, "posted", &reference, "", now).ok();
-            s.db.log(&draft.kind, &format!("duyệt & đăng {} (#{id})", draft.kind), &reference, now).ok();
+            s.db.set_draft_result(id, "posted", &reference, "", now)
+                .ok();
+            s.db.log(
+                &draft.kind,
+                &format!("duyệt & đăng {} (#{id})", draft.kind),
+                &reference,
+                now,
+            )
+            .ok();
             let d = s.db.get_draft(id).map_err(server)?;
             Ok(Json(json!({ "ok": true, "draft": d, "ref": reference })))
         }
@@ -989,13 +1274,40 @@ async fn approve_draft(
     }
 }
 
+/// Retry ONLY the anti-human verification for a post that was already created.
+async fn verify_draft(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, ApiError> {
+    match engine::retry_verify(&s, id).await {
+        Ok(reference) => {
+            let d = s.db.get_draft(id).map_err(server)?;
+            Ok(Json(json!({ "ok": true, "ref": reference, "draft": d })))
+        }
+        Err(e) => {
+            let d = s.db.get_draft(id).map_err(server)?;
+            Ok(Json(json!({ "ok": false, "error": e, "draft": d })))
+        }
+    }
+}
+
 async fn reject_draft(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let draft = s.db.get_draft(id).map_err(server)?.ok_or_else(|| not_found("draft không tồn tại"))?;
-    s.db.set_draft_result(id, "rejected", "", "", now_ts()).map_err(server)?;
-    s.db.log("reject", &format!("từ chối nháp {} (#{id})", draft.kind), "", now_ts()).ok();
+    let draft =
+        s.db.get_draft(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found("draft không tồn tại"))?;
+    s.db.set_draft_result(id, "rejected", "", "", now_ts())
+        .map_err(server)?;
+    s.db.log(
+        "reject",
+        &format!("từ chối nháp {} (#{id})", draft.kind),
+        "",
+        now_ts(),
+    )
+    .ok();
     let d = s.db.get_draft(id).map_err(server)?;
     Ok(Json(json!({ "ok": true, "draft": d })))
 }
@@ -1027,8 +1339,15 @@ pub async fn enqueue_or_publish(state: &Arc<AppState>, dc: DraftCreate) -> Value
         if let Ok(Some(draft)) = db.get_draft(id) {
             return match engine::execute_draft(state, &draft).await {
                 Ok(reference) => {
-                    db.set_draft_result(id, "posted", &reference, "", now_ts()).ok();
-                    db.log(&draft.kind, &format!("live: {} (#{id})", draft.kind), &reference, now_ts()).ok();
+                    db.set_draft_result(id, "posted", &reference, "", now_ts())
+                        .ok();
+                    db.log(
+                        &draft.kind,
+                        &format!("live: {} (#{id})", draft.kind),
+                        &reference,
+                        now_ts(),
+                    )
+                    .ok();
                     json!({ "ok": true, "published": true, "ref": reference, "draft_id": id })
                 }
                 Err(e) => {
@@ -1095,7 +1414,11 @@ struct PostBody {
     url: String,
 }
 async fn action_post(State(s): State<Arc<AppState>>, Json(b): Json<PostBody>) -> Json<Value> {
-    let submolt = if b.submolt.trim().is_empty() { s.db.get_str("default_submolt", "general") } else { b.submolt.trim().trim_start_matches("m/").to_string() };
+    let submolt = if b.submolt.trim().is_empty() {
+        s.db.get_str("default_submolt", "general")
+    } else {
+        b.submolt.trim().trim_start_matches("m/").to_string()
+    };
     let dc = DraftCreate {
         kind: "post".into(),
         submolt,
@@ -1113,7 +1436,12 @@ struct NameBody {
     name: String,
 }
 async fn action_follow(State(s): State<Arc<AppState>>, Json(b): Json<NameBody>) -> Json<Value> {
-    let dc = DraftCreate { kind: "follow".into(), target_name: b.name, source: "user".into(), ..Default::default() };
+    let dc = DraftCreate {
+        kind: "follow".into(),
+        target_name: b.name,
+        source: "user".into(),
+        ..Default::default()
+    };
     Json(enqueue_or_publish(&s, dc).await)
 }
 async fn action_subscribe(State(s): State<Arc<AppState>>, Json(b): Json<NameBody>) -> Json<Value> {
@@ -1150,6 +1478,229 @@ async fn action_submolt(State(s): State<Arc<AppState>>, Json(b): Json<SubmoltBod
 
 async fn engine_run(State(s): State<Arc<AppState>>) -> Json<Value> {
     Json(engine::run_once(&s, "manual").await)
+}
+
+// ---- research workflows ----
+
+async fn list_workflows_h(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
+    let wfs = s.db.list_workflows(false).map_err(server)?;
+    let items: Vec<Value> = wfs
+        .iter()
+        .map(|w| {
+            let mut v = serde_json::to_value(w).unwrap_or(json!({}));
+            // Hand the UI parsed steps so it never re-parses the JSON string.
+            v["steps_parsed"] = serde_json::to_value(crate::research::parse_steps(&w.steps))
+                .unwrap_or(json!([]));
+            v
+        })
+        .collect();
+    Ok(Json(json!({ "workflows": items, "count": items.len() })))
+}
+
+#[derive(Deserialize)]
+struct WorkflowBody {
+    name: String,
+    #[serde(default)]
+    flow: String,
+    /// Steps as a JSON array (already-parsed value, not a string).
+    #[serde(default)]
+    steps: Value,
+    #[serde(default)]
+    extract_prompt: String,
+}
+
+async fn create_workflow_h(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<WorkflowBody>,
+) -> Result<Json<Value>, ApiError> {
+    if b.name.trim().is_empty() {
+        return Err(bad("name là bắt buộc"));
+    }
+    let steps: Vec<crate::research::Step> =
+        serde_json::from_value(b.steps.clone()).map_err(|e| bad(format!("steps không hợp lệ: {e}")))?;
+    if steps.is_empty() {
+        return Err(bad("workflow cần ít nhất 1 bước"));
+    }
+    let steps_json = serde_json::to_string(&steps).map_err(server)?;
+    let id =
+        s.db.add_workflow(&b.name, &b.flow, &steps_json, &b.extract_prompt, false, now_ts())
+            .map_err(bad)?;
+    s.db.log(
+        "workflow",
+        &format!("tạo workflow '{}' ({} bước)", b.name.trim(), steps.len()),
+        &id.to_string(),
+        now_ts(),
+    )
+    .ok();
+    Ok(Json(json!({ "ok": true, "workflow": s.db.get_workflow(id).ok().flatten() })))
+}
+
+#[derive(Deserialize)]
+struct WorkflowPatch {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    flow: Option<String>,
+    #[serde(default)]
+    steps: Option<Value>,
+    #[serde(default)]
+    extract_prompt: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+async fn patch_workflow_h(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(b): Json<WorkflowPatch>,
+) -> Result<Json<Value>, ApiError> {
+    let steps_json = match &b.steps {
+        Some(v) => {
+            let steps: Vec<crate::research::Step> = serde_json::from_value(v.clone())
+                .map_err(|e| bad(format!("steps không hợp lệ: {e}")))?;
+            if steps.is_empty() {
+                return Err(bad("workflow cần ít nhất 1 bước"));
+            }
+            Some(serde_json::to_string(&steps).map_err(server)?)
+        }
+        None => None,
+    };
+    s.db.update_workflow(
+        id,
+        b.name.as_deref(),
+        b.flow.as_deref(),
+        steps_json.as_deref(),
+        b.extract_prompt.as_deref(),
+        b.enabled,
+        now_ts(),
+    )
+    .map_err(bad)?;
+    match s.db.get_workflow(id).map_err(server)? {
+        Some(w) => Ok(Json(json!({ "ok": true, "workflow": w }))),
+        None => Err(not_found(format!("workflow {id} không tồn tại"))),
+    }
+}
+
+async fn delete_workflow_h(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, ApiError> {
+    s.db.delete_workflow(id).map_err(server)?;
+    Ok(Json(json!({ "ok": true, "id": id })))
+}
+
+/// The live tool catalog (builtin + Space Apps + daemon MCP servers).
+async fn research_tools_h() -> Json<Value> {
+    Json(crate::research::catalog().await)
+}
+
+#[derive(Deserialize)]
+struct ResearchRunBody {
+    #[serde(default)]
+    flow: String,
+    topic: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    post_id: String,
+}
+
+/// Run the matching workflows on a topic NOW and return the bundle — the UI's
+/// "chạy thử" button and the agent's on-demand research tool.
+async fn research_run_h(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<ResearchRunBody>,
+) -> Result<Json<Value>, ApiError> {
+    if b.topic.trim().is_empty() {
+        return Err(bad("topic là bắt buộc"));
+    }
+    let input = crate::research::ResearchInput {
+        flow: crate::db::norm_flow(&b.flow),
+        topic: b.topic.clone(),
+        title: b.title.clone(),
+        content: b.content.clone(),
+        post_id: b.post_id.clone(),
+    };
+    // Coerce 'both' to a concrete flow for matching (both matches everything).
+    let input = crate::research::ResearchInput {
+        flow: if input.flow == "both" {
+            "post".into()
+        } else {
+            input.flow
+        },
+        ..input
+    };
+    match crate::research::run_research(&s.db, &input).await {
+        Some(Ok(bundle)) => {
+            let questions = crate::research::gate_questions(&s.db, &bundle);
+            Ok(Json(json!({
+                "ok": true,
+                "bundle": bundle.to_json(),
+                "gated_questions": questions,
+                "sources": bundle.sources_line(),
+                "rendered": bundle.render(),
+            })))
+        }
+        Some(Err(e)) => Ok(Json(json!({ "ok": false, "error": e }))),
+        None => Ok(Json(json!({
+            "ok": false,
+            "error": "nghiên cứu đang tắt hoặc không có workflow nào khớp flow này",
+        }))),
+    }
+}
+
+#[derive(Deserialize)]
+struct AiBuildBody {
+    description: String,
+    #[serde(default)]
+    flow: String,
+}
+
+/// AI-compose a workflow from the live tool catalog and save it.
+async fn research_ai_build_h(
+    State(s): State<Arc<AppState>>,
+    Json(b): Json<AiBuildBody>,
+) -> Result<Json<Value>, ApiError> {
+    if b.description.trim().is_empty() {
+        return Err(bad("description là bắt buộc"));
+    }
+    let (name, flow, steps) = crate::research::ai_build_workflow(&b.description, b.flow.trim())
+        .await
+        .map_err(upstream)?;
+    let steps_json = serde_json::to_string(&steps).map_err(server)?;
+    let id =
+        s.db.add_workflow(&name, &flow, &steps_json, "", false, now_ts())
+            .map_err(bad)?;
+    s.db.log(
+        "workflow",
+        &format!("AI tạo workflow '{name}' ({} bước, flow {flow})", steps.len()),
+        &id.to_string(),
+        now_ts(),
+    )
+    .ok();
+    Ok(Json(json!({ "ok": true, "workflow": s.db.get_workflow(id).ok().flatten() })))
+}
+
+#[derive(Deserialize)]
+struct AnswerBody {
+    /// The human's answer. Empty = skip the questions and release the draft.
+    #[serde(default)]
+    answer: String,
+}
+
+/// Answer (or skip) a needs_input draft's research questions → re-compose →
+/// back to the approval queue.
+async fn answer_draft_h(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(b): Json<AnswerBody>,
+) -> Result<Json<Value>, ApiError> {
+    match engine::answer_draft(&s, id, &b.answer).await {
+        Ok(d) => Ok(Json(json!({ "ok": true, "draft": d }))),
+        Err(e) => Err(bad(e)),
+    }
 }
 
 // ---- demo ----

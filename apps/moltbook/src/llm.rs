@@ -59,8 +59,16 @@ fn describe(e: &reqwest::Error) -> String {
 /// One completion through the daemon bridge. Returns `(text, model, finish)`
 /// where `finish == "length"` means the provider cut the output at the cap.
 /// Transport errors are retried; application errors are surfaced as-is.
-pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(String, String, String), String> {
-    let url = format!("{}/api/space/apps/{}/bridge", base_url().trim_end_matches('/'), app_id());
+pub async fn bridge_llm(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String, String), String> {
+    let url = format!(
+        "{}/api/space/apps/{}/bridge",
+        base_url().trim_end_matches('/'),
+        app_id()
+    );
     let mut payload = json!({ "system": system, "prompt": user, "maxTokens": max_tokens });
     // Compose on our OWN profile when one is chosen — never touch the daemon's
     // global active model. Older daemons ignore the extra field and just use
@@ -91,9 +99,18 @@ pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(St
         };
         return match v.get("status").and_then(|x| x.as_str()) {
             Some("ok") => Ok((
-                v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("finish").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                v.get("text")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                v.get("model")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                v.get("finish")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             )),
             Some("pending") => Err("bridge LLM chưa được bật trong daemon này".to_string()),
             _ => Err(v
@@ -107,8 +124,14 @@ pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(St
 }
 
 /// Convenience: `(text, model)`, dropping the finish reason.
-pub async fn complete(system: &str, user: &str, max_tokens: u32) -> Result<(String, String), String> {
-    bridge_llm(system, user, max_tokens).await.map(|(t, m, _)| (t, m))
+pub async fn complete(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String), String> {
+    bridge_llm(system, user, max_tokens)
+        .await
+        .map(|(t, m, _)| (t, m))
 }
 
 pub async fn list_models() -> Result<Value, String> {
@@ -221,7 +244,10 @@ impl TopicSteer {
     fn render(&self) -> String {
         let mut s = String::new();
         if !self.engage.is_empty() {
-            s.push_str(&format!("\nCHỦ ĐỀ SẾP QUAN TÂM: {}\n", self.engage.join(" · ")));
+            s.push_str(&format!(
+                "\nCHỦ ĐỀ SẾP QUAN TÂM: {}\n",
+                self.engage.join(" · ")
+            ));
             if self.focus_only {
                 s.push_str(
                     "CHỈ tương tác với bài liên quan tới các chủ đề trên. Bài không liên quan → bỏ qua \
@@ -229,7 +255,9 @@ hoàn toàn (không upvote, không bình luận). Nếu không có bài nào li�
 comments RỖNG — đừng cố tương tác cho đủ chỉ tiêu.\n",
                 );
             } else {
-                s.push_str("Ưu tiên bài thuộc các chủ đề trên; vẫn có thể tương tác bài hay khác.\n");
+                s.push_str(
+                    "Ưu tiên bài thuộc các chủ đề trên; vẫn có thể tương tác bài hay khác.\n",
+                );
             }
         }
         if !self.ideas.is_empty() {
@@ -320,8 +348,14 @@ pub async fn plan_engagements(
     let targets: Vec<Target> = priority
         .iter()
         .take(10)
-        .map(|(pid, _)| Target { post_id: pid.clone(), is_own: true })
-        .chain(items.iter().take(25).map(|it| Target { post_id: it.id.clone(), is_own: false }))
+        .map(|(pid, _)| Target {
+            post_id: pid.clone(),
+            is_own: true,
+        })
+        .chain(items.iter().take(25).map(|it| Target {
+            post_id: it.id.clone(),
+            is_own: false,
+        }))
         .collect();
 
     let mut prompt = String::new();
@@ -339,7 +373,10 @@ pub async fn plan_engagements(
         prompt.push_str("People replied to YOU here — respond to these FIRST (they count against your comment budget):\n");
         for (_, snippet) in priority.iter().take(10) {
             n += 1;
-            prompt.push_str(&format!("#{n} (reply on your post): {}\n", truncate(snippet, 300)));
+            prompt.push_str(&format!(
+                "#{n} (reply on your post): {}\n",
+                truncate(snippet, 300)
+            ));
         }
         prompt.push('\n');
     }
@@ -384,15 +421,25 @@ pub async fn plan_engagements(
         }
     }
     let (raw, model) = out.ok_or_else(|| {
-        format!("could not parse engagement plan ({last_err}):\n{}", truncate(&last_text, 300))
+        format!(
+            "could not parse engagement plan ({last_err}):\n{}",
+            truncate(&last_text, 300)
+        )
     })?;
 
     // Resolve #N → post_id, dropping anything out of range. Enforce the budget and
     // the new-post rule here rather than trusting the model to respect them.
     let at = |i: u32| -> Option<&Target> {
-        if i == 0 { None } else { targets.get((i - 1) as usize) }
+        if i == 0 {
+            None
+        } else {
+            targets.get((i - 1) as usize)
+        }
     };
-    let mut plan = EngagementPlan { note: raw.note, ..Default::default() };
+    let mut plan = EngagementPlan {
+        note: raw.note,
+        ..Default::default()
+    };
     for i in raw.upvotes {
         if let Some(t) = at(i) {
             if !t.is_own && !plan.upvotes.contains(&t.post_id) {
@@ -405,7 +452,11 @@ pub async fn plan_engagements(
             continue;
         }
         if let Some(t) = at(c.post) {
-            plan.comments.push(PlanComment { post_id: t.post_id.clone(), content: c.content, why: c.why });
+            plan.comments.push(PlanComment {
+                post_id: t.post_id.clone(),
+                content: c.content,
+                why: c.why,
+            });
         }
     }
     plan.comments.truncate(comment_budget.max(0) as usize);
@@ -413,7 +464,8 @@ pub async fn plan_engagements(
     Ok((plan, model))
 }
 
-const REPLY_SYSTEM: &str = "You are an AI agent on Moltbook writing a reply to another agent's post. \
+const REPLY_SYSTEM: &str =
+    "You are an AI agent on Moltbook writing a reply to another agent's post. \
 Write a single substantive comment (1-4 sentences) that genuinely adds to the conversation — a \
 question, a counterpoint, a build, or a specific experience. Match the post's language. No \
 sycophancy, no filler, no hashtags, no sign-off. \
@@ -432,10 +484,15 @@ pub async fn compose_reply(
 ) -> Result<(String, String), String> {
     let mut prompt = format!("Your voice:\n{voice}\n{}\nThe post you're replying to:\nTitle: {post_title}\n{post_content}\n", grounding.render());
     if !instruction.trim().is_empty() {
-        prompt.push_str(&format!("\nExtra guidance from your human: {}\n", instruction.trim()));
+        prompt.push_str(&format!(
+            "\nExtra guidance from your human: {}\n",
+            instruction.trim()
+        ));
     }
     prompt.push_str("\nWrite the comment now.");
-    complete(REPLY_SYSTEM, &prompt, 500).await.map(|(t, m)| (t.trim().to_string(), m))
+    complete(REPLY_SYSTEM, &prompt, 500)
+        .await
+        .map(|(t, m)| (t.trim().to_string(), m))
 }
 
 const POST_SYSTEM: &str = "You are an AI agent on Moltbook drafting an original post. Write \
@@ -479,9 +536,169 @@ pub async fn compose_post(
         #[serde(default)]
         content: String,
     }
-    let out: Out = parse_json(&text)
-        .map_err(|e| format!("could not parse drafted post ({e}):\n{}", truncate(&text, 300)))?;
-    Ok((DraftedPost { title: out.title.trim().to_string(), content: out.content.trim().to_string() }, model))
+    let out: Out = parse_json(&text).map_err(|e| {
+        format!(
+            "could not parse drafted post ({e}):\n{}",
+            truncate(&text, 300)
+        )
+    })?;
+    Ok((
+        DraftedPost {
+            title: out.title.trim().to_string(),
+            content: out.content.trim().to_string(),
+        },
+        model,
+    ))
+}
+
+// ---- research-grounded composers ----
+
+const RESEARCH_REPLY_SYSTEM: &str = "You are an AI agent on Moltbook writing a reply to another \
+agent's post. You are given a NGHIÊN CỨU section — findings your research tools just gathered — \
+and possibly the human's direct answer/steer. Write ONE substantive comment (1-4 sentences) that \
+genuinely adds to the conversation, GROUNDED in the research: cite the concrete facts from it, \
+never invent beyond it, and never contradict the human's answer. Match the post's language. No \
+sycophancy, no filler, no hashtags. Return ONLY the comment text.";
+
+/// Compose a reply grounded in a research bundle. `angle` is the planner's
+/// original draft (kept as the intent), `answer` the human's reply to the open
+/// questions ("" when none).
+pub async fn compose_reply_researched(
+    voice: &str,
+    post_title: &str,
+    post_content: &str,
+    angle: &str,
+    research_block: &str,
+    answer: &str,
+) -> Result<(String, String), String> {
+    let mut prompt = format!(
+        "Your voice:\n{voice}\n{research_block}\nThe post you're replying to:\nTitle: {post_title}\n{}\n",
+        truncate(post_content, 1500)
+    );
+    if !angle.trim().is_empty() {
+        prompt.push_str(&format!(
+            "\nHướng bạn định nói (bản nháp đầu — giữ ý, viết lại có căn cứ):\n{}\n",
+            truncate(angle.trim(), 500)
+        ));
+    }
+    if !answer.trim().is_empty() {
+        prompt.push_str(&format!(
+            "\nNGƯỜI DÙNG TRẢ LỜI CÂU HỎI CỦA BẠN (ưu tiên tuyệt đối, dựa vào đây):\n{}\n",
+            truncate(answer.trim(), 800)
+        ));
+    }
+    prompt.push_str("\nWrite the comment now.");
+    // Reasoning models can spend the whole cap thinking → empty reply. Retry
+    // once with a firm nudge before giving up.
+    let mut last_err = String::new();
+    for attempt in 0..2u8 {
+        let p = if attempt == 0 {
+            prompt.clone()
+        } else {
+            format!("{prompt}\n\n(Lần trước trả về rỗng — viết NGAY bình luận 1-3 câu, không suy luận dài.)")
+        };
+        match bridge_llm(RESEARCH_REPLY_SYSTEM, &p, 900).await {
+            Ok((t, m, finish)) => {
+                let t = t.trim().to_string();
+                if !t.is_empty() {
+                    return Ok((t, m));
+                }
+                last_err = if finish == "length" {
+                    "hết token trước khi kịp viết (finish=length)".into()
+                } else {
+                    "trả về rỗng".into()
+                };
+            }
+            Err(e) => last_err = e,
+        }
+    }
+    Err(format!("soạn bình luận theo nghiên cứu thất bại: {last_err}"))
+}
+
+const RESEARCH_POST_SYSTEM: &str = "You are an AI agent on Moltbook drafting an original post. \
+You are given a NGHIÊN CỨU section — findings your research tools just gathered — and possibly \
+the human's direct answer/steer. Build the post FROM that research: concrete facts, lessons, or an \
+honest question grounded in what was found. Never invent beyond the research; never contradict \
+the human's answer. \
+Return ONLY valid JSON (no prose, no code fences): \
+{\"title\":\"<max 300 chars, no clickbait>\",\"content\":\"<the body, plain text>\"}. \
+Match the language of the topic.";
+
+/// Compose (or re-compose) a post grounded in a research bundle.
+pub async fn compose_post_researched(
+    voice: &str,
+    submolt: &str,
+    seed_title: &str,
+    seed_content: &str,
+    research_block: &str,
+    answer: &str,
+) -> Result<(DraftedPost, String), String> {
+    let mut prompt = format!(
+        "Your voice:\n{voice}\n{research_block}\nSubmolt: m/{}\n",
+        submolt.trim_start_matches("m/")
+    );
+    if !seed_title.trim().is_empty() || !seed_content.trim().is_empty() {
+        prompt.push_str(&format!(
+            "\nBản nháp đầu (giữ chủ đề & ý định, viết lại có căn cứ):\nTitle: {}\n{}\n",
+            truncate(seed_title.trim(), 300),
+            truncate(seed_content.trim(), 800)
+        ));
+    }
+    if !answer.trim().is_empty() {
+        prompt.push_str(&format!(
+            "\nNGƯỜI DÙNG TRẢ LỜI CÂU HỎI CỦA BẠN (ưu tiên tuyệt đối, dựa vào đây):\n{}\n",
+            truncate(answer.trim(), 800)
+        ));
+    }
+    prompt.push_str("\nReturn the JSON now.");
+    #[derive(Deserialize, Default)]
+    struct Out {
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        content: String,
+    }
+    // A reasoning model can burn most of the cap thinking and get truncated
+    // mid-"content"; the salvage parser then returns a title with an EMPTY
+    // body, which reads as success. Treat empty content as a failure and retry
+    // once, tighter — same lesson as the trending analyzer.
+    let mut last_err = String::new();
+    for attempt in 0..2u8 {
+        let p = if attempt == 0 {
+            prompt.clone()
+        } else {
+            format!(
+                "{prompt}\n\nLƯU Ý: lần trước {last_err}. Trả JSON NGAY, KHÔNG suy luận dài dòng; \
+content bắt buộc khác rỗng và ≤ 180 từ."
+            )
+        };
+        let (text, model, finish) = bridge_llm(RESEARCH_POST_SYSTEM, &p, 2000).await?;
+        match parse_json::<Out>(&text) {
+            Ok(out) if !out.title.trim().is_empty() && !out.content.trim().is_empty() => {
+                return Ok((
+                    DraftedPost {
+                        title: out.title.trim().to_string(),
+                        content: out.content.trim().to_string(),
+                    },
+                    model,
+                ));
+            }
+            Ok(_) => {
+                last_err = if finish == "length" {
+                    "bị cắt vì hết token nên thiếu title/content".into()
+                } else {
+                    "title hoặc content rỗng".into()
+                };
+            }
+            Err(e) => {
+                last_err = format!(
+                    "không parse được ({e}): {}",
+                    truncate(&text, 200)
+                );
+            }
+        }
+    }
+    Err(format!("soạn bài theo nghiên cứu thất bại: {last_err}"))
 }
 
 // ---- trending analysis ----
@@ -544,13 +761,23 @@ pub async fn analyze_trending(
     interests: &[String],
 ) -> Result<(TrendingReport, String), String> {
     if posts.is_empty() {
-        return Ok((TrendingReport { summary: String::new(), topics: Vec::new() }, String::new()));
+        return Ok((
+            TrendingReport {
+                summary: String::new(),
+                topics: Vec::new(),
+            },
+            String::new(),
+        ));
     }
     let mut prompt = String::new();
     if interests.is_empty() {
-        prompt.push_str("Chủ đề human quan tâm: (chưa khai báo — đặt relevant=false cho tất cả)\n\n");
+        prompt
+            .push_str("Chủ đề human quan tâm: (chưa khai báo — đặt relevant=false cho tất cả)\n\n");
     } else {
-        prompt.push_str(&format!("Chủ đề human quan tâm: {}\n\n", interests.join(" · ")));
+        prompt.push_str(&format!(
+            "Chủ đề human quan tâm: {}\n\n",
+            interests.join(" · ")
+        ));
     }
     prompt.push_str("Các bài đang nóng trên Moltbook:\n");
     for (i, p) in posts.iter().enumerate() {
@@ -564,7 +791,8 @@ pub async fn analyze_trending(
             truncate(&p.content, 200),
         ));
     }
-    prompt.push_str("Trả JSON ngay (chỉ tham chiếu bài bằng #N). Viết GỌN — không xuống dòng thừa.");
+    prompt
+        .push_str("Trả JSON ngay (chỉ tham chiếu bài bằng #N). Viết GỌN — không xuống dòng thừa.");
 
     // Retry once on a bad/empty parse. Every field is `#[serde(default)]`, so a
     // reply truncated at the token cap can repair down to `{}` and parse
@@ -594,7 +822,12 @@ mỗi trường tối đa 20 từ, không xuống dòng, không khoảng trắng
                 let complete_enough = !truncated && r.topics.iter().any(|t| !t.posts.is_empty());
                 let is_last = attempt == ATTEMPTS - 1;
                 // Keep the richer of the two attempts.
-                if best.as_ref().map_or(true, |(b, _): &(RawTrending, String)| r.topics.len() > b.topics.len()) {
+                if best
+                    .as_ref()
+                    .map_or(true, |(b, _): &(RawTrending, String)| {
+                        r.topics.len() > b.topics.len()
+                    })
+                {
                     best = Some((r, model));
                 }
                 if complete_enough || is_last {
@@ -617,7 +850,10 @@ mỗi trường tối đa 20 từ, không xuống dòng, không khoảng trắng
         }
     }
     let (raw, model) = best.ok_or_else(|| {
-        format!("không phân tích được xu hướng ({last_err}):\n{}", truncate(&last_text, 300))
+        format!(
+            "không phân tích được xu hướng ({last_err}):\n{}",
+            truncate(&last_text, 300)
+        )
     })?;
 
     // Resolve #N → 0-based indices, dropping anything out of range.
@@ -638,7 +874,13 @@ mỗi trường tối đa 20 từ, không xuống dòng, không khoảng trắng
             relevant: t.relevant,
         })
         .collect();
-    Ok((TrendingReport { summary: raw.summary, topics }, model))
+    Ok((
+        TrendingReport {
+            summary: raw.summary,
+            topics,
+        },
+        model,
+    ))
 }
 
 const FEEDBACK_SYSTEM: &str = "You are given a post an AI agent published on Moltbook and the \
@@ -665,7 +907,10 @@ pub async fn synthesize_feedback(
     if comments.is_empty() {
         return Ok((String::new(), String::new()));
     }
-    let mut prompt = format!("Bài đã đăng:\nTitle: {post_title}\n{}\n\n", truncate(post_content, 1500));
+    let mut prompt = format!(
+        "Bài đã đăng:\nTitle: {post_title}\n{}\n\n",
+        truncate(post_content, 1500)
+    );
     prompt.push_str("Bình luận từ các agent khác:\n");
     for (author, content) in comments.iter().take(40) {
         let c = content.trim();
@@ -675,26 +920,105 @@ pub async fn synthesize_feedback(
         prompt.push_str(&format!("- {author}: {}\n", truncate(c, 600)));
     }
     prompt.push_str("\nViết phần tổng hợp ngay.");
-    complete(FEEDBACK_SYSTEM, &prompt, 1200).await.map(|(t, m)| (t.trim().to_string(), m))
+    complete(FEEDBACK_SYSTEM, &prompt, 1200)
+        .await
+        .map(|(t, m)| (t.trim().to_string(), m))
 }
 
-const CHALLENGE_SYSTEM: &str = "You are given an obfuscated math word problem used by Moltbook to \
-verify that a poster is an AI (not a human). Solve it and return ONLY the numeric answer as a \
-string with exactly 2 decimal places, e.g. \"15.00\". No words, no units, no explanation.";
+/// Headroom for the anti-human challenge. Deliberately generous: reasoning
+/// models emit nothing until they've finished thinking, and an empty completion
+/// is a hard error on the daemon side.
+const CHALLENGE_MAX_TOKENS: u32 = 800;
+/// Verification challenges expire in ~5 minutes, so retry a few times fast.
+const CHALLENGE_ATTEMPTS: u8 = 3;
+
+// Forbidding any working-out (the previous prompt did) forces a snap answer and
+// is why several challenges came back "Incorrect answer". Let it reason briefly,
+// then demand a machine-readable final line.
+const CHALLENGE_SYSTEM: &str = "You are given a deliberately obfuscated math word problem used by \
+Moltbook to verify that a poster is an AI (not a human). Read it carefully — the wording hides the \
+arithmetic, and order of operations matters.\n\
+Work through it in at most 3 short lines, then output the final line EXACTLY as:\n\
+ANSWER: <number>\n\
+where <number> has exactly 2 decimal places (e.g. ANSWER: 15.00). Nothing after that line.";
 
 /// Solve a Moltbook content-verification challenge. Returns the numeric answer
 /// string (2 decimals). Best-effort — the caller decides what to do on failure.
 pub async fn solve_challenge(challenge_text: &str) -> Result<(String, String), String> {
-    let (text, model) = complete(CHALLENGE_SYSTEM, challenge_text, 60).await?;
-    let answer = normalize_answer(&text);
-    if answer.is_empty() {
-        return Err(format!("không trích được đáp số từ: {}", truncate(&text, 120)));
+    let mut last = String::new();
+    for attempt in 0..CHALLENGE_ATTEMPTS {
+        let prompt = if attempt == 0 {
+            challenge_text.to_string()
+        } else {
+            format!(
+                "{challenge_text}\n\n(Lần trước không nhận được đáp số. Hãy trả lời NGAY bằng \
+một con số duy nhất, 2 chữ số thập phân, không giải thích.)"
+            )
+        };
+        // A reasoning model spends tokens thinking before it emits anything, so a
+        // tight cap yields EMPTY content and the daemon rejects it with "LLM
+        // returned an empty response" — which is exactly how challenge solving
+        // kept failing. Give it real headroom; the answer itself is tiny.
+        match bridge_llm(CHALLENGE_SYSTEM, &prompt, CHALLENGE_MAX_TOKENS).await {
+            Ok((text, model, finish)) => {
+                let answer = normalize_answer(&text);
+                if !answer.is_empty() {
+                    return Ok((answer, model));
+                }
+                last = if finish == "length" {
+                    format!(
+                        "hết token trước khi kịp trả đáp số (finish=length): {}",
+                        truncate(&text, 100)
+                    )
+                } else {
+                    format!("không trích được đáp số từ: {}", truncate(&text, 120))
+                };
+            }
+            Err(e) => last = e,
+        }
     }
-    Ok((answer, model))
+    Err(last)
 }
 
-/// Pull the first number out of the model's reply and format it with 2 decimals.
+/// Extract the challenge answer and format it with 2 decimals.
+///
+/// Prefers the explicit `ANSWER:` line; otherwise takes the LAST number in the
+/// reply. Taking the *first* number (the old behaviour) would grab a figure out
+/// of the working-out rather than the conclusion.
 fn normalize_answer(text: &str) -> String {
+    if let Some(idx) = text.to_uppercase().rfind("ANSWER:") {
+        let tail = &text[idx + "ANSWER:".len()..];
+        let n = first_number(tail);
+        if !n.is_empty() {
+            return n;
+        }
+    }
+    // No marker — scan every number and keep the last one.
+    let mut last = String::new();
+    let mut cur = String::new();
+    for c in text.chars() {
+        if c.is_ascii_digit() || (c == '.' && !cur.is_empty() && !cur.contains('.')) {
+            cur.push(c);
+        } else if c == '-' && cur.is_empty() {
+            cur.push(c);
+        } else {
+            if cur.chars().any(|c| c.is_ascii_digit()) {
+                last = cur.clone();
+            }
+            cur.clear();
+        }
+    }
+    if cur.chars().any(|c| c.is_ascii_digit()) {
+        last = cur;
+    }
+    match last.trim_end_matches('.').parse::<f64>() {
+        Ok(n) => format!("{n:.2}"),
+        Err(_) => String::new(),
+    }
+}
+
+/// First number in `text`, formatted with 2 decimals ("" when there is none).
+fn first_number(text: &str) -> String {
     let mut num = String::new();
     let mut seen_digit = false;
     for c in text.chars() {
@@ -719,7 +1043,7 @@ fn normalize_answer(text: &str) -> String {
 
 // ---- tolerant JSON parsing (shared by every structured prompt) ----
 
-fn parse_json<T: for<'de> Deserialize<'de>>(text: &str) -> Result<T, String> {
+pub(crate) fn parse_json<T: for<'de> Deserialize<'de>>(text: &str) -> Result<T, String> {
     let cleaned = strip_fences(text);
     let first_err = match serde_json::from_str::<T>(&cleaned) {
         Ok(v) => return Ok(v),
@@ -752,9 +1076,13 @@ fn strip_fences(t: &str) -> String {
         let mut esc = false;
         for (i, &b) in bytes.iter().enumerate() {
             if in_str {
-                if esc { esc = false; }
-                else if b == b'\\' { esc = true; }
-                else if b == b'"' { in_str = false; }
+                if esc {
+                    esc = false;
+                } else if b == b'\\' {
+                    esc = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
                 continue;
             }
             match b {
@@ -810,7 +1138,11 @@ fn repair_candidates(text: &str) -> Vec<String> {
     points.sort_unstable();
     points.dedup();
     points.reverse();
-    points.iter().take(60).filter_map(|&p| close_at(s, p)).collect()
+    points
+        .iter()
+        .take(60)
+        .filter_map(|&p| close_at(s, p))
+        .collect()
 }
 
 /// Cut `s` at `cut` and close whatever brackets are still open. `None` when the
@@ -870,8 +1202,28 @@ mod tests {
     fn normalize_answer_formats_two_decimals() {
         assert_eq!(normalize_answer("The answer is 15"), "15.00");
         assert_eq!(normalize_answer("42.5"), "42.50");
-        assert_eq!(normalize_answer("= -3.14159 units"), "-3.14");
+        assert_eq!(normalize_answer("-3.14159"), "-3.14");
         assert_eq!(normalize_answer("no number here"), "");
+    }
+
+    /// The model now shows its working, so we must read the CONCLUSION — taking
+    /// the first number would pick a figure out of the reasoning.
+    #[test]
+    fn normalize_answer_prefers_the_answer_marker() {
+        let reply = "Start: 7 cm.\n3 molts × 2.5 = 7.5\n7 + 7.5 - 1 = 13.5\nANSWER: 13.50";
+        assert_eq!(normalize_answer(reply), "13.50");
+        // Case-insensitive marker.
+        assert_eq!(normalize_answer("blah 99\nanswer: 4"), "4.00");
+    }
+
+    #[test]
+    fn normalize_answer_falls_back_to_last_number() {
+        // No marker: the conclusion is the final number, not the first.
+        assert_eq!(normalize_answer("2 plus 3 equals 5"), "5.00");
+        assert_eq!(
+            normalize_answer("step 1: 10\nstep 2: 20\ntotal 30.25"),
+            "30.25"
+        );
     }
 
     #[test]

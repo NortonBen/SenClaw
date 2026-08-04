@@ -31,6 +31,79 @@ export interface Account {
   harvest_enabled: boolean
   /** Write a trending briefing into the wiki once a day. */
   trending_daily: boolean
+  /** Research workflows run before composing comments/posts. */
+  research_enabled: boolean
+  /** Manual "AI soạn" buttons also research first. */
+  research_on_compose: boolean
+  /** Confidence (0-100) below which the AI asks the human before publishing. 0 = never ask. */
+  research_ask_threshold: number
+  /** Global extra extraction instructions appended to every synthesis. */
+  research_extract_prompt: string
+  /** Max researched items per heartbeat tick. */
+  research_max_per_tick: number
+  /** Drafts waiting for the human to answer research questions. */
+  needs_input_drafts: number
+}
+
+/** One step of a research workflow. */
+export interface ResearchStep {
+  kind: 'builtin' | 'app' | 'daemon'
+  tool: string
+  app?: string
+  server?: string
+  args?: Record<string, unknown>
+  save_as?: string
+}
+
+/** A research workflow: MCP-tool steps run before composing. */
+export interface ResearchWorkflow {
+  id: number
+  name: string
+  flow: 'comment' | 'post' | 'both'
+  steps: string
+  steps_parsed?: ResearchStep[]
+  extract_prompt: string
+  enabled: boolean
+  builtin: boolean
+  created_at: number
+  updated_at: number
+}
+
+export interface ResearchStepRun {
+  workflow: string
+  step: string
+  ok: boolean
+  output: string
+  ms: number
+}
+
+/** The synthesised research a draft was grounded in. */
+export interface ResearchBundle {
+  flow: string
+  topic: string
+  findings: string
+  key_facts: string[]
+  open_questions: string[]
+  confidence: number
+  workflows: string[]
+  runs: ResearchStepRun[]
+  model: string
+}
+
+export interface ResearchRunResult {
+  ok: boolean
+  error?: string
+  bundle?: ResearchBundle
+  gated_questions?: string[]
+  sources?: string
+  rendered?: string
+}
+
+/** The live tool catalog for the workflow builder. */
+export interface ToolCatalog {
+  builtin: Array<{ kind: string; tool: string; description: string; args: Record<string, unknown> }>
+  apps: Array<{ id: string; name: string; mcp_name?: string; tools: Array<{ tool: string; description: string; args?: Record<string, unknown> }> }>
+  daemon: Array<{ name: string; builtin: boolean; description: string; tools: Array<{ tool: string; description: string }> }>
 }
 
 /** A day's trending briefing written into the wiki. */
@@ -127,7 +200,7 @@ export interface CachedPost {
 export interface Draft {
   id: number
   kind: 'post' | 'comment' | 'vote' | 'submolt' | 'follow' | 'subscribe'
-  status: 'pending' | 'posted' | 'rejected' | 'error'
+  status: 'pending' | 'needs_input' | 'posted' | 'rejected' | 'error'
   submolt: string
   title: string
   content: string
@@ -144,6 +217,35 @@ export interface Draft {
   error: string
   created_at: number
   decided_at: number | null
+  /** Post exists on Moltbook but its anti-human verification hasn't passed. */
+  verify_post_id: string
+  verify_code: string
+  verify_challenge: string
+  /** Research bundle JSON the content was grounded in ('' = none). */
+  research: string
+  /** Open questions for the human (JSON array). Non-empty ⇔ needs_input. */
+  questions: string
+  /** The human's answer once given. */
+  answer: string
+}
+
+/** Parse a draft's research/questions JSON safely. */
+export function draftResearch(d: Draft): ResearchBundle | null {
+  if (!d.research) return null
+  try {
+    return JSON.parse(d.research) as ResearchBundle
+  } catch {
+    return null
+  }
+}
+export function draftQuestions(d: Draft): string[] {
+  if (!d.questions) return []
+  try {
+    const q = JSON.parse(d.questions)
+    return Array.isArray(q) ? q.map(String) : []
+  } catch {
+    return []
+  }
 }
 
 export interface Activity {
@@ -253,15 +355,21 @@ export const api = {
     const qs = status ? `?status=${status}` : ''
     return req<{ drafts: Draft[]; count: number }>(`/drafts${qs}`).then((r) => r.drafts)
   },
-  draftsCount: () => req<{ pending: number }>('/drafts/count').then((r) => r.pending),
-  composeReply: (body: { target_post_id: string; post_title?: string; post_content?: string; instruction?: string }) =>
+  draftsCount: () => req<{ pending: number; needs_input: number }>('/drafts/count'),
+  composeReply: (body: { target_post_id: string; post_title?: string; post_content?: string; instruction?: string; research?: boolean }) =>
     req<{ ok: boolean; draft: Draft }>('/drafts/compose', { method: 'POST', body: JSON.stringify(body) }),
-  composePost: (body: { submolt?: string; topic?: string }) =>
+  composePost: (body: { submolt?: string; topic?: string; research?: boolean }) =>
     req<{ ok: boolean; draft: Draft }>('/drafts/compose-post', { method: 'POST', body: JSON.stringify(body) }),
+  /** Answer (or skip, with '') a needs_input draft's research questions. */
+  answerDraft: (id: number, answer: string) =>
+    req<{ ok: boolean; draft: Draft }>(`/drafts/${id}/answer`, { method: 'POST', body: JSON.stringify({ answer }) }),
   createDraft: (body: Partial<Draft> & { kind: string }) =>
     req<{ ok: boolean; draft: Draft }>('/drafts', { method: 'POST', body: JSON.stringify(body) }),
   approveDraft: (id: number) =>
     req<{ ok: boolean; draft: Draft; ref?: string; error?: string }>(`/drafts/${id}/approve`, { method: 'POST' }),
+  /** Retry only the verification — never re-posts (that would duplicate). */
+  verifyDraft: (id: number) =>
+    req<{ ok: boolean; draft: Draft; ref?: string; error?: string }>(`/drafts/${id}/verify`, { method: 'POST' }),
   rejectDraft: (id: number) => req<{ ok: boolean; draft: Draft }>(`/drafts/${id}/reject`, { method: 'POST' }),
   deleteDraft: (id: number) => req<{ ok: boolean }>(`/drafts/${id}`, { method: 'DELETE' }),
 
@@ -306,6 +414,22 @@ export const api = {
   // Read-only: the app never changes the daemon's active model. Picking a
   // profile for Moltbook is a local setting (putSettings({ llm_profile })).
   models: () => req<ModelsResponse>('/models'),
+
+  // ---- research workflows ----
+  workflows: () => req<{ workflows: ResearchWorkflow[]; count: number }>('/research/workflows').then((r) => r.workflows),
+  createWorkflow: (body: { name: string; flow: string; steps: ResearchStep[]; extract_prompt?: string }) =>
+    req<{ ok: boolean; workflow: ResearchWorkflow }>('/research/workflows', { method: 'POST', body: JSON.stringify(body) }),
+  patchWorkflow: (id: number, patch: { name?: string; flow?: string; steps?: ResearchStep[]; extract_prompt?: string; enabled?: boolean }) =>
+    req<{ ok: boolean; workflow: ResearchWorkflow }>(`/research/workflows/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteWorkflow: (id: number) => req<{ ok: boolean }>(`/research/workflows/${id}`, { method: 'DELETE' }),
+  researchTools: () => req<ToolCatalog>('/research/tools'),
+  researchRun: (body: { flow: string; topic: string; title?: string; content?: string; post_id?: string }) =>
+    req<ResearchRunResult>('/research/run', { method: 'POST', body: JSON.stringify(body) }),
+  aiBuildWorkflow: (description: string, flow = '') =>
+    req<{ ok: boolean; workflow: ResearchWorkflow }>('/research/ai-build', {
+      method: 'POST',
+      body: JSON.stringify({ description, flow }),
+    }),
 }
 
 export function fmtDateTime(secs: number | null | undefined): string {

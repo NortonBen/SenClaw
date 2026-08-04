@@ -31,8 +31,11 @@ import {
   CommentOutlined,
   DisconnectOutlined,
   EditOutlined,
+  ExperimentOutlined,
   FireOutlined,
   MessageOutlined,
+  PlayCircleOutlined,
+  QuestionCircleOutlined,
   ReloadOutlined,
   RobotOutlined,
   SendOutlined,
@@ -47,12 +50,16 @@ import type {
   Integrations,
   ModelConfig,
   RecallResult,
+  ResearchRunResult,
+  ResearchStep,
+  ResearchWorkflow,
+  ToolCatalog,
   Topic,
   TrackedPost,
   TrendingDigest,
   TrendingRun,
 } from './api'
-import { api, fmtDateTime, fmtRelative, hueFromName } from './api'
+import { api, draftQuestions, draftResearch, fmtDateTime, fmtRelative, hueFromName } from './api'
 
 const { Title, Text, Paragraph } = Typography
 
@@ -178,11 +185,20 @@ export default function App() {
           {
             key: 'drafts',
             label: (
-              <Badge count={account?.pending_drafts || 0} size="small" offset={[10, -2]}>
+              <Badge
+                count={(account?.pending_drafts || 0) + (account?.needs_input_drafts || 0)}
+                size="small"
+                offset={[10, -2]}
+              >
                 Hàng chờ duyệt
               </Badge>
             ),
-            children: <DraftsTab onChanged={reloadAccount} />,
+            children: <DraftsTab needsInput={account?.needs_input_drafts || 0} onChanged={reloadAccount} />,
+          },
+          {
+            key: 'research',
+            label: 'Nghiên cứu',
+            children: <ResearchTab active={tab === 'research'} account={account} onChanged={reloadAccount} />,
           },
           { key: 'trending', label: 'Xu hướng', children: <TrendingTab active={tab === 'trending'} account={account} /> },
           {
@@ -483,7 +499,7 @@ function NewPostModal({
 
 // ---------------------------------------------------------------- Drafts
 
-function DraftsTab({ onChanged }: { onChanged: () => void }) {
+function DraftsTab({ needsInput, onChanged }: { needsInput: number; onChanged: () => void }) {
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [filter, setFilter] = useState('pending')
   const [loading, setLoading] = useState(false)
@@ -526,6 +542,22 @@ function DraftsTab({ onChanged }: { onChanged: () => void }) {
       message.error((e as Error).message)
     }
   }
+  // The post is already live on Moltbook; only its challenge failed. Retrying
+  // verification must never re-post.
+  const retryVerify = async (d: Draft) => {
+    const hide = message.loading('Đang giải lại challenge…', 0)
+    try {
+      const r = await api.verifyDraft(d.id)
+      hide()
+      if (r.ok) message.success('Đã xác minh — bài đã lên Moltbook.')
+      else message.error(r.error || 'Xác minh lại thất bại.')
+      load()
+      onChanged()
+    } catch (e) {
+      hide()
+      message.error((e as Error).message)
+    }
+  }
 
   return (
     <div>
@@ -535,6 +567,10 @@ function DraftsTab({ onChanged }: { onChanged: () => void }) {
           onChange={(v) => setFilter(String(v))}
           options={[
             { label: 'Chờ duyệt', value: 'pending' },
+            {
+              label: needsInput > 0 ? `Cần trả lời (${needsInput})` : 'Cần trả lời',
+              value: 'needs_input',
+            },
             { label: 'Đã đăng', value: 'posted' },
             { label: 'Từ chối', value: 'rejected' },
             { label: 'Lỗi', value: 'error' },
@@ -558,6 +594,7 @@ function DraftsTab({ onChanged }: { onChanged: () => void }) {
                     <Space size={6} wrap style={{ marginBottom: 4 }}>
                       <Tag color="volcano">{KIND_LABEL[d.kind] || d.kind}</Tag>
                       <StatusTag status={d.status} />
+                      {d.verify_post_id && d.verify_code && <Tag color="orange">chờ xác minh</Tag>}
                       {d.source === 'engine' && <Tag>heartbeat</Tag>}
                       {d.model && (
                         <Tag color="blue" style={{ fontSize: 11 }}>
@@ -566,6 +603,8 @@ function DraftsTab({ onChanged }: { onChanged: () => void }) {
                       )}
                     </Space>
                     <DraftBody d={d} />
+                    <DraftResearchBlock d={d} />
+                    <DraftQuestionsBlock d={d} onDone={() => { load(); onChanged() }} />
                     {d.reason && (
                       <Text type="secondary" italic style={{ fontSize: 12 }}>
                         Lý do: {d.reason}
@@ -585,7 +624,20 @@ function DraftsTab({ onChanged }: { onChanged: () => void }) {
                       </Text>
                     </div>
                   </div>
-                  {d.status === 'pending' && (
+                  {d.verify_post_id && d.verify_code ? (
+                    // Post exists on Moltbook — only verification is missing.
+                    // Deliberately NOT offering "duyệt" here: that would duplicate.
+                    <Space direction="vertical">
+                      <Tooltip title="Bài đã có trên Moltbook, chỉ giải lại challenge — không đăng lại">
+                        <Button size="small" type="primary" icon={<SyncOutlined />} onClick={() => retryVerify(d)}>
+                          Xác minh lại
+                        </Button>
+                      </Tooltip>
+                      <Text type="secondary" style={{ fontSize: 10 }}>
+                        challenge hết hạn ~5 phút
+                      </Text>
+                    </Space>
+                  ) : d.status === 'pending' ? (
                     <Space direction="vertical">
                       <Popconfirm
                         title="Đăng lên Moltbook?"
@@ -602,7 +654,7 @@ function DraftsTab({ onChanged }: { onChanged: () => void }) {
                         Từ chối
                       </Button>
                     </Space>
-                  )}
+                  ) : null}
                 </Flex>
               </Card>
             ))}
@@ -661,12 +713,147 @@ function DraftBody({ d }: { d: Draft }) {
 function StatusTag({ status }: { status: string }) {
   const map: Record<string, { color: string; label: string }> = {
     pending: { color: 'gold', label: 'Chờ duyệt' },
+    needs_input: { color: 'purple', label: 'Cần trả lời' },
     posted: { color: 'green', label: 'Đã đăng' },
     rejected: { color: 'default', label: 'Từ chối' },
     error: { color: 'red', label: 'Lỗi' },
   }
   const m = map[status] || { color: 'default', label: status }
   return <Tag color={m.color}>{m.label}</Tag>
+}
+
+/// The research trail a draft was grounded in: confidence, findings, sources.
+function DraftResearchBlock({ d }: { d: Draft }) {
+  const [open, setOpen] = useState(false)
+  const r = draftResearch(d)
+  if (!r) return null
+  const okSteps = r.runs?.filter((x) => x.ok) || []
+  const confColor = r.confidence >= 70 ? 'green' : r.confidence >= 40 ? 'gold' : 'red'
+  return (
+    <div
+      style={{
+        margin: '6px 0',
+        padding: '8px 10px',
+        borderRadius: 8,
+        background: 'rgba(125, 90, 255, 0.06)',
+        border: '1px solid rgba(125, 90, 255, 0.25)',
+      }}
+    >
+      <Space size={6} wrap>
+        <ExperimentOutlined style={{ color: '#9a7bff' }} />
+        <Text style={{ fontSize: 12 }} strong>
+          Nghiên cứu
+        </Text>
+        <Tag color={confColor} style={{ fontSize: 10 }}>
+          tin cậy {r.confidence}%
+        </Tag>
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          {okSteps.length}/{r.runs?.length || 0} bước · {(r.workflows || []).join(' · ')}
+        </Text>
+        <Button size="small" type="link" style={{ fontSize: 11, padding: 0 }} onClick={() => setOpen(!open)}>
+          {open ? 'thu gọn' : 'chi tiết'}
+        </Button>
+      </Space>
+      {open && (
+        <div style={{ marginTop: 6 }}>
+          {r.findings && (
+            <Paragraph style={{ fontSize: 12, whiteSpace: 'pre-wrap', marginBottom: 6 }}>{r.findings}</Paragraph>
+          )}
+          {(r.key_facts || []).length > 0 && (
+            <ul style={{ margin: '0 0 6px 16px', padding: 0 }}>
+              {r.key_facts.map((f, i) => (
+                <li key={i}>
+                  <Text style={{ fontSize: 12 }}>{f}</Text>
+                </li>
+              ))}
+            </ul>
+          )}
+          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+            {(r.runs || []).map((run, i) => (
+              <Text key={i} type={run.ok ? 'secondary' : 'danger'} style={{ fontSize: 11 }}>
+                {run.ok ? '✓' : '✗'} {run.step} · {run.ms}ms{run.ok ? '' : ` — ${run.output}`}
+              </Text>
+            ))}
+          </Space>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/// Open questions parked on a needs_input draft + the answer box.
+function DraftQuestionsBlock({ d, onDone }: { d: Draft; onDone: () => void }) {
+  const [answer, setAnswer] = useState('')
+  const [busy, setBusy] = useState(false)
+  const questions = draftQuestions(d)
+  if (d.status !== 'needs_input' || questions.length === 0) {
+    // Answered earlier — show the trail.
+    if (d.answer) {
+      return (
+        <Text type="secondary" italic style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+          Bạn đã trả lời: {d.answer}
+        </Text>
+      )
+    }
+    return null
+  }
+  const submit = async (skip: boolean) => {
+    setBusy(true)
+    const hide = message.loading(skip ? 'Đang bỏ qua câu hỏi…' : 'Đang soạn lại theo câu trả lời…', 0)
+    try {
+      await api.answerDraft(d.id, skip ? '' : answer.trim())
+      hide()
+      message.success(skip ? 'Đã chuyển về hàng chờ duyệt (giữ nội dung).' : 'Đã soạn lại — kiểm tra rồi duyệt.')
+      onDone()
+    } catch (e) {
+      hide()
+      message.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div
+      style={{
+        margin: '6px 0',
+        padding: '8px 10px',
+        borderRadius: 8,
+        background: 'rgba(255, 173, 20, 0.08)',
+        border: '1px solid rgba(255, 173, 20, 0.35)',
+      }}
+    >
+      <Space size={6} style={{ marginBottom: 4 }}>
+        <QuestionCircleOutlined style={{ color: '#faad14' }} />
+        <Text strong style={{ fontSize: 12 }}>
+          AI chưa chắc chắn — cần bạn trả lời trước khi đăng
+        </Text>
+      </Space>
+      <ul style={{ margin: '0 0 8px 16px', padding: 0 }}>
+        {questions.map((q, i) => (
+          <li key={i}>
+            <Text style={{ fontSize: 13 }}>{q}</Text>
+          </li>
+        ))}
+      </ul>
+      <Input.TextArea
+        rows={2}
+        value={answer}
+        onChange={(e) => setAnswer(e.target.value)}
+        placeholder="Trả lời / bổ sung thông tin, chỉ đạo cho AI…"
+        style={{ marginBottom: 6 }}
+      />
+      <Space wrap>
+        <Button type="primary" size="small" loading={busy} disabled={!answer.trim()} onClick={() => submit(false)}>
+          Trả lời & soạn lại
+        </Button>
+        <Tooltip title="Bỏ qua câu hỏi, giữ nguyên nội dung hiện tại và chuyển về hàng chờ duyệt">
+          <Button size="small" loading={busy} onClick={() => submit(true)}>
+            Bỏ qua, giữ nội dung
+          </Button>
+        </Tooltip>
+      </Space>
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------- Trending
@@ -1018,6 +1205,653 @@ function ActivityTab({ active }: { active: boolean }) {
         />
       )}
     </div>
+  )
+}
+
+// ---------------------------------------------------------------- Research
+
+const FLOW_LABEL: Record<string, string> = {
+  comment: 'Bình luận',
+  post: 'Đăng bài',
+  both: 'Cả hai',
+}
+
+const FLOW_OPTS = [
+  { value: 'both', label: 'Cả hai luồng' },
+  { value: 'comment', label: 'Bình luận bài viết' },
+  { value: 'post', label: 'Đăng bài mới' },
+]
+
+function stepLabel(s: ResearchStep): string {
+  if (s.kind === 'app') return `${s.app}/${s.tool}`
+  if (s.kind === 'daemon') return `${s.server}/${s.tool}`
+  return s.tool
+}
+
+/// Nghiên cứu: workflows chọn tool MCP chạy trước khi bình luận / đăng bài,
+/// tổng hợp tri thức, và hỏi lại người dùng khi chưa chắc chắn.
+function ResearchTab({
+  active,
+  account,
+  onChanged,
+}: {
+  active: boolean
+  account: Account | null
+  onChanged: () => void
+}) {
+  const [workflows, setWorkflows] = useState<ResearchWorkflow[]>([])
+  const [catalog, setCatalog] = useState<ToolCatalog | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [editing, setEditing] = useState<ResearchWorkflow | 'new' | null>(null)
+  const [testing, setTesting] = useState<ResearchWorkflow | null>(null)
+  const [aiDesc, setAiDesc] = useState('')
+  const [aiFlow, setAiFlow] = useState('both')
+  const [aiBusy, setAiBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      setWorkflows(await api.workflows())
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    if (active) {
+      load()
+      // The catalog needs the daemon + peer apps — fetch lazily, best-effort.
+      api.researchTools().then(setCatalog).catch(() => setCatalog(null))
+    }
+  }, [active, load])
+
+  const toggle = async (w: ResearchWorkflow, enabled: boolean) => {
+    try {
+      await api.patchWorkflow(w.id, { enabled })
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+  const remove = async (w: ResearchWorkflow) => {
+    try {
+      await api.deleteWorkflow(w.id)
+      message.success(`Đã xoá workflow “${w.name}”.`)
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+  const aiBuild = async () => {
+    if (!aiDesc.trim()) return
+    setAiBusy(true)
+    const hide = message.loading('AI đang đọc catalog công cụ và soạn workflow…', 0)
+    try {
+      const r = await api.aiBuildWorkflow(aiDesc.trim(), aiFlow)
+      hide()
+      message.success(`Đã tạo workflow “${r.workflow.name}” (${(r.workflow.steps_parsed || JSON.parse(r.workflow.steps) || []).length} bước).`)
+      setAiDesc('')
+      load()
+    } catch (e) {
+      hide()
+      message.error((e as Error).message)
+    } finally {
+      setAiBusy(false)
+    }
+  }
+
+  const nApps = catalog?.apps.length || 0
+  const nDaemon = catalog?.daemon.length || 0
+
+  return (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Alert
+        type="info"
+        showIcon
+        icon={<ExperimentOutlined />}
+        message="Nghiên cứu trước khi đăng / bình luận"
+        description="Trước khi soạn nội dung, molty chạy các workflow bên dưới (song song) để tổng hợp thông tin qua công cụ MCP — trí nhớ, wiki, Moltbook, các Space App khác… — rồi viết dựa trên kết quả. Nếu độ tin cậy thấp hơn ngưỡng, bài sẽ nằm ở Hàng chờ duyệt với trạng thái “Cần trả lời” để hỏi bạn trước."
+      />
+
+      {account && <ResearchSettingsCard account={account} onChanged={onChanged} />}
+
+      <Card
+        title="AI tạo workflow"
+        size="small"
+        extra={
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            catalog: {catalog ? `${catalog.builtin.length} builtin · ${nApps} app · ${nDaemon} MCP server` : 'đang tải…'}
+          </Text>
+        }
+      >
+        <Space.Compact style={{ width: '100%' }}>
+          <Select value={aiFlow} onChange={setAiFlow} style={{ width: 170 }} options={FLOW_OPTS} />
+          <Input
+            value={aiDesc}
+            onChange={(e) => setAiDesc(e.target.value)}
+            onPressEnter={aiBuild}
+            placeholder="VD: tra wiki nội bộ + tìm bài liên quan trên Moltbook, rồi lấy tin tức mới về chủ đề"
+          />
+          <Button type="primary" icon={<RobotOutlined />} loading={aiBusy} onClick={aiBuild} disabled={!aiDesc.trim()}>
+            AI tạo
+          </Button>
+        </Space.Compact>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          AI đọc catalog công cụ thật (builtin + Space App + MCP server của daemon), tự chọn bước và lưu thành workflow — bạn xem lại và sửa được.
+        </Text>
+      </Card>
+
+      <Flex justify="space-between" align="center" wrap gap={8}>
+        <Text strong>Workflow ({workflows.length})</Text>
+        <Space>
+          <Button icon={<EditOutlined />} onClick={() => setEditing('new')}>
+            Tạo thủ công
+          </Button>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={load}>
+            Làm mới
+          </Button>
+        </Space>
+      </Flex>
+
+      <Spin spinning={loading}>
+        {workflows.length === 0 ? (
+          <Empty description="Chưa có workflow — dùng “AI tạo” hoặc “Tạo thủ công”" />
+        ) : (
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            {workflows.map((w) => {
+              const steps: ResearchStep[] = w.steps_parsed || []
+              return (
+                <Card key={w.id} size="small" style={{ opacity: w.enabled ? 1 : 0.55 }}>
+                  <Flex justify="space-between" align="flex-start" gap={12} wrap>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Space size={6} wrap style={{ marginBottom: 6 }}>
+                        <Switch size="small" checked={w.enabled} onChange={(v) => toggle(w, v)} />
+                        <Text strong>{w.name}</Text>
+                        <Tag color={w.flow === 'both' ? 'geekblue' : w.flow === 'post' ? 'volcano' : 'cyan'}>
+                          {FLOW_LABEL[w.flow] || w.flow}
+                        </Tag>
+                        {w.builtin && <Tag style={{ fontSize: 10 }}>mặc định</Tag>}
+                      </Space>
+                      <Space size={4} wrap style={{ marginBottom: 4 }}>
+                        {steps.map((s, i) => (
+                          <Tooltip key={i} title={JSON.stringify(s.args || {}, null, 1)}>
+                            <Tag
+                              color={s.kind === 'builtin' ? 'default' : s.kind === 'app' ? 'blue' : 'purple'}
+                              style={{ fontSize: 11, margin: 0 }}
+                            >
+                              {i + 1}. {stepLabel(s)}
+                            </Tag>
+                          </Tooltip>
+                        ))}
+                      </Space>
+                      {w.extract_prompt && (
+                        <div>
+                          <Text type="secondary" italic style={{ fontSize: 12 }}>
+                            Extract thêm: {w.extract_prompt}
+                          </Text>
+                        </div>
+                      )}
+                    </div>
+                    <Space direction="vertical" size={4}>
+                      <Button size="small" icon={<PlayCircleOutlined />} onClick={() => setTesting(w)}>
+                        Chạy thử
+                      </Button>
+                      <Button size="small" icon={<EditOutlined />} onClick={() => setEditing(w)}>
+                        Sửa
+                      </Button>
+                      <Popconfirm title={`Xoá workflow “${w.name}”?`} okText="Xoá" cancelText="Huỷ" onConfirm={() => remove(w)}>
+                        <Button size="small" type="text" danger>
+                          Xoá
+                        </Button>
+                      </Popconfirm>
+                    </Space>
+                  </Flex>
+                </Card>
+              )
+            })}
+          </Space>
+        )}
+      </Spin>
+
+      {catalog && <ToolCatalogCard catalog={catalog} />}
+
+      <WorkflowEditorModal
+        editing={editing}
+        catalog={catalog}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null)
+          load()
+        }}
+      />
+      <ResearchTestModal workflow={testing} onClose={() => setTesting(null)} />
+    </Space>
+  )
+}
+
+/// Cài đặt nghiên cứu: bật/tắt, ngưỡng hỏi lại, prompt extract chung.
+function ResearchSettingsCard({ account, onChanged }: { account: Account; onChanged: () => void }) {
+  const [extract, setExtract] = useState(account.research_extract_prompt)
+  const patch = async (p: Partial<Account>) => {
+    try {
+      await api.putSettings(p)
+      onChanged()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+  return (
+    <Card title="Cài đặt nghiên cứu" size="small">
+      <Form layout="vertical">
+        <Space size={24} wrap>
+          <Form.Item label="Bật nghiên cứu" style={{ marginBottom: 8 }}>
+            <Switch checked={account.research_enabled} onChange={(v) => patch({ research_enabled: v })} />
+          </Form.Item>
+          <Form.Item
+            label="Cả khi bấm “AI soạn”"
+            style={{ marginBottom: 8 }}
+            tooltip="Nút 'Nháp trả lời (AI)' và 'AI soạn giúp' cũng nghiên cứu trước khi viết."
+          >
+            <Switch
+              checked={account.research_on_compose}
+              disabled={!account.research_enabled}
+              onChange={(v) => patch({ research_on_compose: v })}
+            />
+          </Form.Item>
+          <Form.Item
+            label="Ngưỡng hỏi lại (%)"
+            style={{ marginBottom: 8 }}
+            tooltip="Độ tin cậy dưới ngưỡng này → draft chuyển sang 'Cần trả lời' và hỏi bạn trước khi đăng. 0 = không bao giờ hỏi."
+          >
+            <InputNumber
+              min={0}
+              max={100}
+              value={account.research_ask_threshold}
+              onChange={(v) => patch({ research_ask_threshold: v ?? 60 })}
+            />
+          </Form.Item>
+          <Form.Item
+            label="Số mục nghiên cứu mỗi heartbeat"
+            style={{ marginBottom: 8 }}
+            tooltip="Giới hạn số bình luận/bài được nghiên cứu mỗi vòng heartbeat (tiết kiệm token)."
+          >
+            <InputNumber
+              min={0}
+              max={10}
+              value={account.research_max_per_tick}
+              onChange={(v) => patch({ research_max_per_tick: v ?? 3 })}
+            />
+          </Form.Item>
+        </Space>
+        <Form.Item
+          label="Yêu cầu extract thêm (áp dụng cho mọi workflow)"
+          help="Được đưa vào bước tổng hợp — VD: “luôn trích số liệu cụ thể và nguồn”, “chú ý các ý kiến phản biện”."
+        >
+          <Input.TextArea
+            rows={2}
+            value={extract}
+            onChange={(e) => setExtract(e.target.value)}
+            onBlur={() => extract.trim() !== account.research_extract_prompt && patch({ research_extract_prompt: extract.trim() })}
+            placeholder="VD: luôn trích số liệu cụ thể kèm nguồn; ghi rõ điểm còn tranh cãi"
+          />
+        </Form.Item>
+      </Form>
+    </Card>
+  )
+}
+
+/// Danh mục công cụ MCP khả dụng cho workflow.
+function ToolCatalogCard({ catalog }: { catalog: ToolCatalog }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <Card
+      size="small"
+      title="Công cụ khả dụng"
+      extra={
+        <Button size="small" type="link" onClick={() => setOpen(!open)}>
+          {open ? 'thu gọn' : 'xem tất cả'}
+        </Button>
+      }
+    >
+      {!open ? (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {catalog.builtin.length} builtin (trí nhớ / wiki / Moltbook) · {catalog.apps.length} Space App có MCP (
+          {catalog.apps.map((a) => a.id).join(', ') || 'không có'}) · {catalog.daemon.length} MCP server trên daemon
+        </Text>
+      ) : (
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div>
+            <Text strong style={{ fontSize: 12 }}>
+              Builtin
+            </Text>
+            {catalog.builtin.map((t) => (
+              <div key={t.tool}>
+                <Text code style={{ fontSize: 11 }}>
+                  {t.tool}
+                </Text>{' '}
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {t.description}
+                </Text>
+              </div>
+            ))}
+          </div>
+          {catalog.apps.map((a) => (
+            <div key={a.id}>
+              <Text strong style={{ fontSize: 12 }}>
+                App: {a.name} ({a.id})
+              </Text>
+              {a.tools.map((t) => (
+                <div key={t.tool}>
+                  <Text code style={{ fontSize: 11 }}>
+                    {t.tool}
+                  </Text>{' '}
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {t.description}
+                  </Text>
+                </div>
+              ))}
+            </div>
+          ))}
+          {catalog.daemon.map((s) => (
+            <div key={s.name}>
+              <Text strong style={{ fontSize: 12 }}>
+                MCP server: {s.name}
+              </Text>
+              {s.tools.length === 0 ? (
+                <div>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    (không liệt kê tool — vẫn gọi được nếu biết tên)
+                  </Text>
+                </div>
+              ) : (
+                s.tools.map((t) => (
+                  <div key={t.tool}>
+                    <Text code style={{ fontSize: 11 }}>
+                      {t.tool}
+                    </Text>{' '}
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      {t.description}
+                    </Text>
+                  </div>
+                ))
+              )}
+            </div>
+          ))}
+        </Space>
+      )}
+    </Card>
+  )
+}
+
+/// Tạo/sửa workflow: form + steps JSON (bấm tool trong catalog để thêm bước).
+function WorkflowEditorModal({
+  editing,
+  catalog,
+  onClose,
+  onSaved,
+}: {
+  editing: ResearchWorkflow | 'new' | null
+  catalog: ToolCatalog | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const isNew = editing === 'new'
+  const w = isNew ? null : (editing as ResearchWorkflow | null)
+  const [name, setName] = useState('')
+  const [flow, setFlow] = useState('both')
+  const [extract, setExtract] = useState('')
+  const [stepsText, setStepsText] = useState('[]')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (editing === null) return
+    if (isNew) {
+      setName('')
+      setFlow('both')
+      setExtract('')
+      setStepsText(JSON.stringify([{ kind: 'builtin', tool: 'wiki_context', args: { query: '{{topic}}' } }], null, 2))
+    } else if (w) {
+      setName(w.name)
+      setFlow(w.flow)
+      setExtract(w.extract_prompt)
+      const parsed = w.steps_parsed || []
+      setStepsText(JSON.stringify(parsed.length ? parsed : JSON.parse(w.steps || '[]'), null, 2))
+    }
+  }, [editing, isNew, w])
+
+  const parsedSteps = useMemo<ResearchStep[] | null>(() => {
+    try {
+      const v = JSON.parse(stepsText)
+      return Array.isArray(v) ? (v as ResearchStep[]) : null
+    } catch {
+      return null
+    }
+  }, [stepsText])
+
+  const appendStep = (s: ResearchStep) => {
+    const cur = parsedSteps || []
+    setStepsText(JSON.stringify([...cur, s], null, 2))
+  }
+
+  const save = async () => {
+    if (!name.trim() || !parsedSteps || parsedSteps.length === 0) return
+    setBusy(true)
+    try {
+      if (isNew) {
+        await api.createWorkflow({ name: name.trim(), flow, steps: parsedSteps, extract_prompt: extract })
+        message.success('Đã tạo workflow.')
+      } else if (w) {
+        await api.patchWorkflow(w.id, { name: name.trim(), flow, steps: parsedSteps, extract_prompt: extract })
+        message.success('Đã lưu workflow.')
+      }
+      onSaved()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title={isNew ? 'Tạo workflow nghiên cứu' : `Sửa: ${w?.name || ''}`}
+      open={editing !== null}
+      onCancel={onClose}
+      onOk={save}
+      okText="Lưu"
+      confirmLoading={busy}
+      width={720}
+      okButtonProps={{ disabled: !name.trim() || !parsedSteps || parsedSteps.length === 0 }}
+    >
+      <Space direction="vertical" style={{ width: '100%' }} size={10}>
+        <Space.Compact style={{ width: '100%' }}>
+          <Select value={flow} onChange={setFlow} style={{ width: 180 }} options={FLOW_OPTS} />
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Tên workflow" />
+        </Space.Compact>
+        <div>
+          <Text strong style={{ fontSize: 12 }}>
+            Các bước (JSON){' '}
+            {parsedSteps === null && (
+              <Text type="danger" style={{ fontSize: 12 }}>
+                — JSON không hợp lệ
+              </Text>
+            )}
+          </Text>
+          <Input.TextArea
+            rows={10}
+            value={stepsText}
+            onChange={(e) => setStepsText(e.target.value)}
+            style={{ fontFamily: 'monospace', fontSize: 12 }}
+          />
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            Placeholder trong args: {'{{topic}}'} {'{{title}}'} {'{{content}}'} {'{{post_id}}'} — và {'{{tên_save_as}}'} của bước trước.
+          </Text>
+        </div>
+        {catalog && (
+          <div>
+            <Text strong style={{ fontSize: 12 }}>
+              Bấm để thêm bước:
+            </Text>
+            <div style={{ maxHeight: 140, overflow: 'auto', marginTop: 4 }}>
+              <Space size={4} wrap>
+                {catalog.builtin.map((t) => (
+                  <Tag
+                    key={t.tool}
+                    style={{ cursor: 'pointer', fontSize: 11 }}
+                    onClick={() => appendStep({ kind: 'builtin', tool: t.tool, args: (t.args || {}) as Record<string, unknown> })}
+                  >
+                    + {t.tool}
+                  </Tag>
+                ))}
+                {catalog.apps.flatMap((a) =>
+                  a.tools.map((t) => (
+                    <Tag
+                      key={`${a.id}/${t.tool}`}
+                      color="blue"
+                      style={{ cursor: 'pointer', fontSize: 11 }}
+                      onClick={() => appendStep({ kind: 'app', app: a.id, tool: t.tool, args: { query: '{{topic}}' } })}
+                    >
+                      + {a.id}/{t.tool}
+                    </Tag>
+                  )),
+                )}
+                {catalog.daemon.flatMap((s) =>
+                  s.tools.map((t) => (
+                    <Tag
+                      key={`${s.name}/${t.tool}`}
+                      color="purple"
+                      style={{ cursor: 'pointer', fontSize: 11 }}
+                      onClick={() => appendStep({ kind: 'daemon', server: s.name, tool: t.tool, args: { query: '{{topic}}' } })}
+                    >
+                      + {s.name}/{t.tool}
+                    </Tag>
+                  )),
+                )}
+              </Space>
+            </div>
+          </div>
+        )}
+        <div>
+          <Text strong style={{ fontSize: 12 }}>
+            Yêu cầu extract thêm (riêng workflow này)
+          </Text>
+          <Input.TextArea
+            rows={2}
+            value={extract}
+            onChange={(e) => setExtract(e.target.value)}
+            placeholder="VD: chỉ lấy thông tin có nguồn; ưu tiên dữ liệu 30 ngày gần nhất"
+          />
+        </div>
+      </Space>
+    </Modal>
+  )
+}
+
+/// Chạy thử nghiên cứu với một chủ đề và xem bundle kết quả.
+function ResearchTestModal({ workflow, onClose }: { workflow: ResearchWorkflow | null; onClose: () => void }) {
+  const [topic, setTopic] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<ResearchRunResult | null>(null)
+
+  useEffect(() => {
+    if (workflow) {
+      setTopic('')
+      setResult(null)
+    }
+  }, [workflow])
+
+  const run = async () => {
+    if (!workflow || !topic.trim()) return
+    setBusy(true)
+    setResult(null)
+    try {
+      const flow = workflow.flow === 'both' ? 'post' : workflow.flow
+      setResult(await api.researchRun({ flow, topic: topic.trim() }))
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const b = result?.bundle
+  return (
+    <Modal
+      title={workflow ? `Chạy thử nghiên cứu (luồng ${FLOW_LABEL[workflow.flow] || workflow.flow})` : ''}
+      open={!!workflow}
+      onCancel={onClose}
+      footer={null}
+      width={720}
+    >
+      <Space direction="vertical" style={{ width: '100%' }} size={10}>
+        <Alert
+          type="info"
+          showIcon={false}
+          message={
+            <Text style={{ fontSize: 12 }}>
+              Chạy thử dùng MỌI workflow đang bật khớp luồng này (giống lúc chạy thật — các workflow chạy song song).
+            </Text>
+          }
+        />
+        <Space.Compact style={{ width: '100%' }}>
+          <Input
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            onPressEnter={run}
+            placeholder="Chủ đề để nghiên cứu thử…"
+          />
+          <Button type="primary" icon={<PlayCircleOutlined />} loading={busy} onClick={run} disabled={!topic.trim()}>
+            Chạy
+          </Button>
+        </Space.Compact>
+        {result && !result.ok && <Alert type="error" message={result.error} />}
+        {b && (
+          <div>
+            <Space size={6} wrap style={{ marginBottom: 6 }}>
+              <Tag color={b.confidence >= 70 ? 'green' : b.confidence >= 40 ? 'gold' : 'red'}>tin cậy {b.confidence}%</Tag>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {b.runs.filter((r) => r.ok).length}/{b.runs.length} bước ok · {b.workflows.join(' · ')} · {b.model}
+              </Text>
+            </Space>
+            <Paragraph style={{ whiteSpace: 'pre-wrap', fontSize: 13 }}>{b.findings}</Paragraph>
+            {b.key_facts.length > 0 && (
+              <ul style={{ margin: '0 0 8px 16px' }}>
+                {b.key_facts.map((f, i) => (
+                  <li key={i}>
+                    <Text style={{ fontSize: 12 }}>{f}</Text>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(result.gated_questions || []).length > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                icon={<QuestionCircleOutlined />}
+                message="Với kết quả này, AI sẽ hỏi bạn trước khi đăng:"
+                description={
+                  <ul style={{ margin: '4px 0 0 16px' }}>
+                    {(result.gated_questions || []).map((q, i) => (
+                      <li key={i}>{q}</li>
+                    ))}
+                  </ul>
+                }
+              />
+            )}
+            <div style={{ marginTop: 8 }}>
+              {b.runs.map((r, i) => (
+                <div key={i}>
+                  <Text type={r.ok ? 'secondary' : 'danger'} style={{ fontSize: 11 }}>
+                    {r.ok ? '✓' : '✗'} [{r.workflow}] {r.step} · {r.ms}ms{r.ok ? '' : ` — ${r.output}`}
+                  </Text>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Space>
+    </Modal>
   )
 }
 

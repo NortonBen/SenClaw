@@ -27,7 +27,11 @@ pub const DEFAULT_SPACE: &str = "moltbook";
 const RECALL_MODE: &str = "hybrid";
 
 fn bridge_url() -> String {
-    format!("{}/api/space/apps/{}/bridge", base_url().trim_end_matches('/'), app_id())
+    format!(
+        "{}/api/space/apps/{}/bridge",
+        base_url().trim_end_matches('/'),
+        app_id()
+    )
 }
 
 async fn bridge(action: &str, payload: Value) -> Result<Value, String> {
@@ -54,7 +58,12 @@ async fn bridge(action: &str, payload: Value) -> Result<Value, String> {
 
 /// Save a memory into the molty's space. `tags` also land as global node-sets so
 /// the memory is reachable from the daemon's own knowledge UI.
-pub async fn knowledge_save(space: &str, text: &str, tags: &[&str], source: &str) -> Result<(), String> {
+pub async fn knowledge_save(
+    space: &str,
+    text: &str,
+    tags: &[&str],
+    source: &str,
+) -> Result<(), String> {
     if text.trim().is_empty() {
         return Ok(());
     }
@@ -74,11 +83,19 @@ pub async fn knowledge_recall(space: &str, query: &str) -> Result<String, String
         json!({ "query": query, "space": space, "mode": RECALL_MODE, "limit": 6, "hops": 2 }),
     )
     .await?;
-    Ok(v.get("answer").and_then(|x| x.as_str()).unwrap_or("").trim().to_string())
+    Ok(v.get("answer")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string())
 }
 
 /// Raw scoped hits as `(name, summary, score)` — for the UI/debug view.
-pub async fn knowledge_search(space: &str, query: &str, limit: u32) -> Result<Vec<(String, String, f64)>, String> {
+pub async fn knowledge_search(
+    space: &str,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<(String, String, f64)>, String> {
     let v = bridge(
         "knowledge.search",
         json!({ "query": query, "space": space, "mode": RECALL_MODE, "limit": limit }),
@@ -90,8 +107,14 @@ pub async fn knowledge_search(space: &str, query: &str, limit: u32) -> Result<Ve
             arr.iter()
                 .map(|h| {
                     (
-                        h.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                        h.get("summary").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                        h.get("name")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        h.get("summary")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         h.get("score").and_then(|x| x.as_f64()).unwrap_or(0.0),
                     )
                 })
@@ -103,7 +126,10 @@ pub async fn knowledge_search(space: &str, query: &str, limit: u32) -> Result<Ve
 // ---- wiki = kho thông tin ----
 
 /// Search the wiki; returns up to `limit` hits as `(path, title, snippet)`.
-pub async fn wiki_search(query: &str, limit: usize) -> Result<Vec<(String, String, String)>, String> {
+pub async fn wiki_search(
+    query: &str,
+    limit: usize,
+) -> Result<Vec<(String, String, String)>, String> {
     let url = format!(
         "{}/api/wiki/search?q={}&limit={}",
         base_url().trim_end_matches('/'),
@@ -147,7 +173,12 @@ pub async fn wiki_read(path: &str) -> Result<String, String> {
 }
 
 /// Write a document into the wiki (auto-committed in the wiki's git repo).
-pub async fn wiki_write(path: &str, content: &str, tags: &[&str], commit_msg: &str) -> Result<(), String> {
+pub async fn wiki_write(
+    path: &str,
+    content: &str,
+    tags: &[&str],
+    commit_msg: &str,
+) -> Result<(), String> {
     let url = format!("{}/api/wiki/file", base_url().trim_end_matches('/'));
     let resp = http()
         .put(&url)
@@ -182,7 +213,10 @@ pub async fn wiki_context(topic: &str, max_chars: usize) -> String {
     if let Some((path, _, _)) = hits.first() {
         if let Ok(body) = wiki_read(path).await {
             if !body.trim().is_empty() {
-                ctx.push_str(&format!("\nTrích tài liệu {path}:\n{}\n", truncate(&body, 1200)));
+                ctx.push_str(&format!(
+                    "\nTrích tài liệu {path}:\n{}\n",
+                    truncate(&body, 1200)
+                ));
             }
         }
     }
@@ -234,7 +268,9 @@ fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.as_bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
@@ -247,7 +283,10 @@ mod tests {
 
     #[test]
     fn slugify_makes_safe_wiki_paths() {
-        assert_eq!(slugify("Do we dream when the gateway sleeps?"), "do-we-dream-when-the-gateway-sleeps");
+        assert_eq!(
+            slugify("Do we dream when the gateway sleeps?"),
+            "do-we-dream-when-the-gateway-sleeps"
+        );
         assert_eq!(slugify("  m/existential  "), "m-existential");
         assert_eq!(slugify("!!!"), "");
     }

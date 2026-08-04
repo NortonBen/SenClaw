@@ -67,7 +67,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "moltbook-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -246,6 +248,13 @@ fn tools_list() -> Value {
             }, "required": ["id"] }
         },
         {
+            "name": "moltbook_retry_verify",
+            "description": "Retry ONLY the anti-human verification for a draft whose post was already created on Moltbook but failed its math challenge. Does NOT re-post — approving such a draft again would publish a duplicate, so use this instead. Challenges expire in ~5 minutes; after that the post stays unverified on Moltbook.",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "number", "description": "Draft id (from moltbook_list_drafts)." }
+            }, "required": ["id"] }
+        },
+        {
             "name": "moltbook_reject_draft",
             "description": "Reject a queued draft by id so it's never published (and the engine won't re-draft that post).",
             "inputSchema": { "type": "object", "properties": {
@@ -352,6 +361,63 @@ fn tools_list() -> Value {
             "name": "moltbook_run_heartbeat",
             "description": "Run ONE OpenClaw-style heartbeat tick now: read the feed, and (per autonomy mode) draft or publish a small set of genuine engagements. Returns a summary. Use for 'cho agent tham gia moltbook một vòng', 'run the moltbook heartbeat'.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        // ---- research workflows (tổng hợp thông tin trước khi đăng/bình luận) ----
+        {
+            "name": "moltbook_list_workflows",
+            "description": "List the RESEARCH WORKFLOWS — sequences of MCP-tool steps the molty runs BEFORE composing a comment (flow 'comment') or a new post (flow 'post') to gather grounding. Enabled workflows for a flow run in parallel and their outputs are synthesised into findings + open questions. Use for 'moltbook nghiên cứu bằng gì', 'danh sách workflow'.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "moltbook_save_workflow",
+            "description": "Create (omit id) or update (pass id) a research workflow. steps = array of {kind:'builtin'|'app'|'daemon', tool, app?, server?, args, save_as?}; string args may use {{topic}}, {{title}}, {{content}}, {{post_id}} placeholders. flow: 'comment' | 'post' | 'both'. extract_prompt = extra extraction instructions for the synthesis. Use moltbook_research_tools first to see what tools exist.",
+            "inputSchema": { "type": "object", "properties": {
+                "id":             { "type": "number", "description": "Workflow id to update; omit to create." },
+                "name":           { "type": "string" },
+                "flow":           { "type": "string", "enum": ["comment", "post", "both"] },
+                "steps":          { "type": "array", "items": { "type": "object" } },
+                "extract_prompt": { "type": "string", "description": "Extra 'extract this too' instructions for the synthesis." },
+                "enabled":        { "type": "boolean" }
+            } }
+        },
+        {
+            "name": "moltbook_delete_workflow",
+            "description": "Delete a research workflow by id (moltbook_save_workflow with enabled=false just pauses it).",
+            "inputSchema": { "type": "object", "properties": {
+                "id": { "type": "number" }
+            }, "required": ["id"] }
+        },
+        {
+            "name": "moltbook_ai_build_workflow",
+            "description": "AI-BUILD a research workflow: describe in plain language what should be researched before posting/commenting (e.g. 'tra wiki nội bộ rồi tìm tin tức mới về chủ đề, đối chiếu trí nhớ') and the LLM composes a valid workflow from the LIVE tool catalog (builtin + installed Space Apps + daemon MCP servers), validates it, and saves it. Use for 'tạo workflow nghiên cứu', 'AI build workflow'.",
+            "inputSchema": { "type": "object", "properties": {
+                "description": { "type": "string", "description": "What to research, in plain language." },
+                "flow":        { "type": "string", "enum": ["comment", "post", "both"], "description": "Optional flow constraint." }
+            }, "required": ["description"] }
+        },
+        {
+            "name": "moltbook_research_tools",
+            "description": "The LIVE catalog of tools research workflows can call: builtin steps (trí nhớ/wiki/Moltbook), every installed Space App's MCP tools, and the daemon's registered MCP servers. Use before building a workflow.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "moltbook_research",
+            "description": "Run the matching research workflows on a topic NOW and return the synthesised bundle: findings, key facts, open questions, confidence (0-100), and the per-step trail. Use for 'nghiên cứu chủ đề X trước khi đăng', 'thử workflow', or to gather grounding before drafting manually.",
+            "inputSchema": { "type": "object", "properties": {
+                "topic":   { "type": "string", "description": "Subject to research." },
+                "flow":    { "type": "string", "enum": ["comment", "post"], "description": "Which workflows to run (default post)." },
+                "post_id": { "type": "string", "description": "Target post id (comment flow)." },
+                "title":   { "type": "string", "description": "Target post title (comment flow)." },
+                "content": { "type": "string", "description": "Target post content (comment flow)." }
+            }, "required": ["topic"] }
+        },
+        {
+            "name": "moltbook_answer_draft",
+            "description": "Answer (or skip) the research questions parked on a 'needs_input' draft. With an answer, the content is RE-COMPOSED grounded in the stored research + your answer and the draft returns to the approval queue; with an empty answer the questions are skipped and the draft is released as-is. Use for 'trả lời câu hỏi của draft #N', 'cho đăng luôn không cần hỏi'.",
+            "inputSchema": { "type": "object", "properties": {
+                "id":     { "type": "number", "description": "Draft id (status needs_input)." },
+                "answer": { "type": "string", "description": "Your answer/steer; empty = skip the questions." }
+            }, "required": ["id"] }
         }
     ])
 }
@@ -378,7 +444,13 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                     db.set_str("claim_url", &claim).ok();
                     db.set_str("verification_code", &vcode).ok();
                     db.set_json("last_register_response", &v).ok();
-                    db.log("register", &format!("đăng ký agent '{aname}'"), "", now_ts()).ok();
+                    db.log(
+                        "register",
+                        &format!("đăng ký agent '{aname}'"),
+                        "",
+                        now_ts(),
+                    )
+                    .ok();
                     json_result(json!({
                         "ok": true, "claim_url": claim, "verification_code": vcode, "raw": v,
                         "note": "Mở claim_url và xác nhận bằng tài khoản X để kích hoạt agent. Nếu claim_url rỗng, xem 'raw'."
@@ -392,7 +464,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             if key.is_empty() {
                 return error_result("api_key là bắt buộc".into());
             }
-            if let Some(base) = args["base_url"].as_str().map(str::trim).filter(|b| !b.is_empty()) {
+            if let Some(base) = args["base_url"]
+                .as_str()
+                .map(str::trim)
+                .filter(|b| !b.is_empty())
+            {
                 db.set_str("base_url", base).ok();
             }
             db.set_str("api_key", key).ok();
@@ -403,7 +479,8 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                     }
                     db.set_json("profile", &me).ok();
                     db.set_bool("claimed", true).ok();
-                    db.log("connect", "kết nối agent thành công", "", now_ts()).ok();
+                    db.log("connect", "kết nối agent thành công", "", now_ts())
+                        .ok();
                     json_result(json!({ "ok": true, "profile": me }))
                 }
                 Err(e) => error_result(format!("lưu key nhưng xác minh thất bại: {e}")),
@@ -426,9 +503,17 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                         let rows: Vec<_> = items
                             .iter()
                             .map(|f| crate::db::CachedPost {
-                                post_id: f.id.clone(), submolt: f.submolt.clone(), author: f.author.clone(),
-                                title: f.title.clone(), content: f.content.clone(), url: String::new(),
-                                score: f.score, comment_count: 0, posted_at: now, cached_at: now, demo: false,
+                                post_id: f.id.clone(),
+                                submolt: f.submolt.clone(),
+                                author: f.author.clone(),
+                                title: f.title.clone(),
+                                content: f.content.clone(),
+                                url: String::new(),
+                                score: f.score,
+                                comment_count: 0,
+                                posted_at: now,
+                                cached_at: now,
+                                demo: false,
                             })
                             .collect();
                         db.upsert_posts(&rows).ok();
@@ -494,7 +579,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 return need_connection();
             }
             let mb = client(db);
-            let r = match args["name"].as_str().map(str::trim).filter(|n| !n.is_empty()) {
+            let r = match args["name"]
+                .as_str()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+            {
                 Some(n) => mb.profile_of(n).await,
                 None => mb.me().await,
             };
@@ -576,7 +665,12 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 args["post_content"].as_str().unwrap_or("").to_string(),
             );
             if title.is_empty() && content.is_empty() {
-                if let Some(p) = db.list_cached(500).unwrap_or_default().into_iter().find(|p| p.post_id == post_id) {
+                if let Some(p) = db
+                    .list_cached(500)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|p| p.post_id == post_id)
+                {
                     title = p.title;
                     content = p.content;
                 }
@@ -590,13 +684,19 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                         target_post_id: post_id.to_string(),
                         target_title: title,
                         content: text,
-                        reason: if instruction.is_empty() { "compose_reply".into() } else { instruction.to_string() },
+                        reason: if instruction.is_empty() {
+                            "compose_reply".into()
+                        } else {
+                            instruction.to_string()
+                        },
                         source: "agent".into(),
                         model,
                         ..Default::default()
                     };
                     match db.create_draft(&dc, now_ts()) {
-                        Ok(id) => json_result(json!({ "ok": true, "queued": true, "draft": db.get_draft(id).ok().flatten() })),
+                        Ok(id) => json_result(
+                            json!({ "ok": true, "queued": true, "draft": db.get_draft(id).ok().flatten() }),
+                        ),
                         Err(e) => error_result(e.to_string()),
                     }
                 }
@@ -610,7 +710,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
             let dc = DraftCreate {
                 kind: "vote".into(),
-                vote_dir: if name == "moltbook_downvote" { "down".into() } else { "up".into() },
+                vote_dir: if name == "moltbook_downvote" {
+                    "down".into()
+                } else {
+                    "up".into()
+                },
                 target_post_id: post_id.to_string(),
                 source: "agent".into(),
                 ..Default::default()
@@ -622,19 +726,37 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             if n.is_empty() {
                 return error_result("name là bắt buộc".into());
             }
-            let dc = DraftCreate { kind: "follow".into(), target_name: n.to_string(), source: "agent".into(), ..Default::default() };
+            let dc = DraftCreate {
+                kind: "follow".into(),
+                target_name: n.to_string(),
+                source: "agent".into(),
+                ..Default::default()
+            };
             json_result(enqueue_or_publish(state, dc).await)
         }
         "moltbook_subscribe" => {
-            let n = args["name"].as_str().unwrap_or("").trim().trim_start_matches("m/");
+            let n = args["name"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .trim_start_matches("m/");
             if n.is_empty() {
                 return error_result("name là bắt buộc".into());
             }
-            let dc = DraftCreate { kind: "subscribe".into(), target_name: n.to_string(), source: "agent".into(), ..Default::default() };
+            let dc = DraftCreate {
+                kind: "subscribe".into(),
+                target_name: n.to_string(),
+                source: "agent".into(),
+                ..Default::default()
+            };
             json_result(enqueue_or_publish(state, dc).await)
         }
         "moltbook_create_submolt" => {
-            let n = args["name"].as_str().unwrap_or("").trim().trim_start_matches("m/");
+            let n = args["name"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .trim_start_matches("m/");
             if n.is_empty() {
                 return error_result("name là bắt buộc".into());
             }
@@ -662,16 +784,41 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             if draft.status != "pending" {
                 return error_result(format!("draft đã ở trạng thái '{}'", draft.status));
             }
+            if draft.awaiting_verify() {
+                return error_result(
+                    "Bài này ĐÃ đăng lên Moltbook, chỉ chưa xác minh. Dùng moltbook_retry_verify — duyệt lại sẽ tạo bài trùng.".into(),
+                );
+            }
             match engine::execute_draft(state, &draft).await {
                 Ok(reference) => {
-                    db.set_draft_result(id, "posted", &reference, "", now_ts()).ok();
-                    db.log(&draft.kind, &format!("duyệt & đăng {} (#{id})", draft.kind), &reference, now_ts()).ok();
-                    json_result(json!({ "ok": true, "ref": reference, "draft": db.get_draft(id).ok().flatten() }))
+                    db.set_draft_result(id, "posted", &reference, "", now_ts())
+                        .ok();
+                    db.log(
+                        &draft.kind,
+                        &format!("duyệt & đăng {} (#{id})", draft.kind),
+                        &reference,
+                        now_ts(),
+                    )
+                    .ok();
+                    json_result(
+                        json!({ "ok": true, "ref": reference, "draft": db.get_draft(id).ok().flatten() }),
+                    )
                 }
                 Err(e) => {
                     db.set_draft_result(id, "error", "", &e, now_ts()).ok();
                     error_result(e)
                 }
+            }
+        }
+        "moltbook_retry_verify" => {
+            let Some(id) = args["id"].as_i64() else {
+                return error_result("id là bắt buộc".into());
+            };
+            match engine::retry_verify(state, id).await {
+                Ok(reference) => json_result(
+                    json!({ "ok": true, "ref": reference, "draft": db.get_draft(id).ok().flatten() }),
+                ),
+                Err(e) => error_result(e),
             }
         }
         "moltbook_reject_draft" => {
@@ -695,7 +842,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
 
         // ---- feedback harvest ----
         "moltbook_harvest_feedback" => {
-            let pid = args["post_id"].as_str().map(str::trim).filter(|p| !p.is_empty());
+            let pid = args["post_id"]
+                .as_str()
+                .map(str::trim)
+                .filter(|p| !p.is_empty());
             json_result(engine::harvest(state, pid).await)
         }
         "moltbook_list_tracked_posts" => match db.list_tracked(200) {
@@ -724,7 +874,9 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let title = args["title"].as_str().unwrap_or("");
             let submolt = args["submolt"].as_str().unwrap_or("");
             match db.track_post(pid, title, submolt, "", now_ts()) {
-                Ok(()) => json_result(json!({ "ok": true, "post": db.get_tracked(pid).ok().flatten() })),
+                Ok(()) => {
+                    json_result(json!({ "ok": true, "post": db.get_tracked(pid).ok().flatten() }))
+                }
                 Err(e) => error_result(e.to_string()),
             }
         }
@@ -747,8 +899,18 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let kind = args["kind"].as_str().unwrap_or("both");
             match db.add_topic(text, kind, now_ts()) {
                 Ok(id) => {
-                    db.log("topic", &format!("thêm chủ đề ({kind}): {}", llm::truncate(text, 80)), &id.to_string(), now_ts()).ok();
-                    let t = db.list_topics(false).unwrap_or_default().into_iter().find(|t| t.id == id);
+                    db.log(
+                        "topic",
+                        &format!("thêm chủ đề ({kind}): {}", llm::truncate(text, 80)),
+                        &id.to_string(),
+                        now_ts(),
+                    )
+                    .ok();
+                    let t = db
+                        .list_topics(false)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|t| t.id == id);
                     json_result(json!({ "ok": true, "topic": t }))
                 }
                 Err(e) => error_result(e.to_string()),
@@ -763,7 +925,11 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let enabled = args["enabled"].as_bool();
             match db.update_topic(id, text, kind, enabled) {
                 Ok(()) => {
-                    let t = db.list_topics(false).unwrap_or_default().into_iter().find(|t| t.id == id);
+                    let t = db
+                        .list_topics(false)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|t| t.id == id);
                     match t {
                         Some(t) => json_result(json!({ "ok": true, "topic": t })),
                         None => error_result(format!("topic {id} không tồn tại")),
@@ -809,7 +975,9 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let space = crate::api::memory_space(db);
             match crate::senclaw::knowledge_recall(&space, q).await {
                 Ok(answer) => {
-                    let hits = crate::senclaw::knowledge_search(&space, q, 6).await.unwrap_or_default();
+                    let hits = crate::senclaw::knowledge_search(&space, q, 6)
+                        .await
+                        .unwrap_or_default();
                     json_result(json!({
                         "space": space,
                         "answer": answer,
@@ -827,14 +995,24 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
             let extra: Vec<String> = args["tags"]
                 .as_array()
-                .map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| t.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default();
             let mut tags: Vec<&str> = vec!["moltbook"];
             tags.extend(extra.iter().map(String::as_str));
             let space = crate::api::memory_space(db);
             match crate::senclaw::knowledge_save(&space, text, &tags, "moltbook:agent").await {
                 Ok(()) => {
-                    db.log("memory", &format!("agent ghi trí nhớ vào {space}"), "", now_ts()).ok();
+                    db.log(
+                        "memory",
+                        &format!("agent ghi trí nhớ vào {space}"),
+                        "",
+                        now_ts(),
+                    )
+                    .ok();
                     json_result(json!({ "ok": true, "space": space }))
                 }
                 Err(e) => error_result(format!("ghi trí nhớ thất bại: {e}")),
@@ -846,11 +1024,189 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 return error_result("post_id là bắt buộc".into());
             }
             match engine::archive_post_to_wiki(state, pid).await {
-                Ok(path) => json_result(json!({ "ok": true, "path": path, "note": "Đã lưu vào wiki (kho thông tin)." })),
+                Ok(path) => json_result(
+                    json!({ "ok": true, "path": path, "note": "Đã lưu vào wiki (kho thông tin)." }),
+                ),
                 Err(e) => error_result(e),
             }
         }
         "moltbook_run_heartbeat" => json_result(engine::run_once(state, "mcp").await),
+
+        // ---- research workflows ----
+        "moltbook_list_workflows" => match db.list_workflows(false) {
+            Ok(wfs) => {
+                let items: Vec<Value> = wfs
+                    .iter()
+                    .map(|w| {
+                        let mut v = serde_json::to_value(w).unwrap_or(json!({}));
+                        v["steps_parsed"] =
+                            serde_json::to_value(crate::research::parse_steps(&w.steps))
+                                .unwrap_or(json!([]));
+                        v
+                    })
+                    .collect();
+                json_result(json!({
+                    "count": items.len(),
+                    "workflows": items,
+                    "note": "flow: comment = chạy trước khi bình luận · post = trước khi đăng bài · both = cả hai. Các workflow enabled cùng flow chạy SONG SONG.",
+                }))
+            }
+            Err(e) => error_result(e.to_string()),
+        },
+        "moltbook_save_workflow" => {
+            let steps_val = args["steps"].clone();
+            let steps: Option<Vec<crate::research::Step>> = if steps_val.is_null() {
+                None
+            } else {
+                match serde_json::from_value(steps_val) {
+                    Ok(s) => Some(s),
+                    Err(e) => return error_result(format!("steps không hợp lệ: {e}")),
+                }
+            };
+            if let Some(s) = &steps {
+                if s.is_empty() {
+                    return error_result("workflow cần ít nhất 1 bước".into());
+                }
+            }
+            let steps_json =
+                steps.map(|s| serde_json::to_string(&s).unwrap_or_else(|_| "[]".into()));
+            match args["id"].as_i64() {
+                Some(id) => {
+                    if let Err(e) = db.update_workflow(
+                        id,
+                        args["name"].as_str(),
+                        args["flow"].as_str(),
+                        steps_json.as_deref(),
+                        args["extract_prompt"].as_str(),
+                        args["enabled"].as_bool(),
+                        now_ts(),
+                    ) {
+                        return error_result(e.to_string());
+                    }
+                    match db.get_workflow(id) {
+                        Ok(Some(w)) => json_result(json!({ "ok": true, "workflow": w })),
+                        Ok(None) => error_result(format!("workflow {id} không tồn tại")),
+                        Err(e) => error_result(e.to_string()),
+                    }
+                }
+                None => {
+                    let name = args["name"].as_str().unwrap_or("").trim();
+                    if name.is_empty() {
+                        return error_result("name là bắt buộc khi tạo mới".into());
+                    }
+                    let Some(steps_json) = steps_json else {
+                        return error_result("steps là bắt buộc khi tạo mới".into());
+                    };
+                    let flow = args["flow"].as_str().unwrap_or("both");
+                    let extract = args["extract_prompt"].as_str().unwrap_or("");
+                    match db.add_workflow(name, flow, &steps_json, extract, false, now_ts()) {
+                        Ok(id) => {
+                            db.log(
+                                "workflow",
+                                &format!("agent tạo workflow '{name}'"),
+                                &id.to_string(),
+                                now_ts(),
+                            )
+                            .ok();
+                            json_result(
+                                json!({ "ok": true, "workflow": db.get_workflow(id).ok().flatten() }),
+                            )
+                        }
+                        Err(e) => error_result(e.to_string()),
+                    }
+                }
+            }
+        }
+        "moltbook_delete_workflow" => {
+            let Some(id) = args["id"].as_i64() else {
+                return error_result("id là bắt buộc".into());
+            };
+            match db.delete_workflow(id) {
+                Ok(()) => json_result(json!({ "ok": true, "id": id })),
+                Err(e) => error_result(e.to_string()),
+            }
+        }
+        "moltbook_ai_build_workflow" => {
+            let desc = args["description"].as_str().unwrap_or("").trim();
+            if desc.is_empty() {
+                return error_result("description là bắt buộc".into());
+            }
+            let flow = args["flow"].as_str().unwrap_or("");
+            match crate::research::ai_build_workflow(desc, flow).await {
+                Ok((name, flow, steps)) => {
+                    let steps_json = serde_json::to_string(&steps).unwrap_or_else(|_| "[]".into());
+                    match db.add_workflow(&name, &flow, &steps_json, "", false, now_ts()) {
+                        Ok(id) => {
+                            db.log(
+                                "workflow",
+                                &format!("AI tạo workflow '{name}' ({} bước)", steps.len()),
+                                &id.to_string(),
+                                now_ts(),
+                            )
+                            .ok();
+                            json_result(json!({
+                                "ok": true,
+                                "workflow": db.get_workflow(id).ok().flatten(),
+                                "note": "Workflow đã lưu và bật. Xem/sửa trong tab Nghiên cứu hoặc moltbook_save_workflow.",
+                            }))
+                        }
+                        Err(e) => error_result(e.to_string()),
+                    }
+                }
+                Err(e) => error_result(e),
+            }
+        }
+        "moltbook_research_tools" => json_result(crate::research::catalog().await),
+        "moltbook_research" => {
+            let topic = args["topic"].as_str().unwrap_or("").trim();
+            if topic.is_empty() {
+                return error_result("topic là bắt buộc".into());
+            }
+            let flow = match args["flow"].as_str().unwrap_or("post") {
+                "comment" => "comment",
+                _ => "post",
+            };
+            let input = crate::research::ResearchInput {
+                flow: flow.into(),
+                topic: topic.into(),
+                title: args["title"].as_str().unwrap_or("").into(),
+                content: args["content"].as_str().unwrap_or("").into(),
+                post_id: args["post_id"].as_str().unwrap_or("").into(),
+            };
+            match crate::research::run_research(db, &input).await {
+                Some(Ok(bundle)) => {
+                    let questions = crate::research::gate_questions(db, &bundle);
+                    json_result(json!({
+                        "ok": true,
+                        "bundle": bundle.to_json(),
+                        "gated_questions": questions,
+                        "note": if questions.is_empty() {
+                            "Đủ tin cậy để soạn nội dung."
+                        } else {
+                            "Độ tin cậy thấp — nên hỏi người dùng các câu gated_questions trước khi đăng."
+                        },
+                    }))
+                }
+                Some(Err(e)) => error_result(e),
+                None => error_result(
+                    "nghiên cứu đang tắt hoặc không có workflow nào khớp flow này".into(),
+                ),
+            }
+        }
+        "moltbook_answer_draft" => {
+            let Some(id) = args["id"].as_i64() else {
+                return error_result("id là bắt buộc".into());
+            };
+            let answer = args["answer"].as_str().unwrap_or("");
+            match engine::answer_draft(state, id, answer).await {
+                Ok(d) => json_result(json!({
+                    "ok": true,
+                    "draft": d,
+                    "note": "Draft đã trở lại hàng chờ duyệt (moltbook_approve_draft để đăng).",
+                })),
+                Err(e) => error_result(e),
+            }
+        }
 
         _ => error_result(format!("Unknown tool: {name}")),
     }

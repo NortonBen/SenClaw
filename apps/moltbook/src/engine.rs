@@ -13,6 +13,7 @@ use crate::api::{client, now_ts, voice, AppState};
 use crate::db::{CachedPost, Draft, DraftCreate};
 use crate::llm::{self, FeedItem};
 use crate::moltbook::Moltbook;
+use crate::research::{self, ResearchInput};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
@@ -70,7 +71,8 @@ pub async fn run_once(state: &Arc<AppState>, source: &str) -> Value {
     // Cache for the UI (only real posts — never overwrite with nothing).
     if !feed.is_empty() {
         db.clear_live_cache().ok();
-        db.upsert_posts(&feed.iter().map(|f| to_cache(f, now)).collect::<Vec<_>>()).ok();
+        db.upsert_posts(&feed.iter().map(|f| to_cache(f, now)).collect::<Vec<_>>())
+            .ok();
     }
 
     if autonomy == "observe" {
@@ -80,7 +82,10 @@ pub async fn run_once(state: &Arc<AppState>, source: &str) -> Value {
     }
 
     // 2. Only consider posts we haven't already engaged with.
-    let fresh: Vec<&FeedItem> = feed.iter().filter(|f| !db.already_targeting(&f.id)).collect();
+    let fresh: Vec<&FeedItem> = feed
+        .iter()
+        .filter(|f| !db.already_targeting(&f.id))
+        .collect();
     if fresh.is_empty() {
         let msg = "Không có bài mới nào để tương tác.";
         db.log("heartbeat", msg, source, now).ok();
@@ -126,8 +131,16 @@ pub async fn run_once(state: &Arc<AppState>, source: &str) -> Value {
             "memory",
             &format!(
                 "nạp ngữ cảnh: {}{}",
-                if grounding.memory.trim().is_empty() { "" } else { "trí nhớ " },
-                if grounding.wiki.trim().is_empty() { "" } else { "kho thông tin (wiki)" }
+                if grounding.memory.trim().is_empty() {
+                    ""
+                } else {
+                    "trí nhớ "
+                },
+                if grounding.wiki.trim().is_empty() {
+                    ""
+                } else {
+                    "kho thông tin (wiki)"
+                }
             ),
             source,
             now,
@@ -135,10 +148,22 @@ pub async fn run_once(state: &Arc<AppState>, source: &str) -> Value {
         .ok();
     }
 
-    let (plan, model) = match llm::plan_engagements(&voice, &items, &priority, &grounding, &steer, budget, &default_submolt, allow_new_post).await {
+    let (plan, model) = match llm::plan_engagements(
+        &voice,
+        &items,
+        &priority,
+        &grounding,
+        &steer,
+        budget,
+        &default_submolt,
+        allow_new_post,
+    )
+    .await
+    {
         Ok(v) => v,
         Err(e) => {
-            db.log("error", &format!("heartbeat plan: {e}"), source, now).ok();
+            db.log("error", &format!("heartbeat plan: {e}"), source, now)
+                .ok();
             return json!({ "ok": false, "reason": e });
         }
     };
@@ -148,15 +173,27 @@ pub async fn run_once(state: &Arc<AppState>, source: &str) -> Value {
             .iter()
             .find(|i| i.id == id)
             .map(|i| i.title.clone())
-            .or_else(|| priority.iter().find(|(p, _)| p == id).map(|(_, s)| crate::llm::truncate(s, 60)))
+            .or_else(|| {
+                priority
+                    .iter()
+                    .find(|(p, _)| p == id)
+                    .map(|(_, s)| crate::llm::truncate(s, 60))
+            })
             .unwrap_or_default()
     };
 
     // 4. Materialise the plan — as drafts (draft mode) or live writes (live mode).
+    // When research is on, each comment/post first runs the matching research
+    // workflows; the content is then re-composed grounded in the findings, and
+    // low-confidence research parks the draft as `needs_input` with questions
+    // for the human (never auto-published, even in live mode).
     let mut drafted = 0usize;
     let mut published = 0usize;
     let mut errors = 0usize;
+    let mut asked = 0usize;
     let live = autonomy == "live";
+    let research_cap = db.get_i64("research_max_per_tick", 3).clamp(0, 10) as usize;
+    let mut researched = 0usize;
 
     // upvotes
     for pid in &plan.upvotes {
@@ -170,21 +207,117 @@ pub async fn run_once(state: &Arc<AppState>, source: &str) -> Value {
             model: model.clone(),
             ..Default::default()
         };
-        apply(state, &d, live, now, &mut drafted, &mut published, &mut errors).await;
+        apply(
+            state,
+            &d,
+            live,
+            now,
+            &mut drafted,
+            &mut published,
+            &mut errors,
+            &mut asked,
+        )
+        .await;
     }
     // comments
     for c in &plan.comments {
+        let (t_title, t_content) = target_text(&items, &priority, &c.post_id);
+        let mut content = c.content.clone();
+        let mut d_model = model.clone();
+        let mut research_json = String::new();
+        let mut questions: Vec<String> = Vec::new();
+        if researched < research_cap {
+            let input = ResearchInput {
+                flow: "comment".into(),
+                topic: if t_title.trim().is_empty() {
+                    llm::truncate(&c.content, 120)
+                } else {
+                    t_title.clone()
+                },
+                title: t_title.clone(),
+                content: t_content.clone(),
+                post_id: c.post_id.clone(),
+            };
+            match research::run_research(db, &input).await {
+                Some(Ok(bundle)) => {
+                    researched += 1;
+                    let block = bundle.render();
+                    if !block.is_empty() {
+                        match llm::compose_reply_researched(
+                            &voice, &t_title, &t_content, &c.content, &block, "",
+                        )
+                        .await
+                        {
+                            Ok((text, m)) if !text.trim().is_empty() => {
+                                content = text;
+                                d_model = m;
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                db.log(
+                                    "error",
+                                    &format!("soạn theo nghiên cứu thất bại (giữ bản nháp gốc): {e}"),
+                                    &c.post_id,
+                                    now_ts(),
+                                )
+                                .ok();
+                            }
+                        }
+                    }
+                    questions = research::gate_questions(db, &bundle);
+                    db.log(
+                        "research",
+                        &format!(
+                            "nghiên cứu bình luận '{}': {} bước · tin cậy {}%{}",
+                            llm::truncate(&input.topic, 50),
+                            bundle.runs.iter().filter(|r| r.ok).count(),
+                            bundle.confidence,
+                            if questions.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" · {} câu hỏi chờ bạn", questions.len())
+                            }
+                        ),
+                        &c.post_id,
+                        now_ts(),
+                    )
+                    .ok();
+                    research_json = bundle.to_json().to_string();
+                }
+                Some(Err(e)) => {
+                    db.log("error", &format!("nghiên cứu thất bại: {e}"), &c.post_id, now_ts())
+                        .ok();
+                }
+                None => {}
+            }
+        }
         let d = DraftCreate {
             kind: "comment".into(),
             target_post_id: c.post_id.clone(),
             target_title: title_of(&c.post_id),
-            content: c.content.clone(),
-            reason: if c.why.trim().is_empty() { "heartbeat".into() } else { c.why.clone() },
+            content,
+            reason: if c.why.trim().is_empty() {
+                "heartbeat".into()
+            } else {
+                c.why.clone()
+            },
             source: "engine".into(),
-            model: model.clone(),
+            model: d_model,
+            research: research_json,
+            questions,
             ..Default::default()
         };
-        apply(state, &d, live, now, &mut drafted, &mut published, &mut errors).await;
+        apply(
+            state,
+            &d,
+            live,
+            now,
+            &mut drafted,
+            &mut published,
+            &mut errors,
+            &mut asked,
+        )
+        .await;
     }
     // one new post
     if let Some(p) = &plan.new_post {
@@ -195,17 +328,107 @@ pub async fn run_once(state: &Arc<AppState>, source: &str) -> Value {
                     db.mark_topic_used(*topic_id, now).ok();
                 }
             }
+            let submolt = if p.submolt.trim().is_empty() {
+                default_submolt.clone()
+            } else {
+                p.submolt.trim_start_matches("m/").to_string()
+            };
+            let mut title = p.title.clone();
+            let mut content = p.content.clone();
+            let mut d_model = model.clone();
+            let mut research_json = String::new();
+            let mut questions: Vec<String> = Vec::new();
+            if researched < research_cap {
+                let input = ResearchInput {
+                    flow: "post".into(),
+                    topic: p.title.clone(),
+                    title: p.title.clone(),
+                    content: p.content.clone(),
+                    post_id: String::new(),
+                };
+                match research::run_research(db, &input).await {
+                    Some(Ok(bundle)) => {
+                        researched += 1;
+                        let block = bundle.render();
+                        if !block.is_empty() {
+                            match llm::compose_post_researched(
+                                &voice, &submolt, &p.title, &p.content, &block, "",
+                            )
+                            .await
+                            {
+                                Ok((post, m)) if !post.title.trim().is_empty() => {
+                                    title = post.title;
+                                    content = post.content;
+                                    d_model = m;
+                                }
+                                Ok(_) => {}
+                                Err(e) => {
+                                    db.log(
+                                        "error",
+                                        &format!(
+                                            "soạn bài theo nghiên cứu thất bại (giữ bản nháp gốc): {e}"
+                                        ),
+                                        "",
+                                        now_ts(),
+                                    )
+                                    .ok();
+                                }
+                            }
+                        }
+                        questions = research::gate_questions(db, &bundle);
+                        db.log(
+                            "research",
+                            &format!(
+                                "nghiên cứu bài mới '{}': {} bước · tin cậy {}%{}",
+                                llm::truncate(&p.title, 50),
+                                bundle.runs.iter().filter(|r| r.ok).count(),
+                                bundle.confidence,
+                                if questions.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" · {} câu hỏi chờ bạn", questions.len())
+                                }
+                            ),
+                            "",
+                            now_ts(),
+                        )
+                        .ok();
+                        research_json = bundle.to_json().to_string();
+                    }
+                    Some(Err(e)) => {
+                        db.log("error", &format!("nghiên cứu thất bại: {e}"), "", now_ts())
+                            .ok();
+                    }
+                    None => {}
+                }
+            }
             let d = DraftCreate {
                 kind: "post".into(),
-                submolt: if p.submolt.trim().is_empty() { default_submolt.clone() } else { p.submolt.trim_start_matches("m/").to_string() },
-                title: p.title.clone(),
-                content: p.content.clone(),
-                reason: if p.why.trim().is_empty() { "heartbeat".into() } else { p.why.clone() },
+                submolt,
+                title,
+                content,
+                reason: if p.why.trim().is_empty() {
+                    "heartbeat".into()
+                } else {
+                    p.why.clone()
+                },
                 source: "engine".into(),
-                model: model.clone(),
+                model: d_model,
+                research: research_json,
+                questions,
                 ..Default::default()
             };
-            apply(state, &d, live, now, &mut drafted, &mut published, &mut errors).await;
+            apply(
+                state,
+                &d,
+                live,
+                now,
+                &mut drafted,
+                &mut published,
+                &mut errors,
+                &mut asked,
+            )
+            .await;
         }
     }
 
@@ -219,16 +442,28 @@ pub async fn run_once(state: &Arc<AppState>, source: &str) -> Value {
 
     // Once a day, summarise what the whole agent internet is talking about.
     // Off by default — it's an extra LLM call the user should opt into.
-    let trending_summary = if db.get_bool("trending_daily", false) && !db.has_digest(&day_str(now)) {
+    let trending_summary = if db.get_bool("trending_daily", false) && !db.has_digest(&day_str(now))
+    {
         trending_digest(state, true).await
     } else {
         Value::Null
     };
 
-    let note = if live {
-        format!("Heartbeat (live): đã đăng {published}, lỗi {errors}. {}", plan.note)
+    let ask_note = if asked > 0 {
+        format!(" {asked} mục cần bạn trả lời câu hỏi nghiên cứu.")
     } else {
-        format!("Heartbeat (draft): đã soạn {drafted} mục chờ duyệt. {}", plan.note)
+        String::new()
+    };
+    let note = if live {
+        format!(
+            "Heartbeat (live): đã đăng {published}, lỗi {errors}.{ask_note} {}",
+            plan.note
+        )
+    } else {
+        format!(
+            "Heartbeat (draft): đã soạn {drafted} mục chờ duyệt.{ask_note} {}",
+            plan.note
+        )
     };
     db.log("heartbeat", &note, source, now).ok();
     json!({
@@ -241,13 +476,34 @@ pub async fn run_once(state: &Arc<AppState>, source: &str) -> Value {
         "replies_to_you": priority.len(),
         "drafted": drafted,
         "published": published,
+        "needs_input": asked,
+        "researched": researched,
         "errors": errors,
         "note": note,
         "model": model,
     })
 }
 
-/// Draft-or-publish one planned engagement.
+/// `(title, content)` of a plan target, from the browse feed or the priority
+/// (replies-to-you) list. Empty strings when unknown.
+fn target_text(
+    items: &[FeedItem],
+    priority: &[(String, String)],
+    post_id: &str,
+) -> (String, String) {
+    if let Some(it) = items.iter().find(|i| i.id == post_id) {
+        return (it.title.clone(), it.content.clone());
+    }
+    if let Some((_, snippet)) = priority.iter().find(|(p, _)| p == post_id) {
+        return (llm::truncate(snippet, 120), snippet.clone());
+    }
+    (String::new(), String::new())
+}
+
+/// Draft-or-publish one planned engagement. A draft carrying unanswered
+/// research questions is ALWAYS parked as `needs_input` — even in live mode —
+/// because uncertain content must ask the human before touching Moltbook.
+#[allow(clippy::too_many_arguments)]
 async fn apply(
     state: &Arc<AppState>,
     d: &DraftCreate,
@@ -256,8 +512,29 @@ async fn apply(
     drafted: &mut usize,
     published: &mut usize,
     errors: &mut usize,
+    asked: &mut usize,
 ) {
     let db = &state.db;
+    if !d.questions.is_empty() {
+        match db.create_draft(d, now) {
+            Ok(id) => {
+                db.log(
+                    "question",
+                    &format!(
+                        "cần bạn trả lời trước khi đăng {}: {}",
+                        d.kind,
+                        first_line(&d.questions.join(" · "))
+                    ),
+                    &id.to_string(),
+                    now,
+                )
+                .ok();
+                *asked += 1;
+            }
+            Err(_) => *errors += 1,
+        }
+        return;
+    }
     if live {
         // Persist a draft row first so we have something to record the result on.
         match db.create_draft(d, now) {
@@ -265,13 +542,21 @@ async fn apply(
                 if let Ok(Some(draft)) = db.get_draft(id) {
                     match execute_draft(state, &draft).await {
                         Ok(reference) => {
-                            db.set_draft_result(id, "posted", &reference, "", now_ts()).ok();
-                            db.log(&draft.kind, &format!("live: {}", describe_draft(&draft)), &reference, now_ts()).ok();
+                            db.set_draft_result(id, "posted", &reference, "", now_ts())
+                                .ok();
+                            db.log(
+                                &draft.kind,
+                                &format!("live: {}", describe_draft(&draft)),
+                                &reference,
+                                now_ts(),
+                            )
+                            .ok();
                             *published += 1;
                         }
                         Err(e) => {
                             db.set_draft_result(id, "error", "", &e, now_ts()).ok();
-                            db.log("error", &format!("live {}: {e}", draft.kind), "", now_ts()).ok();
+                            db.log("error", &format!("live {}: {e}", draft.kind), "", now_ts())
+                                .ok();
                             *errors += 1;
                         }
                     }
@@ -282,7 +567,13 @@ async fn apply(
     } else {
         match db.create_draft(d, now) {
             Ok(id) => {
-                db.log("draft", &format!("soạn {}: {}", d.kind, first_line(&draft_summary(d))), &id.to_string(), now).ok();
+                db.log(
+                    "draft",
+                    &format!("soạn {}: {}", d.kind, first_line(&draft_summary(d))),
+                    &id.to_string(),
+                    now,
+                )
+                .ok();
                 *drafted += 1;
             }
             Err(_) => *errors += 1,
@@ -319,7 +610,13 @@ fn topics_of(items: &[FeedItem], priority: &[(String, String)]) -> String {
         .map(|(_, s)| llm::truncate(s, 80))
         .filter(|s| !s.trim().is_empty())
         .collect();
-    t.extend(items.iter().take(6).map(|i| i.title.clone()).filter(|s| !s.trim().is_empty()));
+    t.extend(
+        items
+            .iter()
+            .take(6)
+            .map(|i| i.title.clone())
+            .filter(|s| !s.trim().is_empty()),
+    );
     t.join(" · ")
 }
 
@@ -358,16 +655,38 @@ async fn remember_published(db: &crate::db::Db, draft: &Draft, reference: &str) 
             "Trên Moltbook tôi đã bình luận vào bài \"{}\" (post_id {}): {}",
             draft.target_title, draft.target_post_id, draft.content
         ),
-        "submolt" => format!("Trên Moltbook tôi đã tạo submolt m/{}: {}", draft.submolt, draft.content),
+        "submolt" => format!(
+            "Trên Moltbook tôi đã tạo submolt m/{}: {}",
+            draft.submolt, draft.content
+        ),
         _ => return,
     };
     let space = crate::api::memory_space(db);
-    match crate::senclaw::knowledge_save(&space, &text, &["moltbook"], &format!("moltbook:{reference}")).await {
+    match crate::senclaw::knowledge_save(
+        &space,
+        &text,
+        &["moltbook"],
+        &format!("moltbook:{reference}"),
+    )
+    .await
+    {
         Ok(()) => {
-            db.log("memory", &format!("đã ghi vào trí nhớ ({space})"), reference, now_ts()).ok();
+            db.log(
+                "memory",
+                &format!("đã ghi vào trí nhớ ({space})"),
+                reference,
+                now_ts(),
+            )
+            .ok();
         }
         Err(e) => {
-            db.log("error", &format!("ghi trí nhớ thất bại: {e}"), reference, now_ts()).ok();
+            db.log(
+                "error",
+                &format!("ghi trí nhớ thất bại: {e}"),
+                reference,
+                now_ts(),
+            )
+            .ok();
         }
     }
 }
@@ -375,11 +694,21 @@ async fn remember_published(db: &crate::db::Db, draft: &Draft, reference: &str) 
 /// When `wiki_archive` is on, mirror a published post into the wiki so the
 /// user's kho thông tin keeps a record of what the molty put into the world.
 async fn archive_own_post(db: &crate::db::Db, draft: &Draft, reference: &str) {
-    if draft.kind != "post" || !db.get_bool("wiki_enabled", true) || !db.get_bool("wiki_archive", false) {
+    if draft.kind != "post"
+        || !db.get_bool("wiki_enabled", true)
+        || !db.get_bool("wiki_archive", false)
+    {
         return;
     }
     let slug = crate::senclaw::slugify(&draft.title);
-    let path = format!("moltbook/posts/{}.md", if slug.is_empty() { reference.to_string() } else { slug });
+    let path = format!(
+        "moltbook/posts/{}.md",
+        if slug.is_empty() {
+            reference.to_string()
+        } else {
+            slug
+        }
+    );
     let doc = format!(
         "# {}\n\n_Đăng bởi molty của tôi lên Moltbook m/{} · post_id `{}`_\n\n{}\n",
         draft.title,
@@ -387,12 +716,34 @@ async fn archive_own_post(db: &crate::db::Db, draft: &Draft, reference: &str) {
         reference,
         draft.content
     );
-    match crate::senclaw::wiki_write(&path, &doc, &["moltbook", "post"], &format!("moltbook: lưu bài đã đăng '{}'", llm::truncate(&draft.title, 60))).await {
+    match crate::senclaw::wiki_write(
+        &path,
+        &doc,
+        &["moltbook", "post"],
+        &format!(
+            "moltbook: lưu bài đã đăng '{}'",
+            llm::truncate(&draft.title, 60)
+        ),
+    )
+    .await
+    {
         Ok(()) => {
-            db.log("wiki", &format!("đã lưu bài vào kho thông tin: {path}"), reference, now_ts()).ok();
+            db.log(
+                "wiki",
+                &format!("đã lưu bài vào kho thông tin: {path}"),
+                reference,
+                now_ts(),
+            )
+            .ok();
         }
         Err(e) => {
-            db.log("error", &format!("lưu wiki thất bại: {e}"), reference, now_ts()).ok();
+            db.log(
+                "error",
+                &format!("lưu wiki thất bại: {e}"),
+                reference,
+                now_ts(),
+            )
+            .ok();
         }
     }
 }
@@ -446,7 +797,8 @@ pub async fn trending_digest(state: &Arc<AppState>, write_wiki: bool) -> Value {
                 }
             }
             Err(e) => {
-                db.log("error", &format!("trending {sort}: {e}"), "", now).ok();
+                db.log("error", &format!("trending {sort}: {e}"), "", now)
+                    .ok();
             }
         }
     }
@@ -472,7 +824,13 @@ pub async fn trending_digest(state: &Arc<AppState>, write_wiki: bool) -> Value {
     let (report, model) = match llm::analyze_trending(&posts, &interests).await {
         Ok(v) => v,
         Err(e) => {
-            db.log("error", &format!("phân tích xu hướng thất bại: {e}"), "", now).ok();
+            db.log(
+                "error",
+                &format!("phân tích xu hướng thất bại: {e}"),
+                "",
+                now,
+            )
+            .ok();
             return json!({ "ok": false, "reason": e });
         }
     };
@@ -494,7 +852,11 @@ pub async fn trending_digest(state: &Arc<AppState>, write_wiki: bool) -> Value {
             "### {}. {}{}\n\n",
             i + 1,
             t.name,
-            if t.relevant { "  ⭐ _(khớp chủ đề bạn quan tâm)_" } else { "" }
+            if t.relevant {
+                "  ⭐ _(khớp chủ đề bạn quan tâm)_"
+            } else {
+                ""
+            }
         ));
         if !t.why.trim().is_empty() {
             doc.push_str(&format!("**Vì sao nóng:** {}\n\n", t.why.trim()));
@@ -508,7 +870,12 @@ pub async fn trending_digest(state: &Arc<AppState>, write_wiki: bool) -> Value {
                 if let Some(p) = posts.get(*idx) {
                     doc.push_str(&format!(
                         "- [{}]({}/post/{}) · {} · ⬆ {} · by {}\n",
-                        p.title, crate::moltbook::DEFAULT_BASE, p.id, p.submolt, p.score, p.author
+                        p.title,
+                        crate::moltbook::DEFAULT_BASE,
+                        p.id,
+                        p.submolt,
+                        p.score,
+                        p.author
                     ));
                 }
             }
@@ -521,28 +888,60 @@ pub async fn trending_digest(state: &Arc<AppState>, write_wiki: bool) -> Value {
         let title = p.title.replace('|', "\\|");
         doc.push_str(&format!(
             "| {} | {} | [{}]({}/post/{}) | {} |\n",
-            p.score, p.submolt, title, crate::moltbook::DEFAULT_BASE, p.id, p.author
+            p.score,
+            p.submolt,
+            title,
+            crate::moltbook::DEFAULT_BASE,
+            p.id,
+            p.author
         ));
     }
     doc.push_str(&format!(
         "\n---\n\n_Tổng hợp lúc {} · {} bài từ {} · mô hình {}_\n",
         fmt_ts(now),
         posts.len(),
-        if sources.is_empty() { "feed".to_string() } else { sources.join(", ") },
-        if model.is_empty() { "?".into() } else { model.clone() },
+        if sources.is_empty() {
+            "feed".to_string()
+        } else {
+            sources.join(", ")
+        },
+        if model.is_empty() {
+            "?".into()
+        } else {
+            model.clone()
+        },
     ));
 
     // 4. Write the wiki doc (one per day, rewritten on re-run).
     let mut wiki_path = String::new();
     if write_wiki && db.get_bool("wiki_enabled", true) {
         let path = format!("moltbook/trending/{day}.md");
-        match crate::senclaw::wiki_write(&path, &doc, &["moltbook", "trending"], &format!("moltbook: xu hướng {day}")).await {
+        match crate::senclaw::wiki_write(
+            &path,
+            &doc,
+            &["moltbook", "trending"],
+            &format!("moltbook: xu hướng {day}"),
+        )
+        .await
+        {
             Ok(()) => {
                 wiki_path = path.clone();
-                db.log("wiki", &format!("ghi tổng hợp xu hướng: {path}"), "", now_ts()).ok();
+                db.log(
+                    "wiki",
+                    &format!("ghi tổng hợp xu hướng: {path}"),
+                    "",
+                    now_ts(),
+                )
+                .ok();
             }
             Err(e) => {
-                db.log("error", &format!("ghi wiki xu hướng thất bại: {e}"), "", now_ts()).ok();
+                db.log(
+                    "error",
+                    &format!("ghi wiki xu hướng thất bại: {e}"),
+                    "",
+                    now_ts(),
+                )
+                .ok();
             }
         }
     }
@@ -563,13 +962,26 @@ pub async fn trending_digest(state: &Arc<AppState>, write_wiki: bool) -> Value {
         )
         .await;
     }
-    db.upsert_digest(&day, &wiki_path, posts.len() as i64, names.len() as i64, &report.summary, &names, now_ts()).ok();
+    db.upsert_digest(
+        &day,
+        &wiki_path,
+        posts.len() as i64,
+        names.len() as i64,
+        &report.summary,
+        &names,
+        now_ts(),
+    )
+    .ok();
 
     let note = format!(
         "Xu hướng {day}: {} chủ đề từ {} bài{}.",
         names.len(),
         posts.len(),
-        if wiki_path.is_empty() { String::new() } else { format!(" → {wiki_path}") }
+        if wiki_path.is_empty() {
+            String::new()
+        } else {
+            format!(" → {wiki_path}")
+        }
     );
     db.log("trending", &note, "", now_ts()).ok();
     json!({
@@ -622,7 +1034,11 @@ fn extract_comments(v: &Value) -> Vec<(String, String)> {
         .filter_map(|c| {
             let author = c
                 .get("author")
-                .and_then(|a| a.get("name").and_then(|n| n.as_str()).or_else(|| a.as_str()))
+                .and_then(|a| {
+                    a.get("name")
+                        .and_then(|n| n.as_str())
+                        .or_else(|| a.as_str())
+                })
                 .or_else(|| c.get("author_name").and_then(|x| x.as_str()))
                 .unwrap_or("molty")
                 .to_string();
@@ -656,7 +1072,14 @@ async fn write_post_doc(
 ) -> Result<String, String> {
     let slug = crate::senclaw::slugify(title);
     let path = if existing_path.is_empty() {
-        format!("moltbook/posts/{}.md", if slug.is_empty() { post_id.to_string() } else { slug })
+        format!(
+            "moltbook/posts/{}.md",
+            if slug.is_empty() {
+                post_id.to_string()
+            } else {
+                slug
+            }
+        )
     } else {
         existing_path.to_string()
     };
@@ -666,7 +1089,10 @@ async fn write_post_doc(
         submolt.trim_start_matches("m/")
     );
     if !synthesis.trim().is_empty() {
-        doc.push_str(&format!("\n## Phản hồi từ các agent khác\n\n{}\n", synthesis.trim()));
+        doc.push_str(&format!(
+            "\n## Phản hồi từ các agent khác\n\n{}\n",
+            synthesis.trim()
+        ));
     }
     if !comments.is_empty() {
         doc.push_str("\n## Thảo luận gốc\n\n");
@@ -687,7 +1113,10 @@ async fn write_post_doc(
         &path,
         &doc,
         &["moltbook", "post"],
-        &format!("moltbook: cập nhật phản hồi cho '{}'", llm::truncate(title, 60)),
+        &format!(
+            "moltbook: cập nhật phản hồi cho '{}'",
+            llm::truncate(title, 60)
+        ),
     )
     .await?;
     Ok(path)
@@ -698,7 +1127,11 @@ fn fmt_ts(secs: i64) -> String {
     let days = secs.div_euclid(86400);
     let rem = secs.rem_euclid(86400);
     let (y, m, d) = jd_to_ymd(days + 2440588);
-    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}", rem / 3600, (rem % 3600) / 60)
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
+        rem / 3600,
+        (rem % 3600) / 60
+    )
 }
 fn jd_to_ymd(jd: i64) -> (i64, i64, i64) {
     let a = jd + 32044;
@@ -707,7 +1140,11 @@ fn jd_to_ymd(jd: i64) -> (i64, i64, i64) {
     let d = (4 * c + 3) / 1461;
     let e = c - (1461 * d) / 4;
     let m = (5 * e + 2) / 153;
-    (100 * b + d - 4800 + m / 10, m + 3 - 12 * (m / 10), e - (153 * m + 2) / 5 + 1)
+    (
+        100 * b + d - 4800 + m / 10,
+        m + 3 - 12 * (m / 10),
+        e - (153 * m + 2) / 5 + 1,
+    )
 }
 
 /// Collect what other agents said about our posts and refresh their wiki docs.
@@ -763,7 +1200,14 @@ pub async fn harvest(state: &Arc<AppState>, only_post_id: Option<&str>) -> Value
         let post = match client.get_post(&t.post_id).await {
             Ok(p) => p,
             Err(e) => {
-                db.record_check(&t.post_id, t.last_comment_count, t.last_score, &e.to_string(), now_ts()).ok();
+                db.record_check(
+                    &t.post_id,
+                    t.last_comment_count,
+                    t.last_score,
+                    &e.to_string(),
+                    now_ts(),
+                )
+                .ok();
                 errors += 1;
                 details.push(json!({ "post_id": t.post_id, "error": e.to_string() }));
                 continue;
@@ -776,14 +1220,23 @@ pub async fn harvest(state: &Arc<AppState>, only_post_id: Option<&str>) -> Value
             .filter(|s| !s.is_empty())
             .unwrap_or(&t.title)
             .to_string();
-        let body = p.get("content").or_else(|| p.get("body")).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let body = p
+            .get("content")
+            .or_else(|| p.get("body"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
         let submolt = p
             .get("submolt_name")
             .or_else(|| p.get("submolt"))
             .and_then(|x| x.as_str())
             .unwrap_or(&t.submolt)
             .to_string();
-        let score = p.get("score").or_else(|| p.get("upvotes")).and_then(|x| x.as_i64()).unwrap_or(t.last_score);
+        let score = p
+            .get("score")
+            .or_else(|| p.get("upvotes"))
+            .and_then(|x| x.as_i64())
+            .unwrap_or(t.last_score);
 
         // Only OUR OWN posts get a "my post" doc. `/home` activity also covers
         // posts we merely commented on, so auto-discovery can hand us someone
@@ -792,7 +1245,11 @@ pub async fn harvest(state: &Arc<AppState>, only_post_id: Option<&str>) -> Value
         // (Use archive_post_to_wiki to save another agent's thread on purpose.)
         let author = p
             .get("author")
-            .and_then(|a| a.get("name").and_then(|n| n.as_str()).or_else(|| a.as_str()))
+            .and_then(|a| {
+                a.get("name")
+                    .and_then(|n| n.as_str())
+                    .or_else(|| a.as_str())
+            })
             .or_else(|| p.get("author_name").and_then(|x| x.as_str()))
             .unwrap_or("")
             .to_string();
@@ -801,7 +1258,10 @@ pub async fn harvest(state: &Arc<AppState>, only_post_id: Option<&str>) -> Value
             db.untrack(&t.post_id).ok();
             db.log(
                 "harvest",
-                &format!("bỏ theo dõi bài '{}' — tác giả là {author}, không phải bạn", llm::truncate(&title, 50)),
+                &format!(
+                    "bỏ theo dõi bài '{}' — tác giả là {author}, không phải bạn",
+                    llm::truncate(&title, 50)
+                ),
                 &t.post_id,
                 now_ts(),
             )
@@ -815,12 +1275,20 @@ pub async fn harvest(state: &Arc<AppState>, only_post_id: Option<&str>) -> Value
         }
 
         // Persist what we learned about the post (auto-discovery only knew the id).
-        db.track_post(&t.post_id, &title, &submolt, "", t.posted_at).ok();
+        db.track_post(&t.post_id, &title, &submolt, "", t.posted_at)
+            .ok();
 
         let comments = match client.comments(&t.post_id, "best", None).await {
             Ok(c) => extract_comments(&c),
             Err(e) => {
-                db.record_check(&t.post_id, t.last_comment_count, score, &e.to_string(), now_ts()).ok();
+                db.record_check(
+                    &t.post_id,
+                    t.last_comment_count,
+                    score,
+                    &e.to_string(),
+                    now_ts(),
+                )
+                .ok();
                 errors += 1;
                 details.push(json!({ "post_id": t.post_id, "error": e.to_string() }));
                 continue;
@@ -844,7 +1312,13 @@ pub async fn harvest(state: &Arc<AppState>, only_post_id: Option<&str>) -> Value
         let (synthesis, model) = match llm::synthesize_feedback(&title, &body, &comments).await {
             Ok(v) => v,
             Err(e) => {
-                db.log("error", &format!("tổng hợp phản hồi thất bại: {e}"), &t.post_id, now_ts()).ok();
+                db.log(
+                    "error",
+                    &format!("tổng hợp phản hồi thất bại: {e}"),
+                    &t.post_id,
+                    now_ts(),
+                )
+                .ok();
                 errors += 1;
                 details.push(json!({ "post_id": t.post_id, "title": title, "error": e }));
                 continue;
@@ -854,18 +1328,43 @@ pub async fn harvest(state: &Arc<AppState>, only_post_id: Option<&str>) -> Value
         // 4. Rewrite the wiki doc, then remember we did.
         let mut wiki_path = t.wiki_path.clone();
         if wiki_on {
-            match write_post_doc(&t.post_id, &title, &submolt, &body, &synthesis, &comments, score, t.checks + 1, &t.wiki_path).await {
+            match write_post_doc(
+                &t.post_id,
+                &title,
+                &submolt,
+                &body,
+                &synthesis,
+                &comments,
+                score,
+                t.checks + 1,
+                &t.wiki_path,
+            )
+            .await
+            {
                 Ok(p) => {
                     wiki_path = p;
-                    db.log("wiki", &format!("cập nhật doc theo phản hồi: {wiki_path}"), &t.post_id, now_ts()).ok();
+                    db.log(
+                        "wiki",
+                        &format!("cập nhật doc theo phản hồi: {wiki_path}"),
+                        &t.post_id,
+                        now_ts(),
+                    )
+                    .ok();
                 }
                 Err(e) => {
-                    db.log("error", &format!("ghi wiki thất bại: {e}"), &t.post_id, now_ts()).ok();
+                    db.log(
+                        "error",
+                        &format!("ghi wiki thất bại: {e}"),
+                        &t.post_id,
+                        now_ts(),
+                    )
+                    .ok();
                     errors += 1;
                 }
             }
         }
-        db.record_sync(&t.post_id, &synthesis, count, &wiki_path, now_ts()).ok();
+        db.record_sync(&t.post_id, &synthesis, count, &wiki_path, now_ts())
+            .ok();
         if db.get_bool("memory_enabled", true) {
             let memo = format!(
                 "Phản hồi của các agent khác về bài Moltbook \"{title}\" ({count} bình luận):\n{synthesis}"
@@ -888,8 +1387,16 @@ pub async fn harvest(state: &Arc<AppState>, only_post_id: Option<&str>) -> Value
 
     let note = format!(
         "Thu thập phản hồi: kiểm tra {checked} bài, cập nhật doc {updated}{}{}.",
-        if discovered > 0 { format!(", phát hiện thêm {discovered} bài") } else { String::new() },
-        if errors > 0 { format!(", {errors} lỗi") } else { String::new() },
+        if discovered > 0 {
+            format!(", phát hiện thêm {discovered} bài")
+        } else {
+            String::new()
+        },
+        if errors > 0 {
+            format!(", {errors} lỗi")
+        } else {
+            String::new()
+        },
     );
     db.log("harvest", &note, "", now_ts()).ok();
     json!({
@@ -908,11 +1415,22 @@ pub async fn archive_post_to_wiki(state: &Arc<AppState>, post_id: &str) -> Resul
     }
     let post = client.get_post(post_id).await.map_err(|e| e.to_string())?;
     let p = post.get("post").cloned().unwrap_or(post.clone());
-    let title = p.get("title").and_then(|x| x.as_str()).unwrap_or("(không tiêu đề)");
-    let content = p.get("content").or_else(|| p.get("body")).and_then(|x| x.as_str()).unwrap_or("");
+    let title = p
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("(không tiêu đề)");
+    let content = p
+        .get("content")
+        .or_else(|| p.get("body"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
     let author = p
         .get("author")
-        .and_then(|a| a.get("name").and_then(|n| n.as_str()).or_else(|| a.as_str()))
+        .and_then(|a| {
+            a.get("name")
+                .and_then(|n| n.as_str())
+                .or_else(|| a.as_str())
+        })
         .unwrap_or("unknown");
     let submolt = p
         .get("submolt_name")
@@ -926,15 +1444,27 @@ pub async fn archive_post_to_wiki(state: &Arc<AppState>, post_id: &str) -> Resul
     );
     // Include the discussion — that's usually where the value is.
     if let Ok(cs) = client.comments(post_id, "best", None).await {
-        let arr = cs.get("comments").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+        let arr = cs
+            .get("comments")
+            .and_then(|c| c.as_array())
+            .cloned()
+            .unwrap_or_default();
         if !arr.is_empty() {
             doc.push_str("\n## Thảo luận\n\n");
             for c in arr.iter().take(20) {
                 let who = c
                     .get("author")
-                    .and_then(|a| a.get("name").and_then(|n| n.as_str()).or_else(|| a.as_str()))
+                    .and_then(|a| {
+                        a.get("name")
+                            .and_then(|n| n.as_str())
+                            .or_else(|| a.as_str())
+                    })
                     .unwrap_or("molty");
-                let body = c.get("content").or_else(|| c.get("body")).and_then(|x| x.as_str()).unwrap_or("");
+                let body = c
+                    .get("content")
+                    .or_else(|| c.get("body"))
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("");
                 if !body.trim().is_empty() {
                     doc.push_str(&format!("- **{who}**: {body}\n"));
                 }
@@ -943,14 +1473,39 @@ pub async fn archive_post_to_wiki(state: &Arc<AppState>, post_id: &str) -> Resul
     }
 
     let slug = crate::senclaw::slugify(title);
-    let path = format!("moltbook/{}.md", if slug.is_empty() { post_id.to_string() } else { slug });
-    crate::senclaw::wiki_write(&path, &doc, &["moltbook"], &format!("moltbook: lưu thảo luận '{}'", llm::truncate(title, 60))).await?;
-    db.log("wiki", &format!("đã lưu vào kho thông tin: {path}"), post_id, now_ts()).ok();
+    let path = format!(
+        "moltbook/{}.md",
+        if slug.is_empty() {
+            post_id.to_string()
+        } else {
+            slug
+        }
+    );
+    crate::senclaw::wiki_write(
+        &path,
+        &doc,
+        &["moltbook"],
+        &format!("moltbook: lưu thảo luận '{}'", llm::truncate(title, 60)),
+    )
+    .await?;
+    db.log(
+        "wiki",
+        &format!("đã lưu vào kho thông tin: {path}"),
+        post_id,
+        now_ts(),
+    )
+    .ok();
 
     // Remember that we archived it, so the molty can refer back to it later.
     if db.get_bool("memory_enabled", true) {
         let memo = format!("Tôi đã lưu thảo luận Moltbook \"{title}\" (bởi {author}, m/{submolt}) vào wiki tại {path}.");
-        let _ = crate::senclaw::knowledge_save(&crate::api::memory_space(db), &memo, &["moltbook", "wiki"], "moltbook:archive").await;
+        let _ = crate::senclaw::knowledge_save(
+            &crate::api::memory_space(db),
+            &memo,
+            &["moltbook", "wiki"],
+            "moltbook:archive",
+        )
+        .await;
     }
     Ok(path)
 }
@@ -968,10 +1523,15 @@ async fn execute_draft_inner(state: &Arc<AppState>, draft: &Draft) -> Result<Str
             } else {
                 client.upvote_post(&draft.target_post_id).await
             };
-            v.map(|_| draft.target_post_id.clone()).map_err(|e| e.to_string())
+            v.map(|_| draft.target_post_id.clone())
+                .map_err(|e| e.to_string())
         }
         "comment" => {
-            let parent = if draft.parent_id.is_empty() { None } else { Some(draft.parent_id.as_str()) };
+            let parent = if draft.parent_id.is_empty() {
+                None
+            } else {
+                Some(draft.parent_id.as_str())
+            };
             let v = client
                 .create_comment(&draft.target_post_id, &draft.content, parent)
                 .await
@@ -979,22 +1539,51 @@ async fn execute_draft_inner(state: &Arc<AppState>, draft: &Draft) -> Result<Str
             Ok(extract_id(&v, "comment").unwrap_or_else(|| draft.target_post_id.clone()))
         }
         "post" => {
-            let submolt = if draft.submolt.is_empty() { db.get_str("default_submolt", "general") } else { draft.submolt.clone() };
-            let url = if draft.url.is_empty() { None } else { Some(draft.url.as_str()) };
-            let reference = create_post_verified(&client, db, &submolt, &draft.title, &draft.content, url).await?;
+            let submolt = if draft.submolt.is_empty() {
+                db.get_str("default_submolt", "general")
+            } else {
+                draft.submolt.clone()
+            };
+            let url = if draft.url.is_empty() {
+                None
+            } else {
+                Some(draft.url.as_str())
+            };
+            let reference = create_post_verified(
+                &client,
+                db,
+                draft.id,
+                &submolt,
+                &draft.title,
+                &draft.content,
+                url,
+            )
+            .await?;
             db.set_i64("last_post_at", now_ts()).ok();
             Ok(reference)
         }
         "submolt" => {
-            let name = if draft.submolt.is_empty() { draft.target_name.clone() } else { draft.submolt.clone() };
+            let name = if draft.submolt.is_empty() {
+                draft.target_name.clone()
+            } else {
+                draft.submolt.clone()
+            };
             client
                 .create_submolt(&name, &draft.title, &draft.content, false)
                 .await
                 .map(|_| name)
                 .map_err(|e| e.to_string())
         }
-        "follow" => client.follow(&draft.target_name).await.map(|_| draft.target_name.clone()).map_err(|e| e.to_string()),
-        "subscribe" => client.subscribe(&draft.target_name).await.map(|_| draft.target_name.clone()).map_err(|e| e.to_string()),
+        "follow" => client
+            .follow(&draft.target_name)
+            .await
+            .map(|_| draft.target_name.clone())
+            .map_err(|e| e.to_string()),
+        "subscribe" => client
+            .subscribe(&draft.target_name)
+            .await
+            .map(|_| draft.target_name.clone())
+            .map_err(|e| e.to_string()),
         other => Err(format!("loại nháp không hỗ trợ: {other}")),
     }
 }
@@ -1004,28 +1593,237 @@ async fn execute_draft_inner(state: &Arc<AppState>, draft: &Draft) -> Result<Str
 async fn create_post_verified(
     client: &Moltbook,
     db: &crate::db::Db,
+    draft_id: i64,
     submolt: &str,
     title: &str,
     content: &str,
     url: Option<&str>,
 ) -> Result<String, String> {
-    let resp = client.create_post(submolt, title, content, url, "text").await.map_err(|e| e.to_string())?;
+    let resp = client
+        .create_post(submolt, title, content, url, "text")
+        .await
+        .map_err(|e| e.to_string())?;
     let post = resp.get("post").cloned().unwrap_or(resp.clone());
     let post_id = extract_id(&post, "post").unwrap_or_default();
 
-    let status = post.get("verification_status").and_then(|s| s.as_str()).unwrap_or("");
+    let status = post
+        .get("verification_status")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
     if status == "pending" {
         let verification = post.get("verification").cloned().unwrap_or_default();
-        let code = verification.get("verification_code").and_then(|s| s.as_str()).unwrap_or("");
-        let challenge = verification.get("challenge_text").and_then(|s| s.as_str()).unwrap_or("");
+        let code = verification
+            .get("verification_code")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let challenge = verification
+            .get("challenge_text")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
         if code.is_empty() || challenge.is_empty() {
-            return Err("bài cần xác minh nhưng thiếu challenge — thử lại sau".into());
+            return Err(pending_note(
+                &post_id,
+                "bài cần xác minh nhưng Moltbook không trả challenge",
+            ));
         }
-        let (answer, _model) = llm::solve_challenge(challenge).await.map_err(|e| format!("giải challenge thất bại: {e}"))?;
-        client.verify(code, &answer).await.map_err(|e| format!("nộp đáp án challenge thất bại: {e}"))?;
-        db.log("verify", &format!("giải challenge xác minh cho bài '{}' → {}", llm::truncate(title, 60), answer), &post_id, now_ts()).ok();
+        // Park the challenge BEFORE solving: from here on the post exists on
+        // Moltbook, so any failure must be retryable *without* re-posting.
+        db.set_draft_verify(draft_id, &post_id, code, challenge)
+            .ok();
+
+        let (answer, _model) = llm::solve_challenge(challenge)
+            .await
+            .map_err(|e| pending_note(&post_id, &format!("giải challenge thất bại ({e})")))?;
+        client
+            .verify(code, &answer)
+            .await
+            .map_err(|e| pending_note(&post_id, &format!("nộp đáp án thất bại ({e})")))?;
+
+        db.set_draft_verify(draft_id, "", "", "").ok();
+        db.log(
+            "verify",
+            &format!(
+                "giải challenge xác minh cho bài '{}' → {}",
+                llm::truncate(title, 60),
+                answer
+            ),
+            &post_id,
+            now_ts(),
+        )
+        .ok();
     }
-    Ok(if post_id.is_empty() { "ok".into() } else { post_id })
+    Ok(if post_id.is_empty() {
+        "ok".into()
+    } else {
+        post_id
+    })
+}
+
+/// Error text for "the post is live but unverified". Says the one thing the user
+/// must not do: re-approve (that posts a duplicate).
+fn pending_note(post_id: &str, why: &str) -> String {
+    format!(
+        "Bài ĐÃ được tạo trên Moltbook (id {post_id}) nhưng CHƯA xác minh: {why}. \
+ĐỪNG duyệt lại — sẽ tạo bài trùng. Bấm 'Xác minh lại' (challenge hết hạn sau ~5 phút)."
+    )
+}
+
+/// Retry only the verification for a draft whose post already exists. Never
+/// re-creates the post.
+pub async fn retry_verify(state: &Arc<AppState>, draft_id: i64) -> Result<String, String> {
+    let db = &state.db;
+    let draft = db
+        .get_draft(draft_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("draft không tồn tại")?;
+    if !draft.awaiting_verify() {
+        return Err(
+            "draft này không có challenge đang chờ (chưa đăng, hoặc đã xác minh xong)".into(),
+        );
+    }
+    let client = client(db);
+    if !client.is_authenticated() {
+        return Err("chưa kết nối agent Moltbook".into());
+    }
+    let (answer, _) = llm::solve_challenge(&draft.verify_challenge)
+        .await
+        .map_err(|e| format!("giải challenge thất bại: {e}"))?;
+    client
+        .verify(&draft.verify_code, &answer)
+        .await
+        .map_err(|e| format!("nộp đáp án thất bại: {e} (challenge có thể đã hết hạn — bài vẫn nằm chờ trên Moltbook)"))?;
+
+    // Verified at last: clear the pending state and run the normal post-publish
+    // bookkeeping that the failed attempt skipped.
+    let reference = draft.verify_post_id.clone();
+    db.set_draft_verify(draft_id, "", "", "").ok();
+    db.set_draft_result(draft_id, "posted", &reference, "", now_ts())
+        .ok();
+    db.set_i64("last_post_at", now_ts()).ok();
+    db.log(
+        "verify",
+        &format!(
+            "xác minh lại thành công cho bài '{}'",
+            llm::truncate(&draft.title, 60)
+        ),
+        &reference,
+        now_ts(),
+    )
+    .ok();
+    remember_published(db, &draft, &reference).await;
+    archive_own_post(db, &draft, &reference).await;
+    track_published_post(db, &draft, &reference).await;
+    Ok(reference)
+}
+
+/// Answer a `needs_input` draft's research questions and re-compose it.
+///
+/// * Non-empty `answer` → the content is re-composed grounded in the stored
+///   research bundle + the answer, then the draft returns to `pending`.
+/// * Empty `answer` → "skip": keep the content as-is and just release the
+///   draft to `pending` (the human decided the questions don't matter).
+pub async fn answer_draft(
+    state: &Arc<AppState>,
+    draft_id: i64,
+    answer: &str,
+) -> Result<Draft, String> {
+    let db = &state.db;
+    let draft = db
+        .get_draft(draft_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("draft không tồn tại")?;
+    if draft.status != "needs_input" && draft.questions_list().is_empty() {
+        return Err("draft này không có câu hỏi nào đang chờ trả lời".into());
+    }
+    let answer = answer.trim();
+    db.set_draft_answer(draft_id, answer).ok();
+
+    let mut model = String::new();
+    let mut new_title: Option<String> = None;
+    let mut new_content: Option<String> = None;
+
+    if !answer.is_empty() {
+        // Re-compose grounded in the stored research + the human's answer.
+        let block = serde_json::from_str::<Value>(&draft.research)
+            .ok()
+            .and_then(|v| crate::research::ResearchBundle::from_json(&v))
+            .map(|b| b.render())
+            .unwrap_or_default();
+        let voice = voice(db);
+        match draft.kind.as_str() {
+            "comment" => {
+                // Pull the target post's text from the cache when we have it.
+                let t_content = db
+                    .list_cached(500)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|p| p.post_id == draft.target_post_id)
+                    .map(|p| p.content)
+                    .unwrap_or_default();
+                let (text, m) = llm::compose_reply_researched(
+                    &voice,
+                    &draft.target_title,
+                    &t_content,
+                    &draft.content,
+                    &block,
+                    answer,
+                )
+                .await?;
+                if !text.trim().is_empty() {
+                    new_content = Some(text);
+                    model = m;
+                }
+            }
+            "post" => {
+                let (post, m) = llm::compose_post_researched(
+                    &voice,
+                    &draft.submolt,
+                    &draft.title,
+                    &draft.content,
+                    &block,
+                    answer,
+                )
+                .await?;
+                if !post.title.trim().is_empty() {
+                    new_title = Some(post.title);
+                    new_content = Some(post.content);
+                    model = m;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    db.resolve_draft_questions(
+        draft_id,
+        new_title.as_deref(),
+        new_content.as_deref(),
+        &model,
+    )
+    .map_err(|e| e.to_string())?;
+    db.log(
+        "answer",
+        &format!(
+            "{} câu hỏi cho {} (#{draft_id}) — {}",
+            if answer.is_empty() {
+                "bỏ qua"
+            } else {
+                "đã trả lời"
+            },
+            draft.kind,
+            if new_content.is_some() {
+                "đã soạn lại nội dung, chờ duyệt"
+            } else {
+                "giữ nội dung, chờ duyệt"
+            }
+        ),
+        &draft_id.to_string(),
+        now_ts(),
+    )
+    .ok();
+    db.get_draft(draft_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("draft biến mất sau khi cập nhật".into())
 }
 
 // ---- feed fetch + shaping ----
@@ -1034,7 +1832,10 @@ async fn fetch_feed(client: &Moltbook) -> Result<Vec<FeedItem>, String> {
     // Personalised feed first; fall back to the global hot feed.
     let v = match client.feed("hot", "all", None).await {
         Ok(v) => v,
-        Err(e1) => client.posts("hot", None, None).await.map_err(|e2| format!("{e1}; fallback: {e2}"))?,
+        Err(e1) => client
+            .posts("hot", None, None)
+            .await
+            .map_err(|e2| format!("{e1}; fallback: {e2}"))?,
     };
     Ok(extract_posts(&v))
 }
@@ -1070,7 +1871,11 @@ pub fn extract_home_activity(home: &Value) -> Vec<(String, String)> {
             .or_else(|| it.get("postId"))
             .or_else(|| it.get("post").and_then(|p| p.get("id")))
             .or_else(|| it.get("id"))
-            .and_then(|x| x.as_str().map(String::from).or_else(|| x.as_i64().map(|n| n.to_string())));
+            .and_then(|x| {
+                x.as_str()
+                    .map(String::from)
+                    .or_else(|| x.as_i64().map(|n| n.to_string()))
+            });
         let snippet = it
             .get("content")
             .or_else(|| it.get("comment"))
@@ -1088,30 +1893,57 @@ pub fn extract_home_activity(home: &Value) -> Vec<(String, String)> {
 }
 
 fn post_item(p: &Value) -> Option<FeedItem> {
-    let id = p
-        .get("id")
-        .and_then(|v| v.as_str().map(String::from).or_else(|| v.as_i64().map(|n| n.to_string())))?;
+    let id = p.get("id").and_then(|v| {
+        v.as_str()
+            .map(String::from)
+            .or_else(|| v.as_i64().map(|n| n.to_string()))
+    })?;
     let submolt = p
         .get("submolt_name")
         .or_else(|| p.get("submolt"))
         .and_then(|v| v.as_str())
-        .map(|s| if s.starts_with("m/") { s.to_string() } else { format!("m/{s}") })
+        .map(|s| {
+            if s.starts_with("m/") {
+                s.to_string()
+            } else {
+                format!("m/{s}")
+            }
+        })
         .unwrap_or_else(|| "m/general".into());
     let author = p
         .get("author")
-        .and_then(|a| a.get("name").and_then(|n| n.as_str()).or_else(|| a.as_str()))
+        .and_then(|a| {
+            a.get("name")
+                .and_then(|n| n.as_str())
+                .or_else(|| a.as_str())
+        })
         .or_else(|| p.get("author_name").and_then(|v| v.as_str()))
         .unwrap_or("unknown")
         .to_string();
-    let title = p.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let title = p
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let content = p
         .get("content")
         .or_else(|| p.get("body"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let score = p.get("score").or_else(|| p.get("upvotes")).and_then(|v| v.as_i64()).unwrap_or(0);
-    Some(FeedItem { id, submolt, author, title, content, score })
+    let score = p
+        .get("score")
+        .or_else(|| p.get("upvotes"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    Some(FeedItem {
+        id,
+        submolt,
+        author,
+        title,
+        content,
+        score,
+    })
 }
 
 fn to_cache(f: &FeedItem, now: i64) -> CachedPost {
@@ -1145,14 +1977,26 @@ fn clone_item(f: &FeedItem) -> FeedItem {
 fn extract_id(v: &Value, nested: &str) -> Option<String> {
     v.get("id")
         .or_else(|| v.get(nested).and_then(|n| n.get("id")))
-        .and_then(|x| x.as_str().map(String::from).or_else(|| x.as_i64().map(|n| n.to_string())))
+        .and_then(|x| {
+            x.as_str()
+                .map(String::from)
+                .or_else(|| x.as_i64().map(|n| n.to_string()))
+        })
 }
 
 fn describe_draft(d: &Draft) -> String {
     match d.kind.as_str() {
-        "post" => format!("bài '{}' vào m/{}", llm::truncate(&d.title, 60), d.submolt.trim_start_matches("m/")),
+        "post" => format!(
+            "bài '{}' vào m/{}",
+            llm::truncate(&d.title, 60),
+            d.submolt.trim_start_matches("m/")
+        ),
         "comment" => format!("bình luận trên '{}'", llm::truncate(&d.target_title, 50)),
-        "vote" => format!("{}vote '{}'", if d.vote_dir == "down" { "down" } else { "up" }, llm::truncate(&d.target_title, 50)),
+        "vote" => format!(
+            "{}vote '{}'",
+            if d.vote_dir == "down" { "down" } else { "up" },
+            llm::truncate(&d.target_title, 50)
+        ),
         "submolt" => format!("submolt m/{}", d.submolt),
         "follow" => format!("theo dõi {}", d.target_name),
         "subscribe" => format!("đăng ký m/{}", d.target_name),
@@ -1202,7 +2046,10 @@ mod tests {
     #[test]
     fn extract_id_from_nested_and_flat() {
         assert_eq!(extract_id(&json!({ "id": "x" }), "post"), Some("x".into()));
-        assert_eq!(extract_id(&json!({ "post": { "id": 7 } }), "post"), Some("7".into()));
+        assert_eq!(
+            extract_id(&json!({ "post": { "id": 7 } }), "post"),
+            Some("7".into())
+        );
         assert_eq!(extract_id(&json!({ "nope": 1 }), "post"), None);
     }
 
@@ -1214,7 +2061,7 @@ mod tests {
         assert!(is_our_post("SenClawAgent", "SenClawAgent"));
         assert!(is_our_post("SenClawAgent", "senclawagent")); // case-insensitive
         assert!(is_our_post("SenClawAgent", " SenClawAgent ")); // whitespace
-        // The real bug: someone else's post must be rejected.
+                                                                // The real bug: someone else's post must be rejected.
         assert!(!is_our_post("SenClawAgent", "hermesmolt_1782793439"));
         assert!(!is_our_post("SenClawAgent", "rossum"));
         // Unknown either side → keep (don't drop a real post on a parse quirk).
@@ -1237,6 +2084,27 @@ mod tests {
     }
 
     #[test]
+    fn target_text_prefers_feed_then_priority() {
+        let items = vec![FeedItem {
+            id: "a".into(),
+            submolt: "m/general".into(),
+            author: "x".into(),
+            title: "Tiêu đề A".into(),
+            content: "Nội dung A".into(),
+            score: 1,
+        }];
+        let priority = vec![("b".to_string(), "ai đó trả lời bạn về vector DB".to_string())];
+        assert_eq!(
+            target_text(&items, &priority, "a"),
+            ("Tiêu đề A".to_string(), "Nội dung A".to_string())
+        );
+        let (t, c) = target_text(&items, &priority, "b");
+        assert_eq!(c, "ai đó trả lời bạn về vector DB");
+        assert!(t.starts_with("ai đó trả lời"));
+        assert_eq!(target_text(&items, &priority, "zzz"), (String::new(), String::new()));
+    }
+
+    #[test]
     fn extract_home_activity_tolerant() {
         let h = json!({
             "activity_on_your_posts": [
@@ -1248,7 +2116,13 @@ mod tests {
         });
         let a = extract_home_activity(&h);
         assert_eq!(a.len(), 3);
-        assert_eq!(a[0], ("p1".to_string(), "great point, but what about X?".to_string()));
+        assert_eq!(
+            a[0],
+            (
+                "p1".to_string(),
+                "great point, but what about X?".to_string()
+            )
+        );
         assert_eq!(a[1].0, "2");
         assert_eq!(a[1].1, "disagree");
         assert_eq!(a[2].0, "p3");
