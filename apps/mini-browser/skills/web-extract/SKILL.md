@@ -33,14 +33,22 @@ Extract structured data from web pages through the **SenClaw Browser** app via t
 ## Tools you'll use
 
 - `mcp__mini-browser-mcp__browser_navigate` — go to the page.
-- `mcp__mini-browser-mcp__browser_snapshot` — confirm you're on the right page.
-- `mcp__mini-browser-mcp__browser_extract` (`request`) — AI extraction: ask for the
-  exact fields/shape you want, e.g. "Return JSON: [{name, price, rating}] for every
-  product card." Best for messy or semantic data.
+- `mcp__mini-browser-mcp__browser_snapshot` — the page as an accessibility tree.
+  Worth reading before extracting: it preserves table rows, list structure and link
+  targets, which flat text throws away.
+- `mcp__mini-browser-mcp__browser_extract` (`request`, optional `schema`) — AI
+  extraction: describe the fields you want, and pass `schema` to pin the JSON shape,
+  e.g. `schema: "[{name, price, rating}]"`. Best for messy or semantic data.
+- `mcp__mini-browser-mcp__browser_find` — locate one thing on a big page without
+  paying for the whole snapshot.
 - `mcp__mini-browser-mcp__browser_extract_links` — every link as `{href, text}`.
 - `mcp__mini-browser-mcp__browser_extract_text` — raw text (optional CSS `selector`).
 - `mcp__mini-browser-mcp__browser_execute_js` — precise DOM scraping when structure
   is regular (return a JSON-serializable value with `return`).
+- `mcp__mini-browser-mcp__browser_scroll` — lazy-loaded lists only render what has
+  been scrolled to. Scroll and re-snapshot until the count stops growing, or you
+  will confidently report the first twenty of two hundred rows. The snapshot tells
+  you when to stop: it ends with `[end of page]` rather than `[more below]`.
 
 ## Recipes
 

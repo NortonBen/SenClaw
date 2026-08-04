@@ -4,7 +4,7 @@
 #   release/                 <- staged, flat install layout
 #     mini-browser           (release binary; manifest runtime.start = ./mini-browser)
 #     senclaw-manifest.json
-#     skills/                (browse-web, web-task)
+#     skills/                (browse-web, web-extract, web-task)
 #     personas/              (web-operator)
 #     web_dist/              (built React UI — main.rs serves web_dist next to the binary)
 #   mini-browser-app.zip     <- the artifact you install in SenClaw

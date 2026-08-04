@@ -1,7 +1,7 @@
 {
   "id": "mini-browser",
   "name": "SenClaw Browser",
-  "description": "A real, stealth web browser embedded as an App Space. It drives a live Chromium (via CDP) with an anti-detection layer, so pages don't flag it as automated. The user browses in a live view — address bar, tabs, click/scroll/type — while the AI shares the exact same session: it can navigate, read and extract page content, and autonomously complete multi-step tasks (search, fill forms, click flows) with human-like input, indistinguishable from a person. An ✨ AI side panel offers page-grounded chat and an Act ▶ agent. Powered by SenClaw's configured LLM.",
+  "description": "A real web browser embedded as an App Space. Chromium runs out of sight — no window on the desktop — and the page appears only in the app's live view, streamed over CDP screencast. The user browses there (address bar, tabs, click/scroll/type) while the AI shares the exact same session. The AI sees the page as an accessibility tree (including inside iframes and shadow DOM), acts on it with human-like input, reads the console and network to find out why something did not work, handles dialogs, uploads and downloads, and can pursue a multi-step goal on its own — with a second model call checking whether the goal was actually met. An ✨ AI side panel offers page-grounded chat and an Act ▶ agent. Powered by SenClaw's configured LLM.",
   "icon": "🕶️",
   "runtime": {
     "kind": "server",
@@ -24,7 +24,7 @@
     "name": "mini-browser-mcp",
     "transport": "http",
     "path": "/api/mcp/sse",
-    "description": "SenClaw Browser MCP: drive a real stealth Chromium — navigate, snapshot the DOM, click/type/scroll/press with human-like input, manage tabs, extract text/links, run JS, and autonomously pursue a natural-language goal on the live page (browser_act) or answer questions about it (browser_extract).",
+    "description": "SenClaw Browser MCP: drive a real Chromium. Snapshot the page as an accessibility tree with stable element refs (iframes and shadow DOM included), click/type/hover/drag/select with human-like input, fill whole forms in one call, wait for content, answer JavaScript dialogs, upload files, manage tabs, inspect console and network to diagnose failures, run JS, and carry out a natural-language goal on the live page (browser_act — plans, executes, then independently checks the page and replans if the check fails) or answer questions about it (browser_extract). Signing in is handed to the user via browser_request_login: the AI never types credentials.",
     "autoRegister": true
   },
   "skills": [

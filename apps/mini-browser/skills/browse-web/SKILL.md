@@ -35,13 +35,16 @@ keep a short running narration of what you're doing.
 
 1. **Go somewhere.** `mcp__mini-browser-mcp__browser_navigate` with a URL *or* a
    search phrase (a bare domain gets `https://`; a phrase becomes a Google search).
-2. **See the page.** `mcp__mini-browser-mcp__browser_snapshot` → title, text summary,
-   and numbered interactive elements (each `idx` usable by click/type).
+2. **See the page.** `mcp__mini-browser-mcp__browser_snapshot` → the page as an
+   accessibility tree: every element with its role, name, state and a `[ref=eN]`.
+   Refs are what click/type take, they stay valid across re-renders on the same
+   page, and a `*` marks anything that appeared since your last snapshot. On a
+   large page `browser_find` returns just the matching lines and is much cheaper.
 3. **Read / answer.** For a question or a summary, prefer
    `mcp__mini-browser-mcp__browser_extract` (`request`) — it reads the page text and
    answers grounded in it. For raw text use `browser_extract_text` (optional CSS
    `selector`).
-4. **Move around.** Snapshot, then `browser_click` an element `idx`, or
+4. **Move around.** Snapshot, then `browser_click` an element `ref`, or
    `browser_navigate` to a known URL; `browser_scroll` (`direction` up/down) to
    reveal more; `browser_back` / `browser_forward` / `browser_reload` as needed.
 5. **Report.** Give a concise answer and cite the page title + URL.
@@ -50,6 +53,8 @@ keep a short running narration of what you're doing.
 
 - **Search the web** → `browser_navigate` with the query → `browser_snapshot` →
   `browser_click` the result you want → `browser_extract` your question.
+- **Nothing seems to happen after a click** → check `browser_list_tabs` (it may have
+  opened a tab) and `browser_console_messages` (the page may have thrown).
 - **Summarize this page** → `browser_extract` with request "Summarize this page in
   5 bullet points" (it already has the page text).
 - **Translate this page** → `browser_extract` with "Translate the main content to

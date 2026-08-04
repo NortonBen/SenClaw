@@ -13,12 +13,21 @@
 //! headless), and pass everything else through unchanged.
 //!
 //! Scope note, so nobody over-trusts this: each defect above was confirmed by
-//! probing what the browser actually emits, and all are fixed. But the specific
-//! `/v3/signin/rejected` bounce that prompted the rewrite was never reproduced
-//! here — Google serves the sign-in form to the old code too, so that rejection
-//! comes from somewhere later in the flow (most likely the password step) and is
-//! NOT known to be fixed by this. `google_serves_signin_form` in `main.rs` only
-//! pins the entry point.
+//! probing what the browser actually emits, and all are fixed. But none of it
+//! fixes Google sign-in, and it never could have.
+//!
+//! That was an open question in this file for a while — the `/v3/signin/rejected`
+//! bounce could not be reproduced, so it was attributed vaguely to "somewhere
+//! later in the flow". It has an answer, and it is published policy rather than a
+//! fingerprint check. Google's own help page (*Sign in with a supported
+//! browser*) lists the conditions under which sign-in is refused, and one of them
+//! is a browser "being controlled through software automation rather than a
+//! human". The criterion is automation *control*, not headlessness and not
+//! plausibility, so no amount of identity tidying moves it.
+//!
+//! This is why signing in is handed to the person instead — see
+//! `session::set_takeover`. `google_serves_signin_form` in `main.rs` still pins
+//! the entry point, which is all it ever claimed to.
 
 use anyhow::{anyhow, Result};
 use chromiumoxide::cdp::browser_protocol::emulation::{
@@ -28,9 +37,21 @@ use chromiumoxide::cdp::js_protocol::runtime::EvaluateParams;
 use chromiumoxide::Page;
 use serde::Deserialize;
 
-/// `Accept-Language` header *and* `navigator.languages`, kept in sync. The old
-/// layer patched only the JS side, so the header said `en-US` while JS claimed
-/// `vi-VN` — a contradiction any server could see for free.
+/// `Accept-Language` header *and* `navigator.languages`, from one source.
+///
+/// The original layer patched only the JS side, so the header said `en-US` while
+/// JS claimed `vi-VN` — a contradiction any server could see for free. The fix
+/// after that set `acceptLanguage` on the CDP user-agent override, which is
+/// better but not sufficient on its own: that field is documented to set the
+/// HTTP header, and it is not reliable that it also updates
+/// `navigator.languages`. Trusting it would have quietly recreated the same
+/// drift in the other direction.
+///
+/// So the primary source is Chrome's own `--accept-lang` launch switch, which
+/// sets the header *and* the value exposed to JavaScript from a single input.
+/// The CDP override still carries the same string, so the two agree by
+/// construction rather than by hope. `identity_smoke` asserts they match, which
+/// is what turns this from an argument into a fact.
 ///
 /// Plain comma-separated locales only: Chrome appends the `q=` weights itself,
 /// and passing our own produces `vi;q=0.9;q=0.9` on the wire.
@@ -71,8 +92,10 @@ pub async fn probe(page: &Page) -> Result<RawIdentity> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let server = tokio::spawn(async move {
-        let app = axum::Router::new()
-            .route("/", axum::routing::get(|| async { axum::response::Html("<html><body></body></html>") }));
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(|| async { axum::response::Html("<html><body></body></html>") }),
+        );
         axum::serve(listener, app).await.ok();
     });
 
@@ -143,10 +166,11 @@ pub struct Identity {
 /// client-hint brand list. That is the single tell worth correcting: the browser
 /// is a genuine Chrome build, run without a window.
 pub fn correct(raw: &RawIdentity) -> Identity {
-    let corrected = raw.ua.contains("Headless")
-        || raw.brands.iter().any(|b| b.brand.contains("Headless"));
+    let corrected =
+        raw.ua.contains("Headless") || raw.brands.iter().any(|b| b.brand.contains("Headless"));
 
-    let ua = std::env::var("MB_USER_AGENT").unwrap_or_else(|_| raw.ua.replace("HeadlessChrome", "Chrome"));
+    let ua = std::env::var("MB_USER_AGENT")
+        .unwrap_or_else(|_| raw.ua.replace("HeadlessChrome", "Chrome"));
 
     let fix = |list: &Vec<Brand>| -> Vec<UserAgentBrandVersion> {
         list.iter()
@@ -169,7 +193,11 @@ pub fn correct(raw: &RawIdentity) -> Identity {
         wow64: Some(false),
     };
 
-    Identity { ua, metadata, corrected }
+    Identity {
+        ua,
+        metadata,
+        corrected,
+    }
 }
 
 /// Build the UA override. We *always* send this — not to lie, but because it is
@@ -209,8 +237,13 @@ pub fn chrome_args() -> Vec<String> {
         "--force-color-profile=srgb",
         "--metrics-recording-only",
         "--no-first-run",
-        "--password-store=basic",
-        "--use-mock-keychain",
+        // NOTE: the standard automation flag set also carries
+        // `--password-store=basic` and `--use-mock-keychain`. They are omitted
+        // deliberately. Both replace the OS keychain with a fixed, publicly
+        // known key, which is fine for a disposable test profile and quite wrong
+        // for this one — the user signs into their real accounts here, and those
+        // flags would leave the resulting cookies readable by anything that can
+        // read the directory. The cost is one macOS keychain prompt.
         // Keeps navigator.webdriver false, as on a normal Chrome.
         "--disable-blink-features=AutomationControlled",
         "--no-default-browser-check",
@@ -218,7 +251,14 @@ pub fn chrome_args() -> Vec<String> {
     .iter()
     .map(|s| s.to_string())
     .collect();
-    v.push(format!("--lang={}", accept_language().split(',').next().unwrap_or("vi-VN")));
+    let langs = accept_language();
+    // `--lang` sets the UI locale; `--accept-lang` sets both the HTTP header and
+    // what `navigator.languages` reports. Both, so nothing can disagree.
+    v.push(format!(
+        "--lang={}",
+        langs.split(',').next().unwrap_or("vi-VN")
+    ));
+    v.push(format!("--accept-lang={langs}"));
     v
 }
 
@@ -250,8 +290,14 @@ mod tests {
     fn raw(ua: &str, brand: &str) -> RawIdentity {
         RawIdentity {
             ua: ua.to_string(),
-            brands: vec![Brand { brand: brand.to_string(), version: "150".into() }],
-            full_version_list: vec![Brand { brand: brand.to_string(), version: "150.0.7871.125".into() }],
+            brands: vec![Brand {
+                brand: brand.to_string(),
+                version: "150".into(),
+            }],
+            full_version_list: vec![Brand {
+                brand: brand.to_string(),
+                version: "150.0.7871.125".into(),
+            }],
             mobile: false,
             platform: "macOS".into(),
             platform_version: "15.5.0".into(),
@@ -271,8 +317,14 @@ mod tests {
         assert!(id.corrected);
         assert!(!id.ua.contains("Headless"), "UA still headless: {}", id.ua);
         assert!(id.ua.contains("Chrome/150.0.7871.125"));
-        assert_eq!(id.metadata.brands.as_ref().unwrap()[0].brand, "Google Chrome");
-        assert_eq!(id.metadata.full_version_list.as_ref().unwrap()[0].brand, "Google Chrome");
+        assert_eq!(
+            id.metadata.brands.as_ref().unwrap()[0].brand,
+            "Google Chrome"
+        );
+        assert_eq!(
+            id.metadata.full_version_list.as_ref().unwrap()[0].brand,
+            "Google Chrome"
+        );
     }
 
     #[test]
@@ -282,17 +334,26 @@ mod tests {
         let id = correct(&r);
         assert!(!id.corrected, "headful needs no correction");
         assert_eq!(id.ua, ua);
-        assert_eq!(id.metadata.brands.as_ref().unwrap()[0].brand, "Google Chrome");
+        assert_eq!(
+            id.metadata.brands.as_ref().unwrap()[0].brand,
+            "Google Chrome"
+        );
     }
 
     /// The real browser's version must survive — the old layer hardcoded 131
     /// while shipping Chrome 150, and the client hints gave it away.
     #[test]
     fn version_is_never_hardcoded() {
-        let r = raw("Mozilla/5.0 (Macintosh) HeadlessChrome/99.1.2.3 Safari/537.36", "HeadlessChrome");
+        let r = raw(
+            "Mozilla/5.0 (Macintosh) HeadlessChrome/99.1.2.3 Safari/537.36",
+            "HeadlessChrome",
+        );
         let id = correct(&r);
         assert!(id.ua.contains("99.1.2.3"));
-        assert_eq!(id.metadata.full_version_list.as_ref().unwrap()[0].version, "150.0.7871.125");
+        assert_eq!(
+            id.metadata.full_version_list.as_ref().unwrap()[0].version,
+            "150.0.7871.125"
+        );
     }
 
     #[test]
@@ -307,9 +368,17 @@ mod tests {
     fn accept_language_leads_with_a_real_locale() {
         let lang = accept_language();
         assert!(lang.starts_with("vi-VN"), "unexpected default: {lang}");
-        // The --lang flag must agree with the header's primary locale.
+        // Both flags must agree with the header's locale list: --lang picks the
+        // UI locale, --accept-lang drives the header *and* navigator.languages.
         let args = chrome_args();
-        assert!(args.iter().any(|a| a == "--lang=vi-VN"), "lang flag missing: {args:?}");
+        assert!(
+            args.iter().any(|a| a == "--lang=vi-VN"),
+            "lang flag missing: {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--accept-lang=vi-VN,vi,en-US,en"),
+            "accept-lang flag missing — navigator.languages would be free to drift: {args:?}"
+        );
     }
 
     #[test]
@@ -319,7 +388,9 @@ mod tests {
             !args.iter().any(|a| a.contains("site-per-process")),
             "site isolation must not be disabled — this profile holds real logins"
         );
-        assert!(args.iter().any(|a| a == "--disable-blink-features=AutomationControlled"));
+        assert!(args
+            .iter()
+            .any(|a| a == "--disable-blink-features=AutomationControlled"));
     }
 
     #[test]
@@ -330,7 +401,10 @@ mod tests {
         let id = correct(&raw("HeadlessChrome/150.0.0.0", "HeadlessChrome"));
         let p = override_params(&id).expect("build override");
         let md = p.user_agent_metadata.expect("metadata must be attached");
-        assert!(!md.brands.unwrap().is_empty(), "empty brands ⇒ no Sec-CH-UA");
+        assert!(
+            !md.brands.unwrap().is_empty(),
+            "empty brands ⇒ no Sec-CH-UA"
+        );
         assert_eq!(p.accept_language.as_deref(), Some("vi-VN,vi,en-US,en"));
     }
 
@@ -338,6 +412,9 @@ mod tests {
     /// `vi;q=0.9;q=0.9` seen on the wire.
     #[test]
     fn accept_language_carries_no_q_values() {
-        assert!(!accept_language().contains("q="), "Chrome adds the weights itself");
+        assert!(
+            !accept_language().contains("q="),
+            "Chrome adds the weights itself"
+        );
     }
 }

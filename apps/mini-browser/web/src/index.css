@@ -104,3 +104,96 @@ body {
 .list-item { padding: 7px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; }
 .list-item:hover { background: var(--panel2); }
 .list-item .u { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A JavaScript dialog suspends the renderer, so the live view stops updating
+   entirely. This bar is what tells the user the browser is waiting on them
+   rather than broken, and gives them somewhere to answer. */
+.dialog-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; background: var(--warn-bg, #4a3a12); color: var(--fg, #eee);
+  border-bottom: 1px solid rgba(255,255,255,.12); font-size: 13px;
+}
+.dialog-bar .dialog-kind {
+  text-transform: uppercase; font-size: 11px; letter-spacing: .06em;
+  opacity: .75; flex: none;
+}
+.dialog-bar .dialog-msg { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dialog-bar .dialog-input {
+  flex: 0 1 240px; padding: 4px 8px; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.2); background: rgba(0,0,0,.25); color: inherit;
+}
+
+/* Live agent progress — plan, step, action, check. Dense on purpose: a run can
+   emit dozens of these and they have to stay readable inside a chat bubble. */
+.agent-line {
+  display: flex; gap: 6px; align-items: baseline;
+  font-size: 12px; line-height: 1.45; margin-top: 3px;
+}
+.agent-line.bad .agent-text { color: var(--danger, #ff6b6b); }
+.agent-tag {
+  flex: none; min-width: 58px; font-size: 10px; letter-spacing: .04em;
+  text-transform: uppercase; opacity: .6;
+}
+.agent-text { white-space: pre-wrap; word-break: break-word; }
+
+/* The link from a chat answer to the run that produced it. */
+.run-link {
+  margin-left: 8px; font-size: 11px; opacity: .7; cursor: pointer;
+  text-decoration: underline;
+}
+.run-link:hover { opacity: 1; }
+
+.setting-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; margin: 8px 0; padding: 8px;
+  border: 1px solid rgba(255,255,255,.12); border-radius: 8px;
+}
+.setting-row label { flex: 1 1 auto; }
+.setting-row input {
+  width: 64px; padding: 3px 6px; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.2); background: rgba(0,0,0,.25); color: inherit;
+}
+
+/* Settings */
+.setting-group {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  opacity: .55; margin: 14px 0 6px;
+}
+.setting-row label { display: block; }
+.setting-row label .u { font-weight: normal; margin-top: 2px; }
+
+/* One learned note. Shown to the user because it silently changes how the
+   agent plans, and a wrong one needs to be findable and deletable. */
+.lesson {
+  display: flex; gap: 8px; align-items: baseline;
+  font-size: 12px; line-height: 1.45; padding: 6px 8px; margin-bottom: 4px;
+  border: 1px solid rgba(255,255,255,.10); border-radius: 8px;
+}
+.lesson-note { flex: 1 1 auto; word-break: break-word; }
+.lesson-kind {
+  flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  padding: 1px 5px; border-radius: 4px; opacity: .8;
+  background: rgba(255,255,255,.10);
+}
+.lesson-kind.gotcha { background: rgba(255,180,60,.20); }
+.lesson .x { cursor: pointer; opacity: .5; flex: none; }
+.lesson .x:hover { opacity: 1; color: var(--danger, #ff6b6b); }
+
+/* The user is driving. This is a mode, not a toast — it sits above everything
+   and stays until control is handed back. */
+.takeover-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; font-size: 13px;
+  background: linear-gradient(90deg, rgba(80,120,255,.22), rgba(80,120,255,.10));
+  border-bottom: 1px solid rgba(120,150,255,.35);
+}
+.takeover-text { flex: 1 1 auto; line-height: 1.45; }
+.takeover-dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: #6ea8ff; box-shadow: 0 0 0 3px rgba(110,168,255,.25);
+  animation: takeover-pulse 1.6s ease-in-out infinite;
+}
+@keyframes takeover-pulse {
+  0%, 100% { opacity: 1 }
+  50%      { opacity: .35 }
+}
