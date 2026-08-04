@@ -100,7 +100,7 @@ export function AreaSpark({
         preserveAspectRatio="none"
         style={{ width: '100%', height: H, display: 'block' }}
         role="img"
-        aria-label={`Biểu đồ theo thời gian, giá trị hiện tại ${format(points[n - 1] ?? 0)}`}
+        aria-label={`Time series, current value ${format(points[n - 1] ?? 0)}`}
       >
         <defs>
           <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
@@ -191,7 +191,7 @@ export function AreaSpark({
           {format(hoveredValue)}
           <span style={{ opacity: 0.6 }}>
             {' · '}
-            {hoveredAgo === 0 ? 'bây giờ' : `${hoveredAgo}s trước`}
+            {hoveredAgo === 0 ? 'now' : `${hoveredAgo}s ago`}
           </span>
         </div>
       )}
@@ -236,7 +236,7 @@ export function ChartHeader({
       </Typography.Text>
       <Typography.Text strong>{value}</Typography.Text>
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-        đỉnh trục {ceilingLabel}
+        {ceilingLabel}
       </Typography.Text>
     </div>
   )

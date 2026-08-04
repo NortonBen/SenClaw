@@ -26,8 +26,28 @@ uuid = { version = "1", features = ["v4"] }
 # Interactive terminal into a sandbox. Same crate/version apps/code-ide uses
 # for its integrated terminal, so PTY behaviour matches across apps.
 portable-pty = "0.8"
+
 # setsid/killpg: a timed-out run must take its grandchildren with it.
+# Unix only — Windows uses a Job Object for the same job.
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Windows direct sandbox: AppContainer (isolation) + Job Object (limits).
+# Target-gated so the Unix build is untouched.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.58"
+features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_Isolation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_JobObjects",
+  "Win32_System_Memory",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+]
 
 [dev-dependencies]
 tempfile = "3"

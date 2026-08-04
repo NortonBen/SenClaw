@@ -79,7 +79,7 @@ pub fn resolve(scope: &Scope, rel: &str) -> Result<PathBuf> {
     let rel = rel.trim().trim_start_matches("./");
     let p = Path::new(rel);
     if p.is_absolute() {
-        return Err(anyhow!("đường dẫn phải là tương đối trong sandbox: `{rel}`"));
+        return Err(anyhow!("path must be relative to the sandbox: `{rel}`"));
     }
 
     let mut out = PathBuf::new();
@@ -89,11 +89,11 @@ pub fn resolve(scope: &Scope, rel: &str) -> Result<PathBuf> {
             Component::CurDir => {}
             Component::ParentDir => {
                 if !out.pop() {
-                    return Err(anyhow!("đường dẫn `{rel}` đi ra ngoài sandbox"));
+                    return Err(anyhow!("path `{rel}` escapes the sandbox"));
                 }
             }
             Component::RootDir | Component::Prefix(_) => {
-                return Err(anyhow!("đường dẫn phải là tương đối trong sandbox: `{rel}`"));
+                return Err(anyhow!("path must be relative to the sandbox: `{rel}`"));
             }
         }
     }
@@ -107,7 +107,7 @@ pub fn resolve(scope: &Scope, rel: &str) -> Result<PathBuf> {
     loop {
         if let Ok(real) = probe.canonicalize() {
             if !scope.permits(&real) {
-                return Err(anyhow!("đường dẫn `{rel}` trỏ ra ngoài sandbox (symlink)"));
+                return Err(anyhow!("path `{rel}` points outside the sandbox (symlink)"));
             }
             break;
         }
@@ -161,13 +161,13 @@ pub fn list(scope: &Scope, rel: &str) -> Result<Vec<Entry>> {
 
 pub fn read(scope: &Scope, rel: &str) -> Result<String> {
     let p = resolve(scope, rel)?;
-    let md = std::fs::metadata(&p).map_err(|_| anyhow!("không có file `{rel}`"))?;
+    let md = std::fs::metadata(&p).map_err(|_| anyhow!("no such file `{rel}`"))?;
     if md.is_dir() {
-        return Err(anyhow!("`{rel}` là thư mục"));
+        return Err(anyhow!("`{rel}` is a directory"));
     }
     if md.len() > MAX_READ {
         return Err(anyhow!(
-            "file `{rel}` lớn {} byte, vượt giới hạn đọc {MAX_READ} byte",
+            "file `{rel}` is {} bytes, over the {MAX_READ} byte read limit",
             md.len()
         ));
     }
@@ -176,7 +176,7 @@ pub fn read(scope: &Scope, rel: &str) -> Result<String> {
     // characters that the caller would then write back and corrupt the file.
     match String::from_utf8(bytes) {
         Ok(s) => Ok(s),
-        Err(_) => Err(anyhow!("`{rel}` không phải văn bản UTF-8 (file nhị phân)")),
+        Err(_) => Err(anyhow!("`{rel}` is not UTF-8 text (binary file)")),
     }
 }
 
@@ -192,7 +192,7 @@ pub fn write(scope: &Scope, rel: &str, content: &str) -> Result<u64> {
 pub fn delete(scope: &Scope, rel: &str) -> Result<()> {
     let p = resolve(scope, rel)?;
     if rel.trim().is_empty() || rel == "." {
-        return Err(anyhow!("không thể xoá gốc sandbox"));
+        return Err(anyhow!("cannot delete the sandbox root"));
     }
     if p.is_dir() {
         std::fs::remove_dir_all(p)?;
@@ -269,7 +269,7 @@ mod tests {
         let d = root();
         std::fs::write(d.path().join("bin"), [0xff, 0xfe, 0x00]).unwrap();
         let e = read(&Scope::bare(d.path()), "bin").unwrap_err().to_string();
-        assert!(e.contains("nhị phân"));
+        assert!(e.contains("binary"));
     }
 
     #[test]
@@ -277,7 +277,7 @@ mod tests {
         let d = root();
         std::fs::write(d.path().join("big"), vec![b'a'; (MAX_READ + 1) as usize]).unwrap();
         let e = read(&Scope::bare(d.path()), "big").unwrap_err().to_string();
-        assert!(e.contains("vượt giới hạn"));
+        assert!(e.contains("read limit"));
     }
 
     #[test]

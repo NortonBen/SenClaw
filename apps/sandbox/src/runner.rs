@@ -30,6 +30,7 @@ pub struct CreateReq {
     pub mounts: Vec<crate::mounts::Mount>,
     /// `None` = take the app default from settings.
     pub fs_mode: Option<crate::fsmode::FsMode>,
+    pub ports: crate::ports::PortPolicy,
 }
 
 pub async fn create(db: &Db, req: CreateReq) -> Result<Sandbox> {
@@ -44,7 +45,7 @@ pub async fn create(db: &Db, req: CreateReq) -> Result<Sandbox> {
     let backend = match req.backend.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some("direct") => {
             if !direct.available {
-                return Err(anyhow!("không dùng được backend `direct`: {}", direct.detail));
+                return Err(anyhow!("the `direct` backend is unavailable: {}", direct.detail));
             }
             "direct".to_string()
         }
@@ -54,13 +55,13 @@ pub async fn create(db: &Db, req: CreateReq) -> Result<Sandbox> {
                 // Naming the measured reason beats "backend unavailable": the
                 // usual cause is a stopped Docker Desktop, and that is fixable
                 // in one click once the message says so.
-                return Err(anyhow!("không dùng được backend `docker`: {}", docker.detail));
+                return Err(anyhow!("the `docker` backend is unavailable: {}", docker.detail));
             }
             "docker".to_string()
         }
         Some(other) => {
             return Err(anyhow!(
-                "không dùng được backend `{other}`: chỉ có `direct` và `docker`"
+                "unknown backend `{other}`: only `direct` and `docker` exist"
             ))
         }
         None => {
@@ -78,7 +79,7 @@ pub async fn create(db: &Db, req: CreateReq) -> Result<Sandbox> {
                     "direct".to_string()
                 } else {
                     return Err(anyhow!(
-                        "máy này chưa chạy được sandbox nào. Docker: {} / Trực tiếp: {}",
+                        "this machine cannot run any sandbox yet. Docker: {} / Direct: {}",
                         docker.detail,
                         direct.detail
                     ));
@@ -88,13 +89,13 @@ pub async fn create(db: &Db, req: CreateReq) -> Result<Sandbox> {
     };
 
     if backend == "docker" && req.image.is_none() && config::default_image().is_empty() {
-        return Err(anyhow!("backend docker cần `image`"));
+        return Err(anyhow!("the docker backend needs an `image`"));
     }
 
     let id_dir = db::new_id();
     let workdir = config::workspaces_dir().join(&id_dir);
     std::fs::create_dir_all(workdir.join(".runs"))
-        .map_err(|e| anyhow!("không tạo được thư mục sandbox: {e}"))?;
+        .map_err(|e| anyhow!("cannot create sandbox directory: {e}"))?;
 
     let image = if backend == "docker" {
         Some(req.image.unwrap_or_else(config::default_image))
@@ -125,6 +126,7 @@ pub async fn create(db: &Db, req: CreateReq) -> Result<Sandbox> {
         env: req.env,
         mounts: req.mounts,
         fs_mode: req.fs_mode.unwrap_or(defaults.default_fs_mode),
+        ports: req.ports,
     })?;
     Ok(sb)
 }
@@ -177,6 +179,36 @@ pub async fn delete(db: &Db, sb: &Sandbox, purge: bool) -> Result<()> {
     Ok(())
 }
 
+/// Program and arguments for a **shell command**, or `None` on Unix.
+///
+/// Unix feeds the script to `sh -s` on stdin and needs nothing here. Windows
+/// has no `/bin/sh`, so the script is written to a `.cmd` file and `cmd.exe` is
+/// pointed at it. Writing a file rather than building a command line keeps the
+/// same guarantee as the Unix path: user text is never parsed as arguments.
+pub fn shell_argv(sb: &Sandbox) -> Option<Vec<String>> {
+    if !cfg!(windows) || sb.backend != "direct" {
+        return None;
+    }
+    None // filled by `write_windows_script` at exec time, which has the script
+}
+
+/// Program and arguments for a **code snippet**, or `None` on Unix.
+///
+/// The interpreter is resolved here rather than inside the sandbox because on
+/// Windows the AppContainer must be granted the interpreter's own directory
+/// before launch — and to grant it, we have to know where it is.
+pub async fn code_argv(lang: &'static crate::code::Lang, rel: &str) -> Option<Vec<String>> {
+    if !cfg!(windows) {
+        return None;
+    }
+    for name in lang.interpreters {
+        if let Some(path) = caps::which(name).await {
+            return Some(vec![path, rel.to_string()]);
+        }
+    }
+    None
+}
+
 /// Which isolation the `direct` backend would apply right now.
 ///
 /// Deliberately the direct-only probe, not the full one: the full probe also
@@ -196,6 +228,7 @@ pub async fn exec(
     kind: &str,
     language: Option<&str>,
     source: &str,
+    argv: Option<Vec<String>>,
 ) -> Result<Run> {
     let timeout_ms = timeout_ms
         .unwrap_or(sb.timeout_ms)
@@ -228,10 +261,31 @@ pub async fn exec(
         None
     };
 
+    // On Windows a shell command still needs a program to run. The script goes
+    // to a `.cmd` file and `cmd.exe` is pointed at it — never at a command line
+    // built from the user's text.
+    let argv = match argv {
+        Some(a) => Some(a),
+        None if cfg!(windows) && sb.backend == "direct" => {
+            let rel = format!(".runs/{}.cmd", db::new_id());
+            crate::files::write(
+                &crate::files::Scope::of(sb),
+                &rel,
+                &format!("@echo off\r\n{}\r\n", script.replace('\n', "\r\n")),
+            )
+            .map_err(|e| anyhow!("cannot write the script: {e}"))?;
+            let cmd_exe = std::env::var("COMSPEC")
+                .unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".to_string());
+            Some(vec![cmd_exe, "/d".into(), "/c".into(), rel])
+        }
+        None => None,
+    };
+
     let spec = ExecSpec {
         script: script.to_string(),
         timeout_ms,
         extra_env,
+        argv,
     };
 
     let outcome: Outcome = match sb.backend.as_str() {
@@ -244,9 +298,16 @@ pub async fn exec(
             // per run either way so a change in settings takes effect on the
             // next run rather than on the next sandbox.
             let allow = crate::settings::load(db).allowlist;
-            backend::direct::exec(sb, &spec, direct_kind().await, &allow).await
+            #[cfg(windows)]
+            {
+                backend::direct_windows::exec(sb, &spec, &allow).await
+            }
+            #[cfg(not(windows))]
+            {
+                backend::direct::exec(sb, &spec, direct_kind().await, &allow).await
+            }
         }
-        other => return Err(anyhow!("backend `{other}` không hợp lệ")),
+        other => return Err(anyhow!("invalid backend `{other}`")),
     };
 
     let run = Run {
@@ -281,8 +342,8 @@ pub async fn exec(
                     pid: 0,
                     source: "senclaw".into(),
                     kind: "trace.truncated".into(),
-                    target: format!("giới hạn {} sự kiện mỗi lần chạy", crate::trace::MAX_EVENTS),
-                    detail: "còn sự kiện khác không được ghi lại".into(),
+                    target: format!("limit of {} events per run", crate::trace::MAX_EVENTS),
+                    detail: "further events were not recorded".into(),
                 }],
             );
         }
@@ -307,7 +368,7 @@ pub async fn run_code(
 
     // Written on the host — the same directory the container sees at /work.
     crate::files::write(&crate::files::Scope::of(sb), &rel, source)
-        .map_err(|e| anyhow!("không ghi được file mã nguồn: {e}"))?;
+        .map_err(|e| anyhow!("cannot write the source file: {e}"))?;
 
     let script = code::launch_script(lang, &rel);
     exec(
@@ -319,13 +380,14 @@ pub async fn run_code(
         "code",
         Some(lang.name),
         source,
+        code_argv(lang, &rel).await,
     )
     .await
 }
 
 /// A one-shot run in a throwaway sandbox: create, run, delete.
 ///
-/// This is the call an agent reaches for most ("chạy đoạn Python này"), and
+/// This is the call an agent reaches for most ("run this Python snippet"), and
 /// doing it in one step keeps it from leaving a sandbox behind on every
 /// question. Cleanup runs even when the snippet fails.
 pub async fn run_once(
@@ -339,7 +401,7 @@ pub async fn run_once(
     let sb = create(
         db,
         CreateReq {
-            name: Some("một lần".into()),
+            name: Some("one-shot".into()),
             backend: backend_name,
             image: None,
             network,
@@ -349,6 +411,7 @@ pub async fn run_once(
             env: json!({}),
             mounts: Vec::new(),
             fs_mode: None,
+            ports: Default::default(),
         },
     )
     .await?;
@@ -372,14 +435,14 @@ pub async fn install(
     timeout_ms: Option<i64>,
 ) -> Result<Run> {
     if packages.is_empty() {
-        return Err(anyhow!("chưa có gói nào để cài"));
+        return Err(anyhow!("no packages given"));
     }
     // Package names go through the same no-interpolation rule as everything
     // else: anything that is not a plausible package spec is refused rather
     // than quoted, because quoting is where command builders go wrong.
     for p in packages {
         if !p.chars().all(|c| c.is_ascii_alphanumeric() || "-_.+=<>[]!~/:@".contains(c)) {
-            return Err(anyhow!("tên gói không hợp lệ: `{p}`"));
+            return Err(anyhow!("invalid package name: `{p}`"));
         }
     }
     let list = packages.join(" ");
@@ -388,22 +451,33 @@ pub async fn install(
         "npm" | "node" => format!("set -e\nnpm install {list}\n"),
         "apt" | "apt-get" => format!(
             "set -e\nif ! command -v apt-get >/dev/null 2>&1; then \
-               echo 'image này không có apt-get' >&2; exit 127; fi\n\
+               echo 'this image has no apt-get' >&2; exit 127; fi\n\
              apt-get update -qq\nDEBIAN_FRONTEND=noninteractive apt-get install -y -qq {list}\n"
         ),
-        other => return Err(anyhow!("chưa hỗ trợ trình quản lý gói `{other}` (pip, npm, apt)")),
+        other => return Err(anyhow!("package manager `{other}` is not supported (pip, npm, apt)")),
     };
 
     if !sb.network {
         return Err(anyhow!(
-            "sandbox `{}` đang tắt mạng nên không cài gói được — bật mạng rồi thử lại",
+            "sandbox `{}` has the network off, so packages cannot be installed — turn the network on and retry",
             sb.name
         ));
     }
     // Installs are slower than a normal run; default them higher rather than
     // letting a 30s default kill an apt-get halfway through.
     let t = timeout_ms.or(Some(300_000));
-    exec(db, sb, &script, t, BTreeMap::new(), "exec", None, &format!("{manager} install {list}")).await
+    exec(
+        db,
+        sb,
+        &script,
+        t,
+        BTreeMap::new(),
+        "exec",
+        None,
+        &format!("{manager} install {list}"),
+        shell_argv(sb),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -480,7 +554,7 @@ mod tests {
         let sb = create(&db, req(None)).await.unwrap();
         let bad = vec!["requests; rm -rf /".to_string()];
         let e = install(&db, &sb, "pip", &bad, None).await.unwrap_err().to_string();
-        assert!(e.contains("không hợp lệ"));
+        assert!(e.contains("invalid package name"));
     }
 
     #[tokio::test]
@@ -492,7 +566,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(e.contains("tắt mạng"));
+        assert!(e.contains("network off"));
     }
 
     #[tokio::test]
@@ -522,7 +596,7 @@ mod tests {
     async fn enforced_sandbox(db: &Db) -> Option<Sandbox> {
         let caps = caps::probe(true).await;
         if !caps.direct.kind.is_enforced() {
-            eprintln!("SKIP: máy này không có cách ly trực tiếp ({})", caps.direct.detail);
+            eprintln!("SKIP: this machine has no enforced direct isolation ({})", caps.direct.detail);
             return None;
         }
         Some(create(db, req(Some("direct".into()))).await.unwrap())
@@ -681,6 +755,134 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_opened_port_can_be_served_on_and_reached_from_this_machine() {
+        let _d = tmp_data();
+        let db = Db::open_memory().unwrap();
+        let caps = caps::direct_caps(true).await;
+        if caps.kind != DirectKind::Seatbelt {
+            eprintln!("SKIP: per-port rules are only enforced by Seatbelt here");
+            return;
+        }
+        // A high port unlikely to collide with anything on the machine.
+        const PORT: u16 = 18771;
+        let mut r = req(Some("direct".into()));
+        r.ports = crate::ports::validate(&[PORT], &[]).unwrap();
+        let sb = create(&db, r).await.unwrap();
+
+        // Serve one request, then exit. The sandbox has no general network —
+        // only this port is open — so a reply proves the port rule works.
+        // `allow_reuse_address` and a server-side timeout so this can never
+        // leave a listener behind: if the client never knocks, the server exits
+        // on its own rather than outliving the test as an orphan.
+        let code = format!(
+            "import http.server, socketserver\n\
+             class S(socketserver.TCPServer):\n\
+             \x20   allow_reuse_address = True\n\
+             \x20   timeout = 10\n\
+             class H(http.server.BaseHTTPRequestHandler):\n\
+             \x20   def do_GET(s):\n\
+             \x20       s.send_response(200); s.end_headers(); s.wfile.write(b'SERVED')\n\
+             \x20   def log_message(s, *a): pass\n\
+             with S(('127.0.0.1', {PORT}), H) as sv:\n\
+             \x20   sv.handle_request()\n"
+        );
+        let db2 = db.clone();
+        let sb2 = sb.clone();
+        let server = tokio::spawn(async move {
+            run_code(&db2, &sb2, "python", &code, Some(20_000), BTreeMap::new()).await
+        });
+
+        // Give the server a moment, then knock on the door from outside.
+        let mut body = String::new();
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            if let Ok(resp) = reqwest::get(format!("http://127.0.0.1:{PORT}/")).await {
+                body = resp.text().await.unwrap_or_default();
+                break;
+            }
+        }
+        let run = server.await.unwrap().unwrap();
+        assert!(
+            body.contains("SERVED"),
+            "an opened port must be reachable from this machine. stderr: {}",
+            run.stderr
+        );
+    }
+
+    #[tokio::test]
+    async fn a_port_that_was_not_opened_cannot_be_bound() {
+        let _d = tmp_data();
+        let db = Db::open_memory().unwrap();
+        if caps::direct_caps(true).await.kind != DirectKind::Seatbelt {
+            return;
+        }
+        let mut r = req(Some("direct".into()));
+        // 18772 is open; 18773 is not.
+        r.ports = crate::ports::validate(&[18772], &[]).unwrap();
+        let sb = create(&db, r).await.unwrap();
+
+        let probe = |port: u16| {
+            format!(
+                "import socket\n\
+                 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n\
+                 try:\n\x20   s.bind(('127.0.0.1', {port})); print('BOUND')\n\
+                 except Exception:\n\x20   print('REFUSED')\n"
+            )
+        };
+        let ok = run_code(&db, &sb, "python", &probe(18772), None, BTreeMap::new())
+            .await
+            .unwrap();
+        assert!(ok.stdout.contains("BOUND"), "the opened port must bind: {}", ok.stderr);
+
+        let no = run_code(&db, &sb, "python", &probe(18773), None, BTreeMap::new())
+            .await
+            .unwrap();
+        assert!(
+            no.stdout.contains("REFUSED"),
+            "a port that was never opened must not bind — port isolation is not working: {}",
+            no.stdout
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_rules_open_one_remote_port_and_no_other() {
+        let _d = tmp_data();
+        let db = Db::open_memory().unwrap();
+        if caps::direct_caps(true).await.kind != DirectKind::Seatbelt {
+            return;
+        }
+        let mut r = req(Some("direct".into()));
+        // DNS out, nothing else. Note the sandbox's `network` flag stays false:
+        // the port rule is the entire permission.
+        r.ports = crate::ports::validate(&[], &[53]).unwrap();
+        let sb = create(&db, r).await.unwrap();
+
+        let probe = |port: u16| {
+            format!(
+                "import socket\n\
+                 s = socket.socket(); s.settimeout(4)\n\
+                 try:\n\x20   s.connect(('1.1.1.1', {port})); print('CONNECTED')\n\
+                 except Exception:\n\x20   print('BLOCKED')\n"
+            )
+        };
+        let blocked = run_code(&db, &sb, "python", &probe(443), Some(15_000), BTreeMap::new())
+            .await
+            .unwrap();
+        assert!(
+            !blocked.stdout.contains("CONNECTED"),
+            "a remote port that was not opened must stay closed: {}",
+            blocked.stdout
+        );
+        // The allowed direction is checked in the opposite sense: on a machine
+        // with no internet it legitimately fails, so only the block is asserted
+        // as a hard rule, and the allow is reported.
+        let allowed = run_code(&db, &sb, "python", &probe(53), Some(15_000), BTreeMap::new())
+            .await
+            .unwrap();
+        eprintln!("connect :53 (allowed) → {}", allowed.stdout.trim());
+    }
+
+    #[tokio::test]
     async fn tracing_records_files_processes_and_network_from_a_real_run() {
         let _d = tmp_data();
         let db = Db::open_memory().unwrap();
@@ -692,13 +894,13 @@ mod tests {
             &sb,
             "python",
             "import subprocess, socket\n\
-             open('ket-qua.txt','w').write('xin chao')\n\
-             open('ket-qua.txt').read()\n\
+             open('result.txt','w').write('xin chao')\n\
+             open('result.txt').read()\n\
              subprocess.run(['/bin/echo','hi'], capture_output=True)\n\
              s = socket.socket(); s.settimeout(2)\n\
              try:\n    s.connect(('1.1.1.1', 53))\n\
              except Exception:\n    pass\n\
-             try:\n    socket.getaddrinfo('vi.dụ.test', 80)\n\
+             try:\n    socket.getaddrinfo('example.invalid', 80)\n\
              except Exception:\n    pass\n",
             Some(20_000),
             BTreeMap::new(),
@@ -713,11 +915,11 @@ mod tests {
                 .any(|e| e.kind == kind && (e.target.contains(needle) || e.detail.contains(needle)))
         };
 
-        assert!(has("file.write", "ket-qua.txt"), "no write event: {events:#?}");
-        assert!(has("file.read", "ket-qua.txt"), "no read event");
+        assert!(has("file.write", "result.txt"), "no write event: {events:#?}");
+        assert!(has("file.read", "result.txt"), "no read event");
         assert!(has("proc.spawn", "echo"), "no process event");
         assert!(has("net.connect", "1.1.1.1"), "no network event with the address");
-        assert!(has("net.dns", "test"), "no DNS event with the hostname");
+        assert!(has("net.dns", "example.invalid"), "no DNS event with the hostname");
 
         // The point of the noise filter: a handful of meaningful events, not
         // several hundred lines of CPython loading its own standard library.
@@ -755,24 +957,24 @@ mod tests {
         let Some(sb) = enforced_sandbox(&db).await else { return };
         let sb = db.set_trace(&sb.id, true).unwrap();
 
-        let r1 = run_code(&db, &sb, "python", "open('mot.txt','w').write('1')", None, BTreeMap::new())
+        let r1 = run_code(&db, &sb, "python", "open('one.txt','w').write('1')", None, BTreeMap::new())
             .await
             .unwrap();
-        let r2 = run_code(&db, &sb, "python", "open('hai.txt','w').write('2')", None, BTreeMap::new())
+        let r2 = run_code(&db, &sb, "python", "open('two.txt','w').write('2')", None, BTreeMap::new())
             .await
             .unwrap();
 
         let e2 = db.list_events(&sb.id, Some(&r2.id), None, 200).unwrap();
-        assert!(e2.iter().any(|e| e.target.contains("hai.txt")));
+        assert!(e2.iter().any(|e| e.target.contains("two.txt")));
         assert!(
-            !e2.iter().any(|e| e.target.contains("mot.txt")),
+            !e2.iter().any(|e| e.target.contains("one.txt")),
             "the log offset is not being honoured — run 1's events leaked into run 2"
         );
         assert!(db
             .list_events(&sb.id, Some(&r1.id), None, 200)
             .unwrap()
             .iter()
-            .any(|e| e.target.contains("mot.txt")));
+            .any(|e| e.target.contains("one.txt")));
     }
 
     #[tokio::test]
@@ -785,20 +987,20 @@ mod tests {
         // A plain shell redirect: no Python, no Node, so only the snapshot diff
         // can see it. This is the fallback that makes tracing useful for any
         // language rather than only the two with hooks.
-        let run = runner_exec_shell(&db, &sb, "echo noi-dung > tu-shell.txt").await;
+        let run = runner_exec_shell(&db, &sb, "echo content > from-shell.txt").await;
         assert_eq!(run.exit_code, Some(0), "stderr: {}", run.stderr);
 
         let events = db.list_events(&sb.id, Some(&run.id), None, 200).unwrap();
         assert!(
             events
                 .iter()
-                .any(|e| e.source == "diff" && e.target.contains("tu-shell.txt")),
+                .any(|e| e.source == "diff" && e.target.contains("from-shell.txt")),
             "the diff missed a file the shell created: {events:#?}"
         );
     }
 
     async fn runner_exec_shell(db: &Db, sb: &Sandbox, cmd: &str) -> Run {
-        exec(db, sb, cmd, None, BTreeMap::new(), "exec", None, cmd)
+        exec(db, sb, cmd, None, BTreeMap::new(), "exec", None, cmd, shell_argv(sb))
             .await
             .unwrap()
     }
@@ -808,11 +1010,11 @@ mod tests {
         let _d = tmp_data();
         let db = Db::open_memory().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        let secret = outside.path().join("rieng-tu.txt");
-        std::fs::write(&secret, "dữ liệu riêng").unwrap();
+        let secret = outside.path().join("private.txt");
+        std::fs::write(&secret, "private data").unwrap();
 
         if !caps::direct_caps(true).await.kind.is_enforced() {
-            eprintln!("SKIP: máy này không có cách ly trực tiếp");
+            eprintln!("SKIP: this machine has no enforced direct isolation");
             return;
         }
         let mut r = req(Some("direct".into()));
@@ -823,7 +1025,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            !run.stdout.contains("dữ liệu riêng"),
+            !run.stdout.contains("private data"),
             "strict mode read a file outside the sandbox: {}",
             run.stdout
         );
@@ -862,7 +1064,7 @@ mod tests {
         let _d = tmp_data();
         let db = Db::open_memory().unwrap();
         let outside = tempfile::tempdir().unwrap();
-        let f = outside.path().join("ho-so.txt");
+        let f = outside.path().join("record.txt");
         std::fs::write(&f, "noi dung").unwrap();
 
         if !caps::direct_caps(true).await.kind.is_enforced() {
@@ -894,8 +1096,8 @@ mod tests {
         let denied = outside.path().join("khong-duoc");
         std::fs::create_dir_all(&allowed).unwrap();
         std::fs::create_dir_all(&denied).unwrap();
-        std::fs::write(allowed.join("a.txt"), "cho phep").unwrap();
-        std::fs::write(denied.join("b.txt"), "cam").unwrap();
+        std::fs::write(allowed.join("a.txt"), "allowed").unwrap();
+        std::fs::write(denied.join("b.txt"), "forbidden").unwrap();
 
         if !caps::direct_caps(true).await.kind.is_enforced() {
             return;
@@ -927,7 +1129,7 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            ok.stdout.contains("cho phep"),
+            ok.stdout.contains("allowed"),
             "the allowlisted folder must be readable: {} / {}",
             ok.stdout,
             ok.stderr
@@ -944,7 +1146,7 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            !no.stdout.contains("cam"),
+            !no.stdout.contains("forbidden"),
             "allowlist mode leaked a folder that was not on the list: {}",
             no.stdout
         );
@@ -955,16 +1157,16 @@ mod tests {
         let _d = tmp_data();
         let db = Db::open_memory().unwrap();
         let host = tempfile::tempdir().unwrap();
-        let shared = host.path().join("gan");
+        let shared = host.path().join("mounted");
         std::fs::create_dir(&shared).unwrap();
-        std::fs::write(shared.join("c.txt"), "qua mount").unwrap();
+        std::fs::write(shared.join("c.txt"), "via mount").unwrap();
 
         if !caps::direct_caps(true).await.kind.is_enforced() {
             return;
         }
         let mut r = req(Some("direct".into()));
         r.fs_mode = Some(crate::fsmode::FsMode::Strict);
-        r.mounts = vec![crate::mounts::validate(shared.to_str().unwrap(), "gan", false).unwrap()];
+        r.mounts = vec![crate::mounts::validate(shared.to_str().unwrap(), "mounted", false).unwrap()];
         let sb = create(&db, r).await.unwrap();
 
         // Strict blocks the disk; a mount is the sanctioned way back in, and if
@@ -973,14 +1175,14 @@ mod tests {
             &db,
             &sb,
             "python",
-            "print(open('gan/c.txt').read())",
+            "print(open('mounted/c.txt').read())",
             None,
             BTreeMap::new(),
         )
         .await
         .unwrap();
         assert!(
-            run.stdout.contains("qua mount"),
+            run.stdout.contains("via mount"),
             "a mount must stay readable under strict: {} / {}",
             run.stdout,
             run.stderr
@@ -1064,15 +1266,15 @@ mod tests {
         let _d = tmp_data();
         let db = Db::open_memory().unwrap();
         let host = tempfile::tempdir().unwrap();
-        let shared = host.path().join("chung");
+        let shared = host.path().join("shared");
         std::fs::create_dir(&shared).unwrap();
-        std::fs::write(shared.join("vao.txt"), "dữ liệu thật").unwrap();
+        std::fs::write(shared.join("in.txt"), "real data").unwrap();
 
         let mut r = req(Some("direct".into()));
-        r.mounts = vec![crate::mounts::validate(shared.to_str().unwrap(), "chung", false).unwrap()];
+        r.mounts = vec![crate::mounts::validate(shared.to_str().unwrap(), "shared", false).unwrap()];
         let caps = caps::probe(true).await;
         if !caps.direct.kind.is_enforced() {
-            eprintln!("SKIP: máy này không có cách ly trực tiếp");
+            eprintln!("SKIP: this machine has no enforced direct isolation");
             return;
         }
         let sb = create(&db, r).await.unwrap();
@@ -1081,8 +1283,8 @@ mod tests {
             &db,
             &sb,
             "python",
-            "print(open('chung/vao.txt').read())\n\
-             open('chung/ra.txt','w').write('từ sandbox')",
+            "print(open('shared/in.txt').read())\n\
+             open('shared/out.txt','w').write('from the sandbox')",
             None,
             BTreeMap::new(),
         )
@@ -1090,10 +1292,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(run.exit_code, Some(0), "stderr: {}", run.stderr);
-        assert!(run.stdout.contains("dữ liệu thật"), "mount was not readable");
+        assert!(run.stdout.contains("real data"), "mount was not readable");
         assert_eq!(
-            std::fs::read_to_string(shared.join("ra.txt")).unwrap(),
-            "từ sandbox",
+            std::fs::read_to_string(shared.join("out.txt")).unwrap(),
+            "from the sandbox",
             "a read-write mount must let the sandbox write back to the real folder"
         );
     }
@@ -1103,24 +1305,24 @@ mod tests {
         let _d = tmp_data();
         let db = Db::open_memory().unwrap();
         let host = tempfile::tempdir().unwrap();
-        let shared = host.path().join("chidoc");
+        let shared = host.path().join("readonly");
         std::fs::create_dir(&shared).unwrap();
-        std::fs::write(shared.join("goc.txt"), "không được sửa").unwrap();
+        std::fs::write(shared.join("orig.txt"), "must not be modified").unwrap();
 
         let caps = caps::probe(true).await;
         if !caps.direct.kind.is_enforced() {
             return;
         }
         let mut r = req(Some("direct".into()));
-        r.mounts = vec![crate::mounts::validate(shared.to_str().unwrap(), "chidoc", true).unwrap()];
+        r.mounts = vec![crate::mounts::validate(shared.to_str().unwrap(), "readonly", true).unwrap()];
         let sb = create(&db, r).await.unwrap();
 
         let run = run_code(
             &db,
             &sb,
             "python",
-            "print(open('chidoc/goc.txt').read())\n\
-             try:\n    open('chidoc/goc.txt','w').write('đã sửa')\n    print('WROTE')\n\
+            "print(open('readonly/orig.txt').read())\n\
+             try:\n    open('readonly/orig.txt','w').write('modified')\n    print('WROTE')\n\
              except Exception as e:\n    print('REFUSED')",
             None,
             BTreeMap::new(),
@@ -1128,10 +1330,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(run.stdout.contains("không được sửa"), "stderr: {}", run.stderr);
+        assert!(run.stdout.contains("must not be modified"), "stderr: {}", run.stderr);
         assert_eq!(
-            std::fs::read_to_string(shared.join("goc.txt")).unwrap(),
-            "không được sửa",
+            std::fs::read_to_string(shared.join("orig.txt")).unwrap(),
+            "must not be modified",
             "a read-only mount was written through"
         );
         assert!(!run.stdout.contains("WROTE"));
@@ -1142,23 +1344,23 @@ mod tests {
         let _d = tmp_data();
         let db = Db::open_memory().unwrap();
         let host = tempfile::tempdir().unwrap();
-        let shared = host.path().join("duyet");
+        let shared = host.path().join("browse");
         std::fs::create_dir(&shared).unwrap();
-        std::fs::write(shared.join("a.txt"), "xin chào").unwrap();
+        std::fs::write(shared.join("a.txt"), "hello").unwrap();
         // A sibling of the mount, deliberately NOT mounted.
-        std::fs::write(host.path().join("ngoai.txt"), "bí mật").unwrap();
+        std::fs::write(host.path().join("outside.txt"), "secret").unwrap();
 
         let mut r = req(Some("direct".into()));
-        r.mounts = vec![crate::mounts::validate(shared.to_str().unwrap(), "duyet", false).unwrap()];
+        r.mounts = vec![crate::mounts::validate(shared.to_str().unwrap(), "browse", false).unwrap()];
         let sb = create(&db, r).await.unwrap();
         crate::mounts::materialise_symlinks(&PathBuf::from(&sb.workdir), &sb.mounts).unwrap();
 
         let scope = crate::files::Scope::of(&sb);
         // Into the mount: allowed, because it was declared.
-        assert_eq!(crate::files::read(&scope, "duyet/a.txt").unwrap(), "xin chào");
+        assert_eq!(crate::files::read(&scope, "browse/a.txt").unwrap(), "hello");
         // One step beyond it: still refused.
         assert!(
-            crate::files::read(&scope, "duyet/../ngoai.txt").is_err(),
+            crate::files::read(&scope, "browse/../outside.txt").is_err(),
             "a mount must not become a door to its parent directory"
         );
     }
@@ -1193,6 +1395,7 @@ mod tests {
             env: json!({}),
             mounts: Vec::new(),
             fs_mode: None,
+            ports: Default::default(),
         }
     }
 

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import type { Resolved } from './theme'
+import { useT } from './i18n'
 
 /**
  * Interactive shell inside a sandbox.
@@ -11,6 +12,7 @@ import type { Resolved } from './theme'
  * binary frames back are raw PTY bytes.
  */
 export function SandboxTerminal({ sandboxId, mode }: { sandboxId: string; mode: Resolved }) {
+  const t = useT()
   const host = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -47,8 +49,8 @@ export function SandboxTerminal({ sandboxId, mode }: { sandboxId: string; mode: 
     }
     // A closed socket with no explanation reads as a frozen terminal, so say so
     // in the terminal itself.
-    ws.onclose = () => term.write('\r\n\x1b[2m[phiên đã đóng]\x1b[0m\r\n')
-    ws.onerror = () => term.write('\r\n\x1b[31m[mất kết nối tới sandbox]\x1b[0m\r\n')
+    ws.onclose = () => term.write(`\r\n\x1b[2m${t.sessionClosed}\x1b[0m\r\n`)
+    ws.onerror = () => term.write(`\r\n\x1b[31m${t.connectionLost}\x1b[0m\r\n`)
 
     const sub = term.onData((d) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ d }))
@@ -72,7 +74,7 @@ export function SandboxTerminal({ sandboxId, mode }: { sandboxId: string; mode: 
       ws.close()
       term.dispose()
     }
-  }, [sandboxId, mode])
+  }, [sandboxId, mode, t])
 
   return <div className="sbx-term" ref={host} style={{ background: mode === 'dark' ? '#141414' : '#fafafa' }} />
 }

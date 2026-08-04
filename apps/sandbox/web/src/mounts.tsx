@@ -14,6 +14,7 @@ import {
 } from 'antd'
 import { DeleteOutlined, FolderAddOutlined } from '@ant-design/icons'
 import { api, type Sandbox } from './api'
+import { useT } from './i18n'
 
 /** Host folders bound into the sandbox. */
 export function MountsPanel({
@@ -24,20 +25,21 @@ export function MountsPanel({
   onChange: () => void
 }) {
   const { message } = AntApp.useApp()
+  const t = useT()
   const [source, setSource] = useState('')
   const [target, setTarget] = useState('')
   const [readOnly, setReadOnly] = useState(true)
   const [busy, setBusy] = useState(false)
 
   const add = async () => {
-    if (!source.trim()) return message.warning('Nhập đường dẫn thư mục trên máy')
+    if (!source.trim()) return message.warning(t.needHostPath)
     setBusy(true)
     try {
       await api.addMount(sandbox.id, source.trim(), target.trim(), readOnly)
       setSource('')
       setTarget('')
       onChange()
-      message.success('Đã gắn thư mục')
+      message.success(t.mountAdded)
     } catch (e) {
       message.error((e as Error).message)
     } finally {
@@ -59,20 +61,20 @@ export function MountsPanel({
       <Alert
         type="info"
         showIcon
-        message="Thư mục gắn là lỗ hổng có chủ ý trên hàng rào sandbox"
-        description="Mã trong sandbox đọc và ghi thẳng vào thư mục thật trên máy bạn. Nếu chỉ cần đọc dữ liệu, hãy để 'Chỉ đọc'. Không gắn được thư mục nhà, thư mục hệ thống hay nơi chứa khoá bí mật."
+        message={t.mountsWarnTitle}
+        description={t.mountsWarnBody}
       />
 
       <Space.Compact style={{ width: '100%' }}>
         <Input
-          placeholder="/Users/ban/du-an/du-lieu"
+          placeholder={t.mountPathPlaceholder}
           value={source}
           onChange={(e) => setSource(e.target.value)}
           className="sbx-mono"
           onPressEnter={() => void add()}
         />
         <Input
-          placeholder="tên trong sandbox (bỏ trống = tên thư mục)"
+          placeholder={t.mountTargetPlaceholder}
           value={target}
           onChange={(e) => setTarget(e.target.value)}
           style={{ maxWidth: 280 }}
@@ -84,15 +86,15 @@ export function MountsPanel({
           loading={busy}
           onClick={() => void add()}
         >
-          Gắn
+          {t.mount}
         </Button>
       </Space.Compact>
       <Checkbox checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)}>
-        Chỉ đọc — sandbox không sửa được dữ liệu thật
+        {t.readOnlyLabel}
       </Checkbox>
 
       {sandbox.mounts.length === 0 ? (
-        <Empty description="Chưa gắn thư mục nào" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        <Empty description={t.noMounts} image={Empty.PRESENTED_IMAGE_SIMPLE} />
       ) : (
         <List
           size="small"
@@ -103,10 +105,10 @@ export function MountsPanel({
               actions={[
                 <Popconfirm
                   key="x"
-                  title={`Gỡ "${m.target}"?`}
-                  description="Chỉ gỡ khỏi sandbox. Dữ liệu trên máy vẫn nguyên."
-                  okText="Gỡ"
-                  cancelText="Thôi"
+                  title={t.unmount(m.target)}
+                  description={t.unmountBody}
+                  okText={t.delete}
+                  cancelText={t.cancel}
                   onConfirm={() => void remove(m.target)}
                 >
                   <Button size="small" type="text" danger icon={<DeleteOutlined />} />
@@ -118,7 +120,7 @@ export function MountsPanel({
                   <Space size={6} wrap>
                     <Typography.Text className="sbx-mono">{m.target}</Typography.Text>
                     <Tag color={m.readOnly ? 'blue' : 'orange'}>
-                      {m.readOnly ? 'chỉ đọc' : 'đọc-ghi'}
+                      {m.readOnly ? t.readOnly : t.readWrite}
                     </Tag>
                   </Space>
                 }

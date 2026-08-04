@@ -2,6 +2,8 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { App as AntApp, ConfigProvider, theme } from 'antd'
 import viVN from 'antd/locale/vi_VN'
+import enUS from 'antd/locale/en_US'
+import { I18nProvider, useI18n } from './i18n'
 import App from './App'
 import { ThemeProvider, type Resolved } from './theme'
 import './index.css'
@@ -26,9 +28,12 @@ function Surface({ children }: { children: React.ReactNode }) {
 }
 
 function Themed({ mode }: { mode: Resolved }) {
+  // antd's own strings (date pickers, pagination, empty states) must follow the
+  // same switch, or the app ends up half-translated.
+  const { lang } = useI18n()
   return (
     <ConfigProvider
-      locale={viVN}
+      locale={lang === 'vi' ? viVN : enUS}
       theme={{
         algorithm: mode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: { colorPrimary: '#00a37a' },
@@ -45,6 +50,8 @@ function Themed({ mode }: { mode: Resolved }) {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ThemeProvider>{(mode) => <Themed mode={mode} />}</ThemeProvider>
+    <I18nProvider>
+      <ThemeProvider>{(mode) => <Themed mode={mode} />}</ThemeProvider>
+    </I18nProvider>
   </React.StrictMode>,
 )

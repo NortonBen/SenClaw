@@ -186,7 +186,7 @@ pub async fn stats(sb: &Sandbox) -> Stats {
                 rss_mb: 0.0,
                 memory_limit_mb: Some(sb.memory_mb),
                 running: false,
-                note: Some(format!("không đọc được tiến trình trong container: {e}")),
+                note: Some(format!("cannot read the container process list: {e}")),
             },
         };
     }
@@ -203,7 +203,7 @@ pub async fn stats(sb: &Sandbox) -> Stats {
             rss_mb: 0.0,
             memory_limit_mb: None,
             running: false,
-            note: Some(format!("không đọc được bảng tiến trình: {e}")),
+            note: Some(format!("cannot read the process table: {e}")),
         },
     }
 }
@@ -265,7 +265,7 @@ pub async fn kill_pid(sb: &Sandbox, pid: u32) -> Result<()> {
     let procs = sample_host(&g).await?;
     if !procs.iter().any(|p| p.pid == pid) {
         return Err(anyhow!(
-            "tiến trình {pid} không thuộc sandbox `{}` — từ chối dừng",
+            "process {pid} does not belong to sandbox `{}` — refusing to kill it",
             sb.name
         ));
     }
@@ -294,12 +294,12 @@ async fn run(bin: &str, args: &[&str], timeout: Duration) -> Result<String> {
         .kill_on_drop(true);
     let child = cmd.spawn().map_err(|e| anyhow!("{e}"))?;
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Err(_) => Err(anyhow!("`{bin}` không phản hồi sau {}s", timeout.as_secs())),
+        Err(_) => Err(anyhow!("`{bin}` did not answer within {}s", timeout.as_secs())),
         Ok(Err(e)) => Err(anyhow!("{e}")),
         Ok(Ok(o)) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).to_string()),
         Ok(Ok(o)) => {
             let e = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            Err(anyhow!(if e.is_empty() { format!("`{bin}` lỗi") } else { e }))
+            Err(anyhow!(if e.is_empty() { format!("`{bin}` failed") } else { e }))
         }
     }
 }
@@ -402,6 +402,7 @@ mod tests {
             mounts: Vec::new(),
             fs_mode: crate::fsmode::FsMode::Strict,
             trace_enabled: false,
+            ports: Default::default(),
             status: "stopped".into(),
             container_id: None,
             last_error: None,
@@ -412,6 +413,6 @@ mod tests {
         // Nothing registered for this sandbox, so pid 1 must be refused rather
         // than signalled.
         let e = kill_pid(&sb, 1).await.unwrap_err().to_string();
-        assert!(e.contains("không thuộc sandbox"), "got: {e}");
+        assert!(e.contains("does not belong to sandbox"), "got: {e}");
     }
 }

@@ -30,6 +30,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         ("mounts_json", "TEXT NOT NULL DEFAULT '[]'"),
         ("fs_mode", "TEXT NOT NULL DEFAULT 'strict'"),
         ("trace_enabled", "INTEGER NOT NULL DEFAULT 0"),
+        ("ports_json", "TEXT NOT NULL DEFAULT '{}'"),
     ];
     for (col, def) in wanted {
         if !existing.iter().any(|c| c == col) {
@@ -69,6 +70,7 @@ pub struct Sandbox {
     pub mounts: Vec<crate::mounts::Mount>,
     pub fs_mode: crate::fsmode::FsMode,
     pub trace_enabled: bool,
+    pub ports: crate::ports::PortPolicy,
     pub status: String,
     pub container_id: Option<String>,
     pub last_error: Option<String>,
@@ -99,6 +101,7 @@ impl Sandbox {
             fs_mode: crate::fsmode::FsMode::parse(&r.get::<_, String>("fs_mode")?)
                 .unwrap_or_default(),
             trace_enabled: r.get::<_, i64>("trace_enabled")? != 0,
+            ports: serde_json::from_str(&r.get::<_, String>("ports_json")?).unwrap_or_default(),
             status: r.get("status")?,
             container_id: r.get("container_id")?,
             last_error: r.get("last_error")?,
@@ -164,6 +167,7 @@ pub struct NewSandbox {
     pub env: Value,
     pub mounts: Vec<crate::mounts::Mount>,
     pub fs_mode: crate::fsmode::FsMode,
+    pub ports: crate::ports::PortPolicy,
 }
 
 impl Db {
@@ -198,8 +202,8 @@ impl Db {
             "INSERT INTO sandboxes
                (id, name, backend, image, workdir, network, cpus, memory_mb,
                 pids_limit, timeout_ms, env_json, mounts_json, fs_mode,
-                status, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'stopped',?14,?14)",
+                ports_json, status, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'stopped',?15,?15)",
             params![
                 id,
                 n.name,
@@ -214,6 +218,7 @@ impl Db {
                 serde_json::to_string(&n.env).unwrap_or_else(|_| "{}".into()),
                 serde_json::to_string(&n.mounts).unwrap_or_else(|_| "[]".into()),
                 n.fs_mode.as_str(),
+                serde_json::to_string(&n.ports).unwrap_or_else(|_| "{}".into()),
                 now,
             ],
         )?;
@@ -229,7 +234,7 @@ impl Db {
             Sandbox::from_row,
         )
         .optional()?
-        .ok_or_else(|| anyhow!("không tìm thấy sandbox `{id}`"))
+        .ok_or_else(|| anyhow!("no sandbox `{id}`"))
     }
 
     pub fn list_sandboxes(&self) -> Result<Vec<Sandbox>> {
@@ -312,6 +317,21 @@ impl Db {
                     timeout_ms,
                     env.map(|e| serde_json::to_string(e).unwrap_or_else(|_| "{}".into())),
                     now_ms(),
+                ],
+            )?;
+        }
+        self.sandbox(id)
+    }
+
+    pub fn set_ports(&self, id: &str, ports: &crate::ports::PortPolicy) -> Result<Sandbox> {
+        {
+            let c = self.conn.lock().unwrap();
+            c.execute(
+                "UPDATE sandboxes SET ports_json = ?2, updated_at = ?3 WHERE id = ?1",
+                params![
+                    id,
+                    serde_json::to_string(ports).unwrap_or_else(|_| "{}".into()),
+                    now_ms()
                 ],
             )?;
         }
@@ -494,7 +514,7 @@ impl Db {
         let c = self.conn.lock().unwrap();
         c.query_row("SELECT * FROM runs WHERE id = ?1", params![id], Run::from_row)
             .optional()?
-            .ok_or_else(|| anyhow!("không tìm thấy run `{id}`"))
+            .ok_or_else(|| anyhow!("no run `{id}`"))
     }
 }
 
@@ -516,6 +536,7 @@ mod tests {
             env: json!({}),
             mounts: Vec::new(),
             fs_mode: crate::fsmode::FsMode::Strict,
+            ports: Default::default(),
         })
         .unwrap()
     }

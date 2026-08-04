@@ -64,6 +64,7 @@ pub fn api_router(state: AppState) -> Router {
         .route("/sandboxes/:id/mounts/remove", post(remove_mount))
         .route("/sandboxes/:id/fs-mode", post(set_fs_mode))
         .route("/sandboxes/:id/trace", post(set_trace))
+        .route("/sandboxes/:id/ports", post(set_ports))
         .route("/sandboxes/:id/events", get(list_events).delete(clear_events))
         .route("/settings", get(get_settings).put(put_settings))
         .route("/fs-modes", get(fs_modes))
@@ -126,6 +127,10 @@ struct CreateBody {
     #[serde(default)]
     mounts: Vec<MountBody>,
     fs_mode: Option<String>,
+    #[serde(default)]
+    listen_ports: Vec<u16>,
+    #[serde(default)]
+    connect_ports: Vec<u16>,
 }
 
 async fn create_sandbox(State(s): State<AppState>, Json(b): Json<CreateBody>) -> ApiResult {
@@ -146,6 +151,7 @@ async fn create_sandbox(State(s): State<AppState>, Json(b): Json<CreateBody>) ->
                 .map(|m| mounts::validate(&m.source, &m.target, m.read_only))
                 .collect::<Result<Vec<_>, _>>()?,
             fs_mode: b.fs_mode.as_deref().and_then(crate::fsmode::FsMode::parse),
+            ports: crate::ports::validate(&b.listen_ports, &b.connect_ports)?,
         },
     )
     .await?;
@@ -276,7 +282,8 @@ async fn exec_sandbox(
         "exec",
         None,
         &b.command,
-    )
+        runner::shell_argv(&sb),
+)
     .await?;
     Ok(Json(serde_json::to_value(run).unwrap()))
 }
@@ -389,9 +396,44 @@ async fn set_fs_mode(
     Json(b): Json<FsModeBody>,
 ) -> ApiResult {
     let mode = crate::fsmode::FsMode::parse(&b.fs_mode)
-        .ok_or_else(|| ApiErr(StatusCode::BAD_REQUEST, format!("chế độ `{}` không hợp lệ", b.fs_mode)))?;
+        .ok_or_else(|| ApiErr(StatusCode::BAD_REQUEST, format!("invalid mode `{}`", b.fs_mode)))?;
     let sb = s.db.set_fs_mode(&id, mode)?;
     Ok(Json(serde_json::to_value(sb).unwrap()))
+}
+
+// ── ports ───────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PortsBody {
+    #[serde(default)]
+    listen: Vec<u16>,
+    #[serde(default)]
+    connect: Vec<u16>,
+}
+
+async fn set_ports(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Json(b): Json<PortsBody>,
+) -> ApiResult {
+    let before = s.db.sandbox(&id)?;
+    let policy = crate::ports::validate(&b.listen, &b.connect)?;
+    let sb = s.db.set_ports(&id, &policy)?;
+    // Published ports are fixed at `docker run`, so a live container has to be
+    // recreated for a new one to exist.
+    let recreated = if sb.backend == "docker" && before.status == "running" {
+        let _ = runner::stop(&s.db, &sb).await;
+        runner::ensure_started(&s.db, &sb).await.is_ok()
+    } else {
+        false
+    };
+    let isolation = caps::direct_caps(false).await.kind.as_str().to_string();
+    Ok(Json(json!({
+        "sandbox": s.db.sandbox(&id)?,
+        "containerRecreated": recreated,
+        "note": crate::ports::note_for(&sb.backend, &isolation, &sb.ports),
+    })))
 }
 
 // ── activity tracing ────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 {
   "id": "sandbox",
-  "name": "Sandbox — Chạy lệnh cách ly khỏi máy thật",
-  "description": "Chạy lệnh shell và mã nguồn (Python, JavaScript, Bash, Ruby…) tách khỏi máy thật, theo hai cách. (1) Chạy trực tiếp trên máy này nhưng có rào chắn của hệ điều hành: macOS dùng Seatbelt, Linux dùng bubblewrap — mã chạy được nhưng KHÔNG ghi được ra ngoài thư mục sandbox, và mặc định cũng KHÔNG đọc được phần còn lại của đĩa. Việc đọc có ba mức chọn được: cách ly toàn bộ (chỉ thấy thư mục sandbox và thư mục bạn gắn vào — mặc định), cách ly cộng danh sách thư mục khai sẵn trong cài đặt, hoặc không cách ly đọc. Mạng mặc định tắt. Khởi động tức thì, không cần cài gì. (2) Chạy trong Docker container với giới hạn CPU/RAM/số tiến trình, bỏ toàn bộ capability, mạng tách hẳn — ranh giới chắc hơn, đổi lại cần Docker daemon đang chạy. Windows chỉ có Docker. App tự đo khả năng thật của máy chứ không đoán: có `docker` trên PATH mà daemon chết thì nó nói thẳng daemon chết, kèm cách sửa. Mỗi sandbox là một thư mục riêng giữ được file và gói đã cài giữa các lần chạy, có trình duyệt file, terminal tương tác, theo dõi CPU/RAM theo thời gian thực kèm biểu đồ và danh sách tiến trình (dừng được từng tiến trình hoặc dừng tất cả), gắn được thư mục có thật trên máy vào sandbox ở chế độ chỉ-đọc hoặc đọc-ghi, nhật ký từng lần chạy ghi rõ mức cách ly nào đã thực sự được áp dụng, và tuỳ chọn theo dõi hoạt động khi kiểm thử: ghi lại các sự kiện đọc/ghi file, khởi tạo tiến trình, kết nối mạng tới địa chỉ nào và tra cứu tên miền gì — bằng hook trong tiến trình (Python audit hook, Node preload) cộng so sánh thư mục, nên không cần quyền quản trị; đây là công cụ quan sát cho kiểm thử chứ không phải bằng chứng an ninh. Lệnh luôn được đưa vào shell qua stdin nên dấu nháy trong mã giữ nguyên; môi trường của tiến trình con được dựng mới nên khoá API của daemon không lọt vào sandbox.",
+  "name": "Sandbox — run commands isolated from the real machine",
+  "description": "Run shell commands and source code (Python, JavaScript, Bash, Ruby…) isolated from the real machine, two ways. (1) Directly on this machine but confined by the operating system: macOS uses Seatbelt, Linux uses bubblewrap, Windows uses AppContainer + Job Object. Code runs, but it cannot write outside the sandbox directory and by default cannot read the rest of the disk either. Read access has three selectable levels: full isolation (only the sandbox and the folders you mount — the default), isolation plus an allowlist of folders declared in settings, or reads not isolated. The network is off by default, and can be opened one port at a time: name the ports the sandbox may serve on (reachable at 127.0.0.1) and the only remote ports it may dial out to, so an app can run and be viewed in a browser without also getting general internet access. Starts instantly, nothing to install. (2) Inside a Docker container with CPU/RAM/process limits, all capabilities dropped and a separate network namespace — a firmer boundary, at the cost of needing a running Docker daemon. The app measures what this machine can actually do rather than assuming: if the docker CLI is on PATH but the daemon is dead, it says so and tells you how to fix it. Each sandbox is its own directory that keeps files and installed packages between runs, with a file browser, an interactive terminal, live CPU/RAM charts and a process list (stop one process or all of them), host folders mountable read-only or read-write, a per-run log recording which isolation was actually applied, and optional activity tracing for testing that records file reads and writes, process launches, and which addresses and hostnames were contacted. Commands always reach the shell through stdin, so quotes in your code survive intact; the child environment is built from scratch, so the daemon's API keys never reach the sandbox. The web UI is in English with Vietnamese available from a language switch.",
   "icon": "🧪",
   "runtime": {
     "kind": "server",
@@ -23,7 +23,7 @@
     "name": "sandbox-mcp",
     "transport": "http",
     "path": "/api/mcp/sse",
-    "description": "SenClaw Sandbox MCP: kiểm tra máy chạy được kiểu cách ly nào, chạy nhanh một đoạn mã trong sandbox dùng-một-lần, tạo sandbox tồn tại lâu để làm nhiều bước, chạy lệnh shell hoặc đoạn mã trong sandbox đó, cài gói bằng pip/npm/apt, đọc-ghi-liệt kê file trong sandbox, đổi giới hạn tài nguyên và bật/tắt mạng, xem CPU/RAM và danh sách tiến trình đang chạy, dừng một tiến trình hoặc dừng tất cả, gắn/gỡ thư mục thật trên máy vào sandbox, đổi mức cách ly đọc đĩa của sandbox, xem và đổi cài đặt mặc định của app, bật/tắt theo dõi hoạt động và xem các sự kiện file/tiến trình/mạng đã ghi nhận, xem lịch sử các lần chạy kèm mức cách ly đã áp dụng.",
+    "description": "SenClaw Sandbox MCP: check what isolation this machine supports, run a snippet in a throwaway sandbox, create a long-lived sandbox for multi-step work, run shell commands or snippets inside it, install packages with pip/npm/apt, read/write/list files in the sandbox, change resource limits and the network switch, open specific ports for serving or for outbound connections, change the disk read-isolation level, read and change app defaults, watch CPU/RAM and the running processes, stop one process or all of them, mount and unmount real folders from the machine, turn activity tracing on or off and read the recorded file/process/network events, and review run history with the isolation actually applied.",
     "autoRegister": true
   },
   "skills": [
@@ -68,7 +68,12 @@
         "script này làm gì",
         "nó gọi mạng đi đâu",
         "kiểm thử sandbox",
-        "trace"
+        "trace",
+        "mở cổng cho sandbox",
+        "chạy app trong sandbox",
+        "serve trên cổng",
+        "open a port",
+        "run a server in the sandbox"
       ]
     }
   ],

@@ -3,7 +3,7 @@
 // the alternative is a UI that shows "Failed to fetch" for a message that
 // already explained exactly what to fix.
 
-export type DirectKind = 'seatbelt' | 'bubblewrap' | 'degraded' | 'unsupported'
+export type DirectKind = 'seatbelt' | 'bubblewrap' | 'appcontainer' | 'degraded' | 'unsupported'
 
 export interface Caps {
   os: string
@@ -35,6 +35,7 @@ export interface Sandbox {
   mounts: Mount[]
   fsMode: FsMode
   traceEnabled: boolean
+  ports: PortPolicy
   lastError: string | null
   createdAt: number
   lastUsedAt: number | null
@@ -75,6 +76,11 @@ export interface TraceEvent {
   kind: string
   target: string
   detail: string
+}
+
+export interface PortPolicy {
+  listen: number[]
+  connect: number[]
 }
 
 export interface Mount {
@@ -189,6 +195,12 @@ export const api = {
       body: JSON.stringify({ fsMode }),
     }),
 
+  setPorts: (id: string, listen: number[], connect: number[]) =>
+    req<{ sandbox: Sandbox; note: string | null }>(`/sandboxes/${id}/ports`, {
+      method: 'POST',
+      body: JSON.stringify({ listen, connect }),
+    }),
+
   setTrace: (id: string, enabled: boolean) =>
     req<Sandbox>(`/sandboxes/${id}/trace`, {
       method: 'POST',
@@ -227,52 +239,50 @@ export const api = {
     ),
 }
 
-/// How each read-isolation mode is described, everywhere it appears.
-export function fsModeLabel(m: FsMode): {
-  title: string
-  tag: string
-  color: string
-  detail: string
-} {
+/// Labels live in the dictionary, so both helpers take it rather than owning
+/// copies of the wording.
+export function fsModeLabel(
+  m: FsMode,
+  t: {
+    fsStrictTitle: string; fsStrictTag: string; fsStrictBody: string
+    fsAllowlistTitle: string; fsAllowlistTag: string; fsAllowlistBody: string
+    fsOpenTitle: string; fsOpenTag: string; fsOpenBody: string
+  },
+): { title: string; tag: string; color: string; detail: string } {
   switch (m) {
     case 'strict':
-      return {
-        title: 'Cách ly toàn bộ',
-        tag: 'an toàn nhất',
-        color: 'green',
-        detail:
-          'Chỉ thấy thư mục sandbox và các thư mục bạn gắn vào. Phần còn lại của đĩa không đọc được. (Thư viện hệ thống vẫn đọc được — không có chúng thì Python không chạy nổi.)',
-      }
+      return { title: t.fsStrictTitle, tag: t.fsStrictTag, color: 'green', detail: t.fsStrictBody }
     case 'allowlist':
       return {
-        title: 'Cách ly + danh sách cho phép',
-        tag: 'vừa phải',
+        title: t.fsAllowlistTitle,
+        tag: t.fsAllowlistTag,
         color: 'blue',
-        detail:
-          'Như trên, cộng thêm các thư mục bạn khai sẵn trong Cài đặt mặc định — khỏi phải gắn lại từng lần.',
+        detail: t.fsAllowlistBody,
       }
     case 'open':
-      return {
-        title: 'Không cách ly đọc',
-        tag: 'rộng nhất',
-        color: 'orange',
-        detail:
-          'Đọc được cả đĩa (trừ ~/.ssh, ~/.aws, Keychain và dữ liệu SenClaw). Vẫn không ghi được ra ngoài sandbox.',
-      }
+      return { title: t.fsOpenTitle, tag: t.fsOpenTag, color: 'orange', detail: t.fsOpenBody }
   }
 }
 
-/// Vietnamese label for the isolation actually applied to a run.
-export function isolationLabel(iso: string): { text: string; color: string } {
+/// What actually confined a run, named for the reader.
+export function isolationLabel(
+  iso: string,
+  t: {
+    isoSeatbelt: string; isoBubblewrap: string; isoContainer: string
+    isoAppContainer: string; isoNone: string
+  },
+): { text: string; color: string } {
   switch (iso) {
     case 'seatbelt':
-      return { text: 'macOS Seatbelt', color: 'green' }
+      return { text: t.isoSeatbelt, color: 'green' }
     case 'bubblewrap':
-      return { text: 'Linux bubblewrap', color: 'green' }
+      return { text: t.isoBubblewrap, color: 'green' }
+    case 'appcontainer':
+      return { text: t.isoAppContainer, color: 'green' }
     case 'container':
-      return { text: 'Docker container', color: 'blue' }
+      return { text: t.isoContainer, color: 'blue' }
     case 'degraded':
-      return { text: 'KHÔNG cách ly', color: 'red' }
+      return { text: t.isoNone, color: 'red' }
     default:
       return { text: iso, color: 'default' }
   }

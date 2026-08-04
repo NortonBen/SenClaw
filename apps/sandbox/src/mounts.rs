@@ -77,32 +77,32 @@ fn forbidden_roots() -> Vec<PathBuf> {
 pub fn validate(source: &str, target: &str, read_only: bool) -> Result<Mount> {
     let source = source.trim();
     if source.is_empty() {
-        return Err(anyhow!("thiếu đường dẫn thư mục trên máy"));
+        return Err(anyhow!("missing the host folder path"));
     }
     let src = PathBuf::from(source);
     if !src.is_absolute() {
-        return Err(anyhow!("đường dẫn trên máy phải là tuyệt đối: `{source}`"));
+        return Err(anyhow!("the host path must be absolute: `{source}`"));
     }
     // Resolve before checking, so `/Users/you/../../etc` cannot walk past the
     // guard list, and so a symlinked source is judged by where it really goes.
     let real = src
         .canonicalize()
-        .map_err(|_| anyhow!("không tìm thấy `{source}` trên máy"))?;
+        .map_err(|_| anyhow!("`{source}` does not exist on this machine"))?;
     if !real.is_dir() {
-        return Err(anyhow!("`{source}` không phải thư mục"));
+        return Err(anyhow!("`{source}` is not a directory"));
     }
 
     for bad in forbidden_roots() {
         let bad = bad.canonicalize().unwrap_or(bad);
         if real == bad {
             return Err(anyhow!(
-                "không cho phép gắn `{}` — chọn một thư mục con cụ thể thay vì cả thư mục này",
+                "mounting `{}` is not allowed — pick a specific subfolder instead of the whole thing",
                 real.display()
             ));
         }
         if real.starts_with(&bad) && is_secret(&bad) {
             return Err(anyhow!(
-                "không cho phép gắn `{}` vì nằm trong `{}` (thư mục chứa dữ liệu nhạy cảm)",
+                "mounting `{}` is not allowed: it sits inside `{}` (a folder holding sensitive data)",
                 real.display(),
                 bad.display()
             ));
@@ -138,7 +138,7 @@ fn normalise_target(target: &str, source: &Path) -> Result<String> {
     // how that misunderstanding survives until their script cannot find it.
     if raw.starts_with('/') {
         return Err(anyhow!(
-            "`target` là đường dẫn TƯƠNG ĐỐI trong sandbox — viết `{}` thay vì `{raw}`",
+            "`target` is a path RELATIVE to the sandbox — write `{}` instead of `{raw}`",
             raw.trim_start_matches('/')
         ));
     }
@@ -147,25 +147,25 @@ fn normalise_target(target: &str, source: &Path) -> Result<String> {
         return source
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .ok_or_else(|| anyhow!("không suy ra được tên thư mục đích, hãy đặt `target`"));
+            .ok_or_else(|| anyhow!("cannot derive a target name — set `target` explicitly"));
     }
     let p = Path::new(t);
     if p.is_absolute() {
-        return Err(anyhow!("`target` phải là đường dẫn tương đối trong sandbox"));
+        return Err(anyhow!("`target` must be a path relative to the sandbox"));
     }
     for c in p.components() {
         match c {
             Component::Normal(_) => {}
             _ => {
                 return Err(anyhow!(
-                    "`target` chỉ được là tên thư mục trong sandbox, không dùng `..` hay `/`"
+                    "`target` must be a folder name inside the sandbox — no `..` and no leading `/`"
                 ))
             }
         }
     }
     // The app's own bookkeeping directories.
     if t.starts_with(".runs") || t.starts_with(".tmp") || t == ".sandbox-profile.sb" {
-        return Err(anyhow!("`{t}` là thư mục nội bộ của sandbox, chọn tên khác"));
+        return Err(anyhow!("`{t}` is an internal sandbox folder — choose another name"));
     }
     Ok(t.to_string())
 }
@@ -173,7 +173,7 @@ fn normalise_target(target: &str, source: &Path) -> Result<String> {
 /// Reject a second mount at a target already taken.
 pub fn add(existing: &[Mount], m: Mount) -> Result<Vec<Mount>> {
     if existing.iter().any(|e| e.target == m.target) {
-        return Err(anyhow!("đã có thư mục gắn tại `{}` trong sandbox", m.target));
+        return Err(anyhow!("a folder is already mounted at `{}`", m.target));
     }
     let mut v = existing.to_vec();
     v.push(m);
@@ -201,7 +201,7 @@ pub fn materialise_symlinks(workdir: &Path, mounts: &[Mount]) -> Result<()> {
             }
             Err(_) if link.exists() => {
                 return Err(anyhow!(
-                    "trong sandbox đã có `{}` (không phải liên kết) — chọn `target` khác",
+                    "`{}` already exists in the sandbox and is not a link — choose another `target`",
                     m.target
                 ))
             }
@@ -235,7 +235,7 @@ mod tests {
     fn the_home_directory_itself_is_refused() {
         let home = std::env::var("HOME").unwrap();
         let e = validate(&home, "h", false).unwrap_err().to_string();
-        assert!(e.contains("không cho phép gắn"), "got: {e}");
+        assert!(e.contains("is not allowed"), "got: {e}");
     }
 
     #[test]
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn a_missing_source_says_so_rather_than_failing_later() {
         let e = validate("/definitely/not/here", "x", false).unwrap_err().to_string();
-        assert!(e.contains("không tìm thấy"));
+        assert!(e.contains("does not exist"));
     }
 
     #[test]

@@ -19,6 +19,8 @@
 //!    an explicitly constructed environment and nothing else.
 
 pub mod direct;
+#[cfg(windows)]
+pub mod direct_windows;
 pub mod docker;
 
 use std::collections::BTreeMap;
@@ -41,6 +43,13 @@ pub struct ExecSpec {
     pub timeout_ms: u64,
     /// Extra environment for this run, on top of the sandbox's own.
     pub extra_env: BTreeMap<String, String>,
+    /// Pre-resolved program and arguments. Read on Windows only.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    ///
+    /// Unix ignores this and feeds `script` to `sh -s`. Windows has no
+    /// `/bin/sh`, so it needs the program resolved up front — which also tells
+    /// the AppContainer which interpreter directory to grant.
+    pub argv: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -72,7 +81,7 @@ pub fn clamp(s: String) -> (String, bool) {
         end -= 1;
     }
     let mut out = s[..end].to_string();
-    out.push_str("\n…[đã cắt bớt]");
+    out.push_str("\n…[truncated]");
     (out, true)
 }
 
@@ -131,6 +140,7 @@ mod tests {
             mounts: Vec::new(),
             fs_mode: crate::fsmode::FsMode::Strict,
             trace_enabled: false,
+            ports: Default::default(),
             status: "stopped".into(),
             container_id: None,
             last_error: None,
@@ -154,7 +164,7 @@ mod tests {
         let big = "ế".repeat(MAX_OUTPUT);
         let (s, t) = clamp(big);
         assert!(t);
-        assert!(s.ends_with("[đã cắt bớt]"));
+        assert!(s.ends_with("[truncated]"));
         // Round-tripping proves no partial character survived.
         assert_eq!(s, String::from_utf8(s.clone().into_bytes()).unwrap());
     }

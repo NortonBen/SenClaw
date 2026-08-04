@@ -55,7 +55,7 @@ pub async fn exec(
     let start = Instant::now();
     let workdir = PathBuf::from(&sb.workdir);
     if let Err(e) = std::fs::create_dir_all(workdir.join(".tmp")) {
-        return failed(format!("không tạo được thư mục sandbox: {e}"), kind, start);
+        return failed(format!("cannot create sandbox directory: {e}"), kind, start);
     }
 
     // Canonicalize before it reaches a sandbox profile. On macOS `/tmp` and the
@@ -77,9 +77,11 @@ pub async fn exec(
             c.arg("-s");
             c
         }
-        DirectKind::Unsupported => {
+        // AppContainer is handled by `direct_windows`; reaching it here means
+        // the caller dispatched to the wrong backend for this OS.
+        DirectKind::AppContainer | DirectKind::Unsupported => {
             return failed(
-                "chạy trực tiếp không được hỗ trợ trên hệ điều hành này — dùng backend docker"
+                "direct execution is not supported on this OS — use the docker backend"
                     .into(),
                 kind,
                 start,
@@ -109,7 +111,7 @@ pub async fn exec(
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return failed(format!("không chạy được tiến trình: {e}"), kind, start),
+        Err(e) => return failed(format!("cannot start process: {e}"), kind, start),
     };
     let pid = child.id();
 
@@ -141,13 +143,13 @@ pub async fn exec(
                 isolation: kind.as_str().to_string(),
             }
         }
-        Ok(Err(e)) => failed(format!("lỗi khi chờ tiến trình: {e}"), kind, start),
+        Ok(Err(e)) => failed(format!("error while waiting for the process: {e}"), kind, start),
         Err(_) => {
             kill_group(pid);
             Outcome {
                 exit_code: None,
                 stdout: String::new(),
-                stderr: format!("Quá thời gian {} ms — đã dừng tiến trình.", spec.timeout_ms),
+                stderr: format!("Timed out after {} ms — the process was killed.", spec.timeout_ms),
                 truncated: false,
                 timed_out: true,
                 duration_ms: start.elapsed().as_millis() as i64,
@@ -217,14 +219,22 @@ pub fn write_seatbelt_profile(sb: &Sandbox, allowlist: &[String]) -> Result<Path
     // profile rules are what make it usable. Both are refreshed per run so a
     // mount added while the sandbox existed takes effect without recreating it.
     crate::mounts::materialise_symlinks(&workdir, &sb.mounts)
-        .map_err(|e| format!("không gắn được thư mục: {e}"))?;
+        .map_err(|e| format!("cannot mount folder: {e}"))?;
 
     let path = workdir.join(".sandbox-profile.sb");
     std::fs::write(
         &path,
-        seatbelt_profile(&workdir_s, &home, sb.network, &sb.mounts, sb.fs_mode, allowlist),
+        seatbelt_profile(
+            &workdir_s,
+            &home,
+            sb.network,
+            &sb.mounts,
+            sb.fs_mode,
+            allowlist,
+            &sb.ports,
+        ),
     )
-    .map_err(|e| format!("không ghi được profile sandbox: {e}"))?;
+    .map_err(|e| format!("cannot write the sandbox profile: {e}"))?;
     Ok(path)
 }
 
@@ -252,6 +262,7 @@ pub fn seatbelt_profile(
     mounts: &[crate::mounts::Mount],
     fs_mode: crate::fsmode::FsMode,
     allowlist: &[String],
+    ports: &crate::ports::PortPolicy,
 ) -> String {
     let mut p = String::from(
         "(version 1)\n\
@@ -318,11 +329,8 @@ pub fn seatbelt_profile(
         p.push('\n');
     }
 
-    if !network {
-        p.push_str(";; ── network disabled for this sandbox ──\n(deny network*)\n");
-    } else {
-        p.push_str(";; network: enabled at sandbox creation\n");
-    }
+    // Network section: the coarse switch, narrowed by any opened ports.
+    p.push_str(&crate::ports::seatbelt_rules(ports, network));
     p
 }
 
@@ -355,6 +363,7 @@ fn bwrap_command(
         &sb.mounts,
         sb.fs_mode,
         allowlist,
+        &sb.ports,
     ) {
         cmd.arg(a);
     }
@@ -371,6 +380,7 @@ pub fn bwrap_args(
     mounts: &[crate::mounts::Mount],
     fs_mode: crate::fsmode::FsMode,
     allowlist: &[String],
+    ports: &crate::ports::PortPolicy,
 ) -> Vec<String> {
     let mut a: Vec<String> = vec![
         "--die-with-parent".into(),
@@ -380,7 +390,10 @@ pub fn bwrap_args(
         "--unshare-uts".into(),
         "--unshare-cgroup-try".into(),
     ];
-    if !network {
+    // A private network namespace has no route back to this machine, so a
+    // sandbox that is meant to be reachable cannot have one. Reported by
+    // `ports::note_for` rather than silently traded away.
+    if !network && !ports.wants_network() {
         a.push("--unshare-net".into());
     }
 
@@ -482,7 +495,7 @@ mod tests {
 
     #[test]
     fn seatbelt_denies_writes_before_allowing_the_workdir() {
-        let p = seatbelt_profile("/w/sbx", "/Users/u", false, &[], crate::fsmode::FsMode::Open, &[]);
+        let p = seatbelt_profile("/w/sbx", "/Users/u", false, &[], crate::fsmode::FsMode::Open, &[], &Default::default());
         let deny = p.find("(deny file-write*)").expect("must deny writes");
         let allow = p.find("(allow file-write*").expect("must allow the workdir");
         assert!(deny < allow, "the allow must come after the deny to win");
@@ -491,7 +504,7 @@ mod tests {
 
     #[test]
     fn seatbelt_denies_the_credential_paths() {
-        let p = seatbelt_profile("/w/sbx", "/Users/u", false, &[], crate::fsmode::FsMode::Open, &[]);
+        let p = seatbelt_profile("/w/sbx", "/Users/u", false, &[], crate::fsmode::FsMode::Open, &[], &Default::default());
         assert!(p.contains("\"/Users/u/.ssh\""));
         assert!(p.contains("\"/Users/u/Library/Keychains\""));
         assert!(p.contains("\"/Users/u/.senclaw\""));
@@ -502,7 +515,7 @@ mod tests {
         // The real workdir lives under ~/.senclaw, which the secret-deny list
         // covers. Without the re-allow the sandbox cannot read its own files.
         let wd = "/Users/u/.senclaw/space-app-data/sandbox/workspaces/abc";
-        let p = seatbelt_profile(wd, "/Users/u", false, &[], crate::fsmode::FsMode::Open, &[]);
+        let p = seatbelt_profile(wd, "/Users/u", false, &[], crate::fsmode::FsMode::Open, &[], &Default::default());
         let deny = p.find("(deny file-read*").unwrap();
         let reallow = p.find(&format!("(allow file-read* (subpath \"{wd}\"))")).unwrap();
         assert!(deny < reallow, "re-allow must come after the secret deny");
@@ -510,19 +523,19 @@ mod tests {
 
     #[test]
     fn network_rule_follows_the_sandbox_setting() {
-        assert!(seatbelt_profile("/w", "/h", false, &[], crate::fsmode::FsMode::Open, &[]).contains("(deny network*)"));
-        assert!(!seatbelt_profile("/w", "/h", true, &[], crate::fsmode::FsMode::Open, &[]).contains("(deny network*)"));
+        assert!(seatbelt_profile("/w", "/h", false, &[], crate::fsmode::FsMode::Open, &[], &Default::default()).contains("(deny network*)"));
+        assert!(!seatbelt_profile("/w", "/h", true, &[], crate::fsmode::FsMode::Open, &[], &Default::default()).contains("(deny network*)"));
     }
 
     #[test]
     fn seatbelt_paths_are_quoted_and_escaped() {
-        let p = seatbelt_profile("/w/a\"b", "/h", false, &[], crate::fsmode::FsMode::Open, &[]);
+        let p = seatbelt_profile("/w/a\"b", "/h", false, &[], crate::fsmode::FsMode::Open, &[], &Default::default());
         assert!(p.contains("\"/w/a\\\"b\""), "a quote in a path must be escaped");
     }
 
     #[test]
     fn bwrap_covers_home_before_binding_the_workdir_back() {
-        let args = bwrap_args("/home/u/.senclaw/ws/a", "/home/u", false, &[], crate::fsmode::FsMode::Open, &[]);
+        let args = bwrap_args("/home/u/.senclaw/ws/a", "/home/u", false, &[], crate::fsmode::FsMode::Open, &[], &Default::default());
         let joined = args.join(" ");
         let tmpfs_home = joined.find("--tmpfs /home/u ").expect("home must be covered");
         let bind = joined.find("--bind /home/u/.senclaw/ws/a").expect("workdir bound");
@@ -531,13 +544,13 @@ mod tests {
 
     #[test]
     fn bwrap_unshares_the_network_only_when_disabled() {
-        assert!(bwrap_args("/w", "/h", false, &[], crate::fsmode::FsMode::Open, &[]).iter().any(|a| a == "--unshare-net"));
-        assert!(!bwrap_args("/w", "/h", true, &[], crate::fsmode::FsMode::Open, &[]).iter().any(|a| a == "--unshare-net"));
+        assert!(bwrap_args("/w", "/h", false, &[], crate::fsmode::FsMode::Open, &[], &Default::default()).iter().any(|a| a == "--unshare-net"));
+        assert!(!bwrap_args("/w", "/h", true, &[], crate::fsmode::FsMode::Open, &[], &Default::default()).iter().any(|a| a == "--unshare-net"));
     }
 
     #[test]
     fn bwrap_reads_the_script_from_stdin_not_from_argv() {
-        let args = bwrap_args("/w", "/h", false, &[], crate::fsmode::FsMode::Open, &[]);
+        let args = bwrap_args("/w", "/h", false, &[], crate::fsmode::FsMode::Open, &[], &Default::default());
         assert_eq!(args.last().map(String::as_str), Some("-s"));
         assert!(!args.iter().any(|a| a == "-c"), "never build a `sh -c` command line");
     }
@@ -546,9 +559,9 @@ mod tests {
     fn bwrap_never_tmpfses_a_root_home() {
         // HOME=/ (or unset) must not turn into `--tmpfs /`, which would hide
         // the entire filesystem including the interpreter.
-        let args = bwrap_args("/w", "/", false, &[], crate::fsmode::FsMode::Open, &[]).join(" ");
+        let args = bwrap_args("/w", "/", false, &[], crate::fsmode::FsMode::Open, &[], &Default::default()).join(" ");
         assert!(!args.contains("--tmpfs / "));
-        let args = bwrap_args("/w", "", false, &[], crate::fsmode::FsMode::Open, &[]).join(" ");
+        let args = bwrap_args("/w", "", false, &[], crate::fsmode::FsMode::Open, &[], &Default::default()).join(" ");
         assert!(!args.contains("--tmpfs  "));
     }
 }

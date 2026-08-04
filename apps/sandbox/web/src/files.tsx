@@ -13,10 +13,12 @@ import {
 } from 'antd'
 import { DeleteOutlined, FileOutlined, FolderFilled, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
 import { api, type FileEntry } from './api'
+import { useT } from './i18n'
 
 /** Files inside a sandbox, browsable and editable. */
 export function FilesPanel({ sandboxId }: { sandboxId: string }) {
   const { message } = AntApp.useApp()
+  const t = useT()
   const [dir, setDir] = useState('')
   const [entries, setEntries] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(false)
@@ -59,7 +61,7 @@ export function FilesPanel({ sandboxId }: { sandboxId: string }) {
     setSaving(true)
     try {
       await api.writeFile(sandboxId, open.path, open.content)
-      message.success(`Đã lưu ${open.path}`)
+      message.success(t.saved(open.path))
     } catch (e) {
       message.error((e as Error).message)
     } finally {
@@ -93,13 +95,13 @@ export function FilesPanel({ sandboxId }: { sandboxId: string }) {
           ]}
         />
         <Button size="small" icon={<ReloadOutlined />} onClick={() => void load(dir)}>
-          Tải lại
+          {t.reload}
         </Button>
       </Space>
 
       <Spin spinning={loading}>
         {entries.length === 0 ? (
-          <Empty description="Thư mục trống" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description={t.emptyFolder} image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
           <List
             size="small"
@@ -110,10 +112,10 @@ export function FilesPanel({ sandboxId }: { sandboxId: string }) {
                 actions={[
                   <Popconfirm
                     key="del"
-                    title={`Xoá ${e.name}?`}
-                    description={e.dir ? 'Xoá cả thư mục và nội dung bên trong.' : undefined}
-                    okText="Xoá"
-                    cancelText="Thôi"
+                    title={t.deleteEntry(e.name)}
+                    description={e.dir ? t.deleteFolderWarning : undefined}
+                    okText={t.delete}
+                    cancelText={t.cancel}
                     onConfirm={() => void remove(e)}
                   >
                     <Button size="small" type="text" danger icon={<DeleteOutlined />} />
@@ -123,7 +125,7 @@ export function FilesPanel({ sandboxId }: { sandboxId: string }) {
                 <List.Item.Meta
                   avatar={e.dir ? <FolderFilled style={{ color: '#e8b339' }} /> : <FileOutlined />}
                   title={<a onClick={() => void openEntry(e)}>{e.name}</a>}
-                  description={e.dir ? 'thư mục' : `${e.size.toLocaleString('vi-VN')} byte`}
+                  description={e.dir ? t.folder : t.bytes(e.size.toLocaleString())}
                 />
               </List.Item>
             )}
@@ -144,10 +146,10 @@ export function FilesPanel({ sandboxId }: { sandboxId: string }) {
               loading={saving}
               onClick={() => void save()}
             >
-              Lưu
+              {t.save}
             </Button>
             <Button size="small" onClick={() => setOpen(null)}>
-              Đóng
+              {t.close}
             </Button>
           </Space>
           <Input.TextArea

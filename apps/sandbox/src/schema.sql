@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS sandboxes (
   fs_mode      TEXT NOT NULL DEFAULT 'strict',
   -- Optional activity tracing for testing (see trace.rs). Off by default.
   trace_enabled INTEGER NOT NULL DEFAULT 0,
+  -- Opened ports: {"listen":[…],"connect":[…]} (see ports.rs)
+  ports_json   TEXT NOT NULL DEFAULT '{}',
   status       TEXT NOT NULL DEFAULT 'stopped',  -- stopped | running | error
   container_id TEXT,
   last_error   TEXT,

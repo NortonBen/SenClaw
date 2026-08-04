@@ -47,7 +47,13 @@ pub fn run_args(sb: &Sandbox, image: &str) -> Vec<String> {
         // network namespace with only a loopback — not a firewall rule that
         // something inside could route around.
         "--network".into(),
-        if sb.network { "bridge".into() } else { "none".into() },
+        // `--network none` cannot publish anything, so an opened port forces a
+        // network onto the container. `ports::note_for` tells the user.
+        if sb.network || sb.ports.wants_network() {
+            "bridge".into()
+        } else {
+            "none".into()
+        },
         "--memory".into(),
         mem.clone(),
         // Without a swap cap equal to the memory cap, the container can swap
@@ -70,6 +76,8 @@ pub fn run_args(sb: &Sandbox, image: &str) -> Vec<String> {
         "-w".into(),
         WORK.into(),
     ];
+
+    a.extend(crate::ports::docker_publish_args(&sb.ports));
 
     // Host folders the user asked for, mounted under the sandbox root so the
     // path inside the container matches the path the direct backend uses.
@@ -146,17 +154,17 @@ pub async fn start(sb: &Sandbox) -> Result<String> {
     if !has_image(&image).await {
         pull_image(&image)
             .await
-            .map_err(|e| anyhow!("không tải được image `{image}`: {e}"))?;
+            .map_err(|e| anyhow!("cannot pull image `{image}`: {e}"))?;
     }
 
     std::fs::create_dir_all(Path::new(&sb.workdir).join(".tmp"))
-        .map_err(|e| anyhow!("không tạo được thư mục sandbox: {e}"))?;
+        .map_err(|e| anyhow!("cannot create sandbox directory: {e}"))?;
 
     let args = run_args(sb, &image);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     control(&refs, CONTROL_TIMEOUT)
         .await
-        .map_err(|e| anyhow!("không khởi động được container: {e}"))?;
+        .map_err(|e| anyhow!("cannot start the container: {e}"))?;
     Ok(name)
 }
 
@@ -205,7 +213,7 @@ pub async fn exec(sb: &Sandbox, spec: &ExecSpec) -> Outcome {
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return failed(format!("không gọi được docker: {e}"), start),
+        Err(e) => return failed(format!("cannot invoke docker: {e}"), start),
     };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(spec.script.as_bytes()).await;
@@ -231,19 +239,19 @@ pub async fn exec(sb: &Sandbox, spec: &ExecSpec) -> Outcome {
                 isolation: "container".into(),
             }
         }
-        Ok(Err(e)) => failed(format!("lỗi khi chờ docker exec: {e}"), start),
+        Ok(Err(e)) => failed(format!("error while waiting for docker exec: {e}"), start),
         Err(_) => {
             // See `restart` — the client is dead, the workload is not.
             let restarted = restart(sb).await.is_ok();
             let note = if restarted {
-                "đã khởi động lại container để dừng tiến trình."
+                "the container was restarted to stop it."
             } else {
-                "KHÔNG khởi động lại được container — tiến trình có thể vẫn đang chạy."
+                "the container could NOT be restarted — the process may still be running."
             };
             Outcome {
                 exit_code: None,
                 stdout: String::new(),
-                stderr: format!("Quá thời gian {} ms — {note}", spec.timeout_ms),
+                stderr: format!("Timed out after {} ms — {note}", spec.timeout_ms),
                 truncated: false,
                 timed_out: true,
                 duration_ms: start.elapsed().as_millis() as i64,
@@ -266,7 +274,7 @@ async fn control(args: &[&str], timeout: Duration) -> Result<String> {
     let child = cmd.spawn().map_err(|e| anyhow!("{e}"))?;
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Err(_) => Err(anyhow!(
-            "docker không phản hồi sau {}s",
+            "docker did not answer within {}s",
             timeout.as_secs()
         )),
         Ok(Err(e)) => Err(anyhow!("{e}")),
@@ -276,7 +284,7 @@ async fn control(args: &[&str], timeout: Duration) -> Result<String> {
             } else {
                 let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
                 Err(anyhow!(if err.is_empty() {
-                    "docker trả về lỗi không có thông báo".to_string()
+                    "docker failed without a message".to_string()
                 } else {
                     err
                 }))
@@ -318,6 +326,7 @@ mod tests {
             mounts: Vec::new(),
             fs_mode: crate::fsmode::FsMode::Strict,
             trace_enabled: false,
+            ports: Default::default(),
             status: "stopped".into(),
             container_id: None,
             last_error: None,

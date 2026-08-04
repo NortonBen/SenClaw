@@ -11,6 +11,7 @@ mod fsmode;
 mod mcp;
 mod monitor;
 mod mounts;
+mod ports;
 mod pty;
 mod runner;
 mod settings;
@@ -74,7 +75,7 @@ async fn main() {
                     .into_response(),
                 Err(_) => (
                     axum::http::StatusCode::NOT_FOUND,
-                    "Sandbox UI chưa được build (thiếu web_dist/index.html)",
+                    "The Sandbox UI has not been built (web_dist/index.html is missing)",
                 )
                     .into_response(),
             }
@@ -99,15 +100,15 @@ async fn main() {
     let c = caps::probe(true).await;
     println!("SenClaw Sandbox running on http://{host}:{port}");
     println!(
-        "  backend khả dụng: {}",
+        "  backends available: {}",
         if c.backends.is_empty() {
-            "(không có)".to_string()
+            "(none)".to_string()
         } else {
             c.backends.join(", ")
         }
     );
-    println!("  trực tiếp: {} — {}", c.direct.kind.as_str(), c.direct.detail);
-    println!("  docker:    {}", c.docker.detail);
+    println!("  direct: {} — {}", c.direct.kind.as_str(), c.direct.detail);
+    println!("  docker: {}", c.docker.detail);
 
     axum::serve(listener, app).await.unwrap();
 }

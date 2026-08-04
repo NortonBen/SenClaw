@@ -16,6 +16,7 @@ import {
 } from 'antd'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { api, fsModeLabel, type AppSettings, type FsMode, type Sandbox } from './api'
+import { useT } from './i18n'
 
 const MODES: FsMode[] = ['strict', 'allowlist', 'open']
 
@@ -33,6 +34,7 @@ function FsModePicker({
   onChange: (m: FsMode) => void
   disabled?: boolean
 }) {
+  const t = useT()
   return (
     <Radio.Group
       value={value}
@@ -41,7 +43,7 @@ function FsModePicker({
     >
       <Space direction="vertical" size={6}>
         {MODES.map((m) => {
-          const l = fsModeLabel(m)
+          const l = fsModeLabel(m, t)
           return (
             <Radio key={m} value={m}>
               <Space size={6}>
@@ -61,6 +63,110 @@ function FsModePicker({
   )
 }
 
+/** Which ports are open, and in which direction. */
+function PortsPanel({ sandbox, onChange }: { sandbox: Sandbox; onChange: () => void }) {
+  const { message } = AntApp.useApp()
+  const t = useT()
+  const [listen, setListen] = useState(sandbox.ports.listen.join(', '))
+  const [connect, setConnect] = useState(sandbox.ports.connect.join(', '))
+  const [busy, setBusy] = useState(false)
+
+  // Re-seed when a different sandbox is selected; a stale field would otherwise
+  // apply one sandbox's ports to another.
+  useEffect(() => {
+    setListen(sandbox.ports.listen.join(', '))
+    setConnect(sandbox.ports.connect.join(', '))
+  }, [sandbox.id, sandbox.ports])
+
+  const parse = (v: string): number[] | null => {
+    const parts = v.split(',').map((x) => x.trim()).filter(Boolean)
+    const out: number[] = []
+    for (const p of parts) {
+      const n = Number(p)
+      if (!Number.isInteger(n) || n < 1 || n > 65535) return null
+      out.push(n)
+    }
+    return out
+  }
+
+  const apply = async () => {
+    const l = parse(listen)
+    const c = parse(connect)
+    if (l === null || c === null) return message.warning(t.portsInvalid)
+    setBusy(true)
+    try {
+      const r = await api.setPorts(sandbox.id, l, c)
+      onChange()
+      message.success(t.portsSaved)
+      // The backend note is the honest part: on docker and Linux, opening a
+      // port grants a network. Shown as a warning, not hidden.
+      if (r.note) message.warning(r.note, 8)
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Space direction="vertical" style={{ width: '100%' }} size={10}>
+      <Typography.Text strong>{t.ports}</Typography.Text>
+      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+        {t.portsBody}
+      </Typography.Text>
+      <Space wrap align="end" size={10}>
+        <div>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {t.listenPorts}
+          </Typography.Text>
+          <Input
+            className="sbx-mono"
+            style={{ width: 200 }}
+            placeholder={t.portsPlaceholder}
+            value={listen}
+            onChange={(e) => setListen(e.target.value)}
+          />
+        </div>
+        <div>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {t.connectPorts}
+          </Typography.Text>
+          <Input
+            className="sbx-mono"
+            style={{ width: 200 }}
+            placeholder="443"
+            value={connect}
+            onChange={(e) => setConnect(e.target.value)}
+          />
+        </div>
+        <Button type="primary" loading={busy} onClick={() => void apply()}>
+          {t.portsSave}
+        </Button>
+      </Space>
+      <Space wrap size={6}>
+        {sandbox.ports.listen.length === 0 && sandbox.ports.connect.length === 0 ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {t.portsNone}
+          </Typography.Text>
+        ) : (
+          <>
+            {sandbox.ports.listen.map((p) => (
+              <Tag key={`l${p}`} color="green">
+                {t.reachableAt(p)}
+              </Tag>
+            ))}
+            {sandbox.ports.connect.map((p) => (
+              <Tag key={`c${p}`} color="blue">
+                → :{p}
+              </Tag>
+            ))}
+          </>
+        )}
+      </Space>
+    </Space>
+  )
+}
+
 /** Per-sandbox settings: what this one sandbox is allowed to do. */
 export function SandboxSettings({
   sandbox,
@@ -70,6 +176,7 @@ export function SandboxSettings({
   onChange: () => void
 }) {
   const { message, modal } = AntApp.useApp()
+  const t = useT()
   const [busy, setBusy] = useState(false)
 
   const isDocker = sandbox.backend === 'docker'
@@ -79,7 +186,7 @@ export function SandboxSettings({
     try {
       await api.setFsMode(sandbox.id, m)
       onChange()
-      message.success(`Đã đổi mức cách ly đọc: ${fsModeLabel(m).title}`)
+      message.success(t.isolationChanged(fsModeLabel(m, t).title))
     } catch (e) {
       message.error((e as Error).message)
     } finally {
@@ -93,7 +200,7 @@ export function SandboxSettings({
       try {
         await api.updateSandbox(sandbox.id, { network: next })
         onChange()
-        message.success(next ? 'Đã bật mạng' : 'Đã tắt mạng')
+        message.success(next ? t.networkEnabled : t.networkDisabled)
       } catch (e) {
         message.error((e as Error).message)
       } finally {
@@ -103,11 +210,11 @@ export function SandboxSettings({
     // Only the loosening direction asks.
     if (!next) return void apply()
     modal.confirm({
-      title: 'Bật mạng cho sandbox này?',
+      title: t.enableNetworkTitle,
       content:
-        'Mã trong sandbox sẽ ra được Internet — tải về được, và gửi đi được những gì nó đọc thấy.',
-      okText: 'Bật mạng',
-      cancelText: 'Thôi',
+        t.enableNetworkBody,
+      okText: t.enableNetwork,
+      cancelText: t.cancel,
       onOk: apply,
     })
   }
@@ -127,14 +234,14 @@ export function SandboxSettings({
   return (
     <Space direction="vertical" style={{ width: '100%' }} size={16}>
       <div>
-        <Typography.Text strong>Cách ly đọc đĩa</Typography.Text>
+        <Typography.Text strong>{t.readIsolation}</Typography.Text>
         <div style={{ marginTop: 8 }}>
           {isDocker ? (
             <Alert
               type="success"
               showIcon
-              message="Container đã cách ly toàn bộ đĩa"
-              description="Sandbox docker chỉ thấy nội dung image của nó cộng các thư mục bạn gắn vào — không có đĩa máy thật để mà chặn thêm."
+              message={t.dockerAlreadyIsolated}
+              description={t.dockerAlreadyIsolatedBody}
             />
           ) : (
             <FsModePicker value={sandbox.fsMode} onChange={setMode} disabled={busy} />
@@ -144,8 +251,12 @@ export function SandboxSettings({
 
       <Divider style={{ margin: 0 }} />
 
+      <PortsPanel sandbox={sandbox} onChange={onChange} />
+
+      <Divider style={{ margin: 0 }} />
+
       <Descriptions size="small" column={1} bordered>
-        <Descriptions.Item label="Mạng">
+        <Descriptions.Item label={t.network}>
           <Space size={10} wrap>
             <Switch
               checked={sandbox.network}
@@ -156,13 +267,13 @@ export function SandboxSettings({
             />
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {sandbox.network
-                ? 'Ra được Internet. Cần thiết để cài gói.'
-                : 'Không ra được Internet — an toàn hơn.'}
-              {isDocker && ' Đổi sẽ tạo lại container (file vẫn còn).'}
+                ? t.networkOnHint
+                : t.networkOffHint}
+              {isDocker && t.dockerRecreates}
             </Typography.Text>
           </Space>
         </Descriptions.Item>
-        <Descriptions.Item label="CPU">
+        <Descriptions.Item label={t.cpu}>
           <InputNumber
             min={0.1}
             max={32}
@@ -171,7 +282,7 @@ export function SandboxSettings({
             onChange={(v) => v != null && void setLimit({ cpus: v })}
           />
         </Descriptions.Item>
-        <Descriptions.Item label="RAM (MB)">
+        <Descriptions.Item label={`${t.ram} (MB)`}>
           <Space size={8}>
             <InputNumber
               min={64}
@@ -182,12 +293,12 @@ export function SandboxSettings({
             />
             {!isDocker && (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Chạy trực tiếp không cưỡng chế được trần RAM — số này chỉ có tác dụng với docker.
+                {t.ramNoteDirect}
               </Typography.Text>
             )}
           </Space>
         </Descriptions.Item>
-        <Descriptions.Item label="Hạn mỗi lần chạy">
+        <Descriptions.Item label={t.runDeadline}>
           <Space size={8}>
             <InputNumber
               min={1}
@@ -195,20 +306,20 @@ export function SandboxSettings({
               value={Math.round(sandbox.timeoutMs / 1000)}
               onChange={(v) => v != null && void setLimit({ timeoutMs: v * 1000 })}
             />
-            <Typography.Text type="secondary">giây</Typography.Text>
+            <Typography.Text type="secondary">{t.seconds}</Typography.Text>
           </Space>
         </Descriptions.Item>
-        <Descriptions.Item label="Backend">
+        <Descriptions.Item label={t.backend}>
           {sandbox.backend}
           {sandbox.image ? ` · ${sandbox.image}` : ''}
         </Descriptions.Item>
-        <Descriptions.Item label="Trạng thái">
+        <Descriptions.Item label={t.status}>
           {sandbox.status}
           {sandbox.lastError && (
             <Typography.Text type="danger"> — {sandbox.lastError}</Typography.Text>
           )}
         </Descriptions.Item>
-        <Descriptions.Item label="Thư mục">
+        <Descriptions.Item label={t.directory}>
           <Typography.Text className="sbx-mono" copyable style={{ fontSize: 12 }}>
             {sandbox.workdir}
           </Typography.Text>
@@ -227,6 +338,7 @@ export function AppSettingsModal({
   onClose: () => void
 }) {
   const { message } = AntApp.useApp()
+  const t = useT()
   const [s, setS] = useState<AppSettings | null>(null)
   const [newPath, setNewPath] = useState('')
   const [busy, setBusy] = useState(false)
@@ -241,7 +353,7 @@ export function AppSettingsModal({
     setBusy(true)
     try {
       setS(await api.saveSettings(s))
-      message.success('Đã lưu cài đặt')
+      message.success(t.settingsSaved)
       onClose()
     } catch (e) {
       message.error((e as Error).message)
@@ -253,8 +365,8 @@ export function AppSettingsModal({
   const addPath = () => {
     const p = newPath.trim()
     if (!s || !p) return
-    if (!p.startsWith('/')) return message.warning('Đường dẫn phải là tuyệt đối (bắt đầu bằng /)')
-    if (s.allowlist.includes(p)) return message.warning('Đường dẫn đã có trong danh sách')
+    if (!p.startsWith('/')) return message.warning(t.needAbsolutePath)
+    if (s.allowlist.includes(p)) return message.warning(t.pathAlreadyListed)
     setS({ ...s, allowlist: [...s.allowlist, p] })
     setNewPath('')
   }
@@ -262,9 +374,9 @@ export function AppSettingsModal({
   return (
     <Modal
       open={open}
-      title="Cài đặt mặc định"
-      okText="Lưu"
-      cancelText="Thôi"
+      title={t.defaultsTitle}
+      okText={t.save}
+      cancelText={t.cancel}
       confirmLoading={busy}
       onOk={() => void save()}
       onCancel={onClose}
@@ -275,12 +387,12 @@ export function AppSettingsModal({
           <Alert
             type="info"
             showIcon
-            message="Áp dụng cho sandbox tạo MỚI"
-            description="Sandbox đang có giữ nguyên cài đặt của nó — đổi từng cái trong tab Cài đặt của sandbox đó."
+            message={t.defaultsScope}
+            description={t.defaultsScopeBody}
           />
 
           <div>
-            <Typography.Text strong>Cách ly đọc đĩa mặc định</Typography.Text>
+            <Typography.Text strong>{t.defaultReadIsolation}</Typography.Text>
             <div style={{ marginTop: 8 }}>
               <FsModePicker
                 value={s.defaultFsMode}
@@ -290,29 +402,28 @@ export function AppSettingsModal({
           </div>
 
           <div>
-            <Typography.Text strong>Thư mục cho phép đọc</Typography.Text>
+            <Typography.Text strong>{t.allowlistFolders}</Typography.Text>
             <div>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Chỉ có tác dụng ở chế độ "Cách ly + danh sách cho phép". Sandbox đọc được
-                các thư mục này mà không cần gắn từng cái.
+                {t.allowlistFoldersBody}
               </Typography.Text>
             </div>
             <Space.Compact style={{ width: '100%', marginTop: 8 }}>
               <Input
                 className="sbx-mono"
-                placeholder="/Users/ban/du-an"
+                placeholder={t.mountPathPlaceholder}
                 value={newPath}
                 onChange={(e) => setNewPath(e.target.value)}
                 onPressEnter={addPath}
               />
               <Button icon={<PlusOutlined />} onClick={addPath}>
-                Thêm
+                {t.add}
               </Button>
             </Space.Compact>
             <div style={{ marginTop: 8 }}>
               {s.allowlist.length === 0 ? (
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Chưa có thư mục nào.
+                  {t.noFolders}
                 </Typography.Text>
               ) : (
                 <Space direction="vertical" size={4} style={{ width: '100%' }}>
@@ -345,10 +456,10 @@ export function AppSettingsModal({
                 checked={s.defaultNetwork}
                 onChange={(v) => setS({ ...s, defaultNetwork: v })}
               />
-              <Typography.Text>Mạng bật sẵn</Typography.Text>
+              <Typography.Text>{t.networkOnByDefault}</Typography.Text>
             </Space>
             <Space size={8}>
-              <Typography.Text type="secondary">CPU</Typography.Text>
+              <Typography.Text type="secondary">{t.cpu}</Typography.Text>
               <InputNumber
                 min={0.1}
                 max={32}
@@ -358,7 +469,7 @@ export function AppSettingsModal({
               />
             </Space>
             <Space size={8}>
-              <Typography.Text type="secondary">RAM (MB)</Typography.Text>
+              <Typography.Text type="secondary">{`${t.ram} (MB)`}</Typography.Text>
               <InputNumber
                 min={64}
                 max={65536}
@@ -368,7 +479,7 @@ export function AppSettingsModal({
               />
             </Space>
             <Space size={8}>
-              <Typography.Text type="secondary">Hạn (giây)</Typography.Text>
+              <Typography.Text type="secondary">{t.deadlineSeconds}</Typography.Text>
               <InputNumber
                 min={1}
                 max={600}

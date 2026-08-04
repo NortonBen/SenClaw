@@ -13,6 +13,7 @@ import {
   List,
   Modal,
   Popconfirm,
+  Radio,
   Row,
   Segmented,
   Select,
@@ -32,6 +33,7 @@ import {
   SettingOutlined,
 } from '@ant-design/icons'
 import { api, isolationLabel, type Caps, type Run, type Sandbox } from './api'
+import { useI18n, useT, type Lang } from './i18n'
 import { FilesPanel } from './files'
 import { MonitorPanel } from './monitor'
 import { MountsPanel } from './mounts'
@@ -42,9 +44,37 @@ import type { Resolved } from './theme'
 
 const { Header, Content } = Layout
 
+type Words = ReturnType<typeof useT>
+
 /** The tab label carries the on/off state, so it is visible without opening it. */
-function sandbox_trace_label(sb: Sandbox): React.ReactNode {
-  return sb.traceEnabled ? 'Theo dõi ●' : 'Theo dõi'
+function traceTabLabel(sb: Sandbox, t: Words): React.ReactNode {
+  return sb.traceEnabled ? t.tabTraceOn : t.tabTrace
+}
+
+/**
+ * Language switch. Two languages, so a segmented control beats a dropdown —
+ * the alternative is always visible and one click away.
+ */
+function LangSwitch() {
+  const { lang, setLang } = useI18n()
+  // Radio buttons rather than `Segmented`: the segmented control animates a
+  // sliding thumb and only re-applies its `-selected` class once that
+  // transition completes. Observed here, the class never came back, so the
+  // radio was checked but nothing on screen said which language was active —
+  // and a language switch that does not show its own state is worse than none.
+  return (
+    <Radio.Group
+      size="small"
+      optionType="button"
+      buttonStyle="solid"
+      value={lang}
+      onChange={(e) => setLang(e.target.value as Lang)}
+      options={[
+        { label: 'EN', value: 'en' },
+        { label: 'VI', value: 'vi' },
+      ]}
+    />
+  )
 }
 
 /**
@@ -55,10 +85,26 @@ function sandbox_trace_label(sb: Sandbox): React.ReactNode {
  * fix is one click in another app. Telling the user up front beats letting them
  * discover it when a run fails.
  */
+function directDescription(kind: Caps['direct']['kind'], t: Words): string {
+  switch (kind) {
+    case 'seatbelt':
+      return t.directSeatbelt
+    case 'bubblewrap':
+      return t.directBubblewrap
+    case 'appcontainer':
+      return t.directAppContainer
+    case 'degraded':
+      return t.directDegraded
+    default:
+      return t.directUnsupported
+  }
+}
+
 function CapsBanner({ caps, onRefresh }: { caps: Caps; onRefresh: () => void }) {
+  const t = useT()
   const refresh = (
     <Button size="small" icon={<ReloadOutlined />} onClick={onRefresh}>
-      Kiểm tra lại
+      {t.checkAgain}
     </Button>
   )
 
@@ -67,11 +113,11 @@ function CapsBanner({ caps, onRefresh }: { caps: Caps; onRefresh: () => void }) 
       <Alert
         type="error"
         showIcon
-        message="Máy này chưa chạy được sandbox nào"
+        message={t.noBackend}
         description={
           <>
-            <div>Trực tiếp: {caps.direct.detail}</div>
-            <div>Docker: {caps.docker.detail}</div>
+            <div>{t.directLabel} {directDescription(caps.direct.kind, t)}</div>
+            <div>{t.dockerLabel} {caps.docker.detail}</div>
           </>
         }
         action={refresh}
@@ -86,18 +132,18 @@ function CapsBanner({ caps, onRefresh }: { caps: Caps; onRefresh: () => void }) 
       showIcon
       message={
         <Space wrap size={6}>
-          <span>Backend dùng được:</span>
+          <span>{t.backendsAvailable}</span>
           {caps.backends.map((b) => (
             <Tag key={b} color={b === 'docker' ? 'blue' : 'green'}>
-              {b === 'docker' ? 'Docker container' : 'Chạy trực tiếp'}
+              {b === 'docker' ? t.backendDocker : t.backendDirect}
             </Tag>
           ))}
         </Space>
       }
       description={
         <>
-          <div>Trực tiếp: {caps.direct.detail}</div>
-          <div>Docker: {caps.docker.detail}</div>
+          <div>{t.directLabel} {directDescription(caps.direct.kind, t)}</div>
+          <div>{t.dockerLabel} {caps.docker.detail}</div>
         </>
       }
       action={refresh}
@@ -107,21 +153,22 @@ function CapsBanner({ caps, onRefresh }: { caps: Caps; onRefresh: () => void }) 
 
 /** One run's result. */
 function RunResult({ run }: { run: Run }) {
-  const iso = isolationLabel(run.isolation)
+  const t = useT()
+  const iso = isolationLabel(run.isolation, t)
   return (
     <Space direction="vertical" style={{ width: '100%' }} size={8}>
       <Space wrap size={6}>
         {run.timedOut ? (
-          <Tag color="orange">Quá giờ</Tag>
+          <Tag color="orange">{t.timedOut}</Tag>
         ) : run.exitCode === 0 ? (
-          <Tag color="green">Thành công</Tag>
+          <Tag color="green">{t.succeeded}</Tag>
         ) : (
-          <Tag color="red">Mã thoát {run.exitCode ?? '—'}</Tag>
+          <Tag color="red">{t.exitCode(String(run.exitCode ?? '—'))}</Tag>
         )}
         <Tag color={iso.color}>{iso.text}</Tag>
-        <Tag>{run.network ? 'Mạng bật' : 'Mạng tắt'}</Tag>
+        <Tag>{run.network ? t.networkOn : t.networkOff}</Tag>
         <Typography.Text type="secondary">{run.durationMs} ms</Typography.Text>
-        {run.truncated && <Tag color="gold">Output đã bị cắt</Tag>}
+        {run.truncated && <Tag color="gold">{t.outputTruncated}</Tag>}
       </Space>
       {run.stdout && (
         <pre className="sbx-mono sbx-output" style={{ background: 'var(--sbx-code-bg)' }}>
@@ -137,7 +184,7 @@ function RunResult({ run }: { run: Run }) {
         </pre>
       )}
       {!run.stdout && !run.stderr && (
-        <Typography.Text type="secondary">(không có output)</Typography.Text>
+        <Typography.Text type="secondary">{t.noOutput}</Typography.Text>
       )}
     </Space>
   )
@@ -146,10 +193,13 @@ function RunResult({ run }: { run: Run }) {
 /** Editor + shell box for the selected sandbox. */
 function RunPanel({ sandbox, languages }: { sandbox: Sandbox; languages: string[] }) {
   const { message } = AntApp.useApp()
+  const t = useT()
   const [tab, setTab] = useState<'code' | 'shell'>('code')
   const [language, setLanguage] = useState('python')
-  const [code, setCode] = useState('print("xin chào từ sandbox")\n')
-  const [command, setCommand] = useState('ls -la\n')
+  // Seeded from the dictionary so the starter snippet is in the reader's
+  // language too; a later language switch leaves edited code alone.
+  const [code, setCode] = useState(t.sampleCode)
+  const [command, setCommand] = useState(t.sampleShell)
   const [busy, setBusy] = useState(false)
   const [run, setRun] = useState<Run | null>(null)
 
@@ -175,8 +225,8 @@ function RunPanel({ sandbox, languages }: { sandbox: Sandbox; languages: string[
           value={tab}
           onChange={(v) => setTab(v as 'code' | 'shell')}
           options={[
-            { label: 'Đoạn mã', value: 'code' },
-            { label: 'Lệnh shell', value: 'shell' },
+            { label: t.snippet, value: 'code' },
+            { label: t.shellCommand, value: 'shell' },
           ]}
         />
         {tab === 'code' && (
@@ -193,7 +243,7 @@ function RunPanel({ sandbox, languages }: { sandbox: Sandbox; languages: string[
           loading={busy}
           onClick={() => void go()}
         >
-          Chạy
+          {t.run}
         </Button>
       </Space>
 
@@ -213,6 +263,7 @@ function RunPanel({ sandbox, languages }: { sandbox: Sandbox; languages: string[
 
 export default function App({ mode }: { mode: Resolved }) {
   const { message } = AntApp.useApp()
+  const t = useT()
   const [caps, setCaps] = useState<Caps | null>(null)
   const [sandboxes, setSandboxes] = useState<Sandbox[]>([])
   const [selected, setSelected] = useState<string | null>(null)
@@ -267,7 +318,7 @@ export default function App({ mode }: { mode: Resolved }) {
       form.resetFields()
       await refreshList()
       setSelected(sb.id)
-      message.success(`Đã tạo sandbox "${sb.name}"`)
+      message.success(t.created(sb.name))
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -296,16 +347,18 @@ export default function App({ mode }: { mode: Resolved }) {
       >
         <CodeOutlined style={{ fontSize: 20, color: '#00a37a' }} />
         <Typography.Title level={4} style={{ margin: 0 }}>
-          Sandbox
+          {t.appTitle}
         </Typography.Title>
-        <Typography.Text type="secondary">chạy lệnh cách ly khỏi máy thật</Typography.Text>
+        <Typography.Text type="secondary">{t.appTagline}</Typography.Text>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <LangSwitch />
+        </div>
         <Button
           size="small"
           icon={<SettingOutlined />}
-          style={{ marginLeft: 'auto' }}
           onClick={() => setAppSettings(true)}
         >
-          Cài đặt mặc định
+          {t.appDefaults}
         </Button>
       </Header>
 
@@ -317,7 +370,7 @@ export default function App({ mode }: { mode: Resolved }) {
             <Col xs={24} md={7}>
               <Card
                 size="small"
-                title="Sandbox"
+                title={t.sandboxes}
                 extra={
                   <Button
                     size="small"
@@ -326,13 +379,13 @@ export default function App({ mode }: { mode: Resolved }) {
                     disabled={!caps || caps.backends.length === 0}
                     onClick={() => setCreating(true)}
                   >
-                    Tạo
+                    {t.create}
                   </Button>
                 }
               >
                 {sandboxes.length === 0 ? (
                   <Empty
-                    description="Chưa có sandbox nào"
+                    description={t.noSandboxes}
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 ) : (
@@ -352,10 +405,10 @@ export default function App({ mode }: { mode: Resolved }) {
                         actions={[
                           <Popconfirm
                             key="d"
-                            title={`Xoá "${sb.name}"?`}
-                            description="File trong sandbox vẫn được giữ lại."
-                            okText="Xoá"
-                            cancelText="Thôi"
+                            title={t.deleteSandbox(sb.name)}
+                            description={t.deleteKeepsFiles}
+                            okText={t.delete}
+                            cancelText={t.cancel}
                             onConfirm={() => void remove(sb, false)}
                           >
                             <Button
@@ -375,7 +428,7 @@ export default function App({ mode }: { mode: Resolved }) {
                               <Tag color={sb.backend === 'docker' ? 'blue' : 'green'}>
                                 {sb.backend}
                               </Tag>
-                              {sb.network && <Tag color="orange">mạng</Tag>}
+                              {sb.network && <Tag color="orange">{t.networkTag}</Tag>}
                               <Typography.Text type="secondary">
                                 {sb.memoryMb} MB
                               </Typography.Text>
@@ -392,7 +445,7 @@ export default function App({ mode }: { mode: Resolved }) {
             <Col xs={24} md={17}>
               {!current ? (
                 <Card size="small">
-                  <Empty description="Chọn hoặc tạo một sandbox để bắt đầu" />
+                  <Empty description={t.pickSandbox} />
                 </Card>
               ) : (
                 <Card size="small" title={current.name}>
@@ -400,38 +453,38 @@ export default function App({ mode }: { mode: Resolved }) {
                     items={[
                       {
                         key: 'run',
-                        label: 'Chạy',
+                        label: t.tabRun,
                         children: <RunPanel sandbox={current} languages={languages} />,
                       },
                       {
                         key: 'files',
-                        label: 'File',
+                        label: t.tabFiles,
                         children: <FilesPanel sandboxId={current.id} />,
                       },
                       {
                         key: 'mon',
-                        label: 'Tài nguyên',
+                        label: t.tabResources,
                         // Mounted lazily so the 2-second poll only runs while
                         // the user is actually looking at it.
                         children: <MonitorPanel sandbox={current} mode={mode} />,
                       },
                       {
                         key: 'mounts',
-                        label: `Thư mục gắn (${current.mounts.length})`,
+                        label: t.tabMounts(current.mounts.length),
                         children: (
                           <MountsPanel sandbox={current} onChange={() => void refreshList()} />
                         ),
                       },
                       {
                         key: 'term',
-                        label: 'Terminal',
+                        label: t.tabTerminal,
                         // Mounted lazily: opening a PTY the user never looks at
                         // would leave a shell running per sandbox.
                         children: <SandboxTerminal sandboxId={current.id} mode={mode} />,
                       },
                       {
                         key: 'trace',
-                        label: sandbox_trace_label(current),
+                        label: traceTabLabel(current, t),
                         children: (
                           <TracePanel
                             sandbox={current}
@@ -441,7 +494,7 @@ export default function App({ mode }: { mode: Resolved }) {
                       },
                       {
                         key: 'settings',
-                        label: 'Cài đặt',
+                        label: t.tabSettings,
                         children: (
                           <SandboxSettings
                             sandbox={current}
@@ -451,11 +504,11 @@ export default function App({ mode }: { mode: Resolved }) {
                       },
                       {
                         key: 'hist',
-                        label: `Lịch sử (${history.length})`,
+                        label: t.tabHistory(history.length),
                         children:
                           history.length === 0 ? (
                             <Empty
-                              description="Chưa chạy lần nào"
+                              description={t.traceOnEmpty}
                               image={Empty.PRESENTED_IMAGE_SIMPLE}
                             />
                           ) : (
@@ -472,11 +525,11 @@ export default function App({ mode }: { mode: Resolved }) {
                                     }
                                     description={
                                       <Space size={4} wrap>
-                                        <Tag color={isolationLabel(r.isolation).color}>
-                                          {isolationLabel(r.isolation).text}
+                                        <Tag color={isolationLabel(r.isolation, t).color}>
+                                          {isolationLabel(r.isolation, t).text}
                                         </Tag>
                                         {r.timedOut ? (
-                                          <Tag color="orange">quá giờ</Tag>
+                                          <Tag color="orange">{t.timedOut}</Tag>
                                         ) : (
                                           <Tag color={r.exitCode === 0 ? 'green' : 'red'}>
                                             exit {r.exitCode ?? '—'}
@@ -484,7 +537,7 @@ export default function App({ mode }: { mode: Resolved }) {
                                         )}
                                         <Typography.Text type="secondary">
                                           {r.durationMs} ms ·{' '}
-                                          {new Date(r.createdAt).toLocaleString('vi-VN')}
+                                          {new Date(r.createdAt).toLocaleString()}
                                         </Typography.Text>
                                       </Space>
                                     }
@@ -505,9 +558,9 @@ export default function App({ mode }: { mode: Resolved }) {
 
       <Modal
         open={creating}
-        title="Tạo sandbox"
-        okText="Tạo"
-        cancelText="Thôi"
+        title={t.createTitle}
+        okText={t.create}
+        cancelText={t.cancel}
         onOk={() => void create()}
         onCancel={() => setCreating(false)}
       >
@@ -521,14 +574,14 @@ export default function App({ mode }: { mode: Resolved }) {
             memoryMb: 512,
           }}
         >
-          <Form.Item name="name" label="Tên">
-            <Input placeholder="để trống thì tự đặt" />
+          <Form.Item name="name" label={t.name}>
+            <Input placeholder={t.namePlaceholder} />
           </Form.Item>
-          <Form.Item name="backend" label="Backend">
+          <Form.Item name="backend" label={t.backend}>
             <Select
               options={(caps?.backends ?? []).map((b) => ({
                 value: b,
-                label: b === 'docker' ? 'Docker container' : 'Chạy trực tiếp (OS sandbox)',
+                label: b === 'docker' ? t.backendDocker : t.backendDirectLong,
               }))}
             />
           </Form.Item>
@@ -538,7 +591,7 @@ export default function App({ mode }: { mode: Resolved }) {
           >
             {({ getFieldValue }) =>
               getFieldValue('backend') === 'docker' ? (
-                <Form.Item name="image" label="Docker image">
+                <Form.Item name="image" label={t.dockerImage}>
                   <Input placeholder="python:3.12-slim" />
                 </Form.Item>
               ) : null
@@ -546,17 +599,17 @@ export default function App({ mode }: { mode: Resolved }) {
           </Form.Item>
           <Form.Item
             name="network"
-            label="Cho phép mạng"
+            label={t.allowNetwork}
             valuePropName="checked"
-            extra="Tắt là an toàn hơn. Phải bật thì mới cài được gói."
+            extra={t.allowNetworkHint}
           >
             <Switch />
           </Form.Item>
           <Space>
-            <Form.Item name="cpus" label="CPU">
+            <Form.Item name="cpus" label={t.cpu}>
               <InputNumber min={0.1} max={32} step={0.5} />
             </Form.Item>
-            <Form.Item name="memoryMb" label="RAM (MB)">
+            <Form.Item name="memoryMb" label={`${t.ram} (MB)`}>
               <InputNumber min={64} max={65536} step={256} />
             </Form.Item>
           </Space>

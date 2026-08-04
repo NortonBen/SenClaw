@@ -54,7 +54,7 @@ pub async fn terminal_ws(
             return ws.on_upgrade(move |mut sock| async move {
                 let _ = sock
                     .send(Message::Text(format!(
-                        "\r\n[sandbox] không khởi động được container: {msg}\r\n"
+                        "\r\n[sandbox] cannot start the container: {msg}\r\n"
                     )))
                     .await;
             });
@@ -104,6 +104,7 @@ pub fn shell_command(
                 &sb.mounts,
                 sb.fs_mode,
                 allowlist,
+                &sb.ports,
             );
             for a in args.iter().filter(|a| a.as_str() != "-s") {
                 cmd.arg(a);
@@ -111,8 +112,12 @@ pub fn shell_command(
             Ok(cmd)
         }
         DirectKind::Degraded => Ok(CommandBuilder::new("/bin/sh")),
+        DirectKind::AppContainer => Err(
+            "an interactive terminal inside an AppContainer is not supported yet — use the Run tab, or the docker backend"
+                .into(),
+        ),
         DirectKind::Unsupported => {
-            Err("hệ điều hành này không chạy trực tiếp được — dùng backend docker".into())
+            Err("this OS cannot run direct sandboxes — use the docker backend".into())
         }
     }
 }
@@ -161,7 +166,7 @@ async fn handle(socket: WebSocket, sb: Sandbox, kind: DirectKind, allowlist: Vec
         Ok(c) => c,
         Err(e) => {
             let _ = tx
-                .send(Message::Text(format!("\r\n[sandbox] không mở được shell: {e}\r\n")))
+                .send(Message::Text(format!("\r\n[sandbox] cannot open a shell: {e}\r\n")))
                 .await;
             return;
         }
@@ -252,6 +257,7 @@ mod tests {
             mounts: Vec::new(),
             fs_mode: crate::fsmode::FsMode::Strict,
             trace_enabled: false,
+            ports: Default::default(),
             container_id: None,
             last_error: None,
             created_at: 0,

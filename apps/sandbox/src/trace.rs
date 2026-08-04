@@ -278,7 +278,7 @@ pub fn diff(before: &[(String, u64, i64)], after: &[(String, u64, i64)]) -> Vec<
                 source: "diff".into(),
                 kind: "file.write".into(),
                 target: path.clone(),
-                detail: format!("tạo mới, {size} byte"),
+                detail: format!("created, {size} bytes"),
             }),
             Some((_, s0, m0)) if s0 != size || m0 != mtime => out.push(Event {
                 ts_ms: *mtime.max(&0).min(&now),
@@ -286,7 +286,7 @@ pub fn diff(before: &[(String, u64, i64)], after: &[(String, u64, i64)]) -> Vec<
                 source: "diff".into(),
                 kind: "file.write".into(),
                 target: path.clone(),
-                detail: format!("sửa, {s0} → {size} byte"),
+                detail: format!("modified, {s0} → {size} bytes"),
             }),
             _ => {}
         }

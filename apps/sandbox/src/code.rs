@@ -51,7 +51,7 @@ pub fn lookup(name: &str) -> Result<&'static Lang> {
     LANGS
         .iter()
         .find(|l| l.name == n)
-        .ok_or_else(|| anyhow!("chưa hỗ trợ ngôn ngữ `{name}`; đang có: {}", languages().join(", ")))
+        .ok_or_else(|| anyhow!("language `{name}` is not supported; available: {}", languages().join(", ")))
 }
 
 /// The shell program that runs `file` with the right interpreter.
@@ -69,8 +69,8 @@ pub fn launch_script(lang: &Lang, file: &str) -> String {
         ));
     }
     s.push_str(&format!(
-        "echo 'Không tìm thấy trình thông dịch cho {} (đã thử: {}).' >&2\n\
-         echo 'Với backend docker: chọn image có sẵn, hoặc cài trong sandbox rồi chạy lại.' >&2\n\
+        "echo 'No interpreter found for {} (tried: {}).' >&2\n\
+         echo 'On the docker backend: pick an image that ships one, or install it in the sandbox and retry.' >&2\n\
          exit 127\n",
         lang.name,
         lang.interpreters.join(", ")

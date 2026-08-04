@@ -5,9 +5,9 @@
 //! files" are different promises and users want to pick.
 //!
 //! ```text
-//! strict     chỉ thấy thư mục sandbox + thư mục đã gắn (+ thư viện hệ thống)
-//! allowlist  strict, cộng các thư mục người dùng khai trước trong cài đặt
-//! open       đọc được cả đĩa, trừ các thư mục bí mật đã chặn sẵn
+//! strict     only the sandbox directory + its mounts (+ system libraries)
+//! allowlist  strict, plus the folders declared up front in settings
+//! open       the whole disk is readable, except the secret folders
 //! ```
 //!
 //! ## Why the system roots are always readable
@@ -70,9 +70,9 @@ impl FsMode {
     /// Short Vietnamese label for the UI and for tool results.
     pub fn label(self) -> &'static str {
         match self {
-            FsMode::Strict => "Cách ly toàn bộ — chỉ thấy sandbox và thư mục đã gắn",
-            FsMode::Allowlist => "Cách ly + danh sách cho phép trong cài đặt",
-            FsMode::Open => "Không cách ly đọc — đọc được cả đĩa (trừ thư mục bí mật)",
+            FsMode::Strict => "Full isolation — only the sandbox and mounted folders are visible",
+            FsMode::Allowlist => "Isolated plus the allowlist from settings",
+            FsMode::Open => "Reads not isolated — the whole disk is readable (except secret folders)",
         }
     }
 }

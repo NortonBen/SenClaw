@@ -146,54 +146,56 @@ fn tools_list() -> Value {
     json!([
         {
             "name": "sbx_capabilities",
-            "description": "Kiểm tra máy này chạy được kiểu sandbox nào: docker (cần daemon đang chạy) hay chạy trực tiếp có rào chắn của hệ điều hành (macOS Seatbelt / Linux bubblewrap). Gọi trước khi tạo sandbox nếu chưa chắc, và gọi lại sau khi người dùng vừa mở Docker.",
+            "description": "Check what kind of sandbox this machine can actually run: docker (needs a live daemon) or direct execution confined by the operating system (macOS Seatbelt / Linux bubblewrap / Windows AppContainer). Call it before creating a sandbox if unsure, and again right after the user has started Docker.",
             "inputSchema": obj(json!({
-                "refresh": { "type": "boolean", "description": "Đo lại thay vì dùng kết quả đã lưu (mặc định false)." }
+                "refresh": { "type": "boolean", "description": "Re-measure instead of using the cached result (default false)." }
             }), &[])
         },
         {
             "name": "sbx_run",
-            "description": format!("Chạy nhanh một đoạn mã trong sandbox dùng-một-lần rồi xoá sandbox đó đi. Đây là công cụ nên dùng cho hầu hết yêu cầu kiểu 'chạy thử đoạn Python này'. Mạng TẮT mặc định. Ngôn ngữ: {langs}."),
+            "description": format!("Run a snippet in a throwaway sandbox and delete it afterwards. This is the tool for almost every 'run this Python for me' request. The network is OFF by default. Languages: {langs}."),
             "inputSchema": obj(json!({
-                "language": { "type": "string", "description": format!("Một trong: {langs}") },
-                "code": { "type": "string", "description": "Mã nguồn cần chạy." },
-                "backend": { "type": "string", "enum": ["direct", "docker"], "description": "Bỏ trống để tự chọn theo khả năng của máy." },
-                "network": { "type": "boolean", "description": "Cho phép truy cập mạng (mặc định false)." },
-                "timeoutMs": { "type": "integer", "description": "Hạn chạy, mặc định 30000, tối đa 600000." }
+                "language": { "type": "string", "description": format!("One of: {langs}") },
+                "code": { "type": "string", "description": "The source code to run." },
+                "backend": { "type": "string", "enum": ["direct", "docker"], "description": "Leave empty to pick automatically based on what this machine supports." },
+                "network": { "type": "boolean", "description": "Allow network access (default false)." },
+                "timeoutMs": { "type": "integer", "description": "Run deadline in ms; default 30000, maximum 600000." }
             }), &["language", "code"])
         },
         {
             "name": "sbx_create",
-            "description": "Tạo một sandbox tồn tại lâu dài để chạy nhiều lệnh nối tiếp nhau (file và gói đã cài được giữ lại giữa các lần chạy). Dùng khi công việc cần nhiều bước; việc chạy một đoạn mã lẻ thì dùng sbx_run.",
+            "description": "Create a long-lived sandbox for several commands in a row (files and installed packages persist between runs). Use it for multi-step work; for a single snippet use sbx_run instead.",
             "inputSchema": obj(json!({
                 "name": { "type": "string" },
                 "backend": { "type": "string", "enum": ["direct", "docker"] },
-                "image": { "type": "string", "description": "Docker image, chỉ dùng cho backend docker (mặc định python:3.12-slim)." },
-                "network": { "type": "boolean", "description": "Mặc định false. Phải bật thì mới cài được gói." },
+                "image": { "type": "string", "description": "Docker image, docker backend only (default python:3.12-slim)." },
+                "network": { "type": "boolean", "description": "Default false. Must be on to install packages." },
                 "cpus": { "type": "number" },
                 "memoryMb": { "type": "integer" },
-                "timeoutMs": { "type": "integer", "description": "Hạn mặc định cho mỗi lần chạy trong sandbox này." },
-                "fsMode": { "type": "string", "enum": ["strict", "allowlist", "open"], "description": "Mức cách ly ĐỌC đĩa. strict = chỉ thấy sandbox + thư mục đã gắn (mặc định). allowlist = thêm các thư mục khai trong cài đặt. open = đọc được cả đĩa. Bỏ trống để dùng mặc định trong cài đặt." }
+                "timeoutMs": { "type": "integer", "description": "Default deadline for each run in this sandbox." },
+                "listenPorts": { "type": "array", "items": { "type": "integer" }, "description": "Ports the sandbox may serve on, reachable at 127.0.0.1:<port>." },
+                "connectPorts": { "type": "array", "items": { "type": "integer" }, "description": "The only remote ports it may dial out to, e.g. [443]." },
+                "fsMode": { "type": "string", "enum": ["strict", "allowlist", "open"], "description": "Disk READ isolation. strict = only the sandbox and mounted folders (default). allowlist = plus the folders declared in settings. open = the whole disk. Leave empty to use the default from settings." }
             }), &[])
         },
         {
             "name": "sbx_list",
-            "description": "Liệt kê các sandbox đang có kèm trạng thái, backend và giới hạn tài nguyên.",
+            "description": "List existing sandboxes with their status, backend and resource limits.",
             "inputSchema": obj(json!({}), &[])
         },
         {
             "name": "sbx_exec",
-            "description": "Chạy một lệnh shell trong sandbox đã có. Lệnh được đưa vào shell qua stdin nên dấu nháy trong lệnh giữ nguyên.",
+            "description": "Run a shell command in an existing sandbox. The command reaches the shell on stdin, so quotes inside it survive untouched.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
-                "command": { "type": "string", "description": "Lệnh shell (có thể nhiều dòng)." },
+                "command": { "type": "string", "description": "Shell command; may span several lines." },
                 "timeoutMs": { "type": "integer" },
-                "env": { "type": "object", "description": "Biến môi trường thêm cho lần chạy này." }
+                "env": { "type": "object", "description": "Extra environment variables for this run." }
             }), &["sandboxId", "command"])
         },
         {
             "name": "sbx_run_in",
-            "description": format!("Chạy một đoạn mã trong sandbox đã có, giữ nguyên trạng thái sandbox. Ngôn ngữ: {langs}."),
+            "description": format!("Run a snippet inside an existing sandbox, keeping its state. Languages: {langs}."),
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
                 "language": { "type": "string" },
@@ -204,17 +206,17 @@ fn tools_list() -> Value {
         },
         {
             "name": "sbx_install",
-            "description": "Cài gói vào sandbox bằng pip, npm hoặc apt. Sandbox phải đang bật mạng — nếu chưa thì dùng sbx_update để bật.",
+            "description": "Install packages into a sandbox with pip, npm or apt. The sandbox must have the network on — use sbx_update to turn it on first.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
                 "manager": { "type": "string", "enum": ["pip", "npm", "apt"] },
                 "packages": { "type": "array", "items": { "type": "string" } },
-                "timeoutMs": { "type": "integer", "description": "Mặc định 300000 vì cài gói lâu." }
+                "timeoutMs": { "type": "integer", "description": "Default 300000, because installs are slow." }
             }), &["sandboxId", "manager", "packages"])
         },
         {
             "name": "sbx_update",
-            "description": "Đổi cấu hình sandbox: bật/tắt mạng, đổi giới hạn CPU/RAM, đổi hạn thời gian. Với backend docker, đổi mạng hoặc tài nguyên sẽ tạo lại container (file trong sandbox vẫn còn).",
+            "description": "Change a sandbox: network on/off, CPU/RAM limits, run deadline. On the docker backend, changing the network or resources recreates the container (files are kept).",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
                 "name": { "type": "string" },
@@ -226,23 +228,23 @@ fn tools_list() -> Value {
         },
         {
             "name": "sbx_delete",
-            "description": "Xoá sandbox. Mặc định GIỮ lại file; đặt purge=true nếu muốn xoá luôn toàn bộ file trong sandbox.",
+            "description": "Delete a sandbox. Files are KEPT by default; pass purge=true to delete them as well.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
-                "purge": { "type": "boolean", "description": "Xoá luôn file. Không khôi phục được." }
+                "purge": { "type": "boolean", "description": "Also delete the files. Not recoverable." }
             }), &["sandboxId"])
         },
         {
             "name": "sbx_files",
-            "description": "Liệt kê file trong sandbox theo đường dẫn tương đối.",
+            "description": "List files in the sandbox by relative path.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
-                "path": { "type": "string", "description": "Tương đối với gốc sandbox; bỏ trống là gốc." }
+                "path": { "type": "string", "description": "Relative to the sandbox root; empty means the root." }
             }), &["sandboxId"])
         },
         {
             "name": "sbx_file_read",
-            "description": "Đọc nội dung một file văn bản trong sandbox.",
+            "description": "Read a text file from the sandbox.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
                 "path": { "type": "string" }
@@ -250,7 +252,7 @@ fn tools_list() -> Value {
         },
         {
             "name": "sbx_file_write",
-            "description": "Ghi một file văn bản vào sandbox (tự tạo thư mục cha). Dùng để đưa dữ liệu vào cho đoạn mã xử lý.",
+            "description": "Write a text file into the sandbox (parent folders are created). Use it to hand data to the code.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
                 "path": { "type": "string" },
@@ -259,40 +261,40 @@ fn tools_list() -> Value {
         },
         {
             "name": "sbx_stats",
-            "description": "Xem sandbox đang dùng bao nhiêu CPU và RAM, kèm danh sách tiến trình đang chạy bên trong (pid, %CPU, RAM, thời gian chạy, lệnh). Dùng khi người dùng hỏi 'nó có còn chạy không', 'sao máy chậm thế', hoặc trước khi quyết định dừng cái gì.",
+            "description": "How much CPU and RAM the sandbox is using, with the processes running inside it (pid, %CPU, RAM, elapsed, command). Use it when the user asks whether something is still running, why the machine feels slow, or before deciding what to stop.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" }
             }), &["sandboxId"])
         },
         {
             "name": "sbx_kill",
-            "description": "Dừng tiến trình trong sandbox. Bỏ trống `pid` để dừng TẤT CẢ những gì sandbox đang chạy. Chỉ dừng được tiến trình thuộc chính sandbox đó — không dừng được tiến trình khác trên máy.",
+            "description": "Stop processes in a sandbox. Omit `pid` to stop EVERYTHING it is running. Only processes belonging to that sandbox can be stopped — nothing else on the machine.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
-                "pid": { "type": "integer", "description": "Bỏ trống = dừng toàn bộ. Lấy pid từ sbx_stats." }
+                "pid": { "type": "integer", "description": "Omit to stop everything. Take a pid from sbx_stats." }
             }), &["sandboxId"])
         },
         {
             "name": "sbx_mount",
-            "description": "Gắn một thư mục có thật trên máy vào trong sandbox, để mã trong sandbox đọc/ghi dữ liệu thật. Mặc định gắn cho phép GHI — đặt readOnly=true khi chỉ cần đọc, và nên mặc định chọn readOnly nếu mã nguồn chưa đáng tin. Không gắn được thư mục nhà, thư mục hệ thống, hay các thư mục chứa khoá bí mật.",
+            "description": "Mount a real folder from this machine into a sandbox so the code can read and write actual data. It is READ-WRITE by default — pass readOnly=true when reading is enough, and prefer readOnly whenever the code is not yet trusted. The home directory, system directories and credential folders cannot be mounted.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
-                "source": { "type": "string", "description": "Đường dẫn tuyệt đối của thư mục trên máy thật." },
-                "target": { "type": "string", "description": "Tên thư mục bên trong sandbox. Bỏ trống thì lấy tên thư mục gốc." },
-                "readOnly": { "type": "boolean", "description": "Chỉ đọc (mặc định false)." }
+                "source": { "type": "string", "description": "Absolute path of the folder on the real machine." },
+                "target": { "type": "string", "description": "Folder name inside the sandbox. Empty means the source folder's own name." },
+                "readOnly": { "type": "boolean", "description": "Read-only (default false)." }
             }), &["sandboxId", "source"])
         },
         {
             "name": "sbx_unmount",
-            "description": "Gỡ một thư mục đã gắn khỏi sandbox. Chỉ gỡ liên kết, KHÔNG xoá dữ liệu trong thư mục đó trên máy thật.",
+            "description": "Unmount a folder from a sandbox. This only removes the link; it does NOT delete anything in the real folder.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
-                "target": { "type": "string", "description": "Tên thư mục trong sandbox, như khi gắn." }
+                "target": { "type": "string", "description": "The folder name inside the sandbox, as given when mounting." }
             }), &["sandboxId", "target"])
         },
         {
             "name": "sbx_fs_mode",
-            "description": "Đổi mức cách ly ĐỌC đĩa của một sandbox: `strict` (chỉ thấy sandbox và thư mục đã gắn), `allowlist` (thêm thư mục khai trong cài đặt), `open` (đọc được cả đĩa). Có hiệu lực ngay từ lần chạy kế tiếp. Không áp dụng cho backend docker — container vốn đã cách ly toàn bộ.",
+            "description": "Change a sandbox's disk READ isolation: `strict` (only the sandbox and its mounts), `allowlist` (plus the folders declared in settings), `open` (the whole disk). Takes effect on the next run. Not applicable to the docker backend — a container is already fully isolated.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
                 "fsMode": { "type": "string", "enum": ["strict", "allowlist", "open"] }
@@ -300,10 +302,10 @@ fn tools_list() -> Value {
         },
         {
             "name": "sbx_settings",
-            "description": "Xem hoặc đổi cài đặt mặc định của app: mức cách ly đọc mặc định cho sandbox mới, danh sách thư mục cho phép đọc ở chế độ `allowlist`, và mặc định mạng/CPU/RAM/hạn giờ. Gọi không kèm tham số để chỉ xem.",
+            "description": "Read or change the app defaults: the read-isolation new sandboxes start with, the folders readable in `allowlist` mode, and the default network/CPU/RAM/deadline. Call it with no arguments just to read them.",
             "inputSchema": obj(json!({
                 "defaultFsMode": { "type": "string", "enum": ["strict", "allowlist", "open"] },
-                "allowlist": { "type": "array", "items": { "type": "string" }, "description": "Đường dẫn tuyệt đối. THAY THẾ toàn bộ danh sách cũ, không phải thêm vào." },
+                "allowlist": { "type": "array", "items": { "type": "string" }, "description": "Absolute paths. REPLACES the whole list rather than adding to it." },
                 "defaultNetwork": { "type": "boolean" },
                 "defaultMemoryMb": { "type": "integer" },
                 "defaultCpus": { "type": "number" },
@@ -311,8 +313,17 @@ fn tools_list() -> Value {
             }), &[])
         },
         {
+            "name": "sbx_ports",
+            "description": "Open specific ports for a sandbox while the rest of the network stays closed. `listen` = ports the sandbox may serve on, reachable from this machine at 127.0.0.1:<port> — this is how you run an app inside a sandbox. `connect` = the only remote ports it may dial out to, so `connect:[443]` means HTTPS and nothing else. Sending empty lists closes everything again. On macOS both directions are enforced exactly; on docker and Linux opening a port grants the sandbox a network, and the reply says so.",
+            "inputSchema": obj(json!({
+                "sandboxId": { "type": "string" },
+                "listen": { "type": "array", "items": { "type": "integer" }, "description": "Ports the sandbox may bind (1024 and above). REPLACES the current list." },
+                "connect": { "type": "array", "items": { "type": "integer" }, "description": "Remote ports it may connect out to, e.g. [443]. REPLACES the current list." }
+            }), &["sandboxId"])
+        },
+        {
             "name": "sbx_trace",
-            "description": "Bật/tắt theo dõi hoạt động của sandbox, dùng khi kiểm thử: ghi lại các sự kiện đọc/ghi file, khởi tạo tiến trình, và kết nối mạng tới địa chỉ nào. Mặc định TẮT. Bật xong thì chạy lại mã, rồi xem bằng sbx_events. LƯU Ý: đây là công cụ quan sát cho kiểm thử, KHÔNG phải bằng chứng an ninh — hook chạy bên trong sandbox nên mã cố tình lẩn tránh thì né được; thứ chặn được mã độc là bản thân sandbox (cách ly đọc/ghi/mạng), không phải cái theo dõi này.",
+            "description": "Turn activity tracing on or off, for testing: it records file reads and writes, process launches, and which addresses were contacted. OFF by default. Turn it on, run the code again, then read the result with sbx_events. NOTE: this is an observation tool for testing, NOT security evidence — the hook runs inside the sandbox, so code that deliberately hides can evade it. What actually stops hostile code is the sandbox itself (read/write/network isolation), not this.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
                 "enabled": { "type": "boolean" }
@@ -320,20 +331,20 @@ fn tools_list() -> Value {
         },
         {
             "name": "sbx_events",
-            "description": "Xem các sự kiện đã theo dõi được: file nào bị đọc/ghi, tiến trình nào được khởi tạo, kết nối mạng tới đâu (kèm tên miền tra cứu). Lọc theo `kind` = file | proc | net, hoặc theo `runId` để chỉ xem một lần chạy.",
+            "description": "Read the traced events: which files were read or written, which processes were launched, which addresses were contacted (including hostnames looked up). Filter with `kind` = file | proc | net, or with `runId` for a single run.",
             "inputSchema": obj(json!({
                 "sandboxId": { "type": "string" },
-                "runId": { "type": "string", "description": "Lấy từ `runId` trong kết quả chạy. Bỏ trống = tất cả." },
-                "kind": { "type": "string", "enum": ["file", "proc", "net"], "description": "Bỏ trống = mọi loại." },
-                "limit": { "type": "integer", "description": "Mặc định 200." }
+                "runId": { "type": "string", "description": "Take it from `runId` in a run result. Empty means all runs." },
+                "kind": { "type": "string", "enum": ["file", "proc", "net"], "description": "Empty means every kind." },
+                "limit": { "type": "integer", "description": "Default 200." }
             }), &["sandboxId"])
         },
         {
             "name": "sbx_runs",
-            "description": "Xem lịch sử các lần chạy (lệnh, mã thoát, thời gian, mức cách ly đã áp dụng).",
+            "description": "Run history: command, exit code, duration, and the isolation actually applied.",
             "inputSchema": obj(json!({
-                "sandboxId": { "type": "string", "description": "Bỏ trống để xem tất cả." },
-                "limit": { "type": "integer", "description": "Mặc định 20." }
+                "sandboxId": { "type": "string", "description": "Leave empty for all of them." },
+                "limit": { "type": "integer", "description": "Default 20." }
             }), &[])
         }
     ])
@@ -358,7 +369,7 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         "sbx_run" => {
             let (lang, src) = (s(args, "language"), s(args, "code"));
             if lang.is_empty() || src.is_empty() {
-                return err("cần `language` và `code`".into());
+                return err("`language` and `code` are required".into());
             }
             match runner::run_once(
                 db,
@@ -392,6 +403,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                     env: json!({}),
                     mounts: Vec::new(),
                     fs_mode: opt(args, "fsMode").as_deref().and_then(crate::fsmode::FsMode::parse),
+                    ports: crate::ports::validate(
+                        &args["listenPorts"].as_array().map(|a| a.iter().filter_map(|v| v.as_u64()).map(|v| v as u16).collect::<Vec<_>>()).unwrap_or_default(),
+                        &args["connectPorts"].as_array().map(|a| a.iter().filter_map(|v| v.as_u64()).map(|v| v as u16).collect::<Vec<_>>()).unwrap_or_default(),
+                    )
+                    .unwrap_or_default(),
                 },
             )
             .await
@@ -402,7 +418,7 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                     "backend": sb.backend,
                     "image": sb.image,
                     "network": sb.network,
-                    "note": "Container/tiến trình chỉ khởi động ở lần chạy đầu tiên.",
+                    "note": "The container/process only starts on the first run.",
                 })),
                 Err(e) => err(e.to_string()),
             }
@@ -416,7 +432,7 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         "sbx_exec" => {
             let cmd = s(args, "command");
             if cmd.is_empty() {
-                return err("cần `command`".into());
+                return err("`command` is required".into());
             }
             let sb = match db.sandbox(&s(args, "sandboxId")) {
                 Ok(sb) => sb,
@@ -431,7 +447,8 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 "exec",
                 None,
                 &cmd,
-            )
+                runner::shell_argv(&sb),
+)
             .await
             {
                 Ok(run) => json_result(run_summary(&run)),
@@ -520,9 +537,9 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let purge = flag(args, "purge");
             match runner::delete(db, &sb, purge).await {
                 Ok(()) => text_result(format!(
-                    "Đã xoá sandbox `{}`{}.",
+                    "Deleted sandbox `{}`{}.",
                     sb.name,
-                    if purge { " cùng toàn bộ file" } else { " (file vẫn còn trên đĩa)" }
+                    if purge { " and all of its files" } else { " (files are still on disk)" }
                 )),
                 Err(e) => err(e.to_string()),
             }
@@ -561,7 +578,7 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 &path,
                 args["content"].as_str().unwrap_or(""),
             ) {
-                Ok(n) => text_result(format!("Đã ghi {n} byte vào `{path}`.")),
+                Ok(n) => text_result(format!("Wrote {n} bytes to `{path}`.")),
                 Err(e) => err(e.to_string()),
             }
         }
@@ -581,12 +598,12 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             };
             match args["pid"].as_u64() {
                 Some(pid) => match monitor::kill_pid(&sb, pid as u32).await {
-                    Ok(()) => text_result(format!("Đã dừng tiến trình {pid}.")),
+                    Ok(()) => text_result(format!("Stopped process {pid}.")),
                     Err(e) => err(e.to_string()),
                 },
                 None => match monitor::kill_all(&sb).await {
-                    Ok(0) => text_result("Sandbox không có tiến trình nào đang chạy.".into()),
-                    Ok(n) => text_result(format!("Đã dừng {n} nhóm tiến trình của sandbox.")),
+                    Ok(0) => text_result("The sandbox has no running processes.".into()),
+                    Ok(n) => text_result(format!("Stopped {n} process group(s) belonging to the sandbox.")),
                     Err(e) => err(e.to_string()),
                 },
             }
@@ -613,15 +630,15 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                     if sb.backend == "docker" && sb.status == "running" {
                         let _ = runner::stop(db, &sb).await;
                         note = match runner::ensure_started(db, &sb).await {
-                            Ok(_) => " Container đã được tạo lại để nhận thư mục mới.".into(),
-                            Err(e) => format!(" LƯU Ý: tạo lại container thất bại: {e}"),
+                            Ok(_) => " The container was recreated so the new folder is visible.".into(),
+                            Err(e) => format!(" NOTE: recreating the container failed: {e}"),
                         };
                     }
                     text_result(format!(
-                        "Đã gắn `{}` vào sandbox tại `{}`{}.{note}",
+                        "Mounted `{}` into the sandbox at `{}`{}.{note}",
                         m.source,
                         m.target,
-                        if m.read_only { " (chỉ đọc)" } else { " (đọc-ghi)" }
+                        if m.read_only { " (read-only)" } else { " (read-write)" }
                     ))
                 }
                 Err(e) => err(e.to_string()),
@@ -637,7 +654,7 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let target = s(args, "target");
             let next = mounts::remove(&sb.mounts, &target);
             if next.len() == sb.mounts.len() {
-                return err(format!("sandbox không có thư mục gắn tại `{target}`"));
+                return err(format!("the sandbox has no folder mounted at `{target}`"));
             }
             match db.set_mounts(&id, &next) {
                 Ok(sb) => {
@@ -655,7 +672,7 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                         let _ = runner::ensure_started(db, &sb).await;
                     }
                     text_result(format!(
-                        "Đã gỡ `{target}` khỏi sandbox. Dữ liệu trên máy thật vẫn nguyên."
+                        "Unmounted `{target}`. The real folder is untouched."
                     ))
                 }
                 Err(e) => err(e.to_string()),
@@ -665,7 +682,7 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         "sbx_fs_mode" => {
             let Some(mode) = crate::fsmode::FsMode::parse(&s(args, "fsMode")) else {
                 return err(format!(
-                    "chế độ `{}` không hợp lệ (strict, allowlist, open)",
+                    "invalid mode `{}` (strict, allowlist, open)",
                     s(args, "fsMode")
                 ));
             };
@@ -676,14 +693,13 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             };
             if sb.backend == "docker" {
                 return text_result(
-                    "Sandbox này chạy bằng docker — container vốn đã cách ly toàn bộ đĩa, \
-                     không cần đổi chế độ đọc."
+                    "This sandbox uses docker — a container already isolates the whole disk, so there is no read mode to change."
                         .into(),
                 );
             }
             match db.set_fs_mode(&id, mode) {
                 Ok(sb) => text_result(format!(
-                    "Sandbox `{}` giờ ở chế độ: {}",
+                    "Sandbox `{}` is now in mode: {}",
                     sb.name,
                     mode.label()
                 )),
@@ -719,16 +735,51 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             }
         }
 
+        "sbx_ports" => {
+            let id = s(args, "sandboxId");
+            let before = match db.sandbox(&id) {
+                Ok(sb) => sb,
+                Err(e) => return err(e.to_string()),
+            };
+            let nums = |k: &str| -> Vec<u16> {
+                args[k]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|v| v.as_u64()).map(|v| v as u16).collect())
+                    .unwrap_or_default()
+            };
+            let policy = match crate::ports::validate(&nums("listen"), &nums("connect")) {
+                Ok(p) => p,
+                Err(e) => return err(e.to_string()),
+            };
+            match db.set_ports(&id, &policy) {
+                Ok(sb) => {
+                    if sb.backend == "docker" && before.status == "running" {
+                        let _ = runner::stop(db, &sb).await;
+                        let _ = runner::ensure_started(db, &sb).await;
+                    }
+                    let isolation = caps::direct_caps(false).await.kind.as_str().to_string();
+                    json_result(json!({
+                        "listen": sb.ports.listen,
+                        "connect": sb.ports.connect,
+                        "reachableAt": sb.ports.listen.iter()
+                            .map(|p| format!("127.0.0.1:{p}"))
+                            .collect::<Vec<_>>(),
+                        "note": crate::ports::note_for(&sb.backend, &isolation, &sb.ports),
+                    }))
+                }
+                Err(e) => err(e.to_string()),
+            }
+        }
+
         "sbx_trace" => {
             let on = flag(args, "enabled");
             match db.set_trace(&s(args, "sandboxId"), on) {
                 Ok(sb) => text_result(format!(
-                    "Theo dõi hoạt động của `{}`: {}.{}",
+                    "Activity tracing for `{}`: {}.{}",
                     sb.name,
-                    if on { "BẬT" } else { "TẮT" },
+                    if on { "ON" } else { "OFF" },
                     if on {
-                        " Chạy lại mã rồi dùng sbx_events để xem. Đây là công cụ quan sát \
-                          cho kiểm thử, không phải bằng chứng an ninh."
+                        " Run the code again, then read sbx_events. This is an observation tool for testing, not security evidence."
                     } else {
                         ""
                     }
@@ -750,12 +801,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 opt_int(args, "limit").unwrap_or(200),
             ) {
                 Ok(events) if events.is_empty() => text_result(if sb.trace_enabled {
-                    "Chưa có sự kiện nào. Sandbox đã bật theo dõi — hãy chạy mã rồi xem lại."
+                    "No events yet. Tracing is on for this sandbox — run some code and look again."
                         .into()
                 } else {
                     format!(
-                        "Sandbox `{}` đang TẮT theo dõi nên không có gì được ghi lại. \
-                         Bật bằng sbx_trace rồi chạy lại mã.",
+                        "Tracing is OFF for sandbox `{}`, so nothing was recorded. Turn it on with sbx_trace and run the code again.",
                         sb.name
                     )
                 }),
@@ -772,7 +822,7 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             }
         }
 
-        other => err(format!("không có công cụ `{other}`")),
+        other => err(format!("no such tool `{other}`")),
     }
 }
 

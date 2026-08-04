@@ -35,6 +35,8 @@ pub enum DirectKind {
     Seatbelt,
     /// Linux user namespaces via `bwrap` (bubblewrap).
     Bubblewrap,
+    /// Windows AppContainer + Job Object.
+    AppContainer,
     /// No OS-level confinement available. Commands would run as an ordinary
     /// child process with a scrubbed environment and a private working
     /// directory — weaker than a jail, and labelled as such everywhere.
@@ -48,6 +50,7 @@ impl DirectKind {
         match self {
             DirectKind::Seatbelt => "seatbelt",
             DirectKind::Bubblewrap => "bubblewrap",
+            DirectKind::AppContainer => "appcontainer",
             DirectKind::Degraded => "degraded",
             DirectKind::Unsupported => "unsupported",
         }
@@ -55,7 +58,10 @@ impl DirectKind {
 
     /// True when the kernel/OS actually enforces the boundary.
     pub fn is_enforced(self) -> bool {
-        matches!(self, DirectKind::Seatbelt | DirectKind::Bubblewrap)
+        matches!(
+            self,
+            DirectKind::Seatbelt | DirectKind::Bubblewrap | DirectKind::AppContainer
+        )
     }
 }
 
@@ -195,16 +201,16 @@ async fn probe_direct(os: &str) -> DirectCaps {
                 DirectCaps {
                     available: true,
                     kind: DirectKind::Seatbelt,
-                    detail: "macOS Seatbelt (`sandbox-exec`): ghi file bị chặn ngoài thư mục \
-                             sandbox, đọc các thư mục bí mật (~/.ssh, ~/.aws, Keychain…) bị chặn."
+                    detail: "macOS Seatbelt (`sandbox-exec`): writes outside the sandbox directory are \
+                             blocked, and the credential stores (~/.ssh, ~/.aws, Keychain…) are unreadable."
                         .into(),
                 }
             } else {
                 DirectCaps {
                     available: true,
                     kind: DirectKind::Degraded,
-                    detail: "Không tìm thấy /usr/bin/sandbox-exec — chạy tiến trình con thường, \
-                             KHÔNG có rào chắn của hệ điều hành."
+                    detail: "/usr/bin/sandbox-exec not found — commands run as an ordinary child process \
+                             with NO operating-system barrier."
                         .into(),
                 }
             }
@@ -214,29 +220,33 @@ async fn probe_direct(os: &str) -> DirectCaps {
                 DirectCaps {
                     available: true,
                     kind: DirectKind::Bubblewrap,
-                    detail: "Linux bubblewrap: namespace riêng (pid/ipc/uts), toàn bộ hệ thống \
-                             gắn chỉ-đọc, chỉ thư mục sandbox được ghi."
+                    detail: "Linux bubblewrap: private namespaces (pid/ipc/uts), the system mounted \
+                             read-only, and only the sandbox directory writable."
                         .into(),
                 }
             } else {
                 DirectCaps {
                     available: true,
                     kind: DirectKind::Degraded,
-                    detail: "Không có `bwrap` — cài bubblewrap (apt install bubblewrap) để có \
-                             cách ly thật. Hiện chạy tiến trình con thường."
+                    detail: "`bwrap` is missing — install bubblewrap (apt install bubblewrap) for real \
+                             isolation. Commands currently run as an ordinary child process."
                         .into(),
                 }
             }
         }
         "windows" => DirectCaps {
-            available: false,
-            kind: DirectKind::Unsupported,
-            detail: "Windows không hỗ trợ chạy trực tiếp — dùng backend Docker.".into(),
+            available: true,
+            kind: DirectKind::AppContainer,
+            detail: "Windows AppContainer + Job Object: writes outside the sandbox directory are \
+                     blocked, user data is unreadable, the network is off unless a capability \
+                     grants it, and RAM/process count are enforced limits. NOT yet verified on \
+                     a real machine — see docs/sandbox-windows-research.md."
+                .into(),
         },
         other => DirectCaps {
             available: false,
             kind: DirectKind::Unsupported,
-            detail: format!("Hệ điều hành `{other}` chưa được hỗ trợ chạy trực tiếp."),
+            detail: format!("Direct execution is not supported on `{other}`."),
         },
     }
 }
@@ -250,7 +260,7 @@ async fn probe_docker() -> DockerCaps {
             available: false,
             client_version: None,
             server_version: None,
-            detail: format!("Không tìm thấy `{bin}` trên PATH. Cài Docker rồi bấm kiểm tra lại."),
+            detail: format!("`{bin}` is not on PATH. Install Docker, then check again."),
         };
     }
 
@@ -274,7 +284,7 @@ async fn probe_docker() -> DockerCaps {
                     available: false,
                     client_version: none_if_empty(client),
                     server_version: None,
-                    detail: "Docker CLI có nhưng daemon chưa trả lời. Hãy mở Docker Desktop."
+                    detail: "The Docker CLI is present but the daemon is not answering. Start Docker Desktop."
                         .into(),
                 };
             }
@@ -283,7 +293,7 @@ async fn probe_docker() -> DockerCaps {
                 available: true,
                 client_version: none_if_empty(client),
                 server_version: Some(server.to_string()),
-                detail: format!("Docker daemon {server} sẵn sàng."),
+                detail: format!("Docker daemon {server} is ready."),
             }
         }
         ProbeOut::Failed { stderr } => DockerCaps {
@@ -292,8 +302,8 @@ async fn probe_docker() -> DockerCaps {
             client_version: None,
             server_version: None,
             detail: format!(
-                "Docker CLI có nhưng daemon không chạy: {}",
-                first_line(&stderr).unwrap_or_else(|| "không rõ lý do".into())
+                "The Docker CLI is present but the daemon is not running: {}",
+                first_line(&stderr).unwrap_or_else(|| "no reason given".into())
             ),
         },
         ProbeOut::TimedOut => DockerCaps {
@@ -302,7 +312,7 @@ async fn probe_docker() -> DockerCaps {
             client_version: None,
             server_version: None,
             detail: format!(
-                "Docker daemon không phản hồi sau {}s (Docker Desktop treo hoặc đang khởi động).",
+                "The Docker daemon did not answer within {}s (Docker Desktop is hung or still starting).",
                 PROBE_TIMEOUT.as_secs()
             ),
         },
@@ -374,15 +384,26 @@ async fn run_probe(bin: &str, args: &[&str]) -> ProbeOut {
 /// Resolved by walking `PATH` rather than shelling out to `which`, so the probe
 /// costs no process spawn and behaves the same when PATH is scrubbed.
 pub async fn which(bin: &str) -> Option<String> {
-    if bin.contains('/') {
+    if bin.contains('/') || bin.contains('\\') {
         let p = std::path::Path::new(bin);
         return is_exec(p).then(|| p.to_string_lossy().to_string());
     }
     let path = std::env::var("PATH").unwrap_or_default();
-    for dir in path.split(':').filter(|d| !d.is_empty()) {
-        let cand = std::path::Path::new(dir).join(bin);
-        if is_exec(&cand) {
-            return Some(cand.to_string_lossy().to_string());
+    // Windows separates PATH with `;` and needs an extension appended — a bare
+    // `python3` is never a file there, so a Unix-only lookup finds nothing and
+    // the sandbox reports "no interpreter" on a machine that has one.
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let exts: &[&str] = if cfg!(windows) {
+        &[".exe", ".cmd", ".bat", ""]
+    } else {
+        &[""]
+    };
+    for dir in path.split(sep).filter(|d| !d.is_empty()) {
+        for ext in exts {
+            let cand = std::path::Path::new(dir).join(format!("{bin}{ext}"));
+            if is_exec(&cand) {
+                return Some(cand.to_string_lossy().to_string());
+            }
         }
     }
     None

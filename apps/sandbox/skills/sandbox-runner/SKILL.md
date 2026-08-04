@@ -1,195 +1,200 @@
 ---
 name: sandbox-runner
 description: >-
-  Chạy lệnh shell và mã nguồn của người dùng trong môi trường cách ly khỏi máy
-  thật, qua app Sandbox (Space App). Dùng khi người dùng muốn chạy thử một đoạn
-  Python/JavaScript/Bash, tính toán bằng code, kiểm tra một lệnh có chạy đúng
-  không, chạy code lạ hoặc code tải từ đâu đó mà chưa tin, cần cài thư viện rồi
-  chạy, hoặc nói thẳng là muốn "chạy trong sandbox / máy ảo / docker". Ví dụ:
-  "chạy thử đoạn python này", "tính hộ tôi bằng code", "đoạn script này có an
-  toàn không, chạy thử xem", "cài pandas rồi chạy file này", "chạy lệnh này
-  nhưng đừng động vào máy tôi".
+  Run the user's shell commands and source code isolated from the real machine,
+  through the Sandbox Space App. Use it when they want to try a Python /
+  JavaScript / Bash snippet, compute something with code, check whether a
+  command works, run code they pasted from somewhere and do not yet trust,
+  install a library and then run something, or when they say outright that they
+  want it "in a sandbox / a VM / docker". Examples: "run this python for me",
+  "work it out with code", "is this script safe? try it", "install pandas then
+  run this file", "run this but don't touch my machine". Vietnamese users say
+  the same things as "chạy thử đoạn python này", "chạy trong sandbox", "cài
+  pandas rồi chạy", "chạy lệnh này nhưng đừng động vào máy tôi".
 ---
 
 # Sandbox Runner
 
-Bạn điều khiển app **Sandbox** qua MCP server `sandbox-mcp`. Tên tool đầy đủ
-dạng `mcp__sandbox-mcp__sbx_*`.
+You drive the **Sandbox** app through the `sandbox-mcp` MCP server. Full tool
+names look like `mcp__sandbox-mcp__sbx_*`.
 
-## Chọn công cụ: một lần hay nhiều bước
+## First decision: one shot or several steps
 
-Đây là quyết định đầu tiên và hầu hết yêu cầu rơi vào vế trái.
+Most requests fall on the left.
 
-| Tình huống | Dùng |
+| Situation | Use |
 |---|---|
-| Chạy một đoạn mã, xem kết quả, xong | `sbx_run` — tạo sandbox tạm, chạy, tự xoá |
-| Nhiều bước nối nhau, cần giữ file / gói đã cài | `sbx_create` rồi `sbx_run_in` / `sbx_exec` |
+| Run one snippet, read the result, done | `sbx_run` — throwaway sandbox, auto-deleted |
+| Several steps, keeping files or installed packages | `sbx_create`, then `sbx_run_in` / `sbx_exec` |
 
-Đừng `sbx_create` cho một phép tính. Sandbox tạo ra mà không xoá sẽ đọng lại.
+Do not `sbx_create` for a single calculation. Sandboxes made and never deleted
+pile up.
 
-## Trình tự chuẩn
+## Normal sequence
 
-1. **`sbx_run`** với `language` + `code`. Xong. Không cần gọi gì trước đó — nếu
-   máy không chạy được, lỗi trả về sẽ nói rõ lý do và cách sửa.
-2. Nếu lỗi nói backend không dùng được → gọi `sbx_capabilities` để đọc chi tiết,
-   rồi báo người dùng đúng việc họ cần làm (thường là mở Docker Desktop).
-3. Việc nhiều bước: `sbx_create` → `sbx_file_write` (đưa dữ liệu vào) →
-   `sbx_run_in` / `sbx_exec` → `sbx_delete` khi xong.
+1. **`sbx_run`** with `language` + `code`. That is usually the whole job — no
+   setup call needed. If the machine cannot run it, the error says why and how
+   to fix it.
+2. If the error says a backend is unavailable → `sbx_capabilities` for the
+   detail, then tell the user the one thing they need to do (usually: start
+   Docker Desktop).
+3. Multi-step work: `sbx_create` → `sbx_file_write` (feed data in) →
+   `sbx_run_in` / `sbx_exec` → `sbx_delete` when finished.
 
-## Bảng tool
+## Tools
 
-| Tool | Dùng để |
+| Tool | For |
 |---|---|
-| `mcp__sandbox-mcp__sbx_capabilities` | Máy này chạy được kiểu cách ly nào |
-| `mcp__sandbox-mcp__sbx_run` | **Mặc định** — chạy một đoạn mã rồi dọn sạch |
-| `mcp__sandbox-mcp__sbx_create` | Tạo sandbox tồn tại lâu |
-| `mcp__sandbox-mcp__sbx_list` | Liệt kê sandbox đang có |
-| `mcp__sandbox-mcp__sbx_exec` | Chạy lệnh shell trong sandbox đã có |
-| `mcp__sandbox-mcp__sbx_run_in` | Chạy đoạn mã trong sandbox đã có |
-| `mcp__sandbox-mcp__sbx_install` | Cài gói pip / npm / apt |
-| `mcp__sandbox-mcp__sbx_file_write` | Đưa dữ liệu vào sandbox |
-| `mcp__sandbox-mcp__sbx_file_read` | Đọc file kết quả |
-| `mcp__sandbox-mcp__sbx_files` | Liệt kê file |
-| `mcp__sandbox-mcp__sbx_update` | Bật/tắt mạng, đổi CPU/RAM |
-| `mcp__sandbox-mcp__sbx_delete` | Xoá sandbox |
-| `mcp__sandbox-mcp__sbx_runs` | Lịch sử các lần chạy |
-| `mcp__sandbox-mcp__sbx_stats` | CPU/RAM đang dùng + danh sách tiến trình |
-| `mcp__sandbox-mcp__sbx_kill` | Dừng một tiến trình, hoặc dừng tất cả |
-| `mcp__sandbox-mcp__sbx_mount` | Gắn thư mục thật trên máy vào sandbox |
-| `mcp__sandbox-mcp__sbx_unmount` | Gỡ thư mục đã gắn |
-| `mcp__sandbox-mcp__sbx_fs_mode` | Đổi mức cách ly ĐỌC đĩa của một sandbox |
-| `mcp__sandbox-mcp__sbx_settings` | Xem/đổi cài đặt mặc định của app |
-| `mcp__sandbox-mcp__sbx_trace` | Bật/tắt theo dõi hoạt động (cho kiểm thử) |
-| `mcp__sandbox-mcp__sbx_events` | Xem file/tiến trình/mạng đã ghi nhận được |
+| `mcp__sandbox-mcp__sbx_capabilities` | What isolation this machine supports |
+| `mcp__sandbox-mcp__sbx_run` | **Default** — run a snippet, then clean up |
+| `mcp__sandbox-mcp__sbx_create` | Create a long-lived sandbox |
+| `mcp__sandbox-mcp__sbx_list` | List existing sandboxes |
+| `mcp__sandbox-mcp__sbx_exec` | Shell command in an existing sandbox |
+| `mcp__sandbox-mcp__sbx_run_in` | Snippet in an existing sandbox |
+| `mcp__sandbox-mcp__sbx_install` | Install pip / npm / apt packages |
+| `mcp__sandbox-mcp__sbx_file_write` | Put data into the sandbox |
+| `mcp__sandbox-mcp__sbx_file_read` | Read a result file |
+| `mcp__sandbox-mcp__sbx_files` | List files |
+| `mcp__sandbox-mcp__sbx_update` | Network on/off, CPU/RAM limits |
+| `mcp__sandbox-mcp__sbx_delete` | Delete a sandbox |
+| `mcp__sandbox-mcp__sbx_runs` | Run history |
+| `mcp__sandbox-mcp__sbx_stats` | CPU/RAM in use + running processes |
+| `mcp__sandbox-mcp__sbx_kill` | Stop one process, or all of them |
+| `mcp__sandbox-mcp__sbx_mount` | Mount a real folder into the sandbox |
+| `mcp__sandbox-mcp__sbx_unmount` | Unmount it again |
+| `mcp__sandbox-mcp__sbx_fs_mode` | Change a sandbox's disk read isolation |
+| `mcp__sandbox-mcp__sbx_settings` | Read/change the app defaults |
+| `mcp__sandbox-mcp__sbx_trace` | Turn activity tracing on/off (testing) |
+| `mcp__sandbox-mcp__sbx_events` | Read the file/process/network events |
+| `mcp__sandbox-mcp__sbx_ports` | Open specific ports while the rest stays shut |
 
-## Theo dõi hoạt động (kiểm thử)
+## Opening ports (running an app in a sandbox)
 
-Mặc định TẮT. Bật bằng `sbx_trace` rồi **chạy lại mã**, sau đó `sbx_events`.
+The network switch is all-or-nothing. `sbx_ports` is the middle ground: closed
+except what you name.
 
-Ghi nhận được: đọc/ghi file, khởi tạo tiến trình (kèm argv), kết nối mạng (kèm
-địa chỉ), tra cứu tên miền (kèm hostname). Lọc bằng `kind` = `file` | `proc` |
-`net`, hoặc `runId` để chỉ xem một lần chạy.
+- `listen: [8000]` — the sandbox may serve on 8000, and **you reach it at
+  `http://127.0.0.1:8000`**. This is how you run someone's app in a sandbox and
+  look at it in a browser.
+- `connect: [443]` — the only remote port it may dial out to. HTTPS and nothing
+  else.
 
-Hoạt động bằng hook trong tiến trình: Python qua `sys.addaudithook`, Node qua
-`--require`; ngôn ngữ khác thì so sánh thư mục sandbox trước/sau nên vẫn thấy
-được file bị ghi. Hook lan sang cả tiến trình con.
+Both lists **replace** the current ones; send them complete. Empty lists close
+everything again. Listening ports must be 1024 or above.
 
-**Đây là công cụ quan sát cho kiểm thử, KHÔNG phải bằng chứng an ninh.** Hook
-chạy bên trong sandbox và nhật ký nằm trong thư mục sandbox — mã cố tình lẩn
-tránh thì né được. Đừng bao giờ nói với người dùng "nhật ký sạch nên đoạn mã này
-an toàn". Thứ thật sự chặn được mã độc là bản thân sandbox (cách ly đọc, ghi,
-mạng), do nhân hệ điều hành cưỡng chế.
+You do not need `network: true` for this — the port rules are the whole
+permission, which is the point: an app that serves on 8000 does not also get to
+phone home.
 
-Dùng nó để trả lời "đoạn mã này *thực sự* đụng vào những gì" khi kiểm thử, và để
-chỉ ra hành vi đáng ngờ — ví dụ một script cài đặt lại đi đọc `~/.aws` hay gọi
-ra một tên miền lạ.
+**Enforcement differs by backend, and the reply tells you.** On macOS both
+directions are exact. On docker and Linux, opening a listening port gives the
+sandbox a network, so outbound is *not* limited to the `connect` list — the
+`note` field in the reply says so, and you should pass that on rather than
+implying the restriction held.
 
-## Ba mức cách ly ĐỌC đĩa
+## Three levels of disk READ isolation
 
-Ghi thì luôn bị nhốt trong thư mục sandbox. Đọc thì có ba mức, đổi bằng
-`sbx_fs_mode` hoặc đặt lúc `sbx_create` qua `fsMode`:
+Writes are always confined to the sandbox directory. Reads have three levels,
+set with `sbx_fs_mode` or at creation with `fsMode`:
 
-| Mức | Sandbox đọc được gì |
+| Level | The sandbox can read |
 |---|---|
-| `strict` (**mặc định**) | Thư mục sandbox + thư mục đã gắn + thư viện hệ thống |
-| `allowlist` | Như `strict`, cộng các thư mục khai sẵn trong cài đặt app |
-| `open` | Cả đĩa, trừ `~/.ssh`, `~/.aws`, Keychain, dữ liệu SenClaw |
+| `strict` (**default**) | Its own directory + mounted folders + system libraries |
+| `allowlist` | As `strict`, plus folders declared in app settings |
+| `open` | The whole disk, except `~/.ssh`, `~/.aws`, Keychain, SenClaw data |
 
-**Đừng vội hạ xuống `open`.** Mặc định `strict` nghĩa là mã không đọc được dữ
-liệu người dùng — đó là điểm bán hàng của app. Khi đoạn mã cần một thư mục cụ
-thể, cách đúng là `sbx_mount` đúng thư mục đó (chỉ đọc nếu được), **không** phải
-mở toang cả đĩa. Chỉ dùng `open` khi người dùng bảo thẳng như vậy.
+**Do not reach for `open`.** The `strict` default means the code cannot read
+the user's data, which is the point of the app. When a snippet needs one
+particular folder, the right move is `sbx_mount` for that folder (read-only if
+that is enough) — **not** opening the whole disk. Use `open` only when the user
+explicitly asks for it.
 
-Backend `docker` không dùng thiết lập này — container vốn đã cách ly toàn bộ.
+The docker backend ignores this setting — a container is already fully isolated.
 
-`sbx_settings` đổi mặc định cho sandbox **tạo mới**; sandbox đang có giữ nguyên.
-Lưu ý `allowlist` trong `sbx_settings` **thay thế** cả danh sách chứ không thêm
-vào — đọc danh sách hiện tại trước rồi gửi lại đầy đủ.
+`sbx_settings` changes defaults for **new** sandboxes; existing ones keep
+theirs. Note that its `allowlist` **replaces** the whole list rather than adding
+to it — read the current list first, then send it back complete.
 
-## Theo dõi và dừng
+## Two backends
 
-`sbx_stats` trả về CPU tổng, RAM tổng và từng tiến trình (pid, %CPU, RAM, thời
-gian chạy, lệnh). Dùng khi người dùng hỏi "còn chạy không", "sao máy chậm", hoặc
-trước khi quyết định dừng cái gì.
-
-`sbx_kill` không có `pid` = dừng tất cả. Có `pid` = dừng đúng tiến trình đó (lấy
-pid từ `sbx_stats`). Chỉ dừng được tiến trình của chính sandbox — pid lạ sẽ bị
-từ chối, nên đừng thử dùng nó để dừng thứ gì khác trên máy.
-
-Với backend docker, "dừng tất cả" là khởi động lại container. File trong sandbox
-và gói đã cài vẫn còn.
-
-## Gắn thư mục từ máy thật
-
-`sbx_mount` cho mã trong sandbox đọc/ghi thẳng vào một thư mục có thật trên máy.
-Đây là **lỗ hổng có chủ ý** trên hàng rào sandbox, nên:
-
-- **Mặc định nên đặt `readOnly: true`.** Chỉ mở ghi khi công việc thật sự cần
-  ghi ra, và nói cho người dùng biết.
-- **Mã nguồn chưa tin được thì đừng gắn gì cả**, hoặc chỉ gắn đúng thư mục dữ
-  liệu cần thiết ở chế độ chỉ đọc.
-- Thư mục nhà, thư mục hệ thống và nơi chứa khoá bí mật sẽ bị từ chối — đó là
-  chủ ý, đừng tìm đường lách bằng thư mục con của chúng.
-- Mã trong sandbox thấy thư mục tại `<tên target>` ngay trong thư mục gốc
-  sandbox, ví dụ gắn `target: "du-lieu"` thì đọc bằng `open("du-lieu/a.csv")`.
-- `sbx_unmount` chỉ gỡ liên kết, **không** xoá dữ liệu thật.
-
-## Hai backend, khác nhau ở đâu
-
-| | `direct` (chạy trực tiếp) | `docker` |
+| | `direct` | `docker` |
 |---|---|---|
-| Cần gì | Không cần gì | Docker daemon đang chạy |
-| Khởi động | Tức thì | Vài giây, lần đầu phải tải image |
-| Chặn ghi ra ngoài sandbox | Có (Seatbelt / bubblewrap) | Có |
-| Chặn đọc ~/.ssh, ~/.aws, Keychain | Có | Có |
-| Chặn đọc phần còn lại của đĩa | Có, ở mức `strict`/`allowlist` (mặc định) | Có |
-| Windows | Không | Có |
+| Needs | nothing | a running Docker daemon |
+| Start-up | instant | seconds, plus a first-time image pull |
+| Blocks writes outside the sandbox | yes | yes |
+| Blocks reading the rest of the disk | yes, at `strict`/`allowlist` (default) | yes |
+| Enforced RAM ceiling | only on Windows | yes |
 
-**Bỏ trống `backend` là đúng trong hầu hết trường hợp** — app tự chọn theo
-khả năng thật của máy.
+**Leaving `backend` empty is right almost always** — the app picks what the
+machine can actually do.
 
-Chọn `docker` khi mã nguồn thật sự đáng ngờ (người dùng dán từ trên mạng, từ
-email, từ một repo lạ) và bạn muốn ranh giới chắc nhất — nhưng `direct` ở mức
-`strict` cũng đã chặn đọc dữ liệu người dùng rồi.
+## Rules
 
-## Quy tắc bắt buộc
+- **The network is OFF by default.** Only turn it on (`network: true`) when the
+  work needs it, and **say so when you do**. Untrusted code plus a network is
+  how data leaves.
+- **Installing packages needs the network.** `sbx_install` refuses while it is
+  off; turn it on with `sbx_update` first and explain why.
+- **Read `isolation` in the result.** It reports what actually confined that
+  run: `seatbelt`, `bubblewrap`, `appcontainer`, `container` or `degraded`.
+- **`degraded` means NO barrier at all.** The machine lacks an isolation tool.
+  Tell the user before running anything else, not after.
+- **Mount read-only by default**, and do not mount anything when the code is
+  untrusted.
+- **"File not found" when the file plainly exists** is usually `strict`
+  blocking the read, not a wrong path. Mount that folder; do not switch to
+  `open`.
+- **`purge: true` deletes files irreversibly.** Only for sandboxes you created
+  yourself, or when the user asks for a full delete.
 
-- **Mạng mặc định TẮT.** Chỉ bật (`network: true`) khi công việc cần mạng và
-  **nói cho người dùng biết bạn đang bật**. Đoạn mã lạ + mạng bật = dữ liệu có
-  thể bị gửi đi.
-- **Cài gói thì phải có mạng.** `sbx_install` sẽ từ chối nếu sandbox đang tắt
-  mạng; bật bằng `sbx_update` trước, và nói lý do.
-- **Đọc `isolation` trong kết quả trả về.** Nó cho biết mức cách ly nào ĐÃ THỰC
-  SỰ được áp dụng cho lần chạy đó: `seatbelt`, `bubblewrap`, `container` hay
-  `degraded`.
-- **`degraded` nghĩa là KHÔNG có rào chắn nào.** Máy thiếu công cụ cách ly. Phải
-  báo người dùng trước khi chạy tiếp, đừng chạy rồi mới nói.
-- **Gắn thư mục thì mặc định chỉ đọc.** Xem mục "Gắn thư mục từ máy thật".
-- **Mã báo "không tìm thấy file" mà file có thật** thường là do `strict` chặn
-  đọc, không phải sai đường dẫn. Gắn thư mục đó vào, đừng đổi sang `open`.
-- **`purge: true` xoá sạch file, không khôi phục được.** Chỉ dùng khi người dùng
-  bảo xoá hẳn, hoặc với sandbox tạm do chính bạn tạo.
+## Reading a result
 
-## Đọc kết quả
-
-Mỗi lần chạy trả về:
-
-- `ok` — chạy xong và mã thoát bằng 0
-- `exitCode` — `null` nghĩa là bị giết (quá giờ), không phải thành công
-- `timedOut` — quá hạn; **kết quả in ra trước đó có thể đã mất**, đừng kết luận
-  là mã sai, hãy nói là quá giờ và hỏi có tăng `timeoutMs` không
-- `truncated` — output quá dài đã bị cắt; số liệu cuối có thể thiếu
-- `isolation` — mức cách ly thật sự
+- `ok` — finished with exit code 0
+- `exitCode` — `null` means killed (timed out), not success
+- `timedOut` — over the deadline; **output printed earlier may be lost**, so do
+  not conclude the code is wrong. Say it timed out and offer a larger
+  `timeoutMs`
+- `truncated` — output was cut; the tail may be missing
+- `isolation` — what actually confined it
 - `stdout` / `stderr`
 
-Trình bày cho người dùng: kết quả trước, mức cách ly sau, một dòng là đủ. Đừng
-dán lại toàn bộ mã họ vừa đưa.
+Present it result first, isolation second; one line is enough. Do not paste the
+user's own code back at them.
 
-## Khi Docker không chạy
+## Activity tracing, for testing
 
-Đây là tình huống hay gặp nhất. `sbx_capabilities` trả về `docker.detail` với
-lý do đo được — thường là "Docker CLI có nhưng daemon chưa trả lời".
+Off by default. Turn it on with `sbx_trace`, **run the code again**, then read
+`sbx_events`.
 
-Việc cần làm: nói người dùng mở Docker Desktop, rồi gọi lại
-`sbx_capabilities` với `refresh: true`. **Đừng** kết luận là máy không chạy được
-sandbox — backend `direct` gần như luôn dùng được trên macOS và Linux.
+It records file reads and writes, process launches with argv, network
+connections with addresses, and hostname lookups. Filter with `kind` =
+`file` | `proc` | `net`, or `runId` for a single run.
+
+It works through in-process hooks (Python `sys.addaudithook`, Node `--require`)
+plus a directory diff, so other languages still show their file writes. Hooks
+are inherited by child processes.
+
+**This is an observation tool for testing, NOT security evidence.** The hook
+runs inside the sandbox and the log lives in the sandbox directory — code that
+deliberately hides can evade it. Never tell the user "the log is clean, so this
+code is safe." What actually stops hostile code is the sandbox itself, enforced
+by the kernel.
+
+Use it to answer "what did this code *actually* touch", and to point out
+suspicious behaviour — an installer that reads `~/.aws`, or a script that calls
+out to an unfamiliar domain.
+
+## When Docker is not running
+
+The most common situation. `sbx_capabilities` returns `docker.detail` with the
+measured reason — usually "The Docker CLI is present but the daemon is not
+answering".
+
+Tell the user to start Docker Desktop, then call `sbx_capabilities` again with
+`refresh: true`. **Do not** conclude the machine cannot sandbox — the `direct`
+backend works on nearly every macOS and Linux machine.
+
+## Language
+
+The app's interface is English with a Vietnamese switch, and tool results are
+English. Reply in whatever language the user is writing in.

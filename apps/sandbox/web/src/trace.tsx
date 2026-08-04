@@ -14,23 +14,26 @@ import {
 } from 'antd'
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api, type Sandbox, type TraceEvent } from './api'
+import { useT } from './i18n'
 
 type Filter = 'all' | 'file' | 'proc' | 'net'
 
-function kindTag(kind: string): { text: string; color: string } {
+type Words = ReturnType<typeof useT>
+
+function kindTag(kind: string, t: Words): { text: string; color: string } {
   switch (kind) {
     case 'file.read':
-      return { text: 'đọc file', color: 'blue' }
+      return { text: t.evFileRead, color: 'blue' }
     case 'file.write':
-      return { text: 'ghi file', color: 'orange' }
+      return { text: t.evFileWrite, color: 'orange' }
     case 'proc.spawn':
-      return { text: 'tiến trình', color: 'purple' }
+      return { text: t.evProcSpawn, color: 'purple' }
     case 'net.connect':
-      return { text: 'kết nối', color: 'red' }
+      return { text: t.evNetConnect, color: 'red' }
     case 'net.dns':
-      return { text: 'tra tên miền', color: 'magenta' }
+      return { text: t.evNetDns, color: 'magenta' }
     case 'trace.truncated':
-      return { text: 'bị cắt', color: 'gold' }
+      return { text: t.evTruncated, color: 'gold' }
     default:
       return { text: kind, color: 'default' }
   }
@@ -45,6 +48,7 @@ export function TracePanel({
   onChange: () => void
 }) {
   const { message } = AntApp.useApp()
+  const t = useT()
   const [events, setEvents] = useState<TraceEvent[]>([])
   const [filter, setFilter] = useState<Filter>('all')
   const [loading, setLoading] = useState(false)
@@ -69,7 +73,7 @@ export function TracePanel({
     try {
       await api.setTrace(sandbox.id, on)
       onChange()
-      message.success(on ? 'Đã bật theo dõi — chạy lại mã để ghi nhận' : 'Đã tắt theo dõi')
+      message.success(on ? t.traceOn : t.traceOff)
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -86,7 +90,7 @@ export function TracePanel({
 
   const columns = [
     {
-      title: 'Lúc',
+      title: t.colTime,
       dataIndex: 'tsMs',
       width: 110,
       render: (v: number) =>
@@ -95,16 +99,16 @@ export function TracePanel({
         String(v % 1000).padStart(3, '0'),
     },
     {
-      title: 'Loại',
+      title: t.colKind,
       dataIndex: 'kind',
       width: 130,
       render: (v: string) => {
-        const k = kindTag(v)
+        const k = kindTag(v, t)
         return <Tag color={k.color}>{k.text}</Tag>
       },
     },
     {
-      title: 'Đối tượng',
+      title: t.colTarget,
       dataIndex: 'target',
       render: (v: string) => (
         <Typography.Text className="sbx-mono" ellipsis={{ tooltip: v }} style={{ fontSize: 12 }}>
@@ -113,7 +117,7 @@ export function TracePanel({
       ),
     },
     {
-      title: 'Chi tiết',
+      title: t.colDetail,
       dataIndex: 'detail',
       width: 200,
       render: (v: string) => (
@@ -123,12 +127,12 @@ export function TracePanel({
       ),
     },
     {
-      title: 'Nguồn',
+      title: t.colSource,
       dataIndex: 'source',
       width: 90,
       render: (v: string) => (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {v === 'diff' ? 'so sánh' : v}
+          {v === 'diff' ? t.srcDiff : v}
         </Typography.Text>
       ),
     },
@@ -139,29 +143,29 @@ export function TracePanel({
       <Space wrap size={12}>
         <Space size={8}>
           <Switch checked={sandbox.traceEnabled} onChange={toggle} />
-          <Typography.Text>Theo dõi hoạt động</Typography.Text>
+          <Typography.Text>{t.traceToggle}</Typography.Text>
         </Space>
         <Segmented
           value={filter}
           onChange={(v) => setFilter(v as Filter)}
           options={[
-            { label: 'Tất cả', value: 'all' },
-            { label: 'File', value: 'file' },
-            { label: 'Tiến trình', value: 'proc' },
-            { label: 'Mạng', value: 'net' },
+            { label: t.filterAll, value: 'all' },
+            { label: t.filterFile, value: 'file' },
+            { label: t.filterProc, value: 'proc' },
+            { label: t.filterNet, value: 'net' },
           ]}
         />
         <Button size="small" icon={<ReloadOutlined />} onClick={() => void load()}>
-          Tải lại
+          {t.reload}
         </Button>
         <Popconfirm
-          title="Xoá toàn bộ sự kiện đã ghi?"
-          okText="Xoá"
-          cancelText="Thôi"
+          title={t.clearLogConfirm}
+          okText={t.delete}
+          cancelText={t.cancel}
           onConfirm={() => void clear()}
         >
           <Button size="small" danger icon={<DeleteOutlined />}>
-            Xoá nhật ký
+            {t.clearLog}
           </Button>
         </Popconfirm>
       </Space>
@@ -171,18 +175,18 @@ export function TracePanel({
       <Alert
         type="warning"
         showIcon
-        message="Đây là công cụ quan sát cho kiểm thử, KHÔNG phải bằng chứng an ninh"
-        description="Hook theo dõi chạy bên trong sandbox, nhật ký cũng nằm trong thư mục sandbox — mã cố tình lẩn tránh thì né được. Thứ thật sự chặn được mã độc là bản thân sandbox (cách ly đọc, ghi, mạng), do nhân hệ điều hành cưỡng chế."
+        message={t.traceWarnTitle}
+        description={t.traceWarnBody}
       />
 
       {!sandbox.traceEnabled && events.length === 0 ? (
         <Empty
-          description="Theo dõi đang tắt. Bật lên rồi chạy lại mã để ghi nhận hoạt động."
+          description={t.traceOffEmpty}
           image={Empty.PRESENTED_IMAGE_SIMPLE}
         />
       ) : events.length === 0 ? (
         <Empty
-          description="Chưa ghi nhận sự kiện nào — hãy chạy mã trong sandbox này."
+          description={t.traceOnEmpty}
           image={Empty.PRESENTED_IMAGE_SIMPLE}
         />
       ) : (
