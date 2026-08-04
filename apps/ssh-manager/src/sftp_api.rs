@@ -1,13 +1,16 @@
+use crate::api::AppState;
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::{fs, io::{AsyncReadExt, AsyncWriteExt}};
-use crate::api::AppState;
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+};
 
 #[derive(Serialize)]
 pub struct FileNode {
@@ -48,7 +51,9 @@ pub fn sftp_router() -> Router<Arc<AppState>> {
         .route("/connect", post(connect_sftp))
 }
 
-async fn local_ls(Query(query): Query<PathQuery>) -> axum::response::Result<Json<Vec<FileNode>>, axum::http::StatusCode> {
+async fn local_ls(
+    Query(query): Query<PathQuery>,
+) -> axum::response::Result<Json<Vec<FileNode>>, axum::http::StatusCode> {
     let mut entries = match fs::read_dir(&query.path).await {
         Ok(e) => e,
         Err(_) => return Err(axum::http::StatusCode::NOT_FOUND),
@@ -57,7 +62,8 @@ async fn local_ls(Query(query): Query<PathQuery>) -> axum::response::Result<Json
     let mut files = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
         if let Ok(metadata) = entry.metadata().await {
-            let modified = metadata.modified()
+            let modified = metadata
+                .modified()
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -72,7 +78,7 @@ async fn local_ls(Query(query): Query<PathQuery>) -> axum::response::Result<Json
             });
         }
     }
-    
+
     // Sort directories first, then alphabetical
     files.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
 
@@ -86,7 +92,7 @@ async fn remote_ls(
 ) -> axum::response::Result<Json<Vec<FileNode>>, axum::http::StatusCode> {
     if let Some(client_arc) = state.connections.get(&conn_id).await {
         let mut client = client_arc.lock().await;
-        
+
         let path = if query.path.is_empty() || query.path == "." {
             String::from(".") // Get default remote dir if empty
         } else {
@@ -101,15 +107,17 @@ async fn remote_ls(
                     if name_str == "." || name_str == ".." {
                         continue;
                     }
-                    
+
                     let is_dir = entry.metadata().is_dir();
                     let size = entry.metadata().len();
-                    let modified_time = entry.metadata().modified()
+                    let modified_time = entry
+                        .metadata()
+                        .modified()
                         .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs() as i64;
-                        
+
                     let full_path = entry.path();
 
                     files.push(FileNode {
@@ -143,16 +151,16 @@ async fn download_file(
                 Ok(f) => f,
                 Err(_) => return Err(axum::http::StatusCode::NOT_FOUND),
             };
-            
+
             let mut contents = Vec::new();
             if file.read_to_end(&mut contents).await.is_err() {
                 return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
             }
-            
+
             if fs::write(&payload.target, contents).await.is_err() {
                 return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
             }
-            
+
             Ok(Json(true))
         } else {
             Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
@@ -179,11 +187,11 @@ async fn upload_file(
                 Ok(f) => f,
                 Err(_) => return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
             };
-            
+
             if file.write_all(&contents).await.is_err() {
                 return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
             }
-            
+
             Ok(Json(true))
         } else {
             Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
@@ -197,7 +205,12 @@ async fn connect_sftp(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<SftpConnectRequest>,
 ) -> axum::response::Result<Json<SftpConnectResponse>, axum::http::StatusCode> {
-    let host = match state.hosts.get_all().into_iter().find(|h| h.id == payload.host_id) {
+    let host = match state
+        .hosts
+        .get_all()
+        .into_iter()
+        .find(|h| h.id == payload.host_id)
+    {
         Some(h) => h,
         None => return Err(axum::http::StatusCode::NOT_FOUND),
     };
@@ -212,7 +225,9 @@ async fn connect_sftp(
                     password = Some(kitem.value);
                 }
                 crate::keychain::KeychainItemType::PrivateKey => {
-                    if let Ok(kp) = russh_keys::decode_secret_key(kitem.value.as_str(), password.as_deref()) {
+                    if let Ok(kp) =
+                        russh_keys::decode_secret_key(kitem.value.as_str(), password.as_deref())
+                    {
                         key_pair = Some(kp);
                     }
                 }
@@ -227,11 +242,13 @@ async fn connect_sftp(
         password.as_deref(),
         key_pair,
         None,
-    ).await {
+    )
+    .await
+    {
         Ok(client) => {
             let conn_id = state.connections.add(client).await;
             Ok(Json(SftpConnectResponse { conn_id }))
         }
-        Err(_) => Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+        Err(_) => Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
     }
 }

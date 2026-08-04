@@ -21,8 +21,12 @@ pub struct Settings {
     pub ssh_denied_commands: Vec<String>,
 }
 
-fn default_theme() -> String { "dark".to_string() }
-fn default_ssh_policy() -> String { "off".to_string() }
+fn default_theme() -> String {
+    "dark".to_string()
+}
+fn default_ssh_policy() -> String {
+    "off".to_string()
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -32,9 +36,14 @@ impl Default for Settings {
             ssh_command_policy: default_ssh_policy(),
             ssh_allowed_commands: Vec::new(),
             ssh_denied_commands: vec![
-                "rm".into(), "mkfs".into(), "dd".into(),
-                "shutdown".into(), "reboot".into(), "halt".into(),
-                "poweroff".into(), ":(){".into(),
+                "rm".into(),
+                "mkfs".into(),
+                "dd".into(),
+                "shutdown".into(),
+                "reboot".into(),
+                "halt".into(),
+                "poweroff".into(),
+                ":(){".into(),
             ],
         }
     }
@@ -57,7 +66,10 @@ impl SettingsStore {
             .ok()
             .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
             .unwrap_or_default();
-        Self { file_path, inner: Mutex::new(inner) }
+        Self {
+            file_path,
+            inner: Mutex::new(inner),
+        }
     }
 
     pub fn get(&self) -> Settings {
@@ -69,7 +81,10 @@ impl SettingsStore {
             let mut g = self.inner.lock().unwrap();
             *g = new.clone();
         }
-        let _ = fs::write(&self.file_path, serde_json::to_string_pretty(&new).unwrap_or_default());
+        let _ = fs::write(
+            &self.file_path,
+            serde_json::to_string_pretty(&new).unwrap_or_default(),
+        );
         new
     }
 

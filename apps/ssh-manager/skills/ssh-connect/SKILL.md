@@ -12,6 +12,15 @@ triggers:
 
 Khi người dùng yêu cầu "kết nối SSH", "connect to ssh", hoặc thực hiện lệnh trên một server cụ thể, hãy làm theo các bước sau:
 
+## Tên tool & kiểm tra khả dụng (đọc TRƯỚC khi kết luận thiếu tool)
+
+Mọi tool của skill này nằm trên MCP server **`ssh-manager-mcp`** (app "SSH Manager"). Tên đầy đủ luôn là `mcp__ssh-manager-mcp__<tool>` — không có dạng rút gọn `mcp__ssh__*` hay `mcp__ssh-manager__*`.
+
+- Nạp schema bằng MỘT lệnh ToolSearch duy nhất:
+  `select:mcp__ssh-manager-mcp__ssh_list_hosts,mcp__ssh-manager-mcp__ssh_start_connect_id,mcp__ssh-manager-mcp__ssh_start_connect,mcp__ssh-manager-mcp__ssh_execute_command,mcp__ssh-manager-mcp__ssh_close_connect`
+  (ToolSearch không phân biệt gạch ngang/gạch dưới, `mcp__ssh_manager_mcp__...` vẫn resolve.)
+- Nếu ToolSearch trả 0 kết quả kèm `deferred_total: 0` nghĩa là phiên này KHÔNG có tool MCP nào — đừng kết luận "chưa cài SSH MCP" và đừng tự chạy ssh bằng shell. Hãy báo cho người dùng: hoặc (a) app SSH Manager chưa chạy / MCP chưa đăng ký, hoặc (b) whitelist `allowed_tools` của đoạn chat đang chặn tool MCP (whitelist khác rỗng thì chỉ các tool trong danh sách được hiển thị), rồi dừng lại.
+
 1. **Tìm Host ID**:
    - Sử dụng tool `mcp__ssh-manager-mcp__ssh_list_hosts` để lấy danh sách các server đã được lưu.
    - Tìm server có tên (name) hoặc địa chỉ (host/IP) khớp với yêu cầu của người dùng.

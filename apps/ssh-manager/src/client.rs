@@ -1,10 +1,10 @@
 use anyhow::Result;
+use futures_util::{SinkExt, StreamExt};
 use russh::ChannelMsg;
 use russh::client::{Config, Handle};
 use russh_keys::key::KeyPair;
-use std::sync::Arc;
-use futures_util::{StreamExt, SinkExt};
 use russh_sftp::client::SftpSession;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -91,7 +91,7 @@ impl SshClient {
         mut socket: axum::extract::ws::WebSocket,
     ) -> Result<()> {
         let mut channel = self.handle.channel_open_session().await?;
-        
+
         // Request PTY
         channel
             .request_pty(
@@ -104,14 +104,14 @@ impl SshClient {
                 &[], // terminal modes
             )
             .await?;
-        
+
         // Request shell
         channel.request_shell(true).await?;
 
         let (mut sender, mut receiver) = socket.split();
 
         let mut buf = vec![0; 4096];
-        
+
         loop {
             tokio::select! {
                 // There's terminal input available from the user

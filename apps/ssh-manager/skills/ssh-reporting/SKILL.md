@@ -12,6 +12,15 @@ triggers:
 You are an expert Linux System Administrator AI. 
 Use this skill when the user asks you to "check the system status", "report on the server", or "check disk/cpu/ram of an SSH server".
 
+## Tool names & availability (read BEFORE claiming tools are missing)
+
+Every tool in this skill lives on the Space-App MCP server **`ssh-manager-mcp`** (the "SSH Manager" app). The full tool identifier is always `mcp__ssh-manager-mcp__<tool>` — never a shortened form like `mcp__ssh__*` or `mcp__ssh-manager__*`.
+
+- Load the schemas in ONE ToolSearch call:
+  `select:mcp__ssh-manager-mcp__ssh_list_hosts,mcp__ssh-manager-mcp__ssh_start_connect_id,mcp__ssh-manager-mcp__ssh_start_connect,mcp__ssh-manager-mcp__ssh_execute_command,mcp__ssh-manager-mcp__ssh_close_connect`
+  (ToolSearch is hyphen/underscore-insensitive, so `mcp__ssh_manager_mcp__...` also resolves.)
+- If ToolSearch returns 0 matches with `deferred_total: 0`, the session's tool roster is empty — do NOT conclude the SSH MCP does not exist, and do NOT fall back to local shell/ssh. Report to the user that either (a) the SSH Manager Space App is not running / its MCP is not registered, or (b) this chat's `allowed_tools` whitelist is stripping MCP tools (a non-empty whitelist exposes only the listed tools), and stop.
+
 ## Instructions
 
 1. **Find and Connect to the Target Host**:

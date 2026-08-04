@@ -1,11 +1,11 @@
 use axum::{
+    Json,
     extract::State,
     response::sse::{Event, Sse},
-    Json,
 };
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{convert::Infallible, sync::Arc};
 
 use crate::api::AppState;
@@ -38,7 +38,12 @@ fn missing_connection_params_error(args: &Value, state: &AppState) -> String {
     let hosts = state.hosts.get_all();
     let known: Vec<String> = hosts
         .iter()
-        .map(|h| format!("- id={} (name: {}, {}@{}:{})", h.id, h.name, h.user, h.host, h.port))
+        .map(|h| {
+            format!(
+                "- id={} (name: {}, {}@{}:{})",
+                h.id, h.name, h.user, h.host, h.port
+            )
+        })
         .collect();
 
     if let Some(id) = args["host_id"].as_str() {
@@ -74,9 +79,11 @@ fn missing_connection_params_error(args: &Value, state: &AppState) -> String {
     }
 }
 
-pub async fn mcp_sse(State(state): State<Arc<AppState>>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+pub async fn mcp_sse(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let mut rx = state.mcp_tx.subscribe();
-    
+
     let stream = async_stream::stream! {
         // First message: send the endpoint
         let endpoint_msg = "/api/mcp/message".to_string();
@@ -241,7 +248,7 @@ pub async fn mcp_message(
             "id": req.id,
             "result": tools
         });
-        
+
         let _ = state.mcp_tx.send(resp.to_string());
         return Json(resp);
     }
@@ -255,7 +262,8 @@ pub async fn mcp_message(
         // Priority: explicit host_id (look up name in HostStore) → host:port → connection_id (look up its host_id).
         let host_label: Option<String> = {
             let resolve_by_id = |id: &str| -> Option<String> {
-                state.hosts
+                state
+                    .hosts
                     .get_all()
                     .into_iter()
                     .find(|h| h.id == id)
@@ -271,11 +279,12 @@ pub async fn mcp_message(
                 Some(h.to_string())
             } else if let Some(cid) = args["connection_id"].as_str() {
                 // connection_id → look up host_id via the active client → resolve name
-                let host_id_opt: Option<String> = if let Some(client_arc) = state.connections.get(cid).await {
-                    client_arc.lock().await.host_id.clone()
-                } else {
-                    None
-                };
+                let host_id_opt: Option<String> =
+                    if let Some(client_arc) = state.connections.get(cid).await {
+                        client_arc.lock().await.host_id.clone()
+                    } else {
+                        None
+                    };
                 host_id_opt
                     .and_then(|hid| resolve_by_id(&hid))
                     .or_else(|| Some(format!("conn:{}", &cid[..8.min(cid.len())])))
@@ -291,7 +300,10 @@ pub async fn mcp_message(
                 format!("exec: {}", cmd)
             }
             "ssh_start_connect" => "open connection (explicit params)".to_string(),
-            "ssh_start_connect_id" => format!("open connection (host_id={})", args["host_id"].as_str().unwrap_or("?")),
+            "ssh_start_connect_id" => format!(
+                "open connection (host_id={})",
+                args["host_id"].as_str().unwrap_or("?")
+            ),
             "ssh_close_connect" => {
                 let cid = args["connection_id"].as_str().unwrap_or("?");
                 format!("close connection_id={}", cid)
@@ -309,19 +321,16 @@ pub async fn mcp_message(
             "sftp_read_file" => format!("read {}", args["path"].as_str().unwrap_or("?")),
             "sftp_write_file" => {
                 let bytes = args["content"].as_str().map(|s| s.len()).unwrap_or(0);
-                format!("write {} ({} bytes)", args["path"].as_str().unwrap_or("?"), bytes)
+                format!(
+                    "write {} ({} bytes)",
+                    args["path"].as_str().unwrap_or("?"),
+                    bytes
+                )
             }
             _ => format!("call: {}", name),
         };
 
-        crate::logs::info(
-            &state.log_store,
-            "mcp",
-            name,
-            host_label,
-            detail,
-        );
-
+        crate::logs::info(&state.log_store, "mcp", name, host_label, detail);
 
         if name == "ssh_list_hosts" {
             let hosts = state.hosts.get_all();
@@ -350,7 +359,7 @@ pub async fn mcp_message(
             let _ = state.mcp_tx.send(resp.to_string());
             return Json(resp);
         }
-        
+
         if name == "ssh_add_host" {
             let args = &params["arguments"];
             let id = args["id"].as_str().unwrap_or("").to_string();
@@ -359,7 +368,16 @@ pub async fn mcp_message(
             let user = args["user"].as_str().unwrap_or("").to_string();
             let password = args["password"].as_str().map(|s| s.to_string());
             let name_field = args["name"].as_str().unwrap_or(&host).to_string();
-            state.hosts.add(crate::models::Host { id, name: name_field, host, port, user, password, keychain_id: None, tags: vec![] });
+            state.hosts.add(crate::models::Host {
+                id,
+                name: name_field,
+                host,
+                port,
+                user,
+                password,
+                keychain_id: None,
+                tags: vec![],
+            });
             let result = json!({ "content": [{ "type": "text", "text": "Host added successfully." }
 
 ] });
@@ -376,7 +394,23 @@ pub async fn mcp_message(
             let user = args["user"].as_str().unwrap_or("").to_string();
             let password = args["password"].as_str().map(|s| s.to_string());
             let name_field = args["name"].as_str().unwrap_or(&host).to_string();
-            if state.hosts.update(&id, crate::models::Host { id: id.clone(), name: name_field, host, port, user, password, keychain_id: None, tags: vec![] }).is_some() {
+            if state
+                .hosts
+                .update(
+                    &id,
+                    crate::models::Host {
+                        id: id.clone(),
+                        name: name_field,
+                        host,
+                        port,
+                        user,
+                        password,
+                        keychain_id: None,
+                        tags: vec![],
+                    },
+                )
+                .is_some()
+            {
                 let result = json!({ "content": [{ "type": "text", "text": "Host updated successfully." }
 
 ] });
@@ -424,10 +458,18 @@ pub async fn mcp_message(
             // still resolves `host_id` if one is passed (legacy callers).
             if let Some(host_id) = args["host_id"].as_str() {
                 if let Some(saved) = state.hosts.get_all().into_iter().find(|h| h.id == host_id) {
-                    if host.is_none() { host = Some(saved.host.clone()); }
-                    if port.is_none() { port = Some(saved.port); }
-                    if user.is_none() { user = Some(saved.user.clone()); }
-                    if password.is_none() { password = saved.password.clone(); }
+                    if host.is_none() {
+                        host = Some(saved.host.clone());
+                    }
+                    if port.is_none() {
+                        port = Some(saved.port);
+                    }
+                    if user.is_none() {
+                        user = Some(saved.user.clone());
+                    }
+                    if password.is_none() {
+                        password = saved.password.clone();
+                    }
                 }
             }
 
@@ -438,23 +480,38 @@ pub async fn mcp_message(
 
             if host.is_none() || user.is_none() || port.is_none() {
                 let text = missing_connection_params_error(args, &state);
-                let result = json!({ "isError": true, "content": [{ "type": "text", "text": text }] });
+                let result =
+                    json!({ "isError": true, "content": [{ "type": "text", "text": text }] });
                 let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
                 let _ = state.mcp_tx.send(resp.to_string());
                 return Json(resp);
             }
 
-            match crate::client::SshClient::connect(&host.unwrap(), port.unwrap(), &user.unwrap(), password.as_deref(), None, args["host_id"].as_str().map(|s| s.to_string())).await {
+            match crate::client::SshClient::connect(
+                &host.unwrap(),
+                port.unwrap(),
+                &user.unwrap(),
+                password.as_deref(),
+                None,
+                args["host_id"].as_str().map(|s| s.to_string()),
+            )
+            .await
+            {
                 Ok(c) => {
                     let conn_id = state.connections.add(c).await;
 
                     if let Some(host_id) = args["host_id"].as_str() {
-                        if let Some(saved) = state.hosts.get_all().into_iter().find(|h| h.id == host_id) {
-                            let _ = state.ui_tx.send(json!({
-                                "type": "mcp_connect",
-                                "host_id": host_id,
-                                "host": saved
-                            }).to_string());
+                        if let Some(saved) =
+                            state.hosts.get_all().into_iter().find(|h| h.id == host_id)
+                        {
+                            let _ = state.ui_tx.send(
+                                json!({
+                                    "type": "mcp_connect",
+                                    "host_id": host_id,
+                                    "host": saved
+                                })
+                                .to_string(),
+                            );
                         }
                     }
 
@@ -523,7 +580,9 @@ pub async fn mcp_message(
             let command = args["command"].as_str().unwrap_or("").to_string();
 
             // Apply user-configured command policy.
-            if let crate::settings::CmdVerdict::Deny(reason) = state.settings.check_ssh_command(&command) {
+            if let crate::settings::CmdVerdict::Deny(reason) =
+                state.settings.check_ssh_command(&command)
+            {
                 crate::logs::warn(
                     &state.log_store,
                     "mcp",
@@ -544,14 +603,20 @@ pub async fn mcp_message(
             if let Some(conn_id) = args["connection_id"].as_str() {
                 if let Some(client_arc) = state.connections.get(conn_id).await {
                     let mut client = client_arc.lock().await;
-                    let output = client.execute(&command).await.unwrap_or_else(|e| format!("Error executing: {}", e));
-                    
-                    let _ = state.ui_tx.send(json!({
-                        "type": "mcp_execute",
-                        "host_id": client.host_id,
-                        "command": command,
-                        "output": output
-                    }).to_string());
+                    let output = client
+                        .execute(&command)
+                        .await
+                        .unwrap_or_else(|e| format!("Error executing: {}", e));
+
+                    let _ = state.ui_tx.send(
+                        json!({
+                            "type": "mcp_execute",
+                            "host_id": client.host_id,
+                            "command": command,
+                            "output": output
+                        })
+                        .to_string(),
+                    );
 
                     let result = json!({ "content": [{ "type": "text", "text": output }
 
@@ -572,25 +637,44 @@ pub async fn mcp_message(
                 let mut port = args["port"].as_u64().map(|n| n as u16);
                 let mut user = args["user"].as_str().map(|s| s.to_string());
                 let mut password = args["password"].as_str().map(|s| s.to_string());
-                
+
                 if let Some(host_id) = args["host_id"].as_str() {
-                    if let Some(saved) = state.hosts.get_all().into_iter().find(|h| h.id == host_id) {
-                        if host.is_none() { host = Some(saved.host.clone()); }
-                        if port.is_none() { port = Some(saved.port); }
-                        if user.is_none() { user = Some(saved.user.clone()); }
-                        if password.is_none() { password = saved.password.clone(); }
+                    if let Some(saved) = state.hosts.get_all().into_iter().find(|h| h.id == host_id)
+                    {
+                        if host.is_none() {
+                            host = Some(saved.host.clone());
+                        }
+                        if port.is_none() {
+                            port = Some(saved.port);
+                        }
+                        if user.is_none() {
+                            user = Some(saved.user.clone());
+                        }
+                        if password.is_none() {
+                            password = saved.password.clone();
+                        }
                     }
                 }
 
                 if host.is_none() || user.is_none() || port.is_none() {
                     let text = missing_connection_params_error(args, &state);
-                    let result = json!({ "isError": true, "content": [{ "type": "text", "text": text }] });
+                    let result =
+                        json!({ "isError": true, "content": [{ "type": "text", "text": text }] });
                     let resp = json!({ "jsonrpc": "2.0", "id": req.id, "result": result });
                     let _ = state.mcp_tx.send(resp.to_string());
                     return Json(resp);
                 }
 
-                let mut client = match crate::client::SshClient::connect(&host.unwrap(), port.unwrap(), &user.unwrap(), password.as_deref(), None, args["host_id"].as_str().map(|s| s.to_string())).await {
+                let mut client = match crate::client::SshClient::connect(
+                    &host.unwrap(),
+                    port.unwrap(),
+                    &user.unwrap(),
+                    password.as_deref(),
+                    None,
+                    args["host_id"].as_str().map(|s| s.to_string()),
+                )
+                .await
+                {
                     Ok(c) => c,
                     Err(e) => {
                         let resp = json!({
@@ -601,15 +685,18 @@ pub async fn mcp_message(
                         return Json(resp);
                     }
                 };
-                let output = client.execute(&command).await.unwrap_or_else(|e| format!("Error executing: {}", e));
+                let output = client
+                    .execute(&command)
+                    .await
+                    .unwrap_or_else(|e| format!("Error executing: {}", e));
                 let resp = json!({
                     "jsonrpc": "2.0", "id": req.id,
                     "result": { "content": [{ "type": "text", "text": output }] }
                 });
                 let _ = state.mcp_tx.send(resp.to_string());
                 return Json(resp);
-                    }
-    }
+            }
+        }
     }
     Json(json!("ok"))
 }

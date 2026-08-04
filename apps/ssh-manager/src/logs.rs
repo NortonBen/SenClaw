@@ -111,14 +111,32 @@ impl LogStore {
     }
 }
 
-pub fn info(store: &LogStore, source: &str, action: &str, host: Option<String>, msg: impl Into<String>) {
+pub fn info(
+    store: &LogStore,
+    source: &str,
+    action: &str,
+    host: Option<String>,
+    msg: impl Into<String>,
+) {
     store.push("info", source, action, host, msg, None);
 }
 
-pub fn warn(store: &LogStore, source: &str, action: &str, host: Option<String>, msg: impl Into<String>) {
+pub fn warn(
+    store: &LogStore,
+    source: &str,
+    action: &str,
+    host: Option<String>,
+    msg: impl Into<String>,
+) {
     store.push("warn", source, action, host, msg, None);
 }
 
-pub fn error(store: &LogStore, source: &str, action: &str, host: Option<String>, msg: impl Into<String>) {
+pub fn error(
+    store: &LogStore,
+    source: &str,
+    action: &str,
+    host: Option<String>,
+    msg: impl Into<String>,
+) {
     store.push("error", source, action, host, msg, None);
 }

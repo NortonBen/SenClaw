@@ -1,14 +1,17 @@
 use crate::client::SshClient;
-use crate::models::{Host, HostStore};
 use crate::keychain::{KeychainItem, KeychainStore};
+use crate::logs::{self, LogEntry, LogStore};
+use crate::models::{Host, HostStore};
 use crate::security::CommandFilter;
-use crate::logs::{self, LogStore, LogEntry};
 use crate::settings::{Settings, SettingsStore};
 use axum::{
-    extract::{Path, State, ws::{WebSocketUpgrade, WebSocket}},
+    Json, Router,
+    extract::{
+        Path, State,
+        ws::{WebSocket, WebSocketUpgrade},
+    },
     response::IntoResponse,
     routing::{delete, get, post, put},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -52,7 +55,11 @@ pub fn api_router() -> Router {
         .collect();
 
     let filter = CommandFilter::new(allowed);
-    let data_dir = dirs::home_dir().unwrap().join(".senclaw").join("space-apps-data").join("ssh-manager");
+    let data_dir = dirs::home_dir()
+        .unwrap()
+        .join(".senclaw")
+        .join("space-apps-data")
+        .join("ssh-manager");
     std::fs::create_dir_all(&data_dir).unwrap();
     let hosts_path = data_dir.join("hosts.json");
     let hosts = HostStore::new(hosts_path.to_str().unwrap());
@@ -63,7 +70,8 @@ pub fn api_router() -> Router {
     let connections = crate::connection::ConnectionManager::new();
 
     let port_forwarding_path = data_dir.join("port_forwarding.json");
-    let port_forwarding_store = crate::models::PortForwardingStore::new(port_forwarding_path.to_str().unwrap());
+    let port_forwarding_store =
+        crate::models::PortForwardingStore::new(port_forwarding_path.to_str().unwrap());
     let port_forwarding_manager = crate::port_forwarding::PortForwardingManager::new();
 
     let log_store = Arc::new(LogStore::new());
@@ -82,14 +90,31 @@ pub fn api_router() -> Router {
                 if secs > 0 {
                     let dropped = log_store.prune_older_than(secs * 1000);
                     if dropped > 0 {
-                        logs::info(&log_store, "system", "log_prune", None, format!("Auto-pruned {} old log entries", dropped));
+                        logs::info(
+                            &log_store,
+                            "system",
+                            "log_prune",
+                            None,
+                            format!("Auto-pruned {} old log entries", dropped),
+                        );
                     }
                 }
             }
         });
     }
 
-    let state = Arc::new(AppState { filter, hosts, keychain, mcp_tx, ui_tx, connections, port_forwarding_store, port_forwarding_manager, log_store, settings });
+    let state = Arc::new(AppState {
+        filter,
+        hosts,
+        keychain,
+        mcp_tx,
+        ui_tx,
+        connections,
+        port_forwarding_store,
+        port_forwarding_manager,
+        log_store,
+        settings,
+    });
 
     Router::new()
         .nest("/sftp", crate::sftp_api::sftp_router())
@@ -102,8 +127,14 @@ pub fn api_router() -> Router {
         .route("/hosts", get(list_hosts).post(create_host))
         .route("/hosts/:id", put(update_host).delete(delete_host))
         .route("/keychain", get(list_keychain).post(create_keychain))
-        .route("/keychain/:id", put(update_keychain).delete(delete_keychain))
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/keychain/:id",
+            put(update_keychain).delete(delete_keychain),
+        )
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .route("/ws/terminal/:id", get(ws_terminal_handler))
         .with_state(state)
@@ -136,7 +167,10 @@ async fn update_host(
             "ui",
             "host_update",
             Some(updated.name.clone()),
-            format!("Updated host {}@{}:{}", updated.user, updated.host, updated.port),
+            format!(
+                "Updated host {}@{}:{}",
+                updated.user, updated.host, updated.port
+            ),
         );
         Ok(Json(updated))
     } else {
@@ -148,9 +182,20 @@ async fn delete_host(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> axum::response::Result<Json<bool>, axum::http::StatusCode> {
-    let host_name = state.hosts.get_all().into_iter().find(|h| h.id == id).map(|h| h.name);
+    let host_name = state
+        .hosts
+        .get_all()
+        .into_iter()
+        .find(|h| h.id == id)
+        .map(|h| h.name);
     if state.hosts.delete(&id) {
-        logs::info(&state.log_store, "ui", "host_delete", host_name, format!("Deleted host id={}", id));
+        logs::info(
+            &state.log_store,
+            "ui",
+            "host_delete",
+            host_name,
+            format!("Deleted host id={}", id),
+        );
         Ok(Json(true))
     } else {
         Err(axum::http::StatusCode::NOT_FOUND)
@@ -192,7 +237,13 @@ async fn execute_command(
     {
         Ok(c) => c,
         Err(e) => {
-            logs::error(&state.log_store, "ssh", "connect_failed", Some(host_label.clone()), format!("Connection failed: {}", e));
+            logs::error(
+                &state.log_store,
+                "ssh",
+                "connect_failed",
+                Some(host_label.clone()),
+                format!("Connection failed: {}", e),
+            );
             return Json(SshExecuteResponse {
                 output: String::new(),
                 error: Some(format!("Connection failed: {}", e)),
@@ -202,12 +253,30 @@ async fn execute_command(
 
     match client.execute(&payload.command).await {
         Ok(out) => {
-            logs::info(&state.log_store, "ssh", "exec_ok", Some(host_label.clone()), format!("Output: {} bytes", out.len()));
-            Json(SshExecuteResponse { output: out, error: None })
+            logs::info(
+                &state.log_store,
+                "ssh",
+                "exec_ok",
+                Some(host_label.clone()),
+                format!("Output: {} bytes", out.len()),
+            );
+            Json(SshExecuteResponse {
+                output: out,
+                error: None,
+            })
         }
         Err(e) => {
-            logs::error(&state.log_store, "ssh", "exec_failed", Some(host_label.clone()), format!("Execution failed: {}", e));
-            Json(SshExecuteResponse { output: String::new(), error: Some(format!("Execution failed: {}", e)) })
+            logs::error(
+                &state.log_store,
+                "ssh",
+                "exec_failed",
+                Some(host_label.clone()),
+                format!("Execution failed: {}", e),
+            );
+            Json(SshExecuteResponse {
+                output: String::new(),
+                error: Some(format!("Execution failed: {}", e)),
+            })
         }
     }
 }
@@ -218,7 +287,7 @@ async fn ws_terminal_handler(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     let host_opt = state.hosts.get_all().into_iter().find(|h| h.id == id);
-    
+
     ws.on_upgrade(move |socket| async move {
         if let Some(host) = host_opt {
             let host_label = format!("{}@{}:{}", host.user, host.host, host.port);
@@ -240,7 +309,10 @@ async fn ws_terminal_handler(
                         }
                         crate::keychain::KeychainItemType::PrivateKey => {
                             // russh_keys::decode_secret_key requires the key and an optional password
-                            if let Ok(kp) = russh_keys::decode_secret_key(kitem.value.as_str(), password.as_deref()) {
+                            if let Ok(kp) = russh_keys::decode_secret_key(
+                                kitem.value.as_str(),
+                                password.as_deref(),
+                            ) {
                                 key_pair = Some(kp);
                             } else {
                                 eprintln!("Failed to parse private key");
@@ -257,26 +329,67 @@ async fn ws_terminal_handler(
                 password.as_deref(),
                 key_pair,
                 None,
-            ).await {
+            )
+            .await
+            {
                 Ok(mut client) => {
-                    logs::info(&state.log_store, "ssh", "terminal_connected", Some(host.name.clone()), format!("SSH session established → {}", host_label));
+                    logs::info(
+                        &state.log_store,
+                        "ssh",
+                        "terminal_connected",
+                        Some(host.name.clone()),
+                        format!("SSH session established → {}", host_label),
+                    );
                     if let Err(e) = client.interactive_shell(socket).await {
-                        logs::error(&state.log_store, "ssh", "terminal_error", Some(host.name.clone()), format!("Interactive shell error: {}", e));
+                        logs::error(
+                            &state.log_store,
+                            "ssh",
+                            "terminal_error",
+                            Some(host.name.clone()),
+                            format!("Interactive shell error: {}", e),
+                        );
                         eprintln!("Interactive shell error: {}", e);
                     }
-                    logs::info(&state.log_store, "ssh", "terminal_closed", Some(host.name.clone()), format!("SSH session ended → {}", host_label));
+                    logs::info(
+                        &state.log_store,
+                        "ssh",
+                        "terminal_closed",
+                        Some(host.name.clone()),
+                        format!("SSH session ended → {}", host_label),
+                    );
                 }
                 Err(e) => {
-                    logs::error(&state.log_store, "ssh", "connect_failed", Some(host.name.clone()), format!("SSH connection failed → {}: {}", host_label, e));
+                    logs::error(
+                        &state.log_store,
+                        "ssh",
+                        "connect_failed",
+                        Some(host.name.clone()),
+                        format!("SSH connection failed → {}: {}", host_label, e),
+                    );
                     eprintln!("SSH Connection failed: {}", e);
                     let mut s = socket;
-                    let _ = s.send(axum::extract::ws::Message::Text(format!("\\r\\n\\x1b[31mSSH Connection Failed: {}\\x1b[0m\\r\\n", e))).await;
+                    let _ = s
+                        .send(axum::extract::ws::Message::Text(format!(
+                            "\\r\\n\\x1b[31mSSH Connection Failed: {}\\x1b[0m\\r\\n",
+                            e
+                        )))
+                        .await;
                 }
             }
         } else {
-            logs::warn(&state.log_store, "ui", "terminal_open", None, format!("Host not found: id={}", id));
+            logs::warn(
+                &state.log_store,
+                "ui",
+                "terminal_open",
+                None,
+                format!("Host not found: id={}", id),
+            );
             let mut s = socket;
-            let _ = s.send(axum::extract::ws::Message::Text("\\r\\n\\x1b[31mHost not found.\\x1b[0m\\r\\n".to_string())).await;
+            let _ = s
+                .send(axum::extract::ws::Message::Text(
+                    "\\r\\n\\x1b[31mHost not found.\\x1b[0m\\r\\n".to_string(),
+                ))
+                .await;
         }
     })
 }
@@ -285,9 +398,18 @@ async fn list_keychain(State(state): State<Arc<AppState>>) -> Json<Vec<KeychainI
     Json(state.keychain.get_all())
 }
 
-async fn create_keychain(State(state): State<Arc<AppState>>, Json(item): Json<KeychainItem>) -> Json<KeychainItem> {
+async fn create_keychain(
+    State(state): State<Arc<AppState>>,
+    Json(item): Json<KeychainItem>,
+) -> Json<KeychainItem> {
     let added = state.keychain.add(item);
-    logs::info(&state.log_store, "ui", "keychain_create", None, format!("Created keychain item: {}", added.name));
+    logs::info(
+        &state.log_store,
+        "ui",
+        "keychain_create",
+        None,
+        format!("Created keychain item: {}", added.name),
+    );
     Json(added)
 }
 
@@ -297,7 +419,13 @@ async fn update_keychain(
     Json(item): Json<KeychainItem>,
 ) -> axum::response::Result<Json<KeychainItem>, axum::http::StatusCode> {
     if let Some(updated) = state.keychain.update(&id, item) {
-        logs::info(&state.log_store, "ui", "keychain_update", None, format!("Updated keychain item: {}", updated.name));
+        logs::info(
+            &state.log_store,
+            "ui",
+            "keychain_update",
+            None,
+            format!("Updated keychain item: {}", updated.name),
+        );
         Ok(Json(updated))
     } else {
         Err(axum::http::StatusCode::NOT_FOUND)
@@ -309,7 +437,13 @@ async fn delete_keychain(
     Path(id): Path<String>,
 ) -> axum::response::Result<Json<bool>, axum::http::StatusCode> {
     if state.keychain.delete(&id) {
-        logs::info(&state.log_store, "ui", "keychain_delete", None, format!("Deleted keychain item id={}", id));
+        logs::info(
+            &state.log_store,
+            "ui",
+            "keychain_delete",
+            None,
+            format!("Deleted keychain item id={}", id),
+        );
         Ok(Json(true))
     } else {
         Err(axum::http::StatusCode::NOT_FOUND)
@@ -330,7 +464,13 @@ async fn list_logs(
 
 async fn clear_logs(State(state): State<Arc<AppState>>) -> Json<bool> {
     state.log_store.clear();
-    logs::info(&state.log_store, "ui", "logs_clear", None, "Log buffer cleared");
+    logs::info(
+        &state.log_store,
+        "ui",
+        "logs_clear",
+        None,
+        "Log buffer cleared",
+    );
     Json(true)
 }
 
@@ -358,7 +498,11 @@ async fn put_settings(
 
 async fn logs_sse(
     State(state): State<Arc<AppState>>,
-) -> axum::response::sse::Sse<impl futures_util::stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+) -> axum::response::sse::Sse<
+    impl futures_util::stream::Stream<
+        Item = Result<axum::response::sse::Event, std::convert::Infallible>,
+    >,
+> {
     let mut rx = state.log_store.subscribe();
     let stream = async_stream::stream! {
         while let Ok(entry) = rx.recv().await {
@@ -370,7 +514,13 @@ async fn logs_sse(
     axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
-pub async fn ui_events_sse(State(state): State<Arc<AppState>>) -> axum::response::sse::Sse<impl futures_util::stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+pub async fn ui_events_sse(
+    State(state): State<Arc<AppState>>,
+) -> axum::response::sse::Sse<
+    impl futures_util::stream::Stream<
+        Item = Result<axum::response::sse::Event, std::convert::Infallible>,
+    >,
+> {
     let mut rx = state.ui_tx.subscribe();
     let stream = async_stream::stream! {
         while let Ok(msg) = rx.recv().await {

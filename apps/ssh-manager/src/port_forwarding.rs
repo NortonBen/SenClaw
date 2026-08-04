@@ -1,14 +1,14 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
     response::IntoResponse,
     routing::{delete, get, post, put},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
-use std::collections::HashMap;
 
 use crate::api::AppState;
 use crate::models::PortForwardingRule;
@@ -25,12 +25,18 @@ impl PortForwardingManager {
         }
     }
 
-    pub async fn start_tunnel(&self, state: Arc<AppState>, rule: PortForwardingRule) -> Result<(), String> {
+    pub async fn start_tunnel(
+        &self,
+        state: Arc<AppState>,
+        rule: PortForwardingRule,
+    ) -> Result<(), String> {
         let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
-        
+
         let bind_addr = format!("{}:{}", rule.bind_address, rule.local_port);
-        let listener = TcpListener::bind(&bind_addr).await.map_err(|e| e.to_string())?;
-        
+        let listener = TcpListener::bind(&bind_addr)
+            .await
+            .map_err(|e| e.to_string())?;
+
         let mut tunnels = self.active_tunnels.lock().await;
         if tunnels.contains_key(&rule.id) {
             return Err("Tunnel already active".to_string());
@@ -39,14 +45,14 @@ impl PortForwardingManager {
         drop(tunnels);
 
         let rule_id = rule.id.clone();
-        
+
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     Ok((mut stream, _addr)) = listener.accept() => {
                         let state_clone = state.clone();
                         let rule_clone = rule.clone();
-                        
+
                         tokio::spawn(async move {
                             // First, get the SSH connection
                             let hosts = state_clone.hosts.get_all();
@@ -55,7 +61,7 @@ impl PortForwardingManager {
                                 // In a real scenario, we might want to reuse a connection or start a new one.
                                 // Since we already have ConnectionManager logic, we can try to find an active connection or start one.
                                 // For simplicity, we can reuse the connection map or establish a dedicated one.
-                                
+
                                 // Let's try to get an existing connection
                                 if let Some(client_arc) = state_clone.connections.get(&host.id).await {
                                     let mut client = client_arc.lock().await;
@@ -117,7 +123,9 @@ pub fn port_forwarding_router() -> Router<Arc<AppState>> {
         .route("/port-forwarding/:id/stop", post(stop_rule))
 }
 
-async fn list_rules(State(state): State<Arc<AppState>>) -> axum::response::Result<Json<Vec<PortForwardingRule>>, axum::http::StatusCode> {
+async fn list_rules(
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Result<Json<Vec<PortForwardingRule>>, axum::http::StatusCode> {
     Ok(Json(state.port_forwarding_store.get_all()))
 }
 
@@ -147,7 +155,7 @@ async fn delete_rule(
 ) -> axum::response::Result<Json<bool>, axum::http::StatusCode> {
     // Stop tunnel if active
     state.port_forwarding_manager.stop_tunnel(&id).await;
-    
+
     if state.port_forwarding_store.delete(&id) {
         Ok(Json(true))
     } else {
@@ -160,11 +168,15 @@ async fn start_rule(
     State(state): State<Arc<AppState>>,
 ) -> axum::response::Result<Json<bool>, axum::http::StatusCode> {
     if let Some(mut rule) = state.port_forwarding_store.get(&id) {
-        if let Err(e) = state.port_forwarding_manager.start_tunnel(state.clone(), rule.clone()).await {
+        if let Err(e) = state
+            .port_forwarding_manager
+            .start_tunnel(state.clone(), rule.clone())
+            .await
+        {
             // Probably should return 400 or 500 with error
             return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
         }
-        
+
         rule.active = true;
         state.port_forwarding_store.update(&id, rule);
         Ok(Json(true))
@@ -179,7 +191,7 @@ async fn stop_rule(
 ) -> axum::response::Result<Json<bool>, axum::http::StatusCode> {
     if let Some(mut rule) = state.port_forwarding_store.get(&id) {
         state.port_forwarding_manager.stop_tunnel(&id).await;
-        
+
         rule.active = false;
         state.port_forwarding_store.update(&id, rule);
         Ok(Json(true))
