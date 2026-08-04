@@ -340,6 +340,31 @@ pub struct ConversationUsageData {
     pub usage: UsageData,
 }
 
+/// Event: `llm:usage` — one provider-reported usage record per LLM call.
+///
+/// This is the accounting funnel: every `query_llm` return with real usage
+/// emits one of these on the engine bus, including subagent turns and the
+/// compaction call (whose per-message usage is deliberately fabricated for the
+/// context gauge — this event carries the REAL cost before that happens).
+/// Consumed by the embedding layer (AgentPool bridge, virtual worker pool),
+/// which knows the jid and feeds the UsageRecorder. Bus-only, no
+/// `ZenCoreHandlers` dispatch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmUsageData {
+    /// "agent" | "subagent" | "compact" | "hook" — mapped to
+    /// `crate::usage::UsageSource` by the consumer.
+    pub source: String,
+    pub agent_id: String,
+    pub session_id: String,
+    /// `ModelProfile.name` the call ran on.
+    pub profile: String,
+    pub provider: String,
+    pub model: String,
+    pub usage: RawUsage,
+    pub latency_ms: u64,
+    pub ok: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageData {
     #[serde(rename = "useTokens")]
@@ -746,7 +771,7 @@ pub struct FormResponseData {
 /// of the known kinds and that `data` is an object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WidgetSpec {
-    /// One of `chart | image | clock | weather`.
+    /// One of `chart | image | clock | weather | video | audio | app`.
     pub kind: String,
     /// Optional card header shown above the widget.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -967,6 +992,13 @@ pub trait Tool: Send + Sync {
     fn aliases(&self) -> &[&str] {
         &[]
     }
+
+    /// When this tool is presented under a configured alias (Plugins → Alias),
+    /// the original registered name it wraps. Lets the original name keep
+    /// resolving after a rename. `None` for every ordinary tool.
+    fn renamed_from(&self) -> Option<&str> {
+        None
+    }
 }
 
 // ============================================================================
@@ -1020,6 +1052,11 @@ pub struct ZenCoreOptions {
     /// stored context stays optimized and coherent. Set per-engine from the
     /// global `afterProcess` toggle.
     pub after_process: bool,
+    /// Rendered `## User defaults` block (default flow handlers: open link /
+    /// media / search / note) appended to the system prompt. `None` = user
+    /// configured nothing → prompt unchanged. Set per-engine from the global
+    /// `defaults` config before each turn.
+    pub user_defaults: Option<String>,
     /// Per-group LLM override: id of an entry in the global `llmConfigs` list.
     /// `None` = resolve the globally active model (`activeLlmConfigId`).
     /// Set per-engine from the group binding's `llm_config_id`.
@@ -1053,6 +1090,7 @@ impl Default for ZenCoreOptions {
             memory_folder_override: None,
             pre_trigger_skill: false,
             after_process: false,
+            user_defaults: None,
             model_config_id: None,
             max_agent_turns: None,
         }

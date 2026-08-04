@@ -80,6 +80,7 @@ pub async fn execute_prompt_hook(
     profile: &ModelProfile,
     cancel: Option<&CancellationToken>,
     messages: Option<&[crate::zen_core::Message]>,
+    usage_bus: Option<&crate::zen_core::EventBus>,
 ) -> Result<HookOutput> {
     let prompt_text = match &hook.prompt {
         Some(p) if !p.trim().is_empty() => p.clone(),
@@ -143,6 +144,7 @@ pub async fn execute_prompt_hook(
         false,
     );
 
+    let hook_started = std::time::Instant::now();
     let response = match timeout(Duration::from_secs(timeout_secs), run).await {
         Ok(Ok(msg)) => msg,
         Ok(Err(e)) => return Err(e),
@@ -151,6 +153,26 @@ pub async fn execute_prompt_hook(
             return Err(anyhow!("Prompt hook timed out after {timeout_secs}s"));
         }
     };
+
+    // Token accounting: prompt hooks are real billed LLM calls.
+    if let (Some(bus), Some(u)) = (
+        usage_bus,
+        response.usage.as_ref().filter(|u| !u.is_empty()),
+    ) {
+        bus.emit(crate::zen_core::EngineEvent::LlmUsage(
+            crate::zen_core::LlmUsageData {
+                source: "hook".to_string(),
+                agent_id: "hook".to_string(),
+                session_id: String::new(),
+                profile: profile.name.clone(),
+                provider: profile.provider.clone(),
+                model: profile.model_name.clone(),
+                usage: u.clone(),
+                latency_ms: hook_started.elapsed().as_millis() as u64,
+                ok: true,
+            },
+        ));
+    }
 
     // Extract text content
     let mut result_text = String::new();

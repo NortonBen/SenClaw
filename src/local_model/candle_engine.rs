@@ -142,6 +142,9 @@ pub struct CandleEngine {
     model_id: String,
     loaded: Arc<Mutex<Option<Loaded>>>,
     status: Mutex<RuntimeStatus>,
+    /// `(prompt_tokens, generated_tokens)` of the most recent generation —
+    /// read by `query_llm` after a turn for token accounting.
+    last_usage: Arc<Mutex<Option<(usize, usize)>>>,
 }
 
 impl CandleEngine {
@@ -151,11 +154,17 @@ impl CandleEngine {
             model_id: model_id.to_owned(),
             loaded: Arc::new(Mutex::new(None)),
             status: Mutex::new(RuntimeStatus::NotInstalled),
+            last_usage: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn is_loaded(&self) -> bool {
         self.loaded.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+
+    /// `(prompt_tokens, generated_tokens)` of the most recent generation.
+    pub fn last_usage(&self) -> Option<(usize, usize)> {
+        self.last_usage.lock().ok().and_then(|g| *g)
     }
 
     pub fn warm_up(&self) -> anyhow::Result<()> {
@@ -260,9 +269,18 @@ impl LocalModelRuntime for CandleEngine {
         let loaded = Arc::clone(&self.loaded);
         let model_dir = self.model_dir.clone();
         let model_id = self.model_id.clone();
+        let last_usage = Arc::clone(&self.last_usage);
 
         let join = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            generate_with_cache(&loaded, &model_dir, &model_id, &messages, &tools, tx)
+            generate_with_cache(
+                &loaded,
+                &model_dir,
+                &model_id,
+                &messages,
+                &tools,
+                tx,
+                &last_usage,
+            )
         });
 
         join.await??;
@@ -569,6 +587,7 @@ fn generate_with_cache(
     messages: &[Value],
     _tools: &[Value], // tools intentionally ignored — local models can't call them
     tx: mpsc::Sender<String>,
+    last_usage: &Mutex<Option<(usize, usize)>>,
 ) -> anyhow::Result<()> {
     let mut guard = loaded
         .lock()
@@ -652,20 +671,19 @@ fn generate_with_cache(
     let stop_tokens = state.arch.stop_tokens();
     let t_start = std::time::Instant::now();
 
-    match &mut state.model {
-        LocalModel::Qwen3(model) => {
-            generate_transformer(
-                model,
-                &prompt,
-                &stop_tokens,
-                max_new_tokens,
-                max_kv_tokens,
-                &state.device,
-                &state.tokenizer,
-                tx,
-                t_start,
-            )?;
-        }
+    let prompt_token_count = prompt.len();
+    let generated = match &mut state.model {
+        LocalModel::Qwen3(model) => generate_transformer(
+            model,
+            &prompt,
+            &stop_tokens,
+            max_new_tokens,
+            max_kv_tokens,
+            &state.device,
+            &state.tokenizer,
+            tx,
+            t_start,
+        )?,
         LocalModel::Gemma3(model) => {
             model.clear_kv_cache();
             generate_gemma3(
@@ -678,7 +696,7 @@ fn generate_with_cache(
                 &state.tokenizer,
                 tx,
                 t_start,
-            )?;
+            )?
         }
         LocalModel::Mamba1 { model, cfg } => {
             let mut mamba_state = ct_mamba::State::new(1, cfg, state.dtype, &state.device)
@@ -692,7 +710,7 @@ fn generate_with_cache(
                 &state.tokenizer,
                 tx,
                 t_start,
-            )?;
+            )?
         }
         LocalModel::Mamba2(model) => {
             let mut mamba_state = Mamba2State::new(&model.cfg.clone(), state.dtype, &state.device)
@@ -706,8 +724,11 @@ fn generate_with_cache(
                 &state.tokenizer,
                 tx,
                 t_start,
-            )?;
+            )?
         }
+    };
+    if let Ok(mut g) = last_usage.lock() {
+        *g = Some((prompt_token_count, generated));
     }
     Ok(())
 }
@@ -737,7 +758,7 @@ fn generate_transformer(
     tokenizer: &Tokenizer,
     tx: mpsc::Sender<String>,
     t_start: std::time::Instant,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     /// Maximum tokens processed in a single prefill forward pass.
     /// Bounds peak attention memory: [n_heads, CHUNK, past+CHUNK].
     /// 512 → ~150 MB peak per layer on Qwen3-8B (BF16), vs ~1.1 GB for 4096.
@@ -841,7 +862,7 @@ fn generate_gemma3(
     tokenizer: &Tokenizer,
     tx: mpsc::Sender<String>,
     t_start: std::time::Instant,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     // Clip prompt to max_kv_tokens (keep tail — most recent context)
     let prompt = if prompt.len() > max_kv_tokens {
         let drop = prompt.len() - max_kv_tokens;
@@ -903,7 +924,7 @@ fn generate_mamba1(
     tokenizer: &Tokenizer,
     tx: mpsc::Sender<String>,
     t_start: std::time::Instant,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     let device = model.dtype(); // dtype, not device — need device from model
                                 // Mamba model: forward takes 1D token tensor [1], returns [1, vocab]
     let dev = mamba_state.hs[0].device().clone();
@@ -963,7 +984,7 @@ fn generate_mamba2(
     tokenizer: &Tokenizer,
     tx: mpsc::Sender<String>,
     t_start: std::time::Instant,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     let prompt_len = prompt.len();
     let mut last_logits: Option<Tensor> = None;
 
@@ -1021,7 +1042,7 @@ fn decode_loop<F>(
     offset: &mut usize,
     mut sample_fn: F,
     prompt_len: usize,
-) -> anyhow::Result<()>
+) -> anyhow::Result<usize>
 where
     F: FnMut(u32, usize) -> anyhow::Result<u32>,
 {
@@ -1096,7 +1117,7 @@ where
             decode_steps as f64 / (decode_ms as f64 / 1000.0),
         );
     }
-    Ok(())
+    Ok(decode_steps)
 }
 
 // ---------------------------------------------------------------------------

@@ -178,6 +178,12 @@ pub fn log_response(msg: &Message) {
     if !tool_calls.is_empty() {
         payload.insert("toolCalls".into(), Value::Array(tool_calls));
     }
+    // Token usage — makes the audit log a per-call historical cost record.
+    if let Some(u) = msg.usage.as_ref().filter(|u| !u.is_empty()) {
+        if let Ok(v) = serde_json::to_value(u) {
+            payload.insert("usage".into(), v);
+        }
+    }
     append_line(&Value::Object(payload));
 }
 

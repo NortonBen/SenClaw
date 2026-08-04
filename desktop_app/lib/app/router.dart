@@ -10,6 +10,7 @@ import '../features/kanban/kanban_screen.dart';
 import '../features/diagnostics/diagnostics_screen.dart';
 import '../features/plugins/plugins_screen.dart';
 import '../features/settings/settings_screen.dart';
+import '../features/usage/usage_screen.dart';
 import '../features/space/space_screen.dart'
     show NotesScreen, CalendarScreen, SpaceAppsScreen;
 import '../features/wiki/wiki_screen.dart';
@@ -86,6 +87,10 @@ final appRouter = GoRouter(
           path: '/workflow-runs',
           pageBuilder: (context, state) =>
               _noTransition(const WorkflowRunsScreen()),
+        ),
+        GoRoute(
+          path: '/usage',
+          pageBuilder: (context, state) => _noTransition(const UsageScreen()),
         ),
         GoRoute(
           path: '/settings',

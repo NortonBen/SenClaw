@@ -61,6 +61,11 @@ pub struct ZenCoreApi {
     /// response round-trip).
     on_widget_emit:
         Arc<Mutex<Option<Arc<dyn Fn(String, crate::zen_core::WidgetEmitData) + Send + Sync>>>>,
+    /// Token accounting sink. When set, every `EngineEvent::LlmUsage` an
+    /// engine emits (agent / subagent / compact / hook calls) is recorded with
+    /// this engine's jid. `Arc<Mutex>` for the same late-wiring reason as the
+    /// callbacks above.
+    usage_recorder: Arc<Mutex<Option<Arc<crate::usage::UsageRecorder>>>>,
 }
 
 /// Wire-format tool-execution event used by the AgentPool → WS gateway path.
@@ -93,6 +98,7 @@ impl ZenCoreApi {
             on_plan_exit_request: Arc::new(Mutex::new(None)),
             on_tool_execution: Arc::new(Mutex::new(None)),
             on_widget_emit: Arc::new(Mutex::new(None)),
+            usage_recorder: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -110,6 +116,11 @@ impl ZenCoreApi {
     /// so the chat UI can render tool-call activity inline.
     pub fn set_on_tool_execution(&self, cb: Arc<dyn Fn(String, ToolExecutionEvent) + Send + Sync>) {
         *self.on_tool_execution.lock().unwrap() = Some(cb);
+    }
+
+    /// Wire the token-accounting sink (called once from `run_daemon`).
+    pub fn set_usage_recorder(&self, rec: Arc<crate::usage::UsageRecorder>) {
+        *self.usage_recorder.lock().unwrap() = Some(rec);
     }
 
     /// Wire a callback fired for every `EngineEvent::WidgetEmit`. Used by
@@ -215,12 +226,38 @@ impl ZenCoreApi {
         let plan_callback_for_loop = self.on_plan_exit_request.clone();
         let tool_exec_callback_for_loop = self.on_tool_execution.clone();
         let widget_callback_for_loop = self.on_widget_emit.clone();
+        let usage_recorder_for_loop = self.usage_recorder.clone();
         let mut rx = engine.event_bus.subscribe();
 
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
+                        // Accounting first — must run even when no UI handlers
+                        // are registered for this jid (background sessions,
+                        // early boot), so it sits before the handlers gate.
+                        if let EngineEvent::LlmUsage(d) = &event {
+                            let rec = usage_recorder_for_loop.lock().unwrap().clone();
+                            if let Some(rec) = rec {
+                                rec.record(
+                                    crate::usage::UsageEvent {
+                                        jid: jid.clone(),
+                                        agent_id: d.agent_id.clone(),
+                                        session_id: d.session_id.clone(),
+                                        profile: d.profile.clone(),
+                                        provider: d.provider.clone(),
+                                        model: d.model.clone(),
+                                        latency_ms: d.latency_ms,
+                                        ok: d.ok,
+                                        ..crate::usage::UsageEvent::new(
+                                            crate::usage::UsageSource::from_zen(&d.source),
+                                        )
+                                    }
+                                    .with_tokens(&d.usage),
+                                );
+                            }
+                            continue;
+                        }
                         let handlers = handlers_map.lock().unwrap().get(&jid).cloned();
                         let h = match handlers {
                             Some(h) => h,
@@ -435,6 +472,12 @@ impl CoreApi for ZenCoreApi {
     fn set_after_process(&self, jid: &str, enabled: bool) {
         if let Some(engine) = self.engines.lock().unwrap().get(jid) {
             engine.set_after_process(enabled);
+        }
+    }
+
+    fn set_user_defaults(&self, jid: &str, block: Option<String>) {
+        if let Some(engine) = self.engines.lock().unwrap().get(jid) {
+            engine.set_user_defaults(block);
         }
     }
 

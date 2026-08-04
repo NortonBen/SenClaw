@@ -25,6 +25,21 @@ use crate::zen_core::McpServerConfig;
 pub struct VirtualRunResult {
     pub result: String,
     pub duration_ms: u64,
+    /// Total billed input/output tokens across every LLM call of the run
+    /// (0 when the provider reported no usage, e.g. local models pre-wiring).
+    /// The per-call rows are already in `llm_usage_log` via the engine bus —
+    /// these totals exist so `agent.run` can hand the number straight back to
+    /// the calling Space App without re-querying.
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+}
+
+/// Shared token accumulator threaded into `execute_virtual_prompt` so the
+/// event loop can total up `EngineEvent::LlmUsage` for the run result.
+#[derive(Default)]
+pub struct UsageAccum {
+    pub tokens_in: std::sync::atomic::AtomicU64,
+    pub tokens_out: std::sync::atomic::AtomicU64,
 }
 
 /// A todo item pushed from the virtual agent.
@@ -120,7 +135,9 @@ pub trait VirtualCoreApi: Send + Sync {
         custom_memory_dir: Option<&str>,
         memory_folder_override: Option<&str>,
         activity_notify: Option<ActivityNotifyFn>,
+        usage_accum: Option<Arc<UsageAccum>>,
     ) -> Result<String> {
+        let _ = usage_accum;
         Err(anyhow::anyhow!("VirtualCoreApi not wired"))
     }
 }
@@ -301,6 +318,7 @@ impl VirtualWorkerPool {
             cleanup_permission: std::sync::Mutex::new(None::<Box<dyn FnOnce() + Send>>),
         };
 
+        let usage_accum = Arc::new(UsageAccum::default());
         let result = self
             .execute_inner(
                 persona,
@@ -314,6 +332,7 @@ impl VirtualWorkerPool {
                 &cleanup_guard,
                 custom_memory_dir,
                 memory_folder_override,
+                Arc::clone(&usage_accum),
             )
             .await;
 
@@ -327,6 +346,12 @@ impl VirtualWorkerPool {
             Ok(output) => Ok(VirtualRunResult {
                 result: output,
                 duration_ms,
+                tokens_in: usage_accum
+                    .tokens_in
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                tokens_out: usage_accum
+                    .tokens_out
+                    .load(std::sync::atomic::Ordering::Relaxed),
             }),
             Err(e) => Err(e),
         }
@@ -404,6 +429,7 @@ impl VirtualWorkerPool {
         cleanup_guard: &CleanupGuard<'_>,
         custom_memory_dir: Option<&str>,
         memory_folder_override: Option<&str>,
+        usage_accum: Arc<UsageAccum>,
     ) -> Result<String> {
         // Prepare temp agent data dir
         tokio::fs::create_dir_all(temp_dir).await?;
@@ -482,18 +508,15 @@ impl VirtualWorkerPool {
         let memory_folder_override_captured = memory_folder_override.map(|s| s.to_string());
 
         // Wrap activity_notify with task_id for this run.
-        let activity_notify: Option<ActivityNotifyFn> = self
-            .activity_notify
-            .lock()
-            .unwrap()
-            .clone()
-            .map(|notify| {
+        let activity_notify: Option<ActivityNotifyFn> =
+            self.activity_notify.lock().unwrap().clone().map(|notify| {
                 let tid = task_id.to_string();
                 Arc::new(move |_: &str, entry: SubAgentActivityEntry| {
                     notify(&tid, entry);
                 }) as ActivityNotifyFn
             });
 
+        let usage_accum_for_run = Arc::clone(&usage_accum);
         let result = tokio::task::spawn_blocking(move || {
             let sys_prompt_opt = if sys_prompt.is_empty() {
                 None
@@ -518,6 +541,7 @@ impl VirtualWorkerPool {
                 custom_memory_dir_captured.as_deref(),
                 memory_folder_override_captured.as_deref(),
                 activity_notify,
+                Some(usage_accum_for_run),
             )
         })
         .await;
@@ -683,6 +707,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
         custom_memory_dir: Option<&str>,
         memory_folder_override: Option<&str>,
         activity_notify: Option<ActivityNotifyFn>,
+        usage_accum: Option<Arc<UsageAccum>>,
     ) -> Result<String> {
         use crate::zen_core::{EngineEvent, SessionState, ZenCore, ZenCoreOptions};
 
@@ -920,6 +945,37 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
                                     ts: chrono::Utc::now().to_rfc3339(),
                                 },
                             );
+                        }
+                    }
+                    // Token accounting: this engine is private to the run (no
+                    // AgentPool bridge on its bus), so record here — and total
+                    // up for the VirtualRunResult / agent.run reply.
+                    EngineEvent::LlmUsage(d) => {
+                        if let Some(rec) = crate::usage::global() {
+                            rec.record(
+                                crate::usage::UsageEvent {
+                                    jid: virtual_jid.to_string(),
+                                    agent_id: d.agent_id.clone(),
+                                    session_id: d.session_id.clone(),
+                                    profile: d.profile.clone(),
+                                    provider: d.provider.clone(),
+                                    model: d.model.clone(),
+                                    latency_ms: d.latency_ms,
+                                    ok: d.ok,
+                                    ..crate::usage::UsageEvent::new(
+                                        crate::usage::UsageSource::from_zen(&d.source),
+                                    )
+                                }
+                                .with_tokens(&d.usage),
+                            );
+                        }
+                        if let Some(ref accum) = usage_accum {
+                            accum
+                                .tokens_in
+                                .fetch_add(d.usage.input(), std::sync::atomic::Ordering::Relaxed);
+                            accum
+                                .tokens_out
+                                .fetch_add(d.usage.output(), std::sync::atomic::Ordering::Relaxed);
                         }
                     }
                     _ => {}

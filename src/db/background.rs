@@ -421,7 +421,11 @@ impl super::Db {
     }
 
     /// Quota check (design §10 guard 4).
-    pub fn count_background_tasks_by_owner(&self, owner_id: &str, active_only: bool) -> Result<i64> {
+    pub fn count_background_tasks_by_owner(
+        &self,
+        owner_id: &str,
+        active_only: bool,
+    ) -> Result<i64> {
         self.with_conn(|c| {
             let n: i64 = if active_only {
                 c.query_row(
@@ -476,6 +480,7 @@ impl super::Db {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn finish_background_run(
         &self,
         id: &str,
@@ -485,12 +490,15 @@ impl super::Db {
         error: Option<&str>,
         duration_ms: i64,
         turn_count: Option<i64>,
+        tokens: Option<(i64, i64)>,
     ) -> Result<()> {
         self.with_conn(|c| {
             c.execute(
                 "UPDATE background_runs
                  SET status = ?1, prompt = COALESCE(?2, prompt), result = ?3, error = ?4,
-                     duration_ms = ?5, turn_count = ?6, finished_at = ?7
+                     duration_ms = ?5, turn_count = ?6, finished_at = ?7,
+                     tokens_in = COALESCE(?9, tokens_in),
+                     tokens_out = COALESCE(?10, tokens_out)
                  WHERE id = ?8",
                 params![
                     status.as_str(),
@@ -500,7 +508,9 @@ impl super::Db {
                     duration_ms,
                     turn_count,
                     now_rfc3339(),
-                    id
+                    id,
+                    tokens.map(|t| t.0),
+                    tokens.map(|t| t.1),
                 ],
             )?;
             Ok(())
@@ -617,7 +627,11 @@ impl super::Db {
     // ============================================================
 
     /// Aggregate run outcomes since `since` (RFC3339), optionally for one owner.
-    pub fn background_totals(&self, since: &str, owner_id: Option<&str>) -> Result<BackgroundTotals> {
+    pub fn background_totals(
+        &self,
+        since: &str,
+        owner_id: Option<&str>,
+    ) -> Result<BackgroundTotals> {
         self.with_conn(|c| {
             let (sql_filter, args): (&str, Vec<String>) = match owner_id {
                 Some(o) => (
@@ -990,7 +1004,11 @@ mod tests {
         let default = db
             .list_background_tasks(&BackgroundTaskFilter::default())
             .unwrap();
-        assert_eq!(default.len(), 1, "core upkeep must not bury the user's tasks");
+        assert_eq!(
+            default.len(),
+            1,
+            "core upkeep must not bury the user's tasks"
+        );
 
         let with_internal = db
             .list_background_tasks(&BackgroundTaskFilter {
@@ -1114,7 +1132,10 @@ mod tests {
         db.record_background_failure(&t.id).unwrap();
         db.reset_background_failures(&t.id).unwrap();
         assert_eq!(
-            db.get_background_task(&t.id).unwrap().unwrap().consecutive_failures,
+            db.get_background_task(&t.id)
+                .unwrap()
+                .unwrap()
+                .consecutive_failures,
             0
         );
         assert!(db.background_attention().unwrap().is_empty());
@@ -1133,7 +1154,8 @@ mod tests {
         assert_eq!(db.reclaim_orphan_background_runs().unwrap(), 1);
         let runs = db.list_background_runs(&t.id, 10).unwrap();
         assert!(
-            runs.iter().all(|r| r.status != BackgroundRunStatus::Running),
+            runs.iter()
+                .all(|r| r.status != BackgroundRunStatus::Running),
             "no run may stay 'running' after the owning process died"
         );
         assert_eq!(
@@ -1166,7 +1188,10 @@ mod tests {
         db.upsert_background_task(&task(BackgroundOwnerKind::App, "crm", "c"))
             .unwrap();
 
-        assert_eq!(db.count_background_tasks_by_owner("main", false).unwrap(), 2);
+        assert_eq!(
+            db.count_background_tasks_by_owner("main", false).unwrap(),
+            2
+        );
         assert_eq!(db.count_background_tasks_by_owner("main", true).unwrap(), 1);
         assert_eq!(db.count_background_tasks_by_owner("crm", false).unwrap(), 1);
     }

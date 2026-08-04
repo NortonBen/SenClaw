@@ -26,6 +26,9 @@ pub struct ExecuteHooksOptions<'a> {
     pub profile: Option<&'a ModelProfile>,
     /// Message history for hooks with include_history enabled.
     pub messages: Option<&'a [crate::zen_core::Message]>,
+    /// Engine bus for token accounting: when set, prompt-hook LLM calls emit
+    /// `EngineEvent::LlmUsage` (source "hook") so hook spend is not invisible.
+    pub usage_bus: Option<&'a crate::zen_core::EventBus>,
 }
 
 impl Default for ExecuteHooksOptions<'_> {
@@ -36,6 +39,7 @@ impl Default for ExecuteHooksOptions<'_> {
             client: None,
             profile: None,
             messages: None,
+            usage_bus: None,
         }
     }
 }
@@ -80,6 +84,7 @@ pub async fn execute_hooks(
         let client_clone = opts.client.cloned();
         let profile_clone = opts.profile.cloned();
         let messages_clone = opts.messages.map(|m| m.to_vec());
+        let bus_clone = opts.usage_bus.cloned();
         tokio::spawn(async move {
             let result = run_one_hook(
                 &hook,
@@ -89,6 +94,7 @@ pub async fn execute_hooks(
                 client_clone.as_ref(),
                 profile_clone.as_ref(),
                 messages_clone.as_deref(),
+                bus_clone.as_ref(),
             )
             .await;
             info!("[hooks] Async hook completed: {result:?}");
@@ -107,6 +113,7 @@ pub async fn execute_hooks(
                 opts.client,
                 opts.profile,
                 opts.messages,
+                opts.usage_bus,
             )
         })
         .collect();
@@ -137,6 +144,7 @@ pub async fn execute_hooks(
     aggregate_results(results, errors, event)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_one_hook(
     hook: &HookDefinition,
     input_json: &str,
@@ -145,6 +153,7 @@ async fn run_one_hook(
     client: Option<&Client>,
     profile: Option<&ModelProfile>,
     messages: Option<&[crate::zen_core::Message]>,
+    usage_bus: Option<&crate::zen_core::EventBus>,
 ) -> anyhow::Result<HookOutput> {
     use super::types::HookType;
     match hook.hook_type {
@@ -153,7 +162,8 @@ async fn run_one_hook(
             let client = client.ok_or_else(|| anyhow::anyhow!("No HTTP client for prompt hook"))?;
             let profile =
                 profile.ok_or_else(|| anyhow::anyhow!("No model profile for prompt hook"))?;
-            execute_prompt_hook(hook, input_json, client, profile, cancel, messages).await
+            execute_prompt_hook(hook, input_json, client, profile, cancel, messages, usage_bus)
+                .await
         }
     }
 }

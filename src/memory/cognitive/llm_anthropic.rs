@@ -113,6 +113,7 @@ pub(crate) fn collect_text(blocks: &[ContentBlock]) -> String {
 #[async_trait]
 impl LlmClient for AnthropicLlm {
     async fn complete(&self, system: &str, user: &str) -> Result<String> {
+        let started = std::time::Instant::now();
         let url = self.endpoint();
         let body = MessagesRequest {
             model: &self.model,
@@ -139,6 +140,14 @@ impl LlmClient for AnthropicLlm {
         let text = resp.text().await.context("read anthropic body")?;
         if !status.is_success() {
             anyhow::bail!("Anthropic API {status}: {text}");
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            super::llm::record_cognitive_usage(
+                "anthropic",
+                &self.model,
+                &v,
+                started.elapsed().as_millis() as u64,
+            );
         }
         let parsed: MessagesResponse =
             serde_json::from_str(&text).with_context(|| format!("parse anthropic JSON: {text}"))?;

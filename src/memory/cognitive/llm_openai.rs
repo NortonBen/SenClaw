@@ -220,6 +220,17 @@ pub(crate) fn parse_sse_response(raw: &str) -> Result<String> {
 #[async_trait]
 impl LlmClient for OpenAiCompatLlm {
     async fn complete(&self, system: &str, user: &str) -> Result<String> {
+        let started = std::time::Instant::now();
+        let record = |text: &str| {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
+                super::llm::record_cognitive_usage(
+                    "openai",
+                    &self.model,
+                    &v,
+                    started.elapsed().as_millis() as u64,
+                );
+            }
+        };
         let url = self.endpoint();
         let body = build_body(&self.model, system, user, self.request_json_object);
 
@@ -248,10 +259,12 @@ impl LlmClient for OpenAiCompatLlm {
                 if !status.is_success() {
                     anyhow::bail!("chat completion HTTP {status}: {text}");
                 }
+                record(&text);
                 return parse_response(&text);
             }
             anyhow::bail!("chat completion HTTP {status}: {text}");
         }
+        record(&text);
         parse_response(&text)
     }
 }

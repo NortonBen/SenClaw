@@ -155,6 +155,12 @@ pub struct OneShotResult {
     pub errored: bool,
     /// Description of the session error when `errored` (`<code>: <message>`).
     pub error_message: Option<String>,
+    /// Total billed input/output tokens across the run's LLM calls (0 when
+    /// the provider reported no usage). Per-call rows are in `llm_usage_log`;
+    /// these totals let callers (background runner) store per-run numbers
+    /// without racing the recorder's async flush.
+    pub tokens_in: u64,
+    pub tokens_out: u64,
 }
 
 /// Build a unique instance id like `oneshot-{millis}-{rand}` if caller didn't supply one.
@@ -248,6 +254,8 @@ pub async fn run_one_shot(opts: OneShotOptions) -> Result<OneShotResult> {
     let mut aborted = false;
     let mut errored = false;
     let mut error_message: Option<String> = None;
+    let mut tokens_in: u64 = 0;
+    let mut tokens_out: u64 = 0;
     // Only accept Idle AFTER the session has been observed doing work.
     // create_session / plugin init can leave an early Idle StateUpdate in the
     // event channel; breaking on it would dispose the engine before the LLM
@@ -349,11 +357,32 @@ pub async fn run_one_shot(opts: OneShotOptions) -> Result<OneShotResult> {
                     // (api/model/context) — waiting for Idle just converts
                     // them into a silent empty result.
                     errored = true;
-                    error_message = Some(format!(
-                        "{}: {}",
-                        err.error.code, err.error.message
-                    ));
+                    error_message = Some(format!("{}: {}", err.error.code, err.error.message));
                     break;
+                }
+                // Token accounting — private engine, no AgentPool bridge on
+                // this bus, so the runner records its own calls.
+                EngineEvent::LlmUsage(d) => {
+                    tokens_in += d.usage.input();
+                    tokens_out += d.usage.output();
+                    if let Some(rec) = crate::usage::global() {
+                        rec.record(
+                            crate::usage::UsageEvent {
+                                jid: format!("isolated:{instance_id}"),
+                                agent_id: d.agent_id.clone(),
+                                session_id: d.session_id.clone(),
+                                profile: d.profile.clone(),
+                                provider: d.provider.clone(),
+                                model: d.model.clone(),
+                                latency_ms: d.latency_ms,
+                                ok: d.ok,
+                                ..crate::usage::UsageEvent::new(
+                                    crate::usage::UsageSource::from_zen(&d.source),
+                                )
+                            }
+                            .with_tokens(&d.usage),
+                        );
+                    }
                 }
                 _ => {}
             },
@@ -379,6 +408,8 @@ pub async fn run_one_shot(opts: OneShotOptions) -> Result<OneShotResult> {
         aborted,
         errored,
         error_message,
+        tokens_in,
+        tokens_out,
     })
 }
 

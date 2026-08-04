@@ -69,6 +69,7 @@ impl LlmClient for LocalCandleLlm {
                 serde_json::json!({ "role": "user", "content": user }),
             ];
 
+            let started = std::time::Instant::now();
             let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
             let engine_for_gen = engine.clone();
             let gen_handle =
@@ -93,6 +94,16 @@ impl LlmClient for LocalCandleLlm {
                 }
             }
             let _ = gen_handle.await;
+
+            // Token accounting: real tokenizer counts from the engine (cost 0).
+            if let Some((p, g)) = engine.last_usage() {
+                super::llm::record_cognitive_usage(
+                    "local-candle",
+                    &self.canonical_id,
+                    &serde_json::json!({"usage": {"input_tokens": p, "output_tokens": g}}),
+                    started.elapsed().as_millis() as u64,
+                );
+            }
 
             // Strip <think>…</think> reasoning blocks — Qwen3 family emits
             // them; cognify wants JSON only.

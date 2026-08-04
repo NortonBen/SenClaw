@@ -182,7 +182,7 @@ Quy tắc: \"mỗi sáng 9h\"→cron \"0 9 * * *\"; \"mỗi 30 phút\"→interva
         now_iso = now_local.to_rfc3339(),
     );
 
-    let (answer, _model, _finish) = crate::gateway::ui_server::llm_config::chat_completion(
+    let r = crate::gateway::ui_server::llm_config::chat_completion(
         &s.config.paths.global_config_path,
         None,
         &system,
@@ -191,6 +191,13 @@ Quy tắc: \"mỗi sáng 9h\"→cron \"0 9 * * *\"; \"mỗi 30 phút\"→interva
     )
     .await
     .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
+    crate::gateway::ui_server::llm_config::record_completion(
+        &s.usage_recorder,
+        "web:background-draft",
+        "",
+        &r,
+    );
+    let answer = r.text;
 
     let spec = extract_json_object(&answer).ok_or_else(|| {
         // Show a preview so a misbehaving model is debuggable rather than opaque.
@@ -203,11 +210,24 @@ Quy tắc: \"mỗi sáng 9h\"→cron \"0 9 * * *\"; \"mỗi 30 phút\"→interva
 
     // Normalize + validate the model's output so the UI always gets a usable
     // draft, even when the model is sloppy.
-    let get = |k: &str| spec.get(k).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+    let get = |k: &str| {
+        spec.get(k)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
     let prompt = get("prompt").unwrap_or(text).to_owned();
     let title = get("title")
         .map(|t| t.chars().take(60).collect::<String>())
-        .unwrap_or_else(|| prompt.lines().next().unwrap_or("Task nền").chars().take(60).collect());
+        .unwrap_or_else(|| {
+            prompt
+                .lines()
+                .next()
+                .unwrap_or("Task nền")
+                .chars()
+                .take(60)
+                .collect()
+        });
     let trigger_type = get("trigger_type").unwrap_or("manual").to_owned();
     // trigger_value may arrive as a string OR (for interval) a number.
     let trigger_value = spec
@@ -219,7 +239,10 @@ Quy tắc: \"mỗi sáng 9h\"→cron \"0 9 * * *\"; \"mỗi 30 phút\"→interva
         })
         .filter(|s| !s.is_empty());
 
-    let notify = spec.get("notify").and_then(|v| v.as_bool()).unwrap_or(false);
+    let notify = spec
+        .get("notify")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     Ok(Json(serde_json::json!({
         "title": title,
@@ -551,8 +574,8 @@ pub(crate) async fn update(
         let next = BackgroundTaskStatus::parse(&v);
         // Resuming clears the failure counter — otherwise a task the user
         // deliberately un-paused would re-quarantine on its very next failure.
-        resumed = next == BackgroundTaskStatus::Active
-            && task.status != BackgroundTaskStatus::Active;
+        resumed =
+            next == BackgroundTaskStatus::Active && task.status != BackgroundTaskStatus::Active;
         task.status = next;
         if resumed {
             task.consecutive_failures = 0;
@@ -651,7 +674,9 @@ pub(crate) async fn run_detail(
     } else {
         Vec::new()
     };
-    Ok(Json(serde_json::json!({ "run": run, "activity": activity })))
+    Ok(Json(
+        serde_json::json!({ "run": run, "activity": activity }),
+    ))
 }
 
 pub(crate) async fn cancel_run(
@@ -762,7 +787,8 @@ mod quick_parse_tests {
 
     #[test]
     fn picks_the_last_valid_object_when_reasoning_has_json_ish_text() {
-        let raw = "Ví dụ {\"x\": 1} nhưng đáp án là:\n{\"title\": \"T\", \"trigger_type\": \"once\"}";
+        let raw =
+            "Ví dụ {\"x\": 1} nhưng đáp án là:\n{\"title\": \"T\", \"trigger_type\": \"once\"}";
         let m = extract_json_object(raw).unwrap();
         assert_eq!(m["title"], "T");
     }
@@ -773,7 +799,11 @@ fn window_start(window: &str) -> Result<String, AppError> {
         "24h" => chrono::Duration::hours(24),
         "7d" => chrono::Duration::days(7),
         "30d" => chrono::Duration::days(30),
-        other => return Err(bad(format!("unknown window '{other}' (use 24h, 7d or 30d)"))),
+        other => {
+            return Err(bad(format!(
+                "unknown window '{other}' (use 24h, 7d or 30d)"
+            )))
+        }
     };
     Ok((Utc::now() - dur).to_rfc3339())
 }

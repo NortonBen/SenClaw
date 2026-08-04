@@ -23,11 +23,16 @@ pub enum EngineEvent {
     SessionReady(SessionReadyData),
     SessionInterrupted(SessionInterruptedData),
     SessionError(SessionErrorData),
-    SessionCleared { session_id: Option<String> },
+    SessionCleared {
+        session_id: Option<String>,
+    },
     StateUpdate(StateUpdateData),
     InputReceived(InputReceivedData),
     MessageComplete(MessageCompleteData),
     ConversationUsage(ConversationUsageData),
+    /// Per-LLM-call token accounting (bus-only; consumed by the embedding
+    /// layer which adds the jid and feeds the usage recorder).
+    LlmUsage(LlmUsageData),
     ThinkingChunk(ThinkingChunkData),
     TextChunk(TextChunkData),
     ToolPermissionRequest(ToolPermissionRequestData),

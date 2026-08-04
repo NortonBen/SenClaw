@@ -232,6 +232,12 @@ pub struct MlxNativeEngine {
     /// `Arc<Mutex<...>>` is.
     loaded: Arc<Mutex<Option<Loaded>>>,
     status: Mutex<RuntimeStatus>,
+    /// `(prompt_tokens, generated_tokens)` of the most recent generation on
+    /// this engine — the numbers that previously only reached the throughput
+    /// log. Read by `query_llm` right after a turn to build real usage for
+    /// token accounting (generations are serialized per engine, so
+    /// "most recent" is the caller's own turn).
+    last_usage: Arc<Mutex<Option<(usize, usize)>>>,
 }
 
 impl MlxNativeEngine {
@@ -242,12 +248,18 @@ impl MlxNativeEngine {
             kv_cache_bits,
             loaded: Arc::new(Mutex::new(None)),
             status: Mutex::new(RuntimeStatus::NotInstalled),
+            last_usage: Arc::new(Mutex::new(None)),
         }
     }
 
     /// True when weights are currently in memory.
     pub fn is_loaded(&self) -> bool {
         self.loaded.lock().map(|g| g.is_some()).unwrap_or(false)
+    }
+
+    /// `(prompt_tokens, generated_tokens)` of the most recent generation.
+    pub fn last_usage(&self) -> Option<(usize, usize)> {
+        self.last_usage.lock().ok().and_then(|g| *g)
     }
 
     /// Drop the cached model + tokenizer + prefix cache, freeing the bulk
@@ -260,7 +272,9 @@ impl MlxNativeEngine {
         // engine is mid-generate on the shared Metal device. If MLX is busy,
         // skip — the idle sweep / next model switch retries.
         let Some(_mlx_serial) = mlx_serial_try_lock() else {
-            tracing::debug!("[local-mlx-native] unload skipped — MLX busy (generation in progress)");
+            tracing::debug!(
+                "[local-mlx-native] unload skipped — MLX busy (generation in progress)"
+            );
             return;
         };
         if let Ok(mut g) = self.loaded.lock() {
@@ -471,10 +485,18 @@ impl MlxNativeEngine {
         let messages = messages.to_vec();
         let tools = tools.to_vec();
         let kv_bits = self.kv_cache_bits;
+        let last_usage = Arc::clone(&self.last_usage);
 
         let join = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             generate_with_cache(
-                &loaded, &model_dir, &model_id, &messages, &tools, kv_bits, tx,
+                &loaded,
+                &model_dir,
+                &model_id,
+                &messages,
+                &tools,
+                kv_bits,
+                tx,
+                &last_usage,
             )
         });
 
@@ -649,8 +671,8 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
             if chat_template.is_none() {
                 anyhow::bail!("Ouro chat template missing in tokenizer_config.json");
             }
-            let m = load_ouro_any(model_dir)
-                .map_err(|e| anyhow::anyhow!("load_ouro failed: {e:?}"))?;
+            let m =
+                load_ouro_any(model_dir).map_err(|e| anyhow::anyhow!("load_ouro failed: {e:?}"))?;
             // Ouro reuses `num_hidden_layers` blocks across `total_ut_steps`
             // recurrent sweeps, with a distinct KV slot per (sweep, layer). Report
             // the product so the engine sizes the cache vector to all 192 slots
@@ -697,7 +719,7 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
     // driver of the daemon's RAM ballooning to ~20 GB).
     let kv_mult = model.kv_recurrence_multiplier();
     let prefix_cache = if kv_mult > 1 {
-        use super::mlx_lm::prefix_cache::{MAX_TOTAL_BYTES, PrefixCache};
+        use super::mlx_lm::prefix_cache::{PrefixCache, MAX_TOTAL_BYTES};
         PrefixCache::with_limits(1, MAX_TOTAL_BYTES / kv_mult as usize)
     } else {
         super::mlx_lm::prefix_cache::PrefixCache::new()
@@ -1042,6 +1064,7 @@ fn openai_messages_to_plain_transcript(messages: &[serde_json::Value]) -> String
     text
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_with_cache(
     loaded: &Arc<Mutex<Option<Loaded>>>,
     model_dir: &Path,
@@ -1050,11 +1073,12 @@ fn generate_with_cache(
     tools: &[serde_json::Value],
     _kv_cache_bits: Option<u8>,
     tx: mpsc::Sender<String>,
+    last_usage: &Mutex<Option<(usize, usize)>>,
 ) -> anyhow::Result<()> {
-    use super::mlx_lm::cache::{DEFAULT_TQ_ACTIVATE_AT, KvCache, eval_all_caches};
-    use mlx_rs::Array;
+    use super::mlx_lm::cache::{eval_all_caches, KvCache, DEFAULT_TQ_ACTIVATE_AT};
     use mlx_rs::ops::indexing::{IndexOp, NewAxis};
     use mlx_rs::transforms::{async_eval, eval};
+    use mlx_rs::Array;
 
     // Serialize all MLX/Metal work process-wide (load + prefill + decode) so the
     // main-agent model and the background cognitive model can't run on the
@@ -1720,7 +1744,10 @@ fn generate_with_cache(
             | ModelKind::Gemma3(_)
             | ModelKind::Gemma4(_)
             | ModelKind::BonsaiQ1(_) => 1.15_f32,
-            ModelKind::Qwen3(_) | ModelKind::Qwen35(_) | ModelKind::Llama(_) | ModelKind::Ouro(_)
+            ModelKind::Qwen3(_)
+            | ModelKind::Qwen35(_)
+            | ModelKind::Llama(_)
+            | ModelKind::Ouro(_)
                 if decode_temperature == 0.0_f32 =>
             {
                 1.05_f32
@@ -2572,13 +2599,13 @@ fn generate_with_cache(
             }
         }
     } // end synchronous (repetition-penalty) decode path
-    // Flush any tokens still in the buffer regardless of whether we stopped
-    // on EOS or hit max_new_tokens. PREVIOUSLY the `hit_stop` branch returned
-    // without flushing, which dropped up to the last 19 tokens (buffer flush
-    // threshold). When the model emits `<tool_call>{...}</tool_call><|im_end|>`
-    // and the `</tool_call>` happens to sit in the un-flushed tail, the parser
-    // never sees the closing tag and rejects the tool call as "truncated".
-    // The fix here is structural: drain the buffer on every exit path.
+      // Flush any tokens still in the buffer regardless of whether we stopped
+      // on EOS or hit max_new_tokens. PREVIOUSLY the `hit_stop` branch returned
+      // without flushing, which dropped up to the last 19 tokens (buffer flush
+      // threshold). When the model emits `<tool_call>{...}</tool_call><|im_end|>`
+      // and the `</tool_call>` happens to sit in the un-flushed tail, the parser
+      // never sees the closing tag and rejects the tool call as "truncated".
+      // The fix here is structural: drain the buffer on every exit path.
     if !buffer.is_empty() {
         eval(&buffer).map_err(|e| anyhow::anyhow!("final eval failed: {e:?}"))?;
         let slice: Vec<u32> = buffer.drain(..).map(|t| t.item::<u32>()).collect();
@@ -2608,6 +2635,9 @@ fn generate_with_cache(
             generated_count,
             decode_elapsed,
         );
+    }
+    if let Ok(mut g) = last_usage.lock() {
+        *g = Some((prompt_token_count, generated_count));
     }
     mlx_release_after_turn();
 
@@ -2679,7 +2709,7 @@ fn gemma3_safetensors_has_lm_head(model_dir: &Path) -> anyhow::Result<bool> {
 ///    `parameters_mut()` misses them. We capture them by raw key and apply
 ///    directly into the struct (same pattern as `load_qwen3_any`).
 fn load_gemma3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::gemma3::Model> {
-    use super::mlx_lm::models::gemma3::{Model, get_gemma3_model_args};
+    use super::mlx_lm::models::gemma3::{get_gemma3_model_args, Model};
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
 
@@ -2897,7 +2927,7 @@ fn load_gemma3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ge
 /// `#[param]`-visible `inner/scales/biases` after quantization.
 fn load_gemma4_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::gemma4::Model> {
     use super::mlx_lm::models::gemma4::{
-        Model, QuantPlan, WeightMap, apply_per_module_quantization, get_gemma4_model_args,
+        apply_per_module_quantization, get_gemma4_model_args, Model, QuantPlan, WeightMap,
     };
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
@@ -3196,8 +3226,8 @@ fn load_deepseek_v2_any(
         })
         .unwrap_or((64, 4));
 
-    let mut model =
-        Model::new(args, group_size, bits).map_err(|e| anyhow::anyhow!("Model::new failed: {e:?}"))?;
+    let mut model = Model::new(args, group_size, bits)
+        .map_err(|e| anyhow::anyhow!("Model::new failed: {e:?}"))?;
 
     // Uniform quantize: flips every #[quantizable] MaybeQuantized slot
     // (embeddings, attention, dense MLP, shared experts, lm_head) to N-bit. The
@@ -3391,7 +3421,7 @@ fn load_falcon_mamba_any(
 /// variants and surfaces unmatched safetensors keys instead of silently
 /// dropping them.
 fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::llama::Model> {
-    use super::mlx_lm::models::llama::{Model, WeightMap, get_llama_model_args};
+    use super::mlx_lm::models::llama::{get_llama_model_args, Model, WeightMap};
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
 
@@ -3576,12 +3606,12 @@ fn load_llama_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::lla
 /// unmatched key.
 fn load_ouro_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ouro::Model> {
     use super::mlx_lm::models::llama::WeightMap;
-    use super::mlx_lm::models::ouro::{Model, get_ouro_model_args};
+    use super::mlx_lm::models::ouro::{get_ouro_model_args, Model};
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
 
-    let args =
-        get_ouro_model_args(model_dir).map_err(|e| anyhow::anyhow!("read ouro args failed: {e:?}"))?;
+    let args = get_ouro_model_args(model_dir)
+        .map_err(|e| anyhow::anyhow!("read ouro args failed: {e:?}"))?;
     let cfg_path = model_dir.join("config.json");
     let raw = std::fs::read_to_string(&cfg_path)
         .map_err(|e| anyhow::anyhow!("read config.json failed: {e}"))?;
@@ -3761,7 +3791,7 @@ fn load_ouro_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::ouro
 /// Load a Qwen3 `Model`, applying `nn::quantize` when `config.json` declares a
 /// `quantization` block (mlx-community 4-bit / 8-bit variants).
 fn load_qwen3_any(model_dir: &Path) -> anyhow::Result<super::mlx_lm::models::qwen3::Model> {
-    use super::mlx_lm::models::qwen3::{Model, WeightMap, get_qwen3_model_args};
+    use super::mlx_lm::models::qwen3::{get_qwen3_model_args, Model, WeightMap};
     use mlx_rs::module::{ModuleParameters, ModuleParametersExt};
     use std::collections::HashSet;
 

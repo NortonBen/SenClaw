@@ -145,6 +145,7 @@ fn spawn_compact_hook(config: &QueryConfig, messages: &[Message], event: HookEve
         context_history,
     });
     let (client, profile) = (config.hook_client.clone(), config.hook_profile.clone());
+    let usage_bus = config.event_bus.clone();
     tokio::spawn(async move {
         let _ = super::hooks::execute_hooks(
             &hm,
@@ -156,6 +157,7 @@ fn spawn_compact_hook(config: &QueryConfig, messages: &[Message], event: HookEve
                 client: client.as_ref(),
                 profile: profile.as_ref(),
                 messages: None,
+                usage_bus: Some(&usage_bus),
             },
         )
         .await;
@@ -190,6 +192,7 @@ async fn summarize_history(
         text: COMPRESSION_PROMPT.to_string(),
     }]));
 
+    let compact_started = std::time::Instant::now();
     let summary_msg = query_llm::query_llm(
         &config.http_client,
         &msgs,
@@ -201,6 +204,24 @@ async fn summarize_history(
         false,
     )
     .await?;
+
+    // Record the REAL cost of the compaction call before it gets replaced by
+    // the fabricated gauge value below — a full-history summarization is often
+    // the most expensive single call in a session and must not vanish from
+    // accounting.
+    if let Some(u) = summary_msg.usage.as_ref().filter(|u| !u.is_empty()) {
+        config.event_bus.emit(EngineEvent::LlmUsage(LlmUsageData {
+            source: "compact".to_string(),
+            agent_id: config.agent_id.clone(),
+            session_id: config.session_id.clone(),
+            profile: config.profile.name.clone(),
+            provider: config.profile.provider.clone(),
+            model: config.profile.model_name.clone(),
+            usage: u.clone(),
+            latency_ms: compact_started.elapsed().as_millis() as u64,
+            ok: true,
+        }));
+    }
 
     let (summary_text, _reasoning, _tools) = extract_content(&summary_msg);
     if summary_text.trim().is_empty() {
@@ -971,6 +992,7 @@ pub async fn query(
             turn_tools.len(),
             config.stream
         );
+        let llm_started = std::time::Instant::now();
         let llm_call = query_llm::query_llm(
             &config.http_client,
             &messages,
@@ -1025,6 +1047,7 @@ pub async fn query(
                         let (client, profile) =
                             (config.hook_client.clone(), config.hook_profile.clone());
                         let hm_clone = hm.clone();
+                        let usage_bus = config.event_bus.clone();
                         tokio::spawn(async move {
                             let _ = super::hooks::execute_hooks(
                                 &hm_clone,
@@ -1036,6 +1059,7 @@ pub async fn query(
                                     client: client.as_ref(),
                                     profile: profile.as_ref(),
                                     messages: None,
+                                    usage_bus: Some(&usage_bus),
                                 },
                             )
                             .await;
@@ -1044,7 +1068,26 @@ pub async fn query(
                 }
                 return Err(anyhow::anyhow!(msg));
             }
-            Ok(Ok(msg)) => msg,
+            Ok(Ok(msg)) => {
+                // Accounting funnel: one event per LLM call with real usage.
+                // Subagent turns included (the UI-facing events are filtered
+                // by agent_id downstream; this one must not be).
+                if let Some(u) = msg.usage.as_ref().filter(|u| !u.is_empty()) {
+                    config.event_bus.emit(EngineEvent::LlmUsage(LlmUsageData {
+                        source: if config.is_subagent { "subagent" } else { "agent" }
+                            .to_string(),
+                        agent_id: config.agent_id.clone(),
+                        session_id: config.session_id.clone(),
+                        profile: config.profile.name.clone(),
+                        provider: config.profile.provider.clone(),
+                        model: config.profile.model_name.clone(),
+                        usage: u.clone(),
+                        latency_ms: llm_started.elapsed().as_millis() as u64,
+                        ok: true,
+                    }));
+                }
+                msg
+            }
             Ok(Err(e)) => {
                 let classified = query_llm::LlmError::classify(&e);
                 if classified.should_emit() {
@@ -1071,6 +1114,7 @@ pub async fn query(
                             let (client, profile) =
                                 (config.hook_client.clone(), config.hook_profile.clone());
                             let hm_clone = hm.clone();
+                            let usage_bus = config.event_bus.clone();
                             tokio::spawn(async move {
                                 let _ = super::hooks::execute_hooks(
                                     &hm_clone,
@@ -1082,6 +1126,7 @@ pub async fn query(
                                         client: client.as_ref(),
                                         profile: profile.as_ref(),
                                         messages: None,
+                                        usage_bus: Some(&usage_bus),
                                     },
                                 )
                                 .await;
@@ -1654,7 +1699,11 @@ pub async fn query(
         } else {
             error_streak = 0;
         }
-        last_error_sig = if fresh_all_errored { Some(sig.clone()) } else { None };
+        last_error_sig = if fresh_all_errored {
+            Some(sig.clone())
+        } else {
+            None
+        };
 
         let stall_hard_stop = stall_streak >= stall_limit * 2;
         let should_nudge = !nudged && stall_streak >= stall_limit;

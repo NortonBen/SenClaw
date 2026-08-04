@@ -63,6 +63,16 @@ pub fn background_mcp_config(db_path: &str, group_folder: &str, chat_jid: &str) 
     cfg
 }
 
+// ===== UsageTool =====
+
+/// MCP config for `senclaw-usage` — read-only token/cost accounting queries
+/// (usage_overview / usage_breakdown / usage_query).
+pub fn usage_mcp_config(db_path: &str) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-usage", "usage-server");
+    cfg.env.insert("SENCLAW_DB_PATH".into(), db_path.to_owned());
+    cfg
+}
+
 // ===== WorkspaceTool =====
 
 pub fn workspace_mcp_config(

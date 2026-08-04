@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Layout, Tooltip, theme, Button, Badge, Popover, List, Typography, Dropdown } from 'antd';
 import {
+  BarChartOutlined,
   SettingOutlined,
   PlusOutlined,
   PushpinOutlined,
@@ -61,6 +62,7 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
   const unreadCount = notifications.filter(n => !n.read).length;
 
   const isSettings  = location.pathname.startsWith('/settings');
+  const isUsage     = location.pathname.startsWith('/usage');
   const isWiki      = location.pathname.startsWith('/wiki');
   const isPlugins   = location.pathname.startsWith('/plugins');
   const isCognitive = location.pathname.startsWith('/cognitive');
@@ -173,6 +175,9 @@ export function Sidebar({ status, isDarkMode, toggleTheme, sidebarContent, notif
             </Tooltip>
             <Tooltip title="Knowledge">
               <Button type={isCognitive ? 'primary' : 'text'} size="small" icon={<DeploymentUnitOutlined />} onClick={() => navigate('/cognitive')} />
+            </Tooltip>
+            <Tooltip title="Token Usage">
+              <Button type={isUsage ? 'primary' : 'text'} size="small" icon={<BarChartOutlined />} onClick={() => navigate('/usage')} />
             </Tooltip>
             <Tooltip title="Settings">
               <Button type={isSettings ? 'primary' : 'text'} size="small" icon={<SettingOutlined />} onClick={() => navigate('/settings')} />

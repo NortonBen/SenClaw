@@ -18,6 +18,36 @@ pub trait LlmClient: Send + Sync {
     async fn complete(&self, system: &str, user: &str) -> Result<String>;
 }
 
+/// Feed one cognify LLM call into the global usage recorder (source
+/// `cognitive`). Implementations call this with the provider's raw response
+/// JSON right after a successful HTTP round-trip; a response without a usage
+/// object, or a daemon without the recorder running (unit tests, CLI
+/// one-shots), is a silent no-op. Kept here so every `LlmClient` impl shares
+/// one code path instead of re-parsing usage five ways.
+pub(crate) fn record_cognitive_usage(
+    provider: &str,
+    model: &str,
+    response_json: &serde_json::Value,
+    latency_ms: u64,
+) {
+    let Some(rec) = crate::usage::global() else {
+        return;
+    };
+    let Some(u) = crate::zen_core::RawUsage::from_json(&response_json["usage"]) else {
+        return;
+    };
+    rec.record(
+        crate::usage::UsageEvent {
+            agent_id: "cognify".to_string(),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            latency_ms,
+            ..crate::usage::UsageEvent::new(crate::usage::UsageSource::Cognitive)
+        }
+        .with_tokens(&u),
+    );
+}
+
 // =====================================================================
 // Raw response schema — what the LLM is asked to emit.
 // =====================================================================

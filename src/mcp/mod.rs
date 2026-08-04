@@ -19,6 +19,7 @@ pub mod schedule_server;
 pub mod send_server;
 pub mod space_server;
 pub mod ts_transpile;
+pub mod usage_server;
 pub mod virtual_server;
 pub mod wiki_server;
 pub mod workspace_server;

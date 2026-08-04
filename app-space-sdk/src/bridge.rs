@@ -9,9 +9,9 @@
 //! sc.set_active_model("llm_123").await?;
 //! ```
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 /// A client for the SenClaw daemon's Space-App open API.
@@ -33,6 +33,28 @@ pub struct ModelInfo {
     pub provider: Option<String>,
 }
 
+/// Provider-reported token usage for one `llm.request` call.
+/// `input_tokens` is the total billed input (cache included); the cache
+/// fields break it down when the provider reports them (Anthropic).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LlmUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+}
+
+/// Result of [`SpaceClient::llm_request_usage`] — the richest reply shape.
+#[derive(Debug, Clone)]
+pub struct LlmReply {
+    pub text: String,
+    pub model: String,
+    /// `"length"` (token cap hit), `"stop"`, or `""` when unreported.
+    pub finish: String,
+    /// `None` when the provider reported no usage (some local models).
+    pub usage: Option<LlmUsage>,
+}
+
 impl SpaceClient {
     pub fn new(base_url: impl Into<String>, app_id: impl Into<String>) -> Self {
         Self {
@@ -46,8 +68,8 @@ impl SpaceClient {
     /// `SENCLAW_BASE_URL` (default `http://127.0.0.1:18788`) and
     /// `SENCLAW_SPACE_APP_ID` (default `"app"`).
     pub fn from_env() -> Self {
-        let base = std::env::var("SENCLAW_BASE_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:18788".into());
+        let base =
+            std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
         let app = std::env::var("SENCLAW_SPACE_APP_ID").unwrap_or_else(|_| "app".into());
         Self::new(base, app)
     }
@@ -97,6 +119,24 @@ impl SpaceClient {
         max_tokens: u32,
         profile: Option<&str>,
     ) -> Result<(String, String, String)> {
+        self.llm_request_usage(system, prompt, max_tokens, profile)
+            .await
+            .map(|r| (r.text, r.model, r.finish))
+    }
+
+    /// Richest form: text + model + finish + provider-reported token usage.
+    ///
+    /// `usage` is `None` when the provider reported none (some local models).
+    /// `input_tokens` is the TOTAL billed input — cache tokens included; the
+    /// cache fields break it down for providers that report them. Prefer this
+    /// over local `chars/4` estimates for any per-task token bookkeeping.
+    pub async fn llm_request_usage(
+        &self,
+        system: &str,
+        prompt: &str,
+        max_tokens: u32,
+        profile: Option<&str>,
+    ) -> Result<LlmReply> {
         let url = format!("{}/api/space/apps/{}/bridge", self.base_url, self.app_id);
         let mut payload = json!({ "system": system, "prompt": prompt, "maxTokens": max_tokens });
         if let Some(p) = profile.map(str::trim).filter(|p| !p.is_empty()) {
@@ -115,18 +155,65 @@ impl SpaceClient {
             .await
             .map_err(|e| anyhow!("invalid bridge response: {e}"))?;
         match v.get("status").and_then(|x| x.as_str()) {
-            Some("ok") => Ok((
-                v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("finish").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            )),
+            Some("ok") => {
+                let s = |k: &str| {
+                    v.get(k)
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                };
+                let usage = v.get("usage").filter(|u| u.is_object()).map(|u| {
+                    let n = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+                    LlmUsage {
+                        input_tokens: n("inputTokens"),
+                        output_tokens: n("outputTokens"),
+                        cache_read_tokens: n("cacheReadTokens"),
+                        cache_creation_tokens: n("cacheCreationTokens"),
+                    }
+                });
+                Ok(LlmReply {
+                    text: s("text"),
+                    model: s("model"),
+                    finish: s("finish"),
+                    usage,
+                })
+            }
             Some("pending") => Err(anyhow!("bridge LLM not enabled in this daemon")),
-            _ => Err(anyhow!(v
-                .get("message")
-                .and_then(|x| x.as_str())
-                .unwrap_or("unknown LLM error")
-                .to_string())),
+            _ => Err(anyhow!(
+                v.get("message")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("unknown LLM error")
+                    .to_string()
+            )),
         }
+    }
+
+    /// Report token usage for a provider call the app made DIRECTLY (own API
+    /// key, not through `llm.request`) so the daemon's accounting stays
+    /// complete. Fire-and-forget semantics are fine — pass `estimated = true`
+    /// when the numbers are chars/4-style guesses rather than provider counts.
+    pub async fn usage_report(
+        &self,
+        model: &str,
+        provider: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        latency_ms: u64,
+        estimated: bool,
+    ) -> Result<()> {
+        self.bridge_action(
+            "usage.report",
+            json!({
+                "model": model,
+                "provider": provider,
+                "inputTokens": input_tokens,
+                "outputTokens": output_tokens,
+                "latencyMs": latency_ms,
+                "estimated": estimated,
+            }),
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn bridge_action(&self, action: &str, payload: Value) -> Result<Value> {
@@ -144,11 +231,12 @@ impl SpaceClient {
             .map_err(|e| anyhow!("invalid bridge response: {e}"))?;
         match v.get("status").and_then(|x| x.as_str()) {
             Some("ok") => Ok(v),
-            _ => Err(anyhow!(v
-                .get("message")
-                .and_then(|x| x.as_str())
-                .unwrap_or("unknown bridge error")
-                .to_string())),
+            _ => Err(anyhow!(
+                v.get("message")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("unknown bridge error")
+                    .to_string()
+            )),
         }
     }
 
@@ -190,8 +278,14 @@ impl SpaceClient {
                 arr.iter()
                     .map(|h| {
                         (
-                            h.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                            h.get("summary").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                            h.get("name")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            h.get("summary")
+                                .and_then(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_string(),
                             h.get("score").and_then(|x| x.as_f64()).unwrap_or(0.0),
                         )
                     })
@@ -209,7 +303,10 @@ impl SpaceClient {
                 json!({ "query": query, "space": space }),
             )
             .await?;
-        Ok(v.get("answer").and_then(|x| x.as_str()).unwrap_or("").to_string())
+        Ok(v.get("answer")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string())
     }
 
     /// List the daemon's configured LLMs (id + display name + provider).
@@ -235,7 +332,10 @@ impl SpaceClient {
                     .filter_map(|c| {
                         Some(ModelInfo {
                             id: c.get("id")?.as_str()?.to_string(),
-                            model_name: c.get("modelName").and_then(|x| x.as_str()).map(String::from),
+                            model_name: c
+                                .get("modelName")
+                                .and_then(|x| x.as_str())
+                                .map(String::from),
                             provider: c
                                 .get("provider")
                                 .or_else(|| c.get("adapt"))

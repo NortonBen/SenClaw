@@ -9,6 +9,7 @@ import { PluginsPage } from './pages/PluginsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SpacePage } from './pages/SpacePage';
 import { CognitivePage } from './pages/CognitivePage';
+import { UsagePage } from './pages/UsagePage';
 import { CoworkPage } from './pages/CoworkPage';
 import { CoworkTeamDetailPage } from './pages/CoworkTeamDetailPage';
 import { WorkflowRunsPage } from './pages/WorkflowRunsPage';
@@ -76,6 +77,7 @@ export function App() {
           <Route path="cowork/:id" element={<CoworkTeamDetailPage />} />
           <Route path="cognitive" element={<CognitivePage />} />
           <Route path="kanban" element={<KanbanPage />} />
+          <Route path="usage" element={<UsagePage />} />
           <Route path="workflows/runs" element={<WorkflowRunsPage />} />
         </Routes>
         {/* Global Plan-mode approval modal — surfaces when any agent calls ExitPlanMode. */}

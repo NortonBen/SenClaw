@@ -74,12 +74,40 @@ impl EmbeddingProvider for OpenAiProvider {
 #[derive(Deserialize)]
 struct OpenAiResponse {
     data: Vec<OpenAiEmbeddingData>,
+    /// `{"prompt_tokens": N, "total_tokens": N}` — present on OpenAI and
+    /// OpenRouter, absent on most local servers.
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
 struct OpenAiEmbeddingData {
     embedding: Vec<f32>,
     index: usize,
+}
+
+/// Feed one embedding call into the global usage recorder (source
+/// `embedding`; output tokens are always 0). No-op when the provider sent no
+/// usage object or the daemon recorder isn't running.
+fn record_embedding_usage(provider: &str, model: &str, usage_json: Option<&serde_json::Value>) {
+    let Some(rec) = crate::usage::global() else {
+        return;
+    };
+    let Some(v) = usage_json else {
+        return;
+    };
+    let Some(u) = crate::zen_core::RawUsage::from_json(v) else {
+        return;
+    };
+    rec.record(
+        crate::usage::UsageEvent {
+            agent_id: "embedding".to_string(),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            ..crate::usage::UsageEvent::new(crate::usage::UsageSource::Embedding)
+        }
+        .with_tokens(&u),
+    );
 }
 
 impl OpenAiProvider {
@@ -106,6 +134,11 @@ impl OpenAiProvider {
                 Ok(r) if r.status().is_success() => {
                     let body: OpenAiResponse =
                         r.json().await.context("parse OpenAI embedding response")?;
+                    record_embedding_usage(
+                        "openai",
+                        "text-embedding-3-small",
+                        body.usage.as_ref(),
+                    );
                     let mut sorted = body.data;
                     sorted.sort_by_key(|d| d.index);
                     return Ok(sorted.into_iter().map(|d| d.embedding).collect());
@@ -207,6 +240,7 @@ impl OpenRouterProvider {
                         .json()
                         .await
                         .context("parse OpenRouter embedding response")?;
+                    record_embedding_usage("openrouter", model, body.usage.as_ref());
                     return Ok(body
                         .data
                         .first()
@@ -458,9 +492,15 @@ pub(crate) mod local_candle {
         model: BertModel,
         tokenizer: tokenizers::Tokenizer,
         device: Device,
+        // candle's Metal backend shares one command buffer per Device; concurrent
+        // forward passes from multiple threads race on it and abort the process
+        // ("A command encoder is already encoding to this command buffer").
+        // All tensor work must run under this lock.
+        inference_lock: std::sync::Mutex<()>,
     }
 
     // candle Tensor is Arc-backed and Send; BertModel is composed of tensors.
+    // Concurrent use is serialized via `inference_lock` (Metal is not re-entrant).
     unsafe impl Send for CandleEngine {}
     unsafe impl Sync for CandleEngine {}
 
@@ -513,6 +553,7 @@ pub(crate) mod local_candle {
                 model,
                 tokenizer,
                 device,
+                inference_lock: std::sync::Mutex::new(()),
             })
         }
 
@@ -520,6 +561,11 @@ pub(crate) mod local_candle {
             if texts.is_empty() {
                 return Ok(vec![]);
             }
+            // Serialize the whole forward pass — see `inference_lock` field docs.
+            let _guard = self
+                .inference_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
             let encodings = self
                 .tokenizer
@@ -905,6 +951,36 @@ mod tests {
                     (norm - 1.0).abs() < 1e-4,
                     "embedding {i} not unit vector: norm={norm}"
                 );
+            }
+        }
+
+        // Regression test for the Metal command-buffer crash: concurrent embed
+        // calls used to race inside candle's Metal backend and abort the whole
+        // process ("A command encoder is already encoding to this command
+        // buffer", SIGABRT/SIGSEGV). `CandleEngine::inference_lock` serializes
+        // the forward pass; this hammers it from many tasks at once.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+        #[ignore = "requires network and ~90MB HuggingFace download"]
+        async fn concurrent_embed_calls_do_not_crash() {
+            use crate::memory::embedding::EmbeddingProvider as _;
+            let provider =
+                std::sync::Arc::new(LocalProvider::new(Some("all-MiniLM-L6-v2".into()), None));
+
+            let mut handles = Vec::new();
+            for i in 0..16 {
+                let p = std::sync::Arc::clone(&provider);
+                handles.push(tokio::spawn(async move {
+                    let texts = vec![
+                        format!("concurrent embedding stress text number {i}"),
+                        format!("another sentence in batch {i} to keep the GPU busy"),
+                    ];
+                    p.embed(&texts).await
+                }));
+            }
+            for h in handles {
+                let embs = h.await.expect("task panicked").expect("embed failed");
+                assert_eq!(embs.len(), 2);
+                assert_eq!(embs[0].len(), 384);
             }
         }
 

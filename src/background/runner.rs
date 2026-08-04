@@ -95,6 +95,7 @@ impl BackgroundRunner {
                 prompt,
                 text,
                 turns,
+                tokens,
             }) => {
                 self.db.finish_background_run(
                     &run_id,
@@ -104,6 +105,7 @@ impl BackgroundRunner {
                     None,
                     duration_ms,
                     turns,
+                    Some((tokens.0 as i64, tokens.1 as i64)),
                 )?;
                 (BackgroundRunStatus::Success, None)
             }
@@ -118,6 +120,7 @@ impl BackgroundRunner {
                     None,
                     duration_ms,
                     None,
+                    None,
                 )?;
                 (BackgroundRunStatus::Skipped, None)
             }
@@ -129,6 +132,7 @@ impl BackgroundRunner {
                     None,
                     Some(&message),
                     duration_ms,
+                    None,
                     None,
                 )?;
                 (status, Some(message))
@@ -142,6 +146,7 @@ impl BackgroundRunner {
                     None,
                     Some(&msg),
                     duration_ms,
+                    None,
                     None,
                 )?;
                 (BackgroundRunStatus::Error, Some(msg))
@@ -167,13 +172,8 @@ impl BackgroundRunner {
             self.db.reset_background_failures(&task.id)?;
         }
 
-        self.events.run_finished(
-            &task.id,
-            &run_id,
-            status,
-            duration_ms,
-            error.as_deref(),
-        );
+        self.events
+            .run_finished(&task.id, &run_id, status, duration_ms, error.as_deref());
         tracing::info!(
             task_id = %task.id, run_id = %run_id, status = status.as_str(),
             duration_ms, "[background] run finished"
@@ -210,6 +210,7 @@ impl BackgroundRunner {
                 prompt: message.to_owned(),
                 text: format!("đã gửi thông báo: {message}"),
                 turns: Some(0),
+                tokens: (0, 0),
             });
         }
 
@@ -285,6 +286,7 @@ impl BackgroundRunner {
             prompt,
             text: res.text,
             turns: Some(res.turn_count as i64),
+            tokens: (res.tokens_in, res.tokens_out),
         })
     }
 
@@ -306,6 +308,7 @@ impl BackgroundRunner {
                 prompt: format!("[native] {key}"),
                 text: summary,
                 turns: None,
+                tokens: (0, 0),
             }),
             Err(e) => Ok(Body::Failed {
                 status: BackgroundRunStatus::Error,
@@ -451,13 +454,16 @@ impl BackgroundRunner {
         if task.continuity != BackgroundContinuity::Thread {
             return Ok(None);
         }
-        let runs = self.db.list_background_runs(&task.id, THREAD_CONTEXT_RUNS)?;
+        let runs = self
+            .db
+            .list_background_runs(&task.id, THREAD_CONTEXT_RUNS)?;
         let summaries: Vec<String> = runs
             .iter()
             .filter(|r| r.status == BackgroundRunStatus::Success)
             .filter_map(|r| r.result.as_deref().map(|t| (r.started_at.as_str(), t)))
             .map(|(at, text)| {
-                let clipped = crate::util::text::truncate_on_char_boundary(text, THREAD_SUMMARY_CHARS);
+                let clipped =
+                    crate::util::text::truncate_on_char_boundary(text, THREAD_SUMMARY_CHARS);
                 format!("- {at}: {clipped}")
             })
             .collect();
@@ -504,6 +510,9 @@ enum Body {
         prompt: String,
         text: String,
         turns: Option<i64>,
+        /// Billed token totals from the one-shot agent run (0/0 for
+        /// notify-only tasks, which never call an LLM).
+        tokens: (u64, u64),
     },
     Skipped {
         reason: String,
@@ -533,10 +542,7 @@ fn is_empty_context(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
 
 /// `{{var}}` substitution. Non-string values are rendered as compact JSON so a
 /// list of customers arrives as a list, not as `[object Object]`.
-fn render_template(
-    template: &str,
-    vars: &serde_json::Map<String, serde_json::Value>,
-) -> String {
+fn render_template(template: &str, vars: &serde_json::Map<String, serde_json::Value>) -> String {
     let mut out = template.to_owned();
     for (k, v) in vars {
         let rendered = match v {

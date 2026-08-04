@@ -324,7 +324,14 @@ async fn query_local_candle_native(
         let dialect = crate::local_model::stream_parser::dialect_for_model_id(&profile.model_name);
         let (clean_text, reasoning, tool_calls_from_text) =
             crate::local_model::stream_parser::parse_complete(&text_buf, dialect);
-        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text, None)
+        // Real tokenizer counts from the engine (cost 0, but context math and
+        // accounting want true numbers, not the chars/4 estimate fallback).
+        let usage = engine.last_usage().map(|(p, g)| RawUsage {
+            input_tokens: Some(p as u64),
+            output_tokens: Some(g as u64),
+            ..Default::default()
+        });
+        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text, usage)
     }
 }
 
@@ -714,7 +721,14 @@ async fn query_local_mlx(
             }
         }
 
-        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text, None)
+        // Real tokenizer counts from the engine (cost 0, but context math and
+        // accounting want true numbers, not the chars/4 estimate fallback).
+        let usage = engine.last_usage().map(|(p, g)| RawUsage {
+            input_tokens: Some(p as u64),
+            output_tokens: Some(g as u64),
+            ..Default::default()
+        });
+        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text, usage)
     }
 }
 

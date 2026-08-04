@@ -240,12 +240,56 @@ fn pick_config<'a>(
             .iter()
             .find(|c| c.id == want)
             .or_else(|| configs.iter().find(|c| c.label.eq_ignore_ascii_case(want)))
-            .ok_or_else(|| format!("LLM profile '{want}' not found in SenClaw (Settings → Models)"));
+            .ok_or_else(|| {
+                format!("LLM profile '{want}' not found in SenClaw (Settings → Models)")
+            });
     }
     active_id
         .and_then(|id| configs.iter().find(|c| c.id == id))
         .or_else(|| configs.first())
         .ok_or_else(|| "No LLM configured in SenClaw (Settings → Models)".to_string())
+}
+
+/// Everything a one-shot completion produced. `usage` is the provider-reported
+/// token usage (`None` when the provider sent no usage object); `profile` /
+/// `provider` / `model` identify the config the call actually ran on, so
+/// callers can feed the usage recorder without re-resolving the config.
+#[derive(Debug, Clone)]
+pub(crate) struct ChatCompletionResult {
+    pub text: String,
+    pub model: String,
+    /// "length" when truncated by max_tokens, "stop" on natural end, "" unknown.
+    pub finish: String,
+    pub usage: Option<crate::zen_core::RawUsage>,
+    pub latency_ms: u64,
+    pub profile: String,
+    pub provider: String,
+}
+
+/// Feed a brokered completion into the usage recorder. `jid`/`app_id` say who
+/// the call was for (`app:<id>` + app id for bridge `llm.request`, an internal
+/// marker jid for daemon-side draft completions). No-op when the provider
+/// reported no usage or the recorder isn't wired (bare test states).
+pub(crate) fn record_completion(
+    rec: &Option<Arc<crate::usage::UsageRecorder>>,
+    jid: &str,
+    app_id: &str,
+    r: &ChatCompletionResult,
+) {
+    let (Some(rec), Some(u)) = (rec, &r.usage) else {
+        return;
+    };
+    let ev = crate::usage::UsageEvent {
+        jid: jid.to_string(),
+        app_id: app_id.to_string(),
+        profile: r.profile.clone(),
+        provider: r.provider.clone(),
+        model: r.model.clone(),
+        latency_ms: r.latency_ms,
+        ..crate::usage::UsageEvent::new(crate::usage::UsageSource::Bridge)
+    }
+    .with_tokens(u);
+    rec.record(ev);
 }
 
 /// One-shot completion. `profile` selects a specific LLM config by id or label;
@@ -256,13 +300,18 @@ pub(crate) async fn chat_completion(
     system: &str,
     user: &str,
     max_tokens: u32,
-) -> Result<(String, String, String), String> {
+) -> Result<ChatCompletionResult, String> {
+    let started = std::time::Instant::now();
     let stored = load_llm_configs(config_path);
     let cfg = pick_config(&stored.configs, stored.active_id.as_deref(), profile)?;
 
     let client = reqwest::Client::new();
     let is_anthropic = cfg.adapt == "anthropic" && cfg.base_url.contains("anthropic.com");
-    let cap = if max_tokens == 0 { cfg.max_tokens.max(256) } else { max_tokens };
+    let cap = if max_tokens == 0 {
+        cfg.max_tokens.max(256)
+    } else {
+        max_tokens
+    };
 
     let (url, body, req) = if is_anthropic {
         let base = cfg.base_url.trim_end_matches('/').trim_end_matches("/v1");
@@ -316,7 +365,10 @@ pub(crate) async fn chat_completion(
         serde_json::from_str(&text).map_err(|e| format!("Invalid JSON: {e}"))?;
 
     let answer = if is_anthropic {
-        json["content"][0]["text"].as_str().unwrap_or("").to_string()
+        json["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
     } else {
         json["choices"][0]["message"]["content"]
             .as_str()
@@ -339,7 +391,15 @@ pub(crate) async fn chat_completion(
             _ => "stop".to_string(),
         }
     };
-    Ok((answer, cfg.model_name.clone(), finish))
+    Ok(ChatCompletionResult {
+        text: answer,
+        model: cfg.model_name.clone(),
+        finish,
+        usage: crate::zen_core::RawUsage::from_json(&json["usage"]),
+        latency_ms: started.elapsed().as_millis() as u64,
+        profile: cfg.label.clone(),
+        provider: cfg.provider.clone(),
+    })
 }
 
 /// Model name of the config a completion would run on, for capability checks
@@ -369,13 +429,18 @@ pub(crate) async fn chat_completion_vision(
     image_b64: &str,
     media_type: &str,
     max_tokens: u32,
-) -> Result<(String, String, String), String> {
+) -> Result<ChatCompletionResult, String> {
+    let started = std::time::Instant::now();
     let stored = load_llm_configs(config_path);
     let cfg = pick_config(&stored.configs, stored.active_id.as_deref(), profile)?;
 
     let client = reqwest::Client::new();
     let is_anthropic = cfg.adapt == "anthropic" && cfg.base_url.contains("anthropic.com");
-    let cap = if max_tokens == 0 { cfg.max_tokens.max(256) } else { max_tokens };
+    let cap = if max_tokens == 0 {
+        cfg.max_tokens.max(256)
+    } else {
+        max_tokens
+    };
 
     let (url, body, req) = if is_anthropic {
         let base = cfg.base_url.trim_end_matches('/').trim_end_matches("/v1");
@@ -440,7 +505,10 @@ pub(crate) async fn chat_completion_vision(
     let json: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("Invalid JSON: {e}"))?;
     let answer = if is_anthropic {
-        json["content"][0]["text"].as_str().unwrap_or("").to_string()
+        json["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
     } else {
         json["choices"][0]["message"]["content"]
             .as_str()
@@ -450,7 +518,30 @@ pub(crate) async fn chat_completion_vision(
     if answer.trim().is_empty() {
         return Err("LLM returned an empty response".into());
     }
-    Ok((answer, cfg.model_name.clone(), String::new()))
+    // Same finish mapping as `chat_completion` — the previous version returned
+    // "" unconditionally, so vision callers couldn't detect truncation.
+    let finish = if is_anthropic {
+        match json["stop_reason"].as_str().unwrap_or("") {
+            "max_tokens" => "length".to_string(),
+            "" => String::new(),
+            _ => "stop".to_string(),
+        }
+    } else {
+        match json["choices"][0]["finish_reason"].as_str().unwrap_or("") {
+            "length" => "length".to_string(),
+            "" => String::new(),
+            _ => "stop".to_string(),
+        }
+    };
+    Ok(ChatCompletionResult {
+        text: answer,
+        model: cfg.model_name.clone(),
+        finish,
+        usage: crate::zen_core::RawUsage::from_json(&json["usage"]),
+        latency_ms: started.elapsed().as_millis() as u64,
+        profile: cfg.label.clone(),
+        provider: cfg.provider.clone(),
+    })
 }
 
 /// Fetch model list from a provider's /models endpoint.
@@ -530,17 +621,33 @@ mod tests {
     fn explicit_profile_wins_by_id_or_label() {
         let configs = vec![cfg("llm_1", "Main"), cfg("llm_2", "MoltClaw")];
         // by id
-        assert_eq!(pick_config(&configs, Some("llm_1"), Some("llm_2")).unwrap().label, "MoltClaw");
+        assert_eq!(
+            pick_config(&configs, Some("llm_1"), Some("llm_2"))
+                .unwrap()
+                .label,
+            "MoltClaw"
+        );
         // by label, case-insensitive
-        assert_eq!(pick_config(&configs, Some("llm_1"), Some("moltclaw")).unwrap().id, "llm_2");
+        assert_eq!(
+            pick_config(&configs, Some("llm_1"), Some("moltclaw"))
+                .unwrap()
+                .id,
+            "llm_2"
+        );
     }
 
     #[test]
     fn no_profile_falls_back_to_active_then_first() {
         let configs = vec![cfg("llm_1", "Main"), cfg("llm_2", "MoltClaw")];
-        assert_eq!(pick_config(&configs, Some("llm_2"), None).unwrap().label, "MoltClaw");
+        assert_eq!(
+            pick_config(&configs, Some("llm_2"), None).unwrap().label,
+            "MoltClaw"
+        );
         // unknown active → first
-        assert_eq!(pick_config(&configs, Some("gone"), None).unwrap().id, "llm_1");
+        assert_eq!(
+            pick_config(&configs, Some("gone"), None).unwrap().id,
+            "llm_1"
+        );
         // no active → first
         assert_eq!(pick_config(&configs, None, None).unwrap().id, "llm_1");
     }
@@ -548,14 +655,22 @@ mod tests {
     #[test]
     fn blank_profile_is_treated_as_unset() {
         let configs = vec![cfg("llm_1", "Main"), cfg("llm_2", "MoltClaw")];
-        assert_eq!(pick_config(&configs, Some("llm_2"), Some("   ")).unwrap().label, "MoltClaw");
+        assert_eq!(
+            pick_config(&configs, Some("llm_2"), Some("   "))
+                .unwrap()
+                .label,
+            "MoltClaw"
+        );
     }
 
     #[test]
     fn missing_profile_errors_rather_than_silently_using_the_wrong_model() {
         let configs = vec![cfg("llm_1", "Main")];
         let err = pick_config(&configs, Some("llm_1"), Some("MoltClaw")).unwrap_err();
-        assert!(err.contains("MoltClaw"), "error should name the missing profile: {err}");
+        assert!(
+            err.contains("MoltClaw"),
+            "error should name the missing profile: {err}"
+        );
     }
 
     #[test]

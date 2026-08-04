@@ -127,6 +127,16 @@ impl LlmClient for LocalMlxLlm {
             // the channel close above.
             let _ = gen_handle.await;
 
+            // Token accounting: real tokenizer counts from the engine (cost 0).
+            if let Some((p, g)) = engine.last_usage() {
+                super::llm::record_cognitive_usage(
+                    "local-mlx",
+                    &self.canonical_id,
+                    &serde_json::json!({"usage": {"input_tokens": p, "output_tokens": g}}),
+                    0,
+                );
+            }
+
             // Qwen reasoning models emit `<think>…</think>` blocks. The
             // cognify pipeline expects JSON only, so we keep just the
             // visible portion (post-thinking).

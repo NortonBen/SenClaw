@@ -1,6 +1,7 @@
 import { Layout, Typography, Row, Col, Card, Statistic } from 'antd';
 import { RobotOutlined, MessageOutlined, FileTextOutlined, ApiOutlined } from '@ant-design/icons';
 import type { WsHook } from '../hooks/useWebSocket';
+import { TokenUsagePanel } from '../components/usage/TokenUsagePanel';
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
@@ -75,6 +76,8 @@ export function DashboardPage({ ws }: Props) {
             </Card>
           </Col>
         </Row>
+
+        <TokenUsagePanel />
 
         <div style={{ marginTop: 32 }}>
           <Title level={4} style={{ color: 'rgba(255,255,255,0.85)', marginBottom: 16 }}>Recent Activity</Title>

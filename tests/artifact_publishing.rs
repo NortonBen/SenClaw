@@ -29,6 +29,7 @@ fn temp_state() -> Arc<UiState> {
         virtual_worker_pool: None,
         agent_states: None,
         background_scheduler: None,
+        usage_recorder: None,
         ws_port: 0,
         ws_token: String::new(),
     })
