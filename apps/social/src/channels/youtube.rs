@@ -35,15 +35,27 @@ pub async fn official_search(c: &Value, query: &str) -> Result<Value, String> {
     }
     let mut req = super::http()
         .get("https://www.googleapis.com/youtube/v3/search")
-        .query(&[("part", "snippet"), ("type", "video"), ("maxResults", "25"), ("q", query)]);
+        .query(&[
+            ("part", "snippet"),
+            ("type", "video"),
+            ("maxResults", "25"),
+            ("q", query),
+        ]);
     if !api_key.is_empty() {
         req = req.query(&[("key", api_key)]);
     } else {
         req = req.bearer_auth(token);
     }
-    let resp = req.send().await.map_err(|e| format!("YouTube search lỗi mạng: {e}"))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("YouTube search lỗi mạng: {e}"))?;
     let body: Value = resp.json().await.unwrap_or(Value::Null);
-    if let Some(err) = body.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+    if let Some(err) = body
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+    {
         return Err(format!("YouTube search lỗi: {err}"));
     }
     Ok(body)

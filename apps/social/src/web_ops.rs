@@ -44,7 +44,10 @@ pub async fn run(
     };
     if platform.capability(cap) == crate::channels::Capability::None {
         let reason = platform.unsupported_reason(cap);
-        state.core.db.log_action(plat, action, "unsupported", &reason);
+        state
+            .core
+            .db
+            .log_action(plat, action, "unsupported", &reason);
         return Err(reason);
     }
 
@@ -120,7 +123,9 @@ mod tests {
     fn test_state(ext: ExtBridge) -> AppState {
         let (mcp_tx, _) = tokio::sync::broadcast::channel(8);
         AppState {
-            core: Arc::new(Core { db: Db::open_memory().unwrap() }),
+            core: Arc::new(Core {
+                db: Db::open_memory().unwrap(),
+            }),
             mcp_tx,
             ext,
             cadence: Arc::new(Cadence::new()),
@@ -147,9 +152,16 @@ mod tests {
         });
 
         let state = test_state(ext);
-        let out = run(&state, Platform::Tiktok, "@shop", "search", "search", json!({ "query": "áo" }))
-            .await
-            .expect("should succeed");
+        let out = run(
+            &state,
+            Platform::Tiktok,
+            "@shop",
+            "search",
+            "search",
+            json!({ "query": "áo" }),
+        )
+        .await
+        .expect("should succeed");
         assert_eq!(out["hits"], json!(["a", "b"]));
         fake.await.unwrap();
     }
@@ -157,9 +169,16 @@ mod tests {
     #[tokio::test]
     async fn run_errors_clearly_when_extension_absent() {
         let state = test_state(ExtBridge::new()); // never connected
-        let err = run(&state, Platform::Facebook, "me", "search", "search", json!({}))
-            .await
-            .unwrap_err();
+        let err = run(
+            &state,
+            Platform::Facebook,
+            "me",
+            "search",
+            "search",
+            json!({}),
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("Extension chưa kết nối"), "got: {err}");
     }
 
@@ -170,13 +189,18 @@ mod tests {
     async fn unsupported_capability_is_refused_before_the_extension_check() {
         let state = test_state(ExtBridge::new());
         for p in [Platform::Threads, Platform::Tiktok, Platform::Youtube] {
-            let err = run(&state, p, "@me", "dm", "send_dm", json!({})).await.unwrap_err();
+            let err = run(&state, p, "@me", "dm", "send_dm", json!({}))
+                .await
+                .unwrap_err();
             assert!(
                 err.contains("không hỗ trợ nhắn tin"),
                 "{} should say it has no DM, got: {err}",
                 p.as_str()
             );
-            assert!(!err.contains("Extension chưa kết nối"), "must not blame the extension");
+            assert!(
+                !err.contains("Extension chưa kết nối"),
+                "must not blame the extension"
+            );
         }
         // Logged as 'unsupported', and no cadence slot was spent.
         let acts = state.core.db.recent_actions(50).unwrap();
@@ -193,8 +217,14 @@ mod tests {
     async fn supported_capability_passes_the_gate() {
         let state = test_state(ExtBridge::new());
         for p in [Platform::Facebook, Platform::X, Platform::Instagram] {
-            let err = run(&state, p, "@me", "dm", "send_dm", json!({})).await.unwrap_err();
-            assert!(err.contains("Extension chưa kết nối"), "{}: {err}", p.as_str());
+            let err = run(&state, p, "@me", "dm", "send_dm", json!({}))
+                .await
+                .unwrap_err();
+            assert!(
+                err.contains("Extension chưa kết nối"),
+                "{}: {err}",
+                p.as_str()
+            );
         }
     }
 

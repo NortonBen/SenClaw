@@ -191,10 +191,18 @@ impl Platform {
 /// needs a real Page `page_id` + `access_token`; other platforms need at least
 /// one non-`web_session` key.
 pub fn official_configured(platform: Platform, cfg: &serde_json::Value) -> bool {
-    let has = |k: &str| cfg.get(k).and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+    let has = |k: &str| {
+        cfg.get(k)
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+    };
     match platform {
         Platform::Facebook => has("page_id") && has("access_token"),
-        _ => cfg.as_object().map(|m| m.keys().any(|k| k != "web_session")).unwrap_or(false),
+        _ => cfg
+            .as_object()
+            .map(|m| m.keys().any(|k| k != "web_session"))
+            .unwrap_or(false),
     }
 }
 

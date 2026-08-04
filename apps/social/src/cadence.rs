@@ -26,14 +26,24 @@ fn policy_for(action: &str) -> Policy {
     match action {
         // Posting is the highest-risk write; keep it slow and capped well under
         // TikTok's ~15–25/day official ceiling.
-        "post" => Policy { min_gap: Duration::from_secs(90), daily_cap: 12 },
+        "post" => Policy {
+            min_gap: Duration::from_secs(90),
+            daily_cap: 12,
+        },
         // DM is reactive-only by product rule; still throttle hard.
-        "dm" => Policy { min_gap: Duration::from_secs(30), daily_cap: 60 },
+        "dm" => Policy {
+            min_gap: Duration::from_secs(30),
+            daily_cap: 60,
+        },
         // Reads still touch the platform; throttle but allow more.
-        "search" | "feed" | "groups" | "inbox" => {
-            Policy { min_gap: Duration::from_secs(8), daily_cap: 400 }
-        }
-        _ => Policy { min_gap: Duration::from_secs(15), daily_cap: 100 },
+        "search" | "feed" | "groups" | "inbox" => Policy {
+            min_gap: Duration::from_secs(8),
+            daily_cap: 400,
+        },
+        _ => Policy {
+            min_gap: Duration::from_secs(15),
+            daily_cap: 100,
+        },
     }
 }
 
@@ -57,7 +67,9 @@ pub enum Decision {
 
 impl Cadence {
     pub fn new() -> Self {
-        Cadence { inner: Mutex::new(HashMap::new()) }
+        Cadence {
+            inner: Mutex::new(HashMap::new()),
+        }
     }
 
     fn today() -> String {
@@ -157,7 +169,10 @@ mod tests {
         for _ in 0..12 {
             assert!(matches!(c.reserve("x", "@a", "post"), Decision::Ok { .. }));
         }
-        assert!(matches!(c.reserve("x", "@a", "post"), Decision::Blocked { .. }));
+        assert!(matches!(
+            c.reserve("x", "@a", "post"),
+            Decision::Blocked { .. }
+        ));
     }
 
     #[test]

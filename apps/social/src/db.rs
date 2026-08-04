@@ -44,7 +44,8 @@ fn account_from_row(r: &Row) -> rusqlite::Result<Account> {
         platform: r.get("platform")?,
         handle: r.get("handle")?,
         display_name: r.get("display_name")?,
-        official_config: serde_json::from_str(&cfg_txt).unwrap_or(Value::Object(Default::default())),
+        official_config: serde_json::from_str(&cfg_txt)
+            .unwrap_or(Value::Object(Default::default())),
         session_present: r.get::<_, i64>("session_present")? != 0,
         token_expiry: r.get("token_expiry")?,
         enabled: r.get::<_, i64>("enabled")? != 0,
@@ -67,10 +68,16 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<
 /// Additive migrations for databases created before a column existed.
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if !has_column(conn, "inbox", "sender")? {
-        conn.execute("ALTER TABLE inbox ADD COLUMN sender TEXT NOT NULL DEFAULT ''", [])?;
+        conn.execute(
+            "ALTER TABLE inbox ADD COLUMN sender TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
     }
     if !has_column(conn, "drafts", "media")? {
-        conn.execute("ALTER TABLE drafts ADD COLUMN media TEXT NOT NULL DEFAULT '[]'", [])?;
+        conn.execute(
+            "ALTER TABLE drafts ADD COLUMN media TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -163,8 +170,7 @@ impl Db {
 
     pub fn list_accounts(&self) -> Result<Vec<Account>> {
         self.with_conn(|c| {
-            let mut st =
-                c.prepare("SELECT * FROM accounts ORDER BY platform, handle")?;
+            let mut st = c.prepare("SELECT * FROM accounts ORDER BY platform, handle")?;
             let rows = st.query_map([], account_from_row)?;
             rows.collect()
         })
@@ -173,8 +179,12 @@ impl Db {
     #[allow(dead_code)] // single-account lookup, used by future REST detail route
     pub fn get_account(&self, id: i64) -> Result<Option<Account>> {
         self.with_conn(|c| {
-            c.query_row("SELECT * FROM accounts WHERE id = ?1", params![id], account_from_row)
-                .optional()
+            c.query_row(
+                "SELECT * FROM accounts WHERE id = ?1",
+                params![id],
+                account_from_row,
+            )
+            .optional()
         })
     }
 
@@ -382,7 +392,13 @@ impl Db {
         })
     }
 
-    pub fn set_draft_status(&self, id: i64, status: &str, ref_id: &str, detail: &str) -> Result<()> {
+    pub fn set_draft_status(
+        &self,
+        id: i64,
+        status: &str,
+        ref_id: &str,
+        detail: &str,
+    ) -> Result<()> {
         self.with_conn(|c| {
             c.execute(
                 "UPDATE drafts SET status = ?2, ref_id = ?3, detail = ?4, decided_at = ?5 WHERE id = ?1",
@@ -470,14 +486,18 @@ mod tests {
     fn draft_persists_and_returns_media() {
         let db = Db::open_memory().unwrap();
         let media = json!(["data:image/png;base64,AAAA", "data:image/png;base64,BBBB"]);
-        let id = db.create_draft("facebook", "bacnd.120", "post", "hi", "", &media).unwrap();
+        let id = db
+            .create_draft("facebook", "bacnd.120", "post", "hi", "", &media)
+            .unwrap();
         let d = db.get_draft(id).unwrap().unwrap();
         assert_eq!(d["media"], media);
         // …and via the list path too.
         let listed = db.list_drafts(Some("pending"), 10).unwrap();
         assert_eq!(listed[0]["media"], media);
         // A media-less draft comes back as an empty array, not null.
-        let id2 = db.create_draft("x", "@me", "post", "hi", "", &json!([])).unwrap();
+        let id2 = db
+            .create_draft("x", "@me", "post", "hi", "", &json!([]))
+            .unwrap();
         assert_eq!(db.get_draft(id2).unwrap().unwrap()["media"], json!([]));
     }
 
@@ -525,8 +545,10 @@ mod tests {
     #[test]
     fn inbox_stores_and_filters_by_platform() {
         let db = Db::open_memory().unwrap();
-        db.insert_inbox("facebook", "t1", "Khách A", "in", "khách hỏi giá").unwrap();
-        db.insert_inbox("tiktok", "t2", "", "out", "đã trả lời").unwrap();
+        db.insert_inbox("facebook", "t1", "Khách A", "in", "khách hỏi giá")
+            .unwrap();
+        db.insert_inbox("tiktok", "t2", "", "out", "đã trả lời")
+            .unwrap();
         assert_eq!(db.list_inbox(None, 10).unwrap().len(), 2);
         let fb = db.list_inbox(Some("facebook"), 10).unwrap();
         assert_eq!(fb.len(), 1);

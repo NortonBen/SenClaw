@@ -37,7 +37,11 @@ pub async fn official_post(c: &Value, text: &str) -> Result<String, String> {
         .map_err(|e| format!("X API v2 lỗi mạng: {e}"))?;
     let status = resp.status();
     let body: Value = resp.json().await.unwrap_or(Value::Null);
-    if let Some(id) = body.get("data").and_then(|d| d.get("id")).and_then(|v| v.as_str()) {
+    if let Some(id) = body
+        .get("data")
+        .and_then(|d| d.get("id"))
+        .and_then(|v| v.as_str())
+    {
         return Ok(id.to_string());
     }
     let err = body
@@ -61,7 +65,10 @@ mod tests {
 
     #[test]
     fn access_token_wins_over_bearer_token() {
-        assert_eq!(bearer(&json!({"access_token": "A", "bearer_token": "B"})), "A");
+        assert_eq!(
+            bearer(&json!({"access_token": "A", "bearer_token": "B"})),
+            "A"
+        );
         assert_eq!(bearer(&json!({"bearer_token": "B"})), "B");
     }
 }

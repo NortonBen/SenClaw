@@ -28,7 +28,11 @@ pub async fn official_post(c: &Value, text: &str) -> Result<String, String> {
     // Step 1 — create the container.
     let create = client
         .post(format!("https://graph.threads.net/v1.0/{uid}/threads"))
-        .query(&[("media_type", "TEXT"), ("text", text), ("access_token", token)])
+        .query(&[
+            ("media_type", "TEXT"),
+            ("text", text),
+            ("access_token", token),
+        ])
         .send()
         .await
         .map_err(|e| format!("Threads API lỗi mạng (create): {e}"))?;
@@ -48,8 +52,13 @@ pub async fn official_post(c: &Value, text: &str) -> Result<String, String> {
 
     // Step 2 — publish it.
     let publish = client
-        .post(format!("https://graph.threads.net/v1.0/{uid}/threads_publish"))
-        .query(&[("creation_id", creation_id.as_str()), ("access_token", token)])
+        .post(format!(
+            "https://graph.threads.net/v1.0/{uid}/threads_publish"
+        ))
+        .query(&[
+            ("creation_id", creation_id.as_str()),
+            ("access_token", token),
+        ])
         .send()
         .await
         .map_err(|e| format!("Threads API lỗi mạng (publish): {e}"))?;
@@ -83,7 +92,11 @@ pub async fn official_search(c: &Value, query: &str) -> Result<Value, String> {
         .await
         .map_err(|e| format!("Threads search lỗi mạng: {e}"))?;
     let body: Value = resp.json().await.unwrap_or(Value::Null);
-    if let Some(err) = body.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+    if let Some(err) = body
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+    {
         return Err(format!("Threads search lỗi: {err}"));
     }
     Ok(body)

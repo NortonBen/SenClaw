@@ -45,7 +45,11 @@ pub async fn official_post(c: &Value, text: &str) -> Result<String, String> {
 
 fn graph_version(c: &Value) -> String {
     let v = cfg(c, "graph_version");
-    if v.is_empty() { "v23.0".to_string() } else { v.to_string() }
+    if v.is_empty() {
+        "v23.0".to_string()
+    } else {
+        v.to_string()
+    }
 }
 
 /// Read a managed Page's metadata via the official Graph API — the reliable,
@@ -60,7 +64,11 @@ pub async fn page_info(c: &Value, fields: &str) -> Result<Value, String> {
     } else {
         fields
     };
-    let url = format!("https://graph.facebook.com/{}/{}", graph_version(c), cfg(c, "page_id"));
+    let url = format!(
+        "https://graph.facebook.com/{}/{}",
+        graph_version(c),
+        cfg(c, "page_id")
+    );
     let resp = super::http()
         .get(&url)
         .query(&[("fields", fields), ("access_token", cfg(c, "access_token"))])
@@ -68,7 +76,11 @@ pub async fn page_info(c: &Value, fields: &str) -> Result<Value, String> {
         .await
         .map_err(|e| format!("Facebook Graph API lỗi mạng: {e}"))?;
     let body: Value = resp.json().await.unwrap_or(Value::Null);
-    if let Some(err) = body.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+    if let Some(err) = body
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+    {
         return Err(format!("Facebook page_info lỗi: {err}"));
     }
     Ok(body)
@@ -80,7 +92,11 @@ pub async fn page_feed(c: &Value, limit: i64) -> Result<Value, String> {
         return Err("Facebook scan: cần page_id + access_token (Page token) trong official_config. Chỉ đọc được Page mà Sếp quản trị.".into());
     }
     let limit = limit.clamp(1, 100).to_string();
-    let url = format!("https://graph.facebook.com/{}/{}/feed", graph_version(c), cfg(c, "page_id"));
+    let url = format!(
+        "https://graph.facebook.com/{}/{}/feed",
+        graph_version(c),
+        cfg(c, "page_id")
+    );
     let resp = super::http()
         .get(&url)
         .query(&[
@@ -92,7 +108,11 @@ pub async fn page_feed(c: &Value, limit: i64) -> Result<Value, String> {
         .await
         .map_err(|e| format!("Facebook Graph API lỗi mạng: {e}"))?;
     let body: Value = resp.json().await.unwrap_or(Value::Null);
-    if let Some(err) = body.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+    if let Some(err) = body
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+    {
         return Err(format!("Facebook page_feed lỗi: {err}"));
     }
     Ok(body)
@@ -110,16 +130,32 @@ pub async fn page_insights(c: &Value, metric: &str, period: &str) -> Result<Valu
     } else {
         metric
     };
-    let period = if period.trim().is_empty() { "day" } else { period };
-    let url = format!("https://graph.facebook.com/{}/{}/insights", graph_version(c), cfg(c, "page_id"));
+    let period = if period.trim().is_empty() {
+        "day"
+    } else {
+        period
+    };
+    let url = format!(
+        "https://graph.facebook.com/{}/{}/insights",
+        graph_version(c),
+        cfg(c, "page_id")
+    );
     let resp = super::http()
         .get(&url)
-        .query(&[("metric", metric), ("period", period), ("access_token", cfg(c, "access_token"))])
+        .query(&[
+            ("metric", metric),
+            ("period", period),
+            ("access_token", cfg(c, "access_token")),
+        ])
         .send()
         .await
         .map_err(|e| format!("Facebook Graph API lỗi mạng: {e}"))?;
     let body: Value = resp.json().await.unwrap_or(Value::Null);
-    if let Some(err) = body.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+    if let Some(err) = body
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+    {
         return Err(format!("Facebook page_insights lỗi: {err} (kiểm tra tên metric — impressions đã đổi sang views từ 15/11/2025)"));
     }
     Ok(body)
@@ -138,9 +174,18 @@ mod tests {
 
     #[tokio::test]
     async fn page_reads_require_config_before_any_network_call() {
-        assert!(page_info(&json!({}), "").await.unwrap_err().contains("page_id"));
-        assert!(page_feed(&json!({}), 10).await.unwrap_err().contains("page_id"));
-        assert!(page_insights(&json!({}), "", "").await.unwrap_err().contains("page_id"));
+        assert!(page_info(&json!({}), "")
+            .await
+            .unwrap_err()
+            .contains("page_id"));
+        assert!(page_feed(&json!({}), 10)
+            .await
+            .unwrap_err()
+            .contains("page_id"));
+        assert!(page_insights(&json!({}), "", "")
+            .await
+            .unwrap_err()
+            .contains("page_id"));
     }
 
     #[tokio::test]

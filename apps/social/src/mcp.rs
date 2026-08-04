@@ -65,7 +65,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "social-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -80,16 +82,24 @@ pub async fn mcp_message(
 // ---- argument helpers ----
 
 fn s(args: &Value, key: &str) -> String {
-    args.get(key).and_then(|v| v.as_str()).unwrap_or_default().to_string()
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn opt_s(args: &Value, key: &str) -> Option<String> {
-    args.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 fn int(args: &Value, key: &str) -> i64 {
     args.get(key)
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .unwrap_or(0)
 }
 
@@ -312,7 +322,10 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 *e = json!(e.as_i64().unwrap_or(0) + 1);
             }
             let db = &state.core.db;
-            let pending = db.list_drafts(Some("pending"), 1000).map(|d| d.len()).unwrap_or(0);
+            let pending = db
+                .list_drafts(Some("pending"), 1000)
+                .map(|d| d.len())
+                .unwrap_or(0);
             // What each platform can actually do, and how — so the agent never
             // asks for a capability a platform doesn't have (e.g. DM on Threads).
             let mut caps = serde_json::Map::new();
@@ -366,7 +379,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             }
             let display = opt_s(args, "display_name").unwrap_or_else(|| handle.clone());
             let cfg = args.get("official_config").cloned().unwrap_or(json!({}));
-            match state.core.db.upsert_account(platform.as_str(), &handle, &display, &cfg) {
+            match state
+                .core
+                .db
+                .upsert_account(platform.as_str(), &handle, &display, &cfg)
+            {
                 Ok(id) => json_result(json!({
                     "ok": true, "id": id, "platform": platform.as_str(), "handle": handle,
                     "official_note": platform.official_note(),
@@ -385,7 +402,8 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 return error_result("thiếu 'text'".into());
             }
             // Through the autonomy gate (draft→approve→live) + cadence.
-            match crate::gate::submit(state, "post", platform, &handle, &text, "", &json!([])).await {
+            match crate::gate::submit(state, "post", platform, &handle, &text, "", &json!([])).await
+            {
                 Ok(v) => json_result(v),
                 Err(e) => error_result(e),
             }
@@ -404,7 +422,10 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                     return error_result("thiếu 'query'".into());
                 }
                 let cfg = state.core.db.official_config(platform.as_str(), &handle);
-                state.core.db.log_action(platform.as_str(), "search", "official", &query);
+                state
+                    .core
+                    .db
+                    .log_action(platform.as_str(), "search", "official", &query);
                 return match crate::channels::official_search(platform, &cfg, &query).await {
                     Ok(v) => json_result(v),
                     Err(e) => error_result(e),
@@ -422,7 +443,16 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             if handle.is_empty() {
                 return error_result("thiếu 'handle'".into());
             }
-            match web_ops::run(state, platform, &handle, "inbox", "inbox_poll", args.clone()).await {
+            match web_ops::run(
+                state,
+                platform,
+                &handle,
+                "inbox",
+                "inbox_poll",
+                args.clone(),
+            )
+            .await
+            {
                 Ok(v) => {
                     // Parse the extension's reply into structured inbound rows and
                     // persist them (direction "in"), so they become a real inbox
@@ -445,7 +475,17 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 return error_result("cần 'thread_id' và 'text' (DM chỉ để trả lời)".into());
             }
             // Reactive DM through the autonomy gate too.
-            match crate::gate::submit(state, "reply", platform, &handle, &text, &thread_id, &json!([])).await {
+            match crate::gate::submit(
+                state,
+                "reply",
+                platform,
+                &handle,
+                &text,
+                &thread_id,
+                &json!([]),
+            )
+            .await
+            {
                 Ok(v) => json_result(v),
                 Err(e) => error_result(e),
             }
@@ -466,7 +506,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         }
         "social_drafts" => {
             let status = opt_s(args, "status");
-            let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20).clamp(1, 200);
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(20)
+                .clamp(1, 200);
             json_result(json!({
                 "drafts": state.core.db.list_drafts(status.as_deref(), limit).unwrap_or_default()
             }))
@@ -480,10 +524,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             if draft["status"] != "pending" {
                 return error_result(format!("nháp #{id} không còn ở trạng thái pending"));
             }
-            let platform = match crate::channels::Platform::parse(draft["platform"].as_str().unwrap_or("")) {
-                Some(p) => p,
-                None => return error_result("nháp có platform không hợp lệ".into()),
-            };
+            let platform =
+                match crate::channels::Platform::parse(draft["platform"].as_str().unwrap_or("")) {
+                    Some(p) => p,
+                    None => return error_result("nháp có platform không hợp lệ".into()),
+                };
             let handle = draft["handle"].as_str().unwrap_or("");
             let kind = draft["kind"].as_str().unwrap_or("post");
             let text = draft["text"].as_str().unwrap_or("");
@@ -502,26 +547,50 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         }
         "social_reject" => {
             let id = int(args, "draft_id");
-            match state.core.db.set_draft_status(id, "rejected", "", "rejected by user") {
+            match state
+                .core
+                .db
+                .set_draft_status(id, "rejected", "", "rejected by user")
+            {
                 Ok(()) => json_result(json!({ "ok": true, "draft_id": id, "status": "rejected" })),
                 Err(e) => error_result(format!("lỗi: {e}")),
             }
         }
         "social_post_log" => {
-            let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20).clamp(1, 200);
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(20)
+                .clamp(1, 200);
             json_result(json!({ "posts": state.core.db.recent_posts(limit).unwrap_or_default() }))
         }
         "social_action_log" => {
-            let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(30).clamp(1, 200);
-            json_result(json!({ "actions": state.core.db.recent_actions(limit).unwrap_or_default() }))
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(30)
+                .clamp(1, 200);
+            json_result(
+                json!({ "actions": state.core.db.recent_actions(limit).unwrap_or_default() }),
+            )
         }
         "social_sessions" => {
-            let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(30).clamp(1, 200);
-            json_result(json!({ "sessions": state.core.db.recent_sessions(limit).unwrap_or_default() }))
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(30)
+                .clamp(1, 200);
+            json_result(
+                json!({ "sessions": state.core.db.recent_sessions(limit).unwrap_or_default() }),
+            )
         }
         "social_inbox_list" => {
             let platform = opt_s(args, "platform");
-            let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20).clamp(1, 200);
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(20)
+                .clamp(1, 200);
             json_result(json!({
                 "messages": state.core.db.list_inbox(platform.as_deref(), limit).unwrap_or_default()
             }))
@@ -533,7 +602,16 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 return error_result("thiếu 'handle'".into());
             }
             let params = json!({ "query": opt_s(args, "query").unwrap_or_default() });
-            match web_ops::run(state, Platform::Facebook, &handle, "groups", "groups", params).await {
+            match web_ops::run(
+                state,
+                Platform::Facebook,
+                &handle,
+                "groups",
+                "groups",
+                params,
+            )
+            .await
+            {
                 Ok(v) => json_result(v),
                 Err(e) => error_result(e),
             }
@@ -548,7 +626,11 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let kind = opt_s(args, "kind").unwrap_or_else(|| "info".into());
             let res = match kind.as_str() {
                 "feed" => {
-                    let limit = if int(args, "limit") > 0 { int(args, "limit") } else { 10 };
+                    let limit = if int(args, "limit") > 0 {
+                        int(args, "limit")
+                    } else {
+                        10
+                    };
                     crate::channels::facebook::page_feed(&cfg, limit).await
                 }
                 "insights" => {
@@ -559,15 +641,27 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                     )
                     .await
                 }
-                _ => crate::channels::facebook::page_info(&cfg, &opt_s(args, "fields").unwrap_or_default()).await,
+                _ => {
+                    crate::channels::facebook::page_info(
+                        &cfg,
+                        &opt_s(args, "fields").unwrap_or_default(),
+                    )
+                    .await
+                }
             };
             match res {
                 Ok(v) => {
-                    state.core.db.log_action("facebook", "page_scan", "ok", &kind);
+                    state
+                        .core
+                        .db
+                        .log_action("facebook", "page_scan", "ok", &kind);
                     json_result(v)
                 }
                 Err(e) => {
-                    state.core.db.log_action("facebook", "page_scan", "error", &e);
+                    state
+                        .core
+                        .db
+                        .log_action("facebook", "page_scan", "error", &e);
                     error_result(e)
                 }
             }
@@ -599,12 +693,20 @@ fn persist_inbound(state: &AppState, platform: &str, v: &Value) -> usize {
         if text.is_empty() {
             continue;
         }
-        let external_id = pick(m, &["external_id", "thread_id", "conversation_id", "chat_id"]);
+        let external_id = pick(
+            m,
+            &["external_id", "thread_id", "conversation_id", "chat_id"],
+        );
         let sender = pick(m, &["sender", "sender_name", "from", "author"]);
         if state.core.db.inbox_contains(platform, &external_id, &text) {
             continue; // idempotent across repeated polls
         }
-        if state.core.db.insert_inbox(platform, &external_id, &sender, "in", &text).is_ok() {
+        if state
+            .core
+            .db
+            .insert_inbox(platform, &external_id, &sender, "in", &text)
+            .is_ok()
+        {
             stored += 1;
         }
     }
@@ -641,7 +743,9 @@ mod tests {
     fn state() -> AppState {
         let (mcp_tx, _) = tokio::sync::broadcast::channel(8);
         AppState {
-            core: Arc::new(Core { db: Db::open_memory().unwrap() }),
+            core: Arc::new(Core {
+                db: Db::open_memory().unwrap(),
+            }),
             mcp_tx,
             ext: ExtBridge::new(),
             cadence: Arc::new(Cadence::new()),
@@ -664,7 +768,11 @@ mod tests {
     async fn every_listed_tool_is_routed() {
         let st = state();
         let names = tool_names();
-        assert!(names.len() >= 18, "expected the full tool set, got {}", names.len());
+        assert!(
+            names.len() >= 18,
+            "expected the full tool set, got {}",
+            names.len()
+        );
         for name in names {
             let out = call_tool(&st, &name, &json!({})).await;
             let text = out["content"][0]["text"].as_str().unwrap_or_default();
@@ -708,15 +816,34 @@ mod tests {
     async fn search_routes_official_vs_extension_per_platform() {
         let st = state(); // extension never connected
         for p in ["threads", "youtube"] {
-            let out = call_tool(&st, "social_search", &json!({"platform": p, "handle": "@a", "query": "áo"})).await;
+            let out = call_tool(
+                &st,
+                "social_search",
+                &json!({"platform": p, "handle": "@a", "query": "áo"}),
+            )
+            .await;
             let text = out["content"][0]["text"].as_str().unwrap();
-            assert!(text.contains("API chính thức"), "{p} should use the official API: {text}");
-            assert!(!text.contains("Extension chưa kết nối"), "{p} must not go to the extension");
+            assert!(
+                text.contains("API chính thức"),
+                "{p} should use the official API: {text}"
+            );
+            assert!(
+                !text.contains("Extension chưa kết nối"),
+                "{p} must not go to the extension"
+            );
         }
         for p in ["facebook", "x", "instagram", "tiktok"] {
-            let out = call_tool(&st, "social_search", &json!({"platform": p, "handle": "@a", "query": "áo"})).await;
+            let out = call_tool(
+                &st,
+                "social_search",
+                &json!({"platform": p, "handle": "@a", "query": "áo"}),
+            )
+            .await;
             let text = out["content"][0]["text"].as_str().unwrap();
-            assert!(text.contains("Extension chưa kết nối"), "{p} should use the extension: {text}");
+            assert!(
+                text.contains("Extension chưa kết nối"),
+                "{p} should use the extension: {text}"
+            );
         }
     }
 
@@ -725,6 +852,9 @@ mod tests {
         let st = state();
         let out = call_tool(&st, "social_bogus", &json!({})).await;
         assert_eq!(out["isError"], json!(true));
-        assert!(out["content"][0]["text"].as_str().unwrap().contains("không tồn tại"));
+        assert!(out["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("không tồn tại"));
     }
 }

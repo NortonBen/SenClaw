@@ -20,7 +20,9 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 }
 
 pub fn root_router(state: AppState) -> Router {
-    Router::new().route("/health", get(health)).with_state(state)
+    Router::new()
+        .route("/health", get(health))
+        .with_state(state)
 }
 
 pub fn api_router(state: AppState) -> Router {
@@ -107,7 +109,10 @@ async fn get_settings(State(state): State<AppState>) -> Response {
 async fn put_settings(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     if let Some(obj) = body.as_object() {
         for (k, v) in obj {
-            let val = v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string());
+            let val = v
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| v.to_string());
             if let Err(e) = state.core.db.set_setting(k, &val) {
                 return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
             }
@@ -132,9 +137,16 @@ async fn connect_account(State(state): State<AppState>, Json(body): Json<Value>)
     if handle.is_empty() {
         return err(StatusCode::BAD_REQUEST, "thiếu handle");
     }
-    let display = body.get("display_name").and_then(|v| v.as_str()).unwrap_or(handle);
+    let display = body
+        .get("display_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(handle);
     let cfg = body.get("official_config").cloned().unwrap_or(json!({}));
-    match state.core.db.upsert_account(platform, handle, display, &cfg) {
+    match state
+        .core
+        .db
+        .upsert_account(platform, handle, display, &cfg)
+    {
         Ok(id) => respond(json!({ "ok": true, "id": id })),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -158,8 +170,14 @@ async fn inbox(
     // With ?since=<id> this is the cursor feed for external pullers (CRM):
     // inbound-only, id-ascending. Without it, the recent view for the UI.
     if let Some(since) = q.get("since").and_then(|s| s.parse::<i64>().ok()) {
-        let limit = q.get("limit").and_then(|s| s.parse::<i64>().ok()).unwrap_or(200).clamp(1, 500);
-        return respond(json!({ "messages": state.core.db.inbox_since(since, limit).unwrap_or_default() }));
+        let limit = q
+            .get("limit")
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(200)
+            .clamp(1, 500);
+        return respond(
+            json!({ "messages": state.core.db.inbox_since(since, limit).unwrap_or_default() }),
+        );
     }
     respond(json!({ "messages": state.core.db.list_inbox(None, 50).unwrap_or_default() }))
 }
@@ -216,7 +234,10 @@ async fn compose(State(state): State<AppState>, Json(body): Json<Value>) -> Resp
         _ => "post",
     };
     if kind == "reply" && thread_id.is_empty() {
-        return err(StatusCode::BAD_REQUEST, "nhắn tin cần thread_id (người nhận / cuộc trò chuyện)");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "nhắn tin cần thread_id (người nhận / cuộc trò chuyện)",
+        );
     }
     // Media: a JSON array of image data URLs. Cap the count + total size so a
     // stray upload can't bloat the drafts table.
@@ -227,7 +248,10 @@ async fn compose(State(state): State<AppState>, Json(body): Json<Value>) -> Resp
         }
         let total: usize = arr.iter().filter_map(|v| v.as_str()).map(|s| s.len()).sum();
         if total > 24_000_000 {
-            return err(StatusCode::BAD_REQUEST, "tổng dung lượng ảnh quá lớn (>~18MB)");
+            return err(
+                StatusCode::BAD_REQUEST,
+                "tổng dung lượng ảnh quá lớn (>~18MB)",
+            );
         }
     } else {
         return err(StatusCode::BAD_REQUEST, "media phải là mảng");
@@ -250,7 +274,8 @@ async fn approve_draft(State(state): State<AppState>, Path(id): Path<i64>) -> Re
     if draft["status"] != "pending" {
         return err(StatusCode::BAD_REQUEST, "nháp không còn pending");
     }
-    let platform = match crate::channels::Platform::parse(draft["platform"].as_str().unwrap_or("")) {
+    let platform = match crate::channels::Platform::parse(draft["platform"].as_str().unwrap_or(""))
+    {
         Some(p) => p,
         None => return err(StatusCode::BAD_REQUEST, "platform không hợp lệ"),
     };
@@ -271,7 +296,11 @@ async fn approve_draft(State(state): State<AppState>, Path(id): Path<i64>) -> Re
 }
 
 async fn reject_draft(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
-    match state.core.db.set_draft_status(id, "rejected", "", "rejected by user") {
+    match state
+        .core
+        .db
+        .set_draft_status(id, "rejected", "", "rejected by user")
+    {
         Ok(()) => respond(json!({ "ok": true })),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -311,20 +340,36 @@ async fn ext_login(State(state): State<AppState>, Json(body): Json<Value>) -> Re
     };
     match state
         .ext
-        .call("OpenLogin", json!({ "platform": platform }), std::time::Duration::from_secs(15))
+        .call(
+            "OpenLogin",
+            json!({ "platform": platform }),
+            std::time::Duration::from_secs(15),
+        )
         .await
     {
         Ok(v) if v.get("error").is_none() => {
-            state.core.db.log_action(&platform, "open_login", "ok", &state.ext.ext_label());
+            state
+                .core
+                .db
+                .log_action(&platform, "open_login", "ok", &state.ext.ext_label());
             respond(json!({ "ok": true, "result": v }))
         }
         Ok(v) => {
-            let msg = v.get("error").and_then(|e| e.as_str()).unwrap_or("lỗi extension");
-            state.core.db.log_action(&platform, "open_login", "error", msg);
+            let msg = v
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("lỗi extension");
+            state
+                .core
+                .db
+                .log_action(&platform, "open_login", "error", msg);
             err(StatusCode::BAD_GATEWAY, msg)
         }
         Err(e) => {
-            state.core.db.log_action(&platform, "open_login", "error", &e);
+            state
+                .core
+                .db
+                .log_action(&platform, "open_login", "error", &e);
             err(StatusCode::BAD_GATEWAY, e)
         }
     }
@@ -340,7 +385,11 @@ async fn ext_whoami(State(state): State<AppState>, Json(body): Json<Value>) -> R
     };
     match state
         .ext
-        .call("WhoAmI", json!({ "platform": platform }), std::time::Duration::from_secs(15))
+        .call(
+            "WhoAmI",
+            json!({ "platform": platform }),
+            std::time::Duration::from_secs(15),
+        )
         .await
     {
         Ok(mut v) if v.get("error").is_none() => {
@@ -349,7 +398,10 @@ async fn ext_whoami(State(state): State<AppState>, Json(body): Json<Value>) -> R
             respond(payload)
         }
         Ok(v) => {
-            let msg = v.get("error").and_then(|e| e.as_str()).unwrap_or("lỗi extension");
+            let msg = v
+                .get("error")
+                .and_then(|e| e.as_str())
+                .unwrap_or("lỗi extension");
             state.core.db.log_action(&platform, "whoami", "error", msg);
             err(StatusCode::BAD_GATEWAY, msg)
         }
@@ -367,7 +419,11 @@ async fn ext_fb_template(State(state): State<AppState>) -> Response {
     }
     match state
         .ext
-        .call("GetFbTemplate", json!({}), std::time::Duration::from_secs(10))
+        .call(
+            "GetFbTemplate",
+            json!({}),
+            std::time::Duration::from_secs(10),
+        )
         .await
     {
         Ok(v) => respond(v.get("result").cloned().unwrap_or(v)),
@@ -384,7 +440,11 @@ async fn ext_fb_test(State(state): State<AppState>, Json(body): Json<Value>) -> 
     let text = body.get("text").and_then(|v| v.as_str()).unwrap_or("");
     match state
         .ext
-        .call("FbTestPost", json!({ "text": text }), std::time::Duration::from_secs(30))
+        .call(
+            "FbTestPost",
+            json!({ "text": text }),
+            std::time::Duration::from_secs(30),
+        )
         .await
     {
         Ok(v) => respond(v.get("result").cloned().unwrap_or(v)),
@@ -400,7 +460,11 @@ async fn ext_callback(State(state): State<AppState>, Json(body): Json<Value>) ->
     if secret != state.ext.secret() {
         return err(StatusCode::UNAUTHORIZED, "sai secret");
     }
-    let id = body.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let id = body
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if id.is_empty() {
         return err(StatusCode::BAD_REQUEST, "thiếu id");
     }

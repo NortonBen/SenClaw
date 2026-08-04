@@ -85,9 +85,20 @@ pub async fn execute_write(
                 if platform == Platform::Facebook {
                     // The extension posts via FB's internal GraphQL (learned from
                     // a real request) when available, else the DOM composer.
-                    let v = web_ops::run(state, platform, handle, "post", "post", json!({ "text": text }))
-                        .await?;
-                    let ref_id = v.get("ref").and_then(|r| r.as_str()).unwrap_or("posted").to_string();
+                    let v = web_ops::run(
+                        state,
+                        platform,
+                        handle,
+                        "post",
+                        "post",
+                        json!({ "text": text }),
+                    )
+                    .await?;
+                    let ref_id = v
+                        .get("ref")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("posted")
+                        .to_string();
                     let via = v.get("via").and_then(|r| r.as_str()).unwrap_or("");
                     state.core.db.log_post(plat, "post", &ref_id, "ok", text);
                     if !via.is_empty() {
@@ -109,7 +120,10 @@ pub async fn execute_write(
                     return Err(reason);
                 }
                 Decision::Ok { delay } => {
-                    state.core.db.log_action(plat, "post", "reserved", "official_post");
+                    state
+                        .core
+                        .db
+                        .log_action(plat, "post", "reserved", "official_post");
                     if !delay.is_zero() {
                         tokio::time::sleep(delay).await;
                     }
@@ -154,7 +168,9 @@ mod tests {
     fn state() -> AppState {
         let (mcp_tx, _) = tokio::sync::broadcast::channel(8);
         AppState {
-            core: Arc::new(Core { db: Db::open_memory().unwrap() }),
+            core: Arc::new(Core {
+                db: Db::open_memory().unwrap(),
+            }),
             mcp_tx,
             ext: ExtBridge::new(),
             cadence: Arc::new(Cadence::new()),
@@ -165,7 +181,9 @@ mod tests {
     async fn observe_mode_refuses_writes() {
         let s = state();
         s.core.db.set_setting("autonomy", "observe").unwrap();
-        let err = submit(&s, "post", Platform::X, "@me", "hi", "", &json!([])).await.unwrap_err();
+        let err = submit(&s, "post", Platform::X, "@me", "hi", "", &json!([]))
+            .await
+            .unwrap_err();
         assert!(err.contains("observe"), "got: {err}");
     }
 
@@ -173,7 +191,17 @@ mod tests {
     async fn draft_mode_records_a_pending_draft_and_does_not_send() {
         let s = state();
         // default autonomy is "draft"
-        let out = submit(&s, "post", Platform::Threads, "@me", "xin chào", "", &json!([])).await.unwrap();
+        let out = submit(
+            &s,
+            "post",
+            Platform::Threads,
+            "@me",
+            "xin chào",
+            "",
+            &json!([]),
+        )
+        .await
+        .unwrap();
         assert_eq!(out["drafted"], json!(true));
         let drafts = s.core.db.list_drafts(Some("pending"), 10).unwrap();
         assert_eq!(drafts.len(), 1);
@@ -199,23 +227,40 @@ mod tests {
 
         let (mcp_tx, _) = tokio::sync::broadcast::channel(8);
         let s = AppState {
-            core: Arc::new(Core { db: Db::open_memory().unwrap() }),
+            core: Arc::new(Core {
+                db: Db::open_memory().unwrap(),
+            }),
             mcp_tx,
             ext,
             cadence: Arc::new(Cadence::new()),
         };
 
         // 1. Drafted (default mode), nothing sent yet.
-        let out = submit(&s, "reply", Platform::Facebook, "Page", "cảm ơn bạn", "t-42", &json!([]))
-            .await
-            .unwrap();
+        let out = submit(
+            &s,
+            "reply",
+            Platform::Facebook,
+            "Page",
+            "cảm ơn bạn",
+            "t-42",
+            &json!([]),
+        )
+        .await
+        .unwrap();
         assert_eq!(out["drafted"], json!(true));
         assert!(s.core.db.list_inbox(None, 10).unwrap().is_empty());
 
         // 2. Approve → executes through the extension.
-        let ref_id = execute_write(&s, "reply", Platform::Facebook, "Page", "cảm ơn bạn", "t-42")
-            .await
-            .unwrap();
+        let ref_id = execute_write(
+            &s,
+            "reply",
+            Platform::Facebook,
+            "Page",
+            "cảm ơn bạn",
+            "t-42",
+        )
+        .await
+        .unwrap();
         assert_eq!(ref_id, "sent");
         let inbox = s.core.db.list_inbox(None, 10).unwrap();
         assert_eq!(inbox.len(), 1);
@@ -237,12 +282,17 @@ mod tests {
                 let id = v["id"].as_str().unwrap().to_string();
                 assert_eq!(v["params"]["op"], "post");
                 assert_eq!(v["params"]["text"], "Test");
-                ext_fake.complete_callback(&id, json!({ "id": id, "ok": true, "ref": "gql:123", "via": "graphql" }));
+                ext_fake.complete_callback(
+                    &id,
+                    json!({ "id": id, "ok": true, "ref": "gql:123", "via": "graphql" }),
+                );
             }
         });
         let (mcp_tx, _) = tokio::sync::broadcast::channel(8);
         let s = AppState {
-            core: Arc::new(Core { db: Db::open_memory().unwrap() }),
+            core: Arc::new(Core {
+                db: Db::open_memory().unwrap(),
+            }),
             mcp_tx,
             ext,
             cadence: Arc::new(Cadence::new()),
@@ -250,9 +300,16 @@ mod tests {
         // Saved with only a web_session — NOT a real Page config.
         s.core
             .db
-            .upsert_account("facebook", "bacnd.120", "Nguyễn Bắc", &json!({ "web_session": { "fb_dtsg": "x" } }))
+            .upsert_account(
+                "facebook",
+                "bacnd.120",
+                "Nguyễn Bắc",
+                &json!({ "web_session": { "fb_dtsg": "x" } }),
+            )
             .unwrap();
-        let ref_id = execute_write(&s, "post", Platform::Facebook, "bacnd.120", "Test", "").await.unwrap();
+        let ref_id = execute_write(&s, "post", Platform::Facebook, "bacnd.120", "Test", "")
+            .await
+            .unwrap();
         assert_eq!(ref_id, "gql:123");
         assert_eq!(s.core.db.recent_posts(10).unwrap()[0]["status"], "ok");
         fake.await.unwrap();
@@ -271,7 +328,10 @@ mod tests {
         // …but no cadence slot was reserved (no "reserved" action rows), so the
         // post budget is intact.
         let acts = s.core.db.recent_actions(50).unwrap();
-        assert!(acts.iter().all(|a| a["status"] != "reserved"), "no reservation expected");
+        assert!(
+            acts.iter().all(|a| a["status"] != "reserved"),
+            "no reservation expected"
+        );
         assert!(matches!(
             s.cadence.reserve("x", "@nocfg", "post"),
             crate::cadence::Decision::Ok { .. }
@@ -281,7 +341,9 @@ mod tests {
     #[tokio::test]
     async fn reply_without_thread_id_is_refused() {
         let s = state();
-        let err = execute_write(&s, "reply", Platform::X, "@me", "hi", "").await.unwrap_err();
+        let err = execute_write(&s, "reply", Platform::X, "@me", "hi", "")
+            .await
+            .unwrap_err();
         assert!(err.contains("thread_id"), "got: {err}");
     }
 
@@ -292,9 +354,15 @@ mod tests {
         // No official_config on a platform with an official-only post path (X) →
         // the write is attempted and fails clearly (proving it did NOT just
         // draft), and the attempt is logged.
-        let err = submit(&s, "post", Platform::X, "@me", "hi", "", &json!([])).await.unwrap_err();
+        let err = submit(&s, "post", Platform::X, "@me", "hi", "", &json!([]))
+            .await
+            .unwrap_err();
         assert!(err.contains("access_token"), "got: {err}");
-        assert_eq!(s.core.db.list_drafts(None, 10).unwrap().len(), 0, "live must not draft");
+        assert_eq!(
+            s.core.db.list_drafts(None, 10).unwrap().len(),
+            0,
+            "live must not draft"
+        );
         assert_eq!(s.core.db.recent_posts(10).unwrap()[0]["status"], "error");
     }
 }
