@@ -131,7 +131,45 @@ tool thì coi như không có luật, vì agent đi đường MCP.
 `sbx_create` / `sbx_list` / `sbx_update` / `sbx_delete`, `sbx_exec` /
 `sbx_run_in`, `sbx_install`, `sbx_files` / `sbx_file_read` / `sbx_file_write`,
 `sbx_runs`, `sbx_stats` / `sbx_kill`, `sbx_mount` / `sbx_unmount`,
-`sbx_fs_mode` / `sbx_settings`, `sbx_trace` / `sbx_events`.
+`sbx_fs_mode` / `sbx_settings`, `sbx_trace` / `sbx_events`, `sbx_ports`.
+
+## Cách ly cổng, mở đúng cổng được yêu cầu (`ports.rs`)
+
+Công tắc mạng là thô: bật hoặc tắt. Phần này thêm trạng thái ở giữa — **không
+có mạng chung, nhưng những cổng này mở** — đúng thứ cần để chạy một app trong
+sandbox: phục vụ trên 8000, xem được bằng trình duyệt, và không với tới gì khác.
+
+Hai chiều, vì đó là hai quyền khác nhau:
+
+* `listen` — sandbox được **bind** cổng đó, và bạn vào được ở `127.0.0.1:<cổng>`.
+* `connect` — cổng từ xa duy nhất nó được gọi ra. `connect: [443]` là "chỉ được
+  nói HTTPS".
+
+**Không cần bật `network`** — luật cổng chính là toàn bộ quyền. Đó là điểm mấu
+chốt: một app phục vụ trên 8000 không đồng thời được quyền gọi về nhà.
+
+### Mỗi backend cưỡng chế được tới đâu
+
+| Backend | `listen` | `connect` |
+|---|---|---|
+| macOS Seatbelt | chính xác từng cổng | chính xác từng cổng |
+| Docker | publish ra `127.0.0.1`, chính xác | **không lọc được** |
+| Linux bubblewrap | chạy được, nhưng mất namespace mạng | **không lọc được** |
+
+Seatbelt là cái chính xác. **Đã đo trên máy thật trước khi viết module**: với
+profile chỉ cho `*:53` ra ngoài, connect `:443` bị từ chối; bind một cổng không
+khai báo cũng bị từ chối.
+
+Docker và bubblewrap không lọc được cổng ra nếu không dựng thêm firewall hay
+proxy bên trong. Nặng hơn: trên cả hai, **mở một cổng lắng nghe là mất luôn cách
+ly mạng** — container `--network none` không publish được gì, và bwrap
+`--unshare-net` thì không có đường về máy chủ. Nên trên hai backend đó, xin một
+cổng lắng nghe là được cấp mạng — và điều đó được **báo ra** (`ports::note_for`)
+chứ không làm lén.
+
+Cổng publish luôn gắn `127.0.0.1`, không phải `0.0.0.0`: `-p 8000:8000` trần sẽ
+đưa app trong sandbox ra cả LAN — đúng lỗi repo này từng mắc một lần với
+`SENCLAW_BIND_HOST`.
 
 ## Theo dõi hoạt động cho kiểm thử (`trace.rs`)
 
@@ -260,6 +298,8 @@ chạy dưới đúng lớp cách ly như lệnh script — một terminal bỏ 
 | **Probe gộp làm mọi lần chạy đợi Docker.** `direct_kind()` gọi probe đầy đủ, mà probe đầy đủ hỏi cả daemon Docker — trên máy Docker hỏng, một đoạn Python 38 ms mất **4,06 giây**. Đo mới thấy | Tách cache `direct_caps` (không spawn tiến trình) khỏi `docker_caps`; `create` cũng chỉ probe đúng thứ cần. Còn **0,03 s**. Có test canh mốc 3 s |
 | `Sum for f64` trong Rust fold từ `-0.0`, nên sandbox rảnh serialize thành `-0.0` và UI hiện "-0.0 %" | `+ 0.0` sau `.sum()` |
 | `target` kiểu `/data` bị trim thành `data` trong im lặng — người dùng tưởng mount ở `/data` trong container, thật ra ở `/work/data` | Từ chối hẳn `target` tuyệt đối, kèm gợi ý viết lại |
+| **Luật "cổng đặc quyền" áp nhầm cho cả chiều ra.** Cấm bind cổng <1024 là đúng (cần root), nhưng đem áp cho `connect` thì `connect:[443]` — luật hữu ích nhất, chính là HTTPS — bị từ chối. 5 test đỏ cùng lúc vì một lỗi này | Chỉ áp cho `listen` |
+| Test mở server trong sandbox để lại tiến trình mồ côi giữ cổng, lần chạy sau `Address already in use` | `allow_reuse_address` + `timeout` phía server để nó tự thoát khi không ai gõ cửa |
 | Tooltip của biểu đồ vẽ đè lên dòng tiêu đề | Chừa sẵn chiều cao tooltip phía trên vùng vẽ; kẹp vị trí ở hai mép |
 | **Cột mới không tới được DB đã tồn tại.** `schema.sql` chạy với `IF NOT EXISTS`, nên cột thêm vào `CREATE TABLE` chỉ có ở DB mới; DB cũ giữ hình dạng cũ và câu lệnh đầu tiên gọi tên cột mới sẽ lỗi lúc chạy | `migrate()` đọc `PRAGMA table_info` rồi `ALTER TABLE ADD COLUMN` cho phần thiếu; chỉ thêm, không sửa/xoá |
 | Thư mục tạm trên macOS tới được qua symlink, nên allowlist so trên đường dẫn đã resolve mới khớp | `canonicalize` trước khi so (test allowlist làm đúng vậy) |
@@ -268,7 +308,7 @@ chạy dưới đúng lớp cách ly như lệnh script — một terminal bỏ 
 
 ## Kiểm chứng
 
-138 test (`cargo test -p sandbox`), trong đó có nhóm **thật sự chạy mã dưới
+150 test (`cargo test -p sandbox`), trong đó có nhóm **thật sự chạy mã dưới
 Seatbelt/bwrap** — chúng tự bỏ qua (in dòng SKIP) trên máy không có cách ly:
 
 - Python chạy và trả đúng output
@@ -291,6 +331,10 @@ Seatbelt/bwrap** — chúng tự bỏ qua (in dòng SKIP) trên máy không có 
 - lần chạy thứ hai không phát lại sự kiện của lần thứ nhất (offset)
 - tắt theo dõi thì **không** để lại thư mục `.trace` nào trong sandbox
 - so sánh thư mục bắt được file do lệnh shell tạo (không qua Python/Node)
+- mở cổng 18771 rồi **chạy hẳn một HTTP server trong sandbox và gọi được từ máy
+  chủ** — trả về đúng nội dung
+- cổng không khai báo thì **không bind được**
+- `connect` chỉ mở đúng cổng từ xa đã khai, cổng khác vẫn chặn
 - bật/tắt mạng trên sandbox **đã tồn tại** có hiệu lực ngay ở lần chạy kế tiếp —
   hàng rào được dựng lại mỗi lần chạy chứ không dựng một lần rồi cache
 

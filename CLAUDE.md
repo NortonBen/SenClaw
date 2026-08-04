@@ -121,9 +121,29 @@ mcp__senclaw-<domain>__<tool-prefix>_<verb>[_<modifier>]
 | litho | `senclaw-litho` | `litho_` | `mcp__senclaw-litho__litho_generate` |
 | js | `senclaw-js` | `js_` | `mcp__senclaw-js__js_eval` |
 | **cognitive** | `senclaw-cognitive` | **`cog_`** (not `cognitive_`) | `mcp__senclaw-cognitive__cog_search` |
+| usage | `senclaw-usage` | `usage_` | `mcp__senclaw-usage__usage_overview` |
 | admin | `senclaw-admin` | (varies) | — |
 
 Source of truth: server names live in [`src/mcp/helper.rs`](src/mcp/helper.rs) `*_mcp_config()` builders; tool names are the `#[rmcp::tool] async fn <name>` definitions in `src/mcp/*_server.rs`.
+
+### Space-App MCP servers
+
+Space Apps register their own MCP servers with a different pattern: `mcp__<mcp.name>__<tool>`, where `<mcp.name>` is the `mcp.name` field of the app's `senclaw-manifest.json` (usually `<app-id>-mcp`, e.g. `ssh-manager-mcp` → `mcp__ssh-manager-mcp__ssh_execute_command`, but not always — luna-calendar registers `luna-mcp`). Never derive the server name from the app id; read the manifest. Tool names live in the app's `apps/<app>/src/mcp.rs` `tools/list`. Runtime check: `GET http://127.0.0.1:18788/api/mcp-servers` lists every registered server with its status. Full lookup + troubleshooting guide (including the `groups.allowed_tools` whitelist trap that empties a session's tool roster): [docs/tool-skill-name-lookup.md](docs/tool-skill-name-lookup.md).
+
+### MCP tool aliases (Plugins → Alias)
+
+Users (and Space Apps via `mcp.toolAliases` in `senclaw-manifest.json`) can rename an
+MCP tool or override it with another tool. Mapping `alias → target` lives in the
+`mcp_tool_aliases` table, resolves at stage 0 of `resolve_tool_by_name`
+([src/tools/tool_search.rs](src/tools/tool_search.rs)) and decorates the roster via
+[src/tools/tool_alias.rs](src/tools/tool_alias.rs). App-declared aliases import
+**disabled** — the user must enable them in Plugins → Alias. When a tool name doesn't
+behave as documented, check this table first (`GET /api/tool-aliases`). Full guide:
+[docs/mcp-tool-alias.md](docs/mcp-tool-alias.md).
+
+### Space-App external links
+
+Links in a Space App UI must open in the **system browser**, never navigate the embedded desktop webview. Flow (JS hook `openExternal` → webview safety net → daemon `POST /api/ui/open-url`), canonical helper (`apps/zeach/web/src/openExternal.ts`), and per-app adoption checklist: [docs/space-app-open-external.md](docs/space-app-open-external.md).
 
 ### Rules for Claude
 
@@ -151,3 +171,41 @@ Project-level [`.mcp.json`](.mcp.json) template (one entry per server needed):
 ```
 
 The `<domain>-server` subcommand list is in `src/main.rs` (e.g. `browser-server`, `memory-server`, `schedule-server`, ...). After editing `.mcp.json`, the user must restart Claude Code and approve the server in the prompt.
+
+## Space App network binding
+
+Space Apps under `apps/*` have **no authentication of their own**. Their REST API
+and their MCP endpoint are wide open to anyone who can reach the port: the trust
+boundary is the loopback interface, not the app. The daemon reaches every app at
+`http://127.0.0.1:<port>` — health checks (`src/gateway/ui_server/space_mcp.rs`
+`health_url`), the MCP origin, and the UI proxy all hardcode loopback — so
+binding loopback costs nothing operationally.
+
+Every app bootstrap MUST therefore resolve its bind host from the env, never
+hardcode one:
+
+```rust
+// Loopback by default. A Space App authenticates nothing of its own — the
+// daemon reaches it over 127.0.0.1 and the UI is same-origin — so binding
+// 0.0.0.0 hands the whole REST + MCP surface to anyone on the LAN. Set
+// SENCLAW_BIND_HOST=0.0.0.0 to opt in to that explicitly.
+let host = std::env::var("SENCLAW_BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await.unwrap();
+```
+
+Rules:
+
+- **Never write `bind("0.0.0.0:...")`.** The bootstrap is copy-pasted between apps,
+  so one bad copy re-exposes the fleet. This was a real exposure (fixed 2026-07-31):
+  nearly every app was serving customer data on `*:PORT`.
+- **Same knob for extension-bridge WebSockets** (`apps/*/src/extbridge.rs`). The
+  Chrome extensions all dial `ws://127.0.0.1:<port>`, so loopback is correct there too.
+- **Node apps** read `process.env.SENCLAW_BIND_HOST || '127.0.0.1'` and pass it as
+  the `app.listen(PORT, HOST, ...)` host argument.
+- **Next.js apps** must pass `-H ${SENCLAW_BIND_HOST:-127.0.0.1}`; bare `next start`
+  binds `0.0.0.0`.
+- `apps/rule-engine` keeps its older `RULE_ENGINE_BIND` override, checked before
+  `SENCLAW_BIND_HOST`.
+
+[`tests/space_app_bind_loopback.rs`](tests/space_app_bind_loopback.rs) enforces all
+of the above on every `cargo test`.
