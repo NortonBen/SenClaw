@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/prefs.dart';
 import '../../../core/transport/connection.dart';
 import '../../../theme/tokens.dart';
 import '../../plugins/plugins_screen.dart' show skillsProvider;
@@ -14,30 +13,34 @@ class MentionSuggestion {
   final String? desc;
 }
 
-const _kRecentDirs = 'senclaw:recent-workdirs';
+/// Workspace a `@` picker draws from, encoded so it can key a provider family.
+/// `jid:<jid>` asks the daemon to resolve the chat's own workspace; `path:<abs>`
+/// names one directly (the New Chat screen, which has no jid yet).
+String mentionScopeForJid(String jid) => jid.isEmpty ? '' : 'jid:$jid';
+String mentionScopeForPath(String? path) =>
+    (path == null || path.isEmpty) ? '' : 'path:$path';
 
-/// `@` file/folder mentions sourced from the most-recent project workdir
-/// (the same set the New Chat picker persists). Empty if no project is known.
+/// `@` file/folder mentions for one workspace scope. Paths come back relative to
+/// the workspace root — the same form the daemon resolves them in, so what the
+/// picker offers is exactly what the agent can open.
 final mentionFilesProvider =
-    FutureProvider<List<MentionSuggestion>>((ref) async {
-  final dirs = Prefs(ref.read(prefsProvider)).stringSet(_kRecentDirs).toList()
-    ..sort();
-  if (dirs.isEmpty) return const [];
-  final root = dirs.first;
+    FutureProvider.family<List<MentionSuggestion>, String>((ref, scope) async {
+  if (scope.isEmpty) return const [];
+  final sep = scope.indexOf(':');
+  if (sep <= 0) return const [];
+  final key = scope.substring(0, sep);
+  final value = scope.substring(sep + 1);
+  if (value.isEmpty) return const [];
   try {
     final r = await ref.read(apiClientProvider).get(
-        '/api/workspace/files?path=${Uri.encodeQueryComponent(root)}&depth=2');
+        '/api/chat/files?$key=${Uri.encodeQueryComponent(value)}');
     final entries = (r is Map ? r['entries'] : null) as List? ?? const [];
-    final rootStr = (r is Map ? r['root']?.toString() : null) ?? root;
     final out = <MentionSuggestion>[];
     for (final e in entries) {
       if (e is! Map) continue;
-      final path = e['path']?.toString() ?? '';
-      final isDir = e['is_dir'] == true;
-      var rel = path.startsWith(rootStr) ? path.substring(rootStr.length) : path;
-      if (rel.startsWith('/')) rel = rel.substring(1);
+      final rel = e['rel']?.toString() ?? '';
       if (rel.isEmpty) continue;
-      out.add(MentionSuggestion(rel, isDir ? 'folder' : 'file', null));
+      out.add(MentionSuggestion(rel, e['is_dir'] == true ? 'folder' : 'file', null));
     }
     return out;
   } catch (_) {
@@ -45,10 +48,10 @@ final mentionFilesProvider =
   }
 });
 
-/// A chat input that pops a suggestion list when the caret follows a `/`
-/// (skills/commands) or `@` (project files & folders) trigger token. Tab/Enter
-/// or click inserts; ↑/↓ navigate; Esc dismisses. Falls through to [onSend]
-/// when no popup is open.
+/// A chat input that pops a suggestion list when the caret follows a `/` or `#`
+/// (skills) or `@` (workspace files & folders) trigger token. Tab/Enter or click
+/// inserts; ↑/↓ navigate; Esc dismisses. Falls through to [onSend] when no popup
+/// is open.
 class SlashMentionField extends ConsumerStatefulWidget {
   const SlashMentionField({
     super.key,
@@ -57,11 +60,20 @@ class SlashMentionField extends ConsumerStatefulWidget {
     required this.decoration,
     this.style,
     this.history = const [],
+    this.fileScope = '',
+    this.minLines = 1,
+    this.autofocus = false,
   });
+  final int minLines;
+  final bool autofocus;
   final TextEditingController controller;
   final VoidCallback onSend;
   final InputDecoration decoration;
   final TextStyle? style;
+
+  /// Built with [mentionScopeForJid] / [mentionScopeForPath]. Empty hides file
+  /// suggestions — a chat with no workspace has nothing to offer.
+  final String fileScope;
 
   /// Previously-sent messages in this conversation, chronological
   /// (oldest → newest). ↑ on the first line recalls the newest then walks
@@ -74,7 +86,7 @@ class SlashMentionField extends ConsumerStatefulWidget {
 }
 
 class _SlashMentionFieldState extends ConsumerState<SlashMentionField> {
-  String? _trigger; // '/' or '@'
+  String? _trigger; // '/', '#' or '@'
   String _query = '';
   int _active = 0;
 
@@ -112,7 +124,7 @@ class _SlashMentionFieldState extends ConsumerState<SlashMentionField> {
     final upto = (sel.baseOffset >= 0 && sel.baseOffset <= text.length)
         ? text.substring(0, sel.baseOffset)
         : text;
-    final m = RegExp(r'(?:^|\s)([/@])([^\s]*)$').firstMatch(upto);
+    final m = RegExp(r'(?:^|\s)([/@#])([^\s]*)$').firstMatch(upto);
     final t = m?.group(1);
     final q = (m?.group(2) ?? '').toLowerCase();
     if (t != _trigger || q != _query) {
@@ -127,12 +139,14 @@ class _SlashMentionFieldState extends ConsumerState<SlashMentionField> {
   List<MentionSuggestion> _suggestions() {
     if (_trigger == null) return const [];
     final List<MentionSuggestion> source;
-    if (_trigger == '/') {
+    if (_trigger == '@') {
+      source =
+          ref.watch(mentionFilesProvider(widget.fileScope)).valueOrNull ?? const [];
+    } else {
+      // `/` and `#` both pin a skill — the daemon accepts either form.
       source = (ref.watch(skillsProvider).valueOrNull ?? [])
           .map((s) => MentionSuggestion(s.name, 'skill', s.description))
           .toList();
-    } else {
-      source = ref.watch(mentionFilesProvider).valueOrNull ?? const [];
     }
     final q = _query;
     final filtered = source
@@ -149,13 +163,24 @@ class _SlashMentionFieldState extends ConsumerState<SlashMentionField> {
     final caret = ctrl.selection.baseOffset.clamp(0, text.length);
     final before = text.substring(0, caret);
     final after = text.substring(caret);
-    final replacedBefore =
-        before.replaceFirst(RegExp(r'([/@])[^\s]*$'), '$_trigger${s.insert} ');
+    // Folders keep the popup open so the user can drill into a subpath; files
+    // and skills get a trailing space to close it.
+    final suffix = s.kind == 'folder' ? '' : ' ';
+    final replacedBefore = before.replaceFirst(
+        RegExp(r'([/@#])[^\s]*$'), '$_trigger${s.insert}$suffix');
     final newText = replacedBefore + after;
+    // Assigning `value` notifies the change listener synchronously, which
+    // recomputes the trigger from the new text — that is how a folder insert
+    // keeps the popup open on the deeper path. Only force it shut for the
+    // space-terminated kinds, where no trigger can survive anyway.
     ctrl.value = TextEditingValue(
       text: newText,
       selection: TextSelection.collapsed(offset: replacedBefore.length),
     );
+    if (suffix.isEmpty) {
+      setState(() => _active = 0);
+      return;
+    }
     setState(() {
       _trigger = null;
       _query = '';
@@ -294,7 +319,8 @@ class _SlashMentionFieldState extends ConsumerState<SlashMentionField> {
           onKeyEvent: _onKey,
           child: TextField(
             controller: widget.controller,
-            minLines: 1,
+            autofocus: widget.autofocus,
+            minLines: widget.minLines,
             maxLines: 8,
             style: widget.style,
             decoration: widget.decoration,

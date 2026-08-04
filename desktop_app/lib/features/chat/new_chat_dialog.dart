@@ -18,6 +18,7 @@ import 'audio_service.dart';
 import 'conversation_provider.dart';
 import 'groups_provider.dart';
 import 'mini_chat_screen.dart' show subWindowIdProvider;
+import 'widgets/slash_mention_input.dart';
 
 class LlmConfig {
   final String id;
@@ -129,7 +130,18 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   bool get _isWorkflow => _kind == 'workflow';
 
   @override
+  void initState() {
+    super.initState();
+    // The composer no longer owns an onChanged callback, so keep the Start
+    // button's enabled state in step with the draft here.
+    _msg.addListener(_onDraftChanged);
+  }
+
+  void _onDraftChanged() => setState(() {});
+
+  @override
   void dispose() {
+    _msg.removeListener(_onDraftChanged);
     _msg.dispose();
     _schedTime.dispose();
     _cron.dispose();
@@ -814,14 +826,17 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                     Padding(
                       padding: const EdgeInsets.fromLTRB(
                           AppTokens.s16, AppTokens.s12, AppTokens.s16, 0),
-                      child: TextField(
+                      // Same `/ # @` affordances as an open conversation. Files
+                      // are only offered once a workspace is picked.
+                      child: SlashMentionField(
                         controller: _msg,
+                        onSend: canStart ? _start : () {},
+                        fileScope: mentionScopeForPath(_workDir),
                         autofocus: true,
                         minLines: 3,
-                        maxLines: 8,
-                        onChanged: (_) => setState(() {}),
                         decoration: const InputDecoration(
-                          hintText: 'Ask anything, or describe a task…',
+                          hintText:
+                              'Ask anything, or describe a task…   / # skill · @ file',
                           border: InputBorder.none,
                           isCollapsed: true,
                         ),

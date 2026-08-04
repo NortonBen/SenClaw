@@ -79,13 +79,22 @@ pub(crate) async fn list_files(
 ) -> Result<Json<WorkspaceListing>, AppError> {
     let root = expand_tilde(&q.path);
     if !root.is_absolute() {
-        return Err(AppError(axum::http::StatusCode::BAD_REQUEST, String::from("path must be absolute")));
+        return Err(AppError(
+            axum::http::StatusCode::BAD_REQUEST,
+            String::from("path must be absolute"),
+        ));
     }
     if !root.exists() {
-        return Err(AppError(axum::http::StatusCode::BAD_REQUEST, String::from("path does not exist")));
+        return Err(AppError(
+            axum::http::StatusCode::BAD_REQUEST,
+            String::from("path does not exist"),
+        ));
     }
     if !root.is_dir() {
-        return Err(AppError(axum::http::StatusCode::BAD_REQUEST, String::from("path is not a directory")));
+        return Err(AppError(
+            axum::http::StatusCode::BAD_REQUEST,
+            String::from("path is not a directory"),
+        ));
     }
     let depth = q.depth.unwrap_or(1).clamp(1, 4);
     let mut entries = Vec::new();
@@ -97,6 +106,95 @@ pub(crate) async fn list_files(
         root: root.to_string_lossy().to_string(),
         entries,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct MentionQuery {
+    /// Chat session to resolve the workspace from. Omit when `path` is given.
+    pub jid: Option<String>,
+    /// Explicit workspace root — used by the New Chat screen, which has no jid yet.
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct MentionEntry {
+    /// Path relative to `root` — this is what the user types after `@`.
+    pub rel: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct MentionListing {
+    pub root: Option<String>,
+    pub entries: Vec<MentionEntry>,
+}
+
+/// GET /api/chat/files?jid=…|path=… — candidates for the composer's `@` picker.
+///
+/// Returns paths *relative* to the workspace root, matching what
+/// [`crate::agent::prompt_directives`] resolves on the way back in. A chat with
+/// no workspace yields an empty list rather than an error: the composer just
+/// shows no file suggestions.
+pub(crate) async fn mention_files(
+    State(s): State<Arc<UiState>>,
+    Query(q): Query<MentionQuery>,
+) -> Result<Json<MentionListing>, AppError> {
+    let root = match resolve_mention_root(&s, &q) {
+        Some(r) => r,
+        None => {
+            return Ok(Json(MentionListing {
+                root: None,
+                entries: vec![],
+            }))
+        }
+    };
+
+    let root_for_walk = root.clone();
+    let mut raw = tokio::task::spawn_blocking(move || {
+        let mut out = Vec::new();
+        walk(&root_for_walk, 4, &mut out);
+        out
+    })
+    .await
+    .map_err(|e| {
+        AppError(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("workspace scan failed: {e}"),
+        )
+    })?;
+
+    raw.truncate(4000);
+    let entries = raw
+        .into_iter()
+        .filter_map(|e| {
+            let rel = Path::new(&e.path).strip_prefix(&root).ok()?;
+            Some(MentionEntry {
+                rel: rel.to_string_lossy().to_string(),
+                is_dir: e.is_dir,
+            })
+        })
+        .collect();
+
+    Ok(Json(MentionListing {
+        root: Some(root.to_string_lossy().to_string()),
+        entries,
+    }))
+}
+
+/// Mirrors `AgentPool::effective_work_dir` — an explicit `path` wins, else the
+/// jid's bound workspace. Keep the two in step: a root the picker offers but
+/// the expander rejects would surface as "file not found" on send.
+fn resolve_mention_root(s: &UiState, q: &MentionQuery) -> Option<std::path::PathBuf> {
+    if let Some(p) = q.path.as_deref().filter(|p| !p.trim().is_empty()) {
+        let dir = expand_tilde(p);
+        return dir.is_dir().then_some(dir);
+    }
+    let jid = q.jid.as_deref()?;
+    let db = s.db.as_ref()?;
+    let gm = s.group_manager.as_ref()?;
+    let binding = gm.get(db, jid)?;
+    let dir = expand_tilde(binding.allowed_work_dirs.as_ref()?.first()?);
+    dir.is_dir().then_some(dir)
 }
 
 #[derive(Debug, Serialize)]
@@ -115,7 +213,10 @@ pub(crate) async fn read_file(
     use axum::http::StatusCode;
     let path = expand_tilde(&q.path);
     if !path.is_absolute() {
-        return Err(AppError(StatusCode::BAD_REQUEST, "path must be absolute".into()));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            "path must be absolute".into(),
+        ));
     }
     if !path.is_file() {
         return Err(AppError(StatusCode::BAD_REQUEST, "not a file".into()));
@@ -126,7 +227,11 @@ pub(crate) async fn read_file(
     let truncated = meta.len() > MAX;
     let bytes = std::fs::read(&path)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let slice = if truncated { &bytes[..MAX as usize] } else { &bytes[..] };
+    let slice = if truncated {
+        &bytes[..MAX as usize]
+    } else {
+        &bytes[..]
+    };
     let content = match std::str::from_utf8(slice) {
         Ok(s) => s.to_string(),
         Err(_) => "(binary file — cannot display)".to_string(),
@@ -180,7 +285,9 @@ pub(crate) async fn mkdir(
     // try `mkdir /` or `mkdir /System/...`. The picker is a developer tool but
     // the input box is freeform, so guard the obvious footguns.
     let s = target.to_string_lossy();
-    for bad in ["/System", "/Library", "/usr", "/bin", "/sbin", "/etc", "/var", "/private"] {
+    for bad in [
+        "/System", "/Library", "/usr", "/bin", "/sbin", "/etc", "/var", "/private",
+    ] {
         if s == bad || s.starts_with(&format!("{bad}/")) {
             return Err(AppError(
                 axum::http::StatusCode::FORBIDDEN,

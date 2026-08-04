@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { theme, Input, message, Select, Segmented, Dropdown, Modal } from 'antd';
 import { WorkflowQuickStart } from './WorkflowQuickStart';
+import { useCommandSuggestions } from './chat-common';
 import type { MenuProps } from 'antd';
 import {
   FolderOpenOutlined,
@@ -310,6 +311,14 @@ export function NewChatScreen({ onStart, projectName, profiles, onWorkflowRunSel
     return items;
   }, [recentPaths, pickerSearch, workDir, token]);
 
+  // Same `/ @ #` composer affordances as an open conversation. Files are only
+  // offered once a workspace is picked — a plain chat has nothing to list.
+  const suggest = useCommandSuggestions({
+    value: input,
+    onChange: setInput,
+    fileScope: kind === 'code' && workDir ? { path: workDir } : undefined,
+  });
+
   const handleSubmit = () => {
     const text = input.trim();
     if (!text || kind === 'workflow') return;
@@ -329,6 +338,7 @@ export function NewChatScreen({ onStart, projectName, profiles, onWorkflowRunSel
   };
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (suggest.handleKeyDown(e)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit();
@@ -433,7 +443,11 @@ export function NewChatScreen({ onStart, projectName, profiles, onWorkflowRunSel
           <WorkflowQuickStart onRunSelected={onWorkflowRunSelected} />
         ) : (
         <>
-        {/* Unified input card — textarea + toolbar all in one rounded surface */}
+        {/* Unified input card — textarea + toolbar all in one rounded surface.
+            The suggestion popup sits outside the card: the card clips overflow,
+            which would otherwise cut the dropdown off. */}
+        <div style={{ position: 'relative' }}>
+        {suggest.popup}
         <div
           className="rounded-2xl overflow-hidden transition-shadow"
           style={{
@@ -447,7 +461,7 @@ export function NewChatScreen({ onStart, projectName, profiles, onWorkflowRunSel
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKey}
-            placeholder="Ask anything, or describe a task…"
+            placeholder="Ask anything, or describe a task… (/ skill, @ file)"
             rows={3}
             className="w-full resize-none outline-none text-sm px-5 pt-4 pb-2 bg-transparent"
             style={{ color: token.colorText, lineHeight: 1.55 }}
@@ -562,6 +576,7 @@ export function NewChatScreen({ onStart, projectName, profiles, onWorkflowRunSel
               </svg>
             </button>
           </div>
+        </div>
         </div>
 
         {/* Suggestions */}

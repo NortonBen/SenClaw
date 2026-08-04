@@ -30,10 +30,9 @@ use crate::agent::session_bridge;
 use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::helper::{
-    browser_mcp_config, dispatch_mcp_config, js_mcp_config, litho_mcp_config, memory_mcp_config,
-    background_mcp_config, ocr_mcp_config, schedule_mcp_config, send_mcp_config,
-    space_mcp_config, wiki_mcp_config,
-    workspace_mcp_config, McpServerConfig,
+    background_mcp_config, browser_mcp_config, dispatch_mcp_config, js_mcp_config,
+    litho_mcp_config, memory_mcp_config, ocr_mcp_config, schedule_mcp_config, send_mcp_config,
+    space_mcp_config, usage_mcp_config, wiki_mcp_config, workspace_mcp_config, McpServerConfig,
 };
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
@@ -211,39 +210,32 @@ impl AgentPool {
             }
         });
 
-        // When user selects "allow" (never ask again), persist tool to DB and
-        // also update the in-memory binding so future engines for this group start
-        // with the tool pre-approved.
+        // When user selects "allow" (never ask again), persist the tool to the
+        // group's `approved_tools` list so future engines for this group start
+        // with it pre-approved. NEVER write it into `allowed_tools`: that
+        // column is the use_tools whitelist, and appending approvals there
+        // shrinks the next session's whole tool roster to just the approved
+        // tools (a single "always allow Skill" click used to strip every MCP
+        // tool from a scheduled session).
         let weak2 = self.self_weak.lock().unwrap().clone();
         bridge.set_tool_allowed_callback(move |group_jid: &str, tool_name: &str| {
             let Some(pool) = weak2.upgrade() else { return };
             let group_jid = group_jid.to_string();
             let tool_name = tool_name.to_string();
 
-            // Persist to DB (best-effort).
+            // Persist to DB (best-effort). Future engines re-read this column
+            // at creation, so no in-memory binding update is needed.
             if let Some(db) = pool.db.lock().unwrap().as_ref() {
-                if let Err(e) = db.append_group_allowed_tool(&group_jid, &tool_name) {
+                if let Err(e) = db.append_group_approved_tool(&group_jid, &tool_name) {
                     tracing::warn!(
-                        "[AgentPool] Failed to persist allowed tool {tool_name} for {group_jid}: {e}"
+                        "[AgentPool] Failed to persist approved tool {tool_name} for {group_jid}: {e}"
                     );
                 } else {
                     tracing::info!(
-                        "[AgentPool] Persisted allowed tool {tool_name} for group {group_jid}"
+                        "[AgentPool] Persisted approved tool {tool_name} for group {group_jid}"
                     );
                 }
-            }
-
-            // Update in-memory binding so the next engine creation for this group
-            // also inherits the approval.
-            {
-                let mut s = pool.state.lock().unwrap();
-                if let Some(binding) = s.bindings.get_mut(&group_jid) {
-                    let tools = binding.allowed_tools.get_or_insert_with(Vec::new);
-                    if !tools.contains(&tool_name) {
-                        tools.push(tool_name);
-                    }
-                }
-            }
+            };
         });
 
         *self.permission_bridge.lock().unwrap() = Some(bridge);
@@ -1061,6 +1053,9 @@ impl AgentPool {
                 &binding.folder,
                 &binding.jid,
             ));
+            // Usage MCP — read-only token/cost accounting so any chat can ask
+            // "hôm nay tốn bao nhiêu" without opening the dashboard.
+            mcp_servers.push(usage_mcp_config(&db_path_s));
             mcp_servers.push(workspace_mcp_config(
                 &state_file_s,
                 &workspace_s,
@@ -1250,13 +1245,26 @@ impl AgentPool {
         // createSession mirrors TS 641-653. If runtime core is not wired, default no-op.
         self.core_api.create_session(&binding.jid)?;
 
-        // Seed PermissionManager with tools that have already been approved for this group
-        // (stored as GroupBinding.allowed_tools in DB). This ensures the "never ask again"
-        // list survives daemon restarts for as long as the group's DB record is intact.
+        // Seed PermissionManager with tools that have already been approved for
+        // this group, so the "never ask again" list survives daemon restarts:
+        //  - `allowed_tools` (the configured whitelist) — being whitelisted
+        //    implies approval;
+        //  - `approved_tools` (persisted "always allow" choices) — read fresh
+        //    from DB because it is not part of GroupBinding.
         if let Some(tools) = &binding.allowed_tools {
             for tool in tools {
                 self.core_api.add_allowed_tool(&binding.jid, tool);
             }
+        }
+        let approved: Vec<String> = self
+            .db
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|db| db.get_group_approved_tools(&binding.jid).ok())
+            .unwrap_or_default();
+        for tool in &approved {
+            self.core_api.add_allowed_tool(&binding.jid, tool);
         }
 
         // Reload skills excluding disabled ones — mirrors TS 657.
@@ -1392,6 +1400,21 @@ impl AgentPool {
             .await
     }
 
+    /// Directory that relative `@file` mentions resolve against: the session's
+    /// live cwd if the agent has `cd`-ed, else the workspace it was bound to.
+    /// `None` for chats with no workspace at all — relative mentions are then
+    /// refused rather than guessed at.
+    fn effective_work_dir(&self, jid: &str, group: &GroupBinding) -> Option<std::path::PathBuf> {
+        if let Some(dir) = self.state.lock().unwrap().runtime_work_dirs.get(jid) {
+            return Some(crate::util::paths::expand_tilde(dir));
+        }
+        group
+            .allowed_work_dirs
+            .as_ref()
+            .and_then(|dirs| dirs.first())
+            .map(|p| crate::util::paths::expand_tilde(p))
+    }
+
     /// Process-and-wait with image attachments support.
     pub(crate) async fn process_and_wait_inner_with_images(
         &self,
@@ -1417,6 +1440,13 @@ impl AgentPool {
             self.core_api.set_pre_trigger_skill(jid, enabled);
             let after = crate::gateway::group_manager::get_after_process_enabled(path);
             self.core_api.set_after_process(jid, after);
+            // Default-flow handlers (open link / media / search / note): render
+            // the `## User defaults` block and push it into the engine so the
+            // system prompt reflects the user's Plugins → Widget settings.
+            // `None` when nothing is configured — the prompt stays unchanged.
+            let defaults = crate::gateway::group_manager::get_defaults_config(path);
+            self.core_api
+                .set_user_defaults(jid, defaults.render_prompt_block());
         }
 
         // ---- Per-group LLM override ----
@@ -1579,6 +1609,43 @@ impl AgentPool {
 
         // ---- typing indicator ON ----
         self.send_typing(jid, true, group.bot_token.as_deref());
+
+        // ---- Pre-process stage 3: composer directives ----
+        // `/skill`, `#skill` and `@file` are typed in the composer; without this
+        // pass they reach the LLM as prose. Gated on a cheap regex so ordinary
+        // messages never pay for the skill scan.
+        let full_prompt = if crate::agent::prompt_directives::has_directives(&full_prompt) {
+            let known_skills = {
+                let cfg = self.config.lock().unwrap();
+                match cfg.as_ref() {
+                    Some(c) => crate::skills::scan::load_all_local_skills(c)
+                        .into_iter()
+                        .map(|s| s.name)
+                        .collect::<Vec<_>>(),
+                    None => Vec::new(),
+                }
+            };
+            let work_dir = self.effective_work_dir(jid, group);
+            let expansion = crate::agent::prompt_directives::expand(
+                &full_prompt,
+                work_dir.as_deref(),
+                &known_skills,
+            );
+            if !expansion.skills.is_empty() || !expansion.files.is_empty() {
+                tracing::info!(
+                    "[AgentPool] directives jid={} skills={:?} files={:?}",
+                    jid,
+                    expansion.skills,
+                    expansion.files
+                );
+            }
+            for warning in &expansion.warnings {
+                tracing::warn!("[AgentPool] directive warning jid={}: {}", jid, warning);
+            }
+            expansion.prompt
+        } else {
+            full_prompt
+        };
 
         // ---- process user input with InputBuilder (image handling) ----
         // Mirrors TS AgentPool.ts:826: core.processUserInput(fullPrompt).

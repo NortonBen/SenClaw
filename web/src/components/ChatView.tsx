@@ -710,6 +710,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           sending={false}
           commands={[]}
           mentionItems={[]}
+          fileScope={{ jid: group.jid }}
           actionButtonDisabled={actionButtonDisabled}
           actionTitle={actionButtonTitle}
           actionAriaLabel={actionButtonTitle}

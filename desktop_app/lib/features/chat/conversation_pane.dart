@@ -664,14 +664,15 @@ class _Composer extends ConsumerWidget {
                 ],
               ),
             ),
-          // ── Input on top (with / command·skill and @ file·folder hints) ──
+          // ── Input on top (with / # skill and @ file·folder hints) ──
           SlashMentionField(
             controller: controller,
             onSend: onSend,
             history: history,
+            fileScope: mentionScopeForJid(jid),
             style: TextStyle(color: c.textPrimary, fontSize: 14),
             decoration: InputDecoration(
-              hintText: 'Message the agent…   / command · @ file',
+              hintText: 'Message the agent…   / # skill · @ file',
               hintStyle: TextStyle(color: c.textMuted, fontSize: 14),
               filled: true,
               fillColor: c.surfaceAlt,
