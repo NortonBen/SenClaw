@@ -1,0 +1,72 @@
+{
+  "id": "cafe",
+  "name": "Quán Cafe",
+  "description": "Quản lý quán cafe / đồ uống 100% cục bộ: kho nguyên liệu theo đơn vị gốc gram / ml / cái (nhập theo kg / lít tự quy đổi), phiếu nhập hàng nhiều dòng với giá vốn bình quân gia quyền, điều chỉnh kiểm kê + thẻ kho, thực đơn món kèm cách pha chế và giá bán, công thức định lượng từng món (gram / ml) để tính giá vốn và lãi gộp, bán hàng trừ kho tự động theo công thức (cảnh báo thiếu nguyên liệu, huỷ đơn hoàn kho), báo cáo nhập hàng theo nhà cung cấp / nguyên liệu / ngày, báo cáo doanh thu – giá vốn – lãi gộp theo ngày / món / nhóm, dự đoán lượng bán và doanh thu theo thứ trong tuần, dự báo nguyên liệu sắp hết kèm đề xuất nhập hàng, và AI phân tích kinh doanh + gợi ý công thức món mới qua bridge SenClaw. App chỉ GHI SỔ cục bộ — không kết nối máy POS hay bán hàng online.",
+  "icon": "☕",
+  "runtime": {
+    "kind": "server",
+    "start": "./cafe",
+    "healthPath": "/api/status",
+    "port": 4700
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request"
+    ]
+  },
+  "mcp": {
+    "name": "cafe-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Cafe MCP: quản lý quán cafe / đồ uống — nguyên liệu kho (cafe_ingredient_*), điều chỉnh kiểm kê + thẻ kho (cafe_stock_*), phiếu nhập hàng + báo cáo nhập + đề xuất nhập (cafe_purchase_*, cafe_report_purchases), thực đơn + công thức pha chế định lượng (cafe_menu_*, cafe_recipe_set), bán hàng trừ kho theo công thức (cafe_sale_*), báo cáo doanh thu / tồn kho (cafe_report_*), dự đoán lượng bán + nguyên liệu (cafe_forecast_*), dashboard (cafe_dashboard) và AI phân tích + gợi ý công thức (cafe_ai_*). Toàn bộ là ghi sổ cục bộ — không có tool nào bán hàng online hay đặt hàng thật.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "cafe-manager",
+      "path": "skills/cafe-manager",
+      "triggers": [
+        "quán cafe",
+        "quán cà phê",
+        "cà phê",
+        "đồ uống",
+        "pha chế",
+        "công thức pha chế",
+        "công thức món",
+        "nguyên liệu",
+        "định lượng",
+        "thực đơn",
+        "menu quán",
+        "giá vốn món",
+        "lãi gộp",
+        "bán hàng",
+        "doanh thu",
+        "báo cáo doanh thu",
+        "nhập hàng",
+        "báo cáo nhập hàng",
+        "đề xuất nhập hàng",
+        "sắp hết nguyên liệu",
+        "dự đoán doanh thu",
+        "dự báo nguyên liệu",
+        "thẻ kho",
+        "kiểm kê",
+        "coffee shop",
+        "barista",
+        "recipe"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "cafe-barista",
+      "path": "personas/cafe-barista.md",
+      "description": "Quản lý quán cafe — ghi sổ nhập hàng / bán hàng chính xác bằng tool, theo dõi kho nguyên liệu và giá vốn từng món, cảnh báo nguyên liệu sắp hết, đề xuất nhập hàng theo dự đoán và phân tích doanh thu khi được hỏi."
+    }
+  ]
+}
