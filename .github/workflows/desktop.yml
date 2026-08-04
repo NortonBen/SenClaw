@@ -338,6 +338,22 @@ jobs:
                 > release-artifacts/latest.json
           cat release-artifacts/latest.json
 
+          # Release-page body. `generate_release_notes` only fills a release
+          # softprops CREATES — when a sibling workflow (hub/extension/apps)
+          # uploads its asset first, the release already exists with an empty
+          # body and would stay empty (v0.3.0 and the first v0.4.0 did). An
+          # explicit body_path is applied on update as well, so the changelog
+          # survives whichever workflow wins the race.
+          # NOT under release-artifacts/: everything there is uploaded as an
+          # asset.
+          {
+            echo "$NOTES"
+            if [ -n "$PREV" ]; then
+              echo
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${TAG}"
+            fi
+          } > RELEASE_NOTES.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -345,5 +361,8 @@ jobs:
           name: SenClaw ${{ github.ref_name }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+          # On create, GitHub appends the auto-generated section after the
+          # body; on update only body_path applies (see RELEASE_NOTES.md note).
           generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           files: release-artifacts/*
