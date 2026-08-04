@@ -79,7 +79,11 @@ fn roster(agents: &[Agent]) -> anyhow::Result<Roster> {
     if workers.is_empty() {
         anyhow::bail!("văn phòng chưa có nhân sự chuyên môn (worker) nào đang hoạt động");
     }
-    Ok(Roster { manager, qa, workers })
+    Ok(Roster {
+        manager,
+        qa,
+        workers,
+    })
 }
 
 /// "kỹ năng/sub-agent nắm giữ" context line for one agent, resolved against
@@ -108,7 +112,11 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("task {} không tồn tại", task_id))?;
     // Only this task's team works on it (teams run in parallel).
     let agents = db.list_agents_in(&task.team)?;
-    let Roster { manager, qa, workers } = roster(&agents)?;
+    let Roster {
+        manager,
+        qa,
+        workers,
+    } = roster(&agents)?;
     let mgr = manager.key.as_str();
     let name_of = |key: &str| -> String {
         agents
@@ -128,12 +136,43 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
     db.reset_agent_statuses(&task.team)?;
     db.set_task_status(task_id, "planning")?;
 
+    // Việc bị Sếp TRẢ LẠI chạy lại với ghi chú của Sếp trong context —
+    // cả khi lập kế hoạch lẫn khi từng nhân sự làm phần việc của mình.
+    let redo_ctx = if task.approval == "returned" && !task.boss_note.is_empty() {
+        let mut s = format!(
+            "\n\n⚠ Sếp đã TRẢ LẠI kết quả lần trước với ghi chú: \"{}\". Lần này phải khắc phục đúng ý Sếp.",
+            task.boss_note
+        );
+        if !task.report.is_empty() {
+            s.push_str(&format!(
+                "\nBáo cáo lần trước (tham khảo, đừng lặp lại nguyên văn):\n{}",
+                clip(&task.report, 1200)
+            ));
+        }
+        s
+    } else {
+        String::new()
+    };
+
     // Sếp giao việc xuất hiện trong feed.
     db.add_event(Some(task_id), "chat", "sep", "", &task.title)?;
+    if !redo_ctx.is_empty() {
+        db.add_event(
+            Some(task_id),
+            "boss",
+            "sep",
+            mgr,
+            &format!("Sếp trả lại — làm lại với ghi chú: {}", task.boss_note),
+        )?;
+    }
     db.set_agent_status(mgr, "working", "đang lập kế hoạch & phân công")?;
 
     // Kho tài liệu chung + inventory kỹ năng (best-effort, một lần cho cả task).
-    let wiki_ctx = if feat_wiki { wiki_context(&db, task_id, &task.title, mgr).await } else { String::new() };
+    let wiki_ctx = if feat_wiki {
+        wiki_context(&db, task_id, &task.title, mgr).await
+    } else {
+        String::new()
+    };
     let ws_dir = db.workspace_dir();
     let (ws_ctx, ws_count) = if feat_workspace {
         let _ = crate::workspace::ensure_dir(&ws_dir);
@@ -147,13 +186,17 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
             "file",
             mgr,
             "",
-            &format!("đọc workspace: {} tệp trong {}", ws_count, ws_dir.to_string_lossy()),
+            &format!(
+                "đọc workspace: {} tệp trong {}",
+                ws_count,
+                ws_dir.to_string_lossy()
+            ),
         )?;
     }
     let inventory = crate::senclaw::skills_inventory().await.unwrap_or_default();
 
     // ---- 1. Trưởng phòng lập kế hoạch ----
-    let plan = plan_live(&db, task_id, &task.title, &workers).await;
+    let plan = plan_live(&db, task_id, &task.title, &workers, &redo_ctx).await;
 
     let plan_lines: Vec<String> = plan
         .iter()
@@ -178,7 +221,12 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
     }
     // Kiểm định (nếu biên chế có) luôn là chốt chặn cuối trước khi tổng hợp.
     let qa_step = match &qa {
-        Some(q) => Some(db.add_step(task_id, &q.key, "soát chất lượng & rủi ro", plan.len() as i64)?),
+        Some(q) => Some(db.add_step(
+            task_id,
+            &q.key,
+            "soát chất lượng & rủi ro",
+            plan.len() as i64,
+        )?),
         None => None,
     };
     db.set_agent_status(mgr, "done", "đã phân công — chờ kết quả")?;
@@ -193,14 +241,15 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
         db.set_agent_status(key, "working", title)?;
 
         let agent = db.get_agent(key)?;
-        let agent_skills: Vec<String> = agent.as_ref().map(|a| a.skills.clone()).unwrap_or_default();
+        let agent_skills: Vec<String> =
+            agent.as_ref().map(|a| a.skills.clone()).unwrap_or_default();
         let (role, duty, skills) = agent
             .map(|a| (a.role.clone(), a.duty.clone(), a.clone()))
             .map(|(r, d, a)| (r, d, skills_line(&a, &inventory)))
             .unwrap_or_default();
         let mut context = format!(
-            "Nhiệm vụ chung của phòng: {}\n\nPhần việc của bạn: {}",
-            task.title, title
+            "Nhiệm vụ chung của phòng: {}\n\nPhần việc của bạn: {}{}",
+            task.title, title, redo_ctx
         );
         // Trí nhớ riêng: mỗi nhân sự chỉ thấy knowledge space của mình.
         let space = crate::senclaw::agent_space(key);
@@ -215,10 +264,16 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
             }
         }
         if !wiki_ctx.is_empty() {
-            context.push_str(&format!("\n\nTài liệu nội bộ (wiki của văn phòng):\n{}", wiki_ctx));
+            context.push_str(&format!(
+                "\n\nTài liệu nội bộ (wiki của văn phòng):\n{}",
+                wiki_ctx
+            ));
         }
         if !ws_ctx.is_empty() {
-            context.push_str(&format!("\n\nTài liệu trong workspace của văn phòng:\n{}", ws_ctx));
+            context.push_str(&format!(
+                "\n\nTài liệu trong workspace của văn phòng:\n{}",
+                ws_ctx
+            ));
         }
         if !handovers.is_empty() {
             context.push_str("\n\nKết quả các đồng nghiệp đã bàn giao:\n");
@@ -239,15 +294,43 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
         // Nhân sự nắm skill/sub-agent + bật "worker dùng tool" → chạy như một
         // agent thật (gọi MCP / search / browser). Ngược lại: một-shot LLM.
         let result = if feat_tools && !agent_skills.is_empty() {
-            db.set_agent_status(key, "working", &format!("đang dùng công cụ: {}", agent_skills.join(", ")))?;
-            match crate::senclaw::agent_run(&space, &system, &context, &ws_dir.to_string_lossy(), 300).await {
+            db.set_agent_status(
+                key,
+                "working",
+                &format!("đang dùng công cụ: {}", agent_skills.join(", ")),
+            )?;
+            match crate::senclaw::agent_run(
+                &space,
+                &system,
+                &context,
+                &ws_dir.to_string_lossy(),
+                300,
+            )
+            .await
+            {
                 Ok(t) if !t.is_empty() => {
-                    db.add_event(Some(task_id), "tool", key, "", &format!("đã dùng công cụ ({}) để xử lý", agent_skills.join(", ")))?;
+                    db.add_event(
+                        Some(task_id),
+                        "tool",
+                        key,
+                        "",
+                        &format!("đã dùng công cụ ({}) để xử lý", agent_skills.join(", ")),
+                    )?;
                     t
                 }
                 Ok(_) => call_llm(&db, task_id, &system, &context, feat_autocontinue).await,
                 Err(e) => {
-                    db.add_event(Some(task_id), "system", "he-thong", "", &format!("{} không dùng được công cụ ({}) — xử lý bằng LLM thường", name_of(key), e))?;
+                    db.add_event(
+                        Some(task_id),
+                        "system",
+                        "he-thong",
+                        "",
+                        &format!(
+                            "{} không dùng được công cụ ({}) — xử lý bằng LLM thường",
+                            name_of(key),
+                            e
+                        ),
+                    )?;
                     call_llm(&db, task_id, &system, &context, feat_autocontinue).await
                 }
             }
@@ -262,7 +345,12 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
                 title,
                 clip(&result, 800)
             );
-            let _ = crate::senclaw::knowledge_save(&space, &memo, &format!("ai-office:task-{}", task_id)).await;
+            let _ = crate::senclaw::knowledge_save(
+                &space,
+                &memo,
+                &format!("ai-office:task-{}", task_id),
+            )
+            .await;
         }
 
         db.set_step_result(step_id, &result)?;
@@ -272,17 +360,30 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
         // Nhân sự ghi phần việc của mình vào workspace làm tài liệu.
         if feat_workspace {
             let doc_rel = format!("task-{}/{:02}-{}.md", task_id, i + 1, key);
-            let doc = format!("# {} — {}\n\nNhiệm vụ: {}\n\n{}\n", name_of(key), title, task.title, result);
+            let doc = format!(
+                "# {} — {}\n\nNhiệm vụ: {}\n\n{}\n",
+                name_of(key),
+                title,
+                task.title,
+                result
+            );
             if crate::workspace::write_doc(&ws_dir, &doc_rel, &doc).is_ok() {
-                db.add_event(Some(task_id), "file", key, "", &format!("đã lưu tài liệu: {}", doc_rel))?;
+                db.add_event(
+                    Some(task_id),
+                    "file",
+                    key,
+                    "",
+                    &format!("đã lưu tài liệu: {}", doc_rel),
+                )?;
             }
         }
 
         // Bàn giao: agent đi sang bàn kế tiếp (QA hoặc Trưởng phòng nếu là bước cuối).
-        let next = plan
-            .get(i + 1)
-            .map(|(k, _)| k.clone())
-            .unwrap_or_else(|| qa.as_ref().map(|q| q.key.clone()).unwrap_or_else(|| mgr.to_string()));
+        let next = plan.get(i + 1).map(|(k, _)| k.clone()).unwrap_or_else(|| {
+            qa.as_ref()
+                .map(|q| q.key.clone())
+                .unwrap_or_else(|| mgr.to_string())
+        });
         db.set_agent_status(key, "handoff", "đi bàn giao")?;
         db.add_event(
             Some(task_id),
@@ -300,7 +401,13 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
     let mut qa_result = String::new();
     if let (Some(q), Some(qa_step)) = (&qa, qa_step) {
         db.set_task_status(task_id, "review")?;
-        db.add_event(Some(task_id), "assign", mgr, &q.key, "soát chất lượng & rủi ro toàn bộ kết quả")?;
+        db.add_event(
+            Some(task_id),
+            "assign",
+            mgr,
+            &q.key,
+            "soát chất lượng & rủi ro toàn bộ kết quả",
+        )?;
         db.set_step_status(qa_step, "working")?;
         db.set_agent_status(&q.key, "working", "đang soát chất lượng & rủi ro")?;
         let mut context = format!(
@@ -335,12 +442,22 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
     }
 
     // ---- 4. Trưởng phòng tổng hợp & nộp báo cáo ----
-    let assigned = plan.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>().join(" + ");
-    db.add_event(Some(task_id), "handoff", &assigned, mgr, "bàn giao kết quả để tổng hợp")?;
+    let assigned = plan
+        .iter()
+        .map(|(k, _)| k.clone())
+        .collect::<Vec<_>>()
+        .join(" + ");
+    db.add_event(
+        Some(task_id),
+        "handoff",
+        &assigned,
+        mgr,
+        "bàn giao kết quả để tổng hợp",
+    )?;
     db.set_agent_status(mgr, "working", "đang tổng hợp báo cáo")?;
     let mut context = format!(
-        "Nhiệm vụ Sếp giao: {}\n\nKết quả từng bộ phận:\n",
-        task.title
+        "Nhiệm vụ Sếp giao: {}{}\n\nKết quả từng bộ phận:\n",
+        task.title, redo_ctx
     );
     for (k, t, r) in &handovers {
         context.push_str(&format!("\n--- {} ({}) ---\n{}\n", name_of(k), t, r));
@@ -362,7 +479,10 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
         let memo = format!(
             "Nhiệm vụ đã hoàn thành: {}\nPhân công: {}\nBáo cáo tóm tắt: {}",
             task.title,
-            plan.iter().map(|(k, t)| format!("{}={}", k, t)).collect::<Vec<_>>().join("; "),
+            plan.iter()
+                .map(|(k, t)| format!("{}={}", k, t))
+                .collect::<Vec<_>>()
+                .join("; "),
             clip(&report, 800)
         );
         let _ = crate::senclaw::knowledge_save(
@@ -380,12 +500,30 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
             task_id,
             crate::db::slugify(&clip(&task.title, 60))
         );
-        match crate::senclaw::wiki_write(&wiki_path, &doc, &format!("ai-office: báo cáo nhiệm vụ #{}", task_id)).await {
+        match crate::senclaw::wiki_write(
+            &wiki_path,
+            &doc,
+            &format!("ai-office: báo cáo nhiệm vụ #{}", task_id),
+        )
+        .await
+        {
             Ok(()) => {
-                db.add_event(Some(task_id), "wiki", mgr, "", &format!("đã lưu báo cáo vào wiki: {}", wiki_path))?;
+                db.add_event(
+                    Some(task_id),
+                    "wiki",
+                    mgr,
+                    "",
+                    &format!("đã lưu báo cáo vào wiki: {}", wiki_path),
+                )?;
             }
             Err(e) => {
-                db.add_event(Some(task_id), "system", "he-thong", "", &format!("không lưu được báo cáo vào wiki: {}", e))?;
+                db.add_event(
+                    Some(task_id),
+                    "system",
+                    "he-thong",
+                    "",
+                    &format!("không lưu được báo cáo vào wiki: {}", e),
+                )?;
             }
         }
     }
@@ -393,7 +531,13 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
     if feat_workspace {
         let report_rel = format!("task-{}/bao-cao.md", task_id);
         if crate::workspace::write_doc(&ws_dir, &report_rel, &doc).is_ok() {
-            db.add_event(Some(task_id), "file", mgr, "", &format!("đã lưu tài liệu: {}", report_rel))?;
+            db.add_event(
+                Some(task_id),
+                "file",
+                mgr,
+                "",
+                &format!("đã lưu tài liệu: {}", report_rel),
+            )?;
         }
     }
     db.add_event(
@@ -405,6 +549,15 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
     )?;
     db.set_agent_status(mgr, "done", "đã nộp báo cáo")?;
     db.set_task_status(task_id, "done")?;
+    // Kết quả lên bàn Sếp: chờ nghiệm thu trên Bảng việc (cột CHỜ SẾP DUYỆT).
+    db.set_task_approval(task_id, "waiting")?;
+    db.add_event(
+        Some(task_id),
+        "boss",
+        mgr,
+        "sep",
+        "đã nộp kết quả — chờ Sếp duyệt trên Bảng việc",
+    )?;
     Ok(())
 }
 
@@ -412,7 +565,11 @@ async fn run(db: Arc<Db>, task_id: i64) -> anyhow::Result<()> {
 /// is auto-assign), in roster order, titled by role.
 fn default_plan(workers: &[Agent]) -> Vec<(String, String)> {
     let auto: Vec<&Agent> = workers.iter().filter(|w| w.auto_assign).collect();
-    let picked: Vec<&Agent> = if auto.is_empty() { workers.iter().collect() } else { auto };
+    let picked: Vec<&Agent> = if auto.is_empty() {
+        workers.iter().collect()
+    } else {
+        auto
+    };
     picked
         .iter()
         .map(|w| {
@@ -435,6 +592,7 @@ async fn plan_live(
     task_id: i64,
     title: &str,
     workers: &[Agent],
+    redo_ctx: &str,
 ) -> Vec<(String, String)> {
     let mandatory: Vec<&Agent> = workers.iter().filter(|w| w.auto_assign).collect();
     let optional: Vec<&Agent> = workers.iter().filter(|w| !w.auto_assign).collect();
@@ -463,8 +621,9 @@ async fn plan_live(
         staff_desc
     );
     let user = format!(
-        "Nhiệm vụ Sếp giao: \"{}\"\n\nTrả về DUY NHẤT một mảng JSON, mỗi phần tử {{\"agent\": \"<key nhân sự>\", \"title\": \"mô tả phần việc ngắn gọn bằng tiếng Việt\"}}. Key hợp lệ: {}. Mỗi nhân sự xuất hiện tối đa một lần.",
+        "Nhiệm vụ Sếp giao: \"{}\"{}\n\nTrả về DUY NHẤT một mảng JSON, mỗi phần tử {{\"agent\": \"<key nhân sự>\", \"title\": \"mô tả phần việc ngắn gọn bằng tiếng Việt\"}}. Key hợp lệ: {}. Mỗi nhân sự xuất hiện tối đa một lần.",
         title,
+        redo_ctx,
         keys.join(", ")
     );
     let raw = call_llm(db, task_id, &system, &user, false).await;
@@ -499,7 +658,8 @@ fn parse_plan(raw: &str, valid: &[String]) -> Option<Vec<(String, String)>> {
         .filter_map(|s| {
             let agent = s["agent"].as_str()?.trim().to_lowercase();
             let title = s["title"].as_str()?.trim().to_string();
-            if valid.iter().any(|v| v == &agent) && !title.is_empty() && seen.insert(agent.clone()) {
+            if valid.iter().any(|v| v == &agent) && !title.is_empty() && seen.insert(agent.clone())
+            {
                 Some((agent, title))
             } else {
                 None
@@ -541,7 +701,10 @@ async fn wiki_context(db: &Arc<Db>, task_id: i64, title: &str, mgr: &str) -> Str
         &format!(
             "tra cứu wiki: {} tài liệu liên quan ({})",
             hits.len(),
-            hits.iter().map(|(p, _, _)| p.as_str()).collect::<Vec<_>>().join(", ")
+            hits.iter()
+                .map(|(p, _, _)| p.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     );
     let mut ctx = String::new();
@@ -550,7 +713,11 @@ async fn wiki_context(db: &Arc<Db>, task_id: i64, title: &str, mgr: &str) -> Str
     }
     if let Some((path, _, _)) = hits.first() {
         if let Ok(body) = crate::senclaw::wiki_read(path).await {
-            ctx.push_str(&format!("\nTrích tài liệu {}:\n{}\n", path, clip(&body, 1500)));
+            ctx.push_str(&format!(
+                "\nTrích tài liệu {}:\n{}\n",
+                path,
+                clip(&body, 1500)
+            ));
         }
     }
     clip(&ctx, 2400)
@@ -584,7 +751,13 @@ fn looks_truncated(text: &str) -> bool {
 /// stitch the parts together. On failure the pipeline degrades to a visible
 /// notice instead of aborting (the office keeps moving, like a real crew
 /// would).
-async fn call_llm(db: &Arc<Db>, task_id: i64, system: &str, user: &str, autocontinue: bool) -> String {
+async fn call_llm(
+    db: &Arc<Db>,
+    task_id: i64,
+    system: &str,
+    user: &str,
+    autocontinue: bool,
+) -> String {
     let max_continues = if autocontinue { MAX_CONTINUES } else { 0 };
     let mut out = String::new();
     for round in 0..=max_continues {
@@ -597,9 +770,16 @@ async fn call_llm(db: &Arc<Db>, task_id: i64, system: &str, user: &str, autocont
             )
         };
         match llm::bridge_llm(system, &prompt, MAX_TOKENS).await {
-            Ok((text, model, finish)) => {
-                let tokens_in = est_tokens(system) + est_tokens(&prompt);
-                let _ = db.bump_llm(task_id, &model, tokens_in, est_tokens(&text));
+            Ok((text, model, finish, usage)) => {
+                // Real provider counts when the daemon reports them; the
+                // chars/4 estimate only as a fallback for older daemons.
+                let (tokens_in, tokens_out) = usage.unwrap_or_else(|| {
+                    (
+                        est_tokens(system) + est_tokens(&prompt),
+                        est_tokens(&text),
+                    )
+                });
+                let _ = db.bump_llm(task_id, &model, tokens_in, tokens_out);
                 if round == 0 {
                     out = text.trim().to_string();
                 } else {

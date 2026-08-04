@@ -3,6 +3,7 @@ mod db;
 mod engine;
 mod llm;
 mod mcp;
+mod meeting;
 mod senclaw;
 mod workspace;
 
@@ -30,7 +31,7 @@ async fn main() {
         std::path::PathBuf::from("web_dist"),                // packaged: flat install cwd
         exe_dir.join("web_dist"),                            // packaged: next to the binary
         exe_dir.join("web").join("dist"),
-        std::path::PathBuf::from("web/dist"),                // last resort (may collide)
+        std::path::PathBuf::from("web/dist"), // last resort (may collide)
     ];
     let dist_path = candidates
         .iter()
@@ -38,17 +39,22 @@ async fn main() {
         .cloned()
         .unwrap_or_else(|| std::path::PathBuf::from("web/dist"));
 
-    let serve_dir = ServeDir::new(&dist_path)
-        .not_found_service(ServeFile::new(dist_path.join("index.html")));
+    let serve_dir =
+        ServeDir::new(&dist_path).not_found_service(ServeFile::new(dist_path.join("index.html")));
 
     let app = Router::new()
         .nest("/api", api_router)
         .fallback_service(serve_dir)
         .layer(CorsLayer::permissive());
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
+    // Loopback by default. A Space App authenticates nothing of its own — the
+    // daemon reaches it over 127.0.0.1 and the UI is same-origin — so binding
+    // 0.0.0.0 hands the whole REST + MCP surface to anyone on the LAN. Set
+    // SENCLAW_BIND_HOST=0.0.0.0 to opt in to that explicitly.
+    let host = std::env::var("SENCLAW_BIND_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}"))
         .await
         .unwrap();
-    println!("SenClaw AI Office running on http://0.0.0.0:{}", port);
+    println!("SenClaw AI Office running on http://{host}:{port}");
     axum::serve(listener, app).await.unwrap();
 }

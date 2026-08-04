@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
 import { Avatar } from './avatar'
+import { BoardView } from './Board'
+import { DashboardView } from './Dashboard'
 import { Feed, Md } from './Feed'
 import { OfficeScene } from './OfficeScene'
 import { MicButton } from './voice'
@@ -27,8 +29,11 @@ const FEATURE_ROWS: [keyof OfficeFeatures, string, string][] = [
   ['autocontinue', 'Tự viết tiếp khi bị cắt', 'Nếu LLM cắt giữa chừng, tự yêu cầu viết tiếp cho trọn.'],
 ]
 
-type Panel = 'none' | 'staff' | 'history' | 'ledger' | 'settings'
+type Panel = 'none' | 'ledger' | 'settings'
 type Theme = 'auto' | 'light' | 'dark'
+/** Các mặt của trụ sở (tab như OPC HQ): bàn Sếp (dashboard), bảng việc
+ *  (kanban), sàn văn phòng, sơ đồ nhân sự, nhật ký nhiệm vụ. */
+type View = 'hq' | 'board' | 'office' | 'staff' | 'history'
 
 const THEME_LABEL: Record<Theme, string> = {
   auto: '◐ Auto',
@@ -66,14 +71,20 @@ export default function App() {
   const [input, setInput] = useState('')
   const [error, setError] = useState('')
   const [stats, setStats] = useState<Stats | null>(null)
-  const [history, setHistory] = useState<Task[]>([])
   const [llmOk, setLlmOk] = useState<boolean | null>(null)
   const [queue, setQueue] = useState<Task[]>([])
-  const [newTaskOpen, setNewTaskOpen] = useState(false)
   const [teams, setTeams] = useState<Team[]>([])
   const [activeTeam, setActiveTeam] = useState<string>(
     () => localStorage.getItem('ai-office-team') ?? '',
   )
+  const [view, setViewState] = useState<View>(() => {
+    const v = localStorage.getItem('ai-office-view')
+    return v === 'board' || v === 'office' || v === 'staff' || v === 'history' ? v : 'hq'
+  })
+  const setView = (v: View) => {
+    setViewState(v)
+    localStorage.setItem('ai-office-view', v)
+  }
 
   const taskRef = useRef<number | null>(null)
   const lastEventRef = useRef(0)
@@ -216,20 +227,6 @@ export default function App() {
 
   const busy = !!task && !['done', 'error'].includes(task.status)
 
-  // Queue a task for the active team (teams run in parallel).
-  const addTask = async (title: string) => {
-    const t = title.trim()
-    if (!t || !activeTeam) return
-    setError('')
-    try {
-      await api.createTask(t, activeTeam)
-      poll()
-    } catch (e) {
-      setError(String((e as Error).message))
-      throw e
-    }
-  }
-
   const submit = async () => {
     const title = input.trim()
     if (!title || !activeTeam) return
@@ -246,7 +243,6 @@ export default function App() {
   const openPanel = async (p: Panel) => {
     setPanel(p)
     if (p === 'ledger') setStats(await api.stats().catch(() => null))
-    if (p === 'history') setHistory((await api.tasks(200).catch(() => ({ tasks: [] }))).tasks)
   }
 
   const workingCount = teamAgents.filter((a) => a.status === 'working').length
@@ -273,39 +269,71 @@ export default function App() {
           3D: {show3d ? tr('BẬT') : tr('TẮT')}
         </button>
         <button className="btn" onClick={() => openPanel('ledger')}>{tr('Kế toán')}</button>
-        <button className="btn" onClick={() => openPanel('staff')}>{tr('Nhân sự')}</button>
-        <button className="btn" onClick={() => openPanel('history')}>{tr('Lịch sử')}</button>
-        <button
-          className="btn"
-          onClick={() => setNewTaskOpen(true)}
-        >
-          {tr('Nhiệm vụ mới')}{queue.length > 0 ? ` (${queue.length})` : ''}
-        </button>
         <button className="btn" onClick={() => openPanel('settings')}>{tr('Cài đặt')}</button>
       </header>
 
-      <div className="team-tabs">
-        {teams.map((t) => {
-          const running = agents.some(
-            (a) => a.team === t.key && a.enabled && (a.status === 'working' || a.status === 'handoff'),
-          )
-          return (
-            <button
-              key={t.key}
-              className={`team-tab${t.key === activeTeam ? ' active' : ''}`}
-              title={tr(t.description)}
-              onClick={() => selectTeam(t.key)}
-            >
-              {running && <span className="team-dot" />}
-              {tr(t.name)}
-            </button>
-          )
-        })}
-        <button className="team-tab add" title={tr('Quản lý đội nhóm')} onClick={() => openPanel('staff')}>
-          + {tr('Đội')}
-        </button>
+      <div className="view-tabs">
+        {(
+          [
+            ['hq', `☀ ${tr('ĐIỀU HÀNH')}`],
+            ['board', `📋 ${tr('BẢNG VIỆC')}`],
+            ['office', `🏢 ${tr('VĂN PHÒNG')}`],
+            ['staff', `👥 ${tr('NHÂN SỰ')}`],
+            ['history', `📜 ${tr('LỊCH SỬ')}`],
+          ] as [View, string][]
+        ).map(([v, label]) => (
+          <button
+            key={v}
+            className={`view-tab${view === v ? ' active' : ''}`}
+            onClick={() => setView(v)}
+          >
+            {v === 'office' &&
+            agents.some((a) => a.enabled && (a.status === 'working' || a.status === 'handoff')) ? (
+              <span className="team-dot" />
+            ) : null}
+            {label}
+          </button>
+        ))}
       </div>
 
+      {view === 'hq' && <DashboardView onOpenBoard={() => setView('board')} />}
+      {view === 'board' && <BoardView teams={teams} />}
+      {view === 'staff' && (
+        <StaffView
+          agents={agents}
+          teams={teams}
+          activeTeam={activeTeam}
+          onSelectTeam={selectTeam}
+          onChanged={poll}
+        />
+      )}
+      {view === 'history' && <HistoryView />}
+
+      {view === 'office' && (
+        <div className="team-tabs">
+          {teams.map((t) => {
+            const running = agents.some(
+              (a) => a.team === t.key && a.enabled && (a.status === 'working' || a.status === 'handoff'),
+            )
+            return (
+              <button
+                key={t.key}
+                className={`team-tab${t.key === activeTeam ? ' active' : ''}`}
+                title={tr(t.description)}
+                onClick={() => selectTeam(t.key)}
+              >
+                {running && <span className="team-dot" />}
+                {tr(t.name)}
+              </button>
+            )
+          })}
+          <button className="team-tab add" title={tr('Quản lý đội nhóm')} onClick={() => setView('staff')}>
+            + {tr('Đội')}
+          </button>
+        </div>
+      )}
+
+      {view === 'office' && (
       <div className="main">
         <aside className="sidebar">
           <div className="cap">{tr('Nhân sự')} · {teamName}</div>
@@ -400,26 +428,8 @@ export default function App() {
           {error && <div className="sysline" style={{ padding: '0 16px 8px' }}>⚠ {error}</div>}
         </div>
       </div>
+      )}
 
-      {newTaskOpen && (
-        <NewTaskDialog
-          busy={busy}
-          queueLen={queue.length}
-          onClose={() => setNewTaskOpen(false)}
-          onSubmit={addTask}
-        />
-      )}
-      {panel === 'staff' && (
-        <StaffPanel
-          agents={agents}
-          teams={teams}
-          activeTeam={activeTeam}
-          onSelectTeam={selectTeam}
-          onClose={() => setPanel('none')}
-          onChanged={poll}
-        />
-      )}
-      {panel === 'history' && <HistoryPanel tasks={history} onClose={() => setPanel('none')} />}
       {panel === 'ledger' && <LedgerPanel stats={stats} onClose={() => setPanel('none')} />}
       {panel === 'settings' && (
         <SettingsPanel
@@ -441,19 +451,19 @@ const KIND_LABEL: Record<string, string> = {
   qa: 'Kiểm định',
 }
 
-function StaffPanel({
+/** Tab NHÂN SỰ — sơ đồ đội nhóm & biên chế, trang inline như OPC HQ
+ *  (không còn là modal; các dialog thêm/sửa vẫn overlay bên trong). */
+function StaffView({
   agents,
   teams,
   activeTeam,
   onSelectTeam,
-  onClose,
   onChanged,
 }: {
   agents: Agent[]
   teams: Team[]
   activeTeam: string
   onSelectTeam: (key: string) => void
-  onClose: () => void
   onChanged: () => void
 }) {
   const [editing, setEditing] = useState<Agent | 'new' | null>(null)
@@ -511,11 +521,10 @@ function StaffPanel({
   }
 
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="page">
+      <div className="page-inner">
         <h2>
-          {tr('Đội nhóm & nhân sự')}
-          <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
+          👥 {tr('SƠ ĐỒ TỔ CHỨC')} — <b>{tr('đội nhóm & biên chế nhân sự AI')}</b>
         </h2>
         {/* team switcher + management */}
         <div className="team-tabs" style={{ margin: '0 0 10px', borderBottom: 'none', paddingLeft: 0 }}>
@@ -836,74 +845,27 @@ function StaffDetailDialog({ agent, onClose }: { agent: Agent; onClose: () => vo
   )
 }
 
-/** Quick "new task" dialog — always queues (works while the office is busy). */
-function NewTaskDialog({
-  busy,
-  queueLen,
-  onClose,
-  onSubmit,
-}: {
-  busy: boolean
-  queueLen: number
-  onClose: () => void
-  onSubmit: (title: string) => Promise<void>
-}) {
-  const [text, setText] = useState('')
-  const [err, setErr] = useState('')
-  const submit = async () => {
-    if (!text.trim()) return
-    try {
-      await onSubmit(text)
-      onClose()
-    } catch (e) {
-      setErr(String((e as Error).message))
-    }
-  }
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" style={{ width: 'min(560px, 92vw)' }} onClick={(e) => e.stopPropagation()}>
-        <h2>
-          {tr('Nhiệm vụ mới')} <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
-        </h2>
-        <div style={{ color: 'var(--faint)', fontSize: 12, marginBottom: 8 }}>
-          {busy
-            ? `${tr('Phòng đang bận — nhiệm vụ này sẽ xếp vào hàng đợi (hiện có')} ${queueLen} ${tr('chờ) và tự chạy khi xong việc trước.')}`
-            : tr('Trưởng phòng sẽ nhận và phân công cho cả phòng ngay.')}
-        </div>
-        <textarea
-          rows={4}
-          autoFocus
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => (e.key === 'Enter' && (e.metaKey || e.ctrlKey) ? submit() : undefined)}
-          placeholder={tr('Ví dụ: nghiên cứu 5 xu hướng nội thất 2026 và đề xuất bộ sưu tập ra mắt')}
-          style={{ width: '100%', border: '1px solid var(--line-strong)', background: 'var(--panel)', padding: 8 }}
-        />
-        {err && <div className="sysline">⚠ {err}</div>}
-        <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <MicButton onText={(t) => setText((prev) => (prev.trim() ? `${prev} ${t}` : t))} />
-          <button className="btn" onClick={submit} disabled={!text.trim()}>
-            {busy ? `+ ${tr('Xếp hàng đợi')}` : tr('Giao việc')}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 const HISTORY_PER_PAGE = 15
 
-function HistoryPanel({ tasks, onClose }: { tasks: Task[]; onClose: () => void }) {
+/** Tab LỊCH SỬ — nhật ký mọi nhiệm vụ đã qua (trang inline như OPC HQ). */
+function HistoryView() {
+  const [tasks, setTasks] = useState<Task[]>([])
   const [open, setOpen] = useState<Task | null>(null)
   const [page, setPage] = useState(0)
+  useEffect(() => {
+    api
+      .tasks(200)
+      .then(({ tasks }) => setTasks(tasks))
+      .catch(() => {})
+  }, [])
   const pages = Math.max(1, Math.ceil(tasks.length / HISTORY_PER_PAGE))
   const p = Math.min(page, pages - 1)
   const slice = tasks.slice(p * HISTORY_PER_PAGE, p * HISTORY_PER_PAGE + HISTORY_PER_PAGE)
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="page">
+      <div className="page-inner">
         <h2>
-          {tr('Lịch sử nhiệm vụ')} <button className="btn" onClick={onClose}>{tr('Đóng')}</button>
+          📜 {tr('LỊCH SỬ NHIỆM VỤ')} — <b>{tr('sổ ghi mọi việc đã qua tay văn phòng')}</b>
         </h2>
         {open ? (
           <div>

@@ -74,14 +74,59 @@ export interface Task {
   title: string
   mode: 'demo' | 'live' | string
   team: string
-  status: 'pending' | 'planning' | 'running' | 'review' | 'done' | 'error' | string
+  status: 'inbox' | 'pending' | 'planning' | 'running' | 'review' | 'done' | 'error' | string
   report: string
   llm_calls: number
   llm_model: string
   tokens_in: number
   tokens_out: number
+  /** Mục tiêu quý việc này phục vụ — null = "lạc hướng". */
+  goal_id: number | null
+  /** '' | 'waiting' (chờ Sếp duyệt) | 'approved' (hoàn tất) | 'returned'. */
+  approval: string
+  approved_at: number | null
+  boss_note: string
   created_at: number
   finished_at: number | null
+}
+
+export interface KeyResult {
+  text: string
+  done: boolean
+}
+
+export interface Goal {
+  id: number
+  title: string
+  quarter: string
+  key_results: KeyResult[]
+  archived: boolean
+  created_at: number
+  progress: number
+  taskCount?: number
+  openTaskCount?: number
+}
+
+export interface Meeting {
+  id: number
+  kind: 'morning' | 'evening' | string
+  day: string
+  content: string
+  created_at: number
+}
+
+export interface Dashboard {
+  date: string
+  alignment: { open: number; aligned: number; percent: number | null }
+  goals: { count: number; avgProgress: number }
+  waiting: number
+  streak: { days: number; morningToday: boolean; eveningToday: boolean }
+  budget: { monthTokens: number; openTasks: number }
+}
+
+export interface Board {
+  columns: { inbox: Task[]; doing: Task[]; waiting: Task[]; done: Task[] }
+  goals: Record<string, { title: string; quarter: string }>
 }
 
 export interface Step {

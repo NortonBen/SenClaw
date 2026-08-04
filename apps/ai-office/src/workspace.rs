@@ -38,7 +38,9 @@ fn collect(root: &Path, dir: &Path, depth: usize, out: &mut Vec<WsFile>) {
     if depth > 2 || out.len() >= 200 {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
@@ -55,7 +57,11 @@ fn collect(root: &Path, dir: &Path, depth: usize, out: &mut Vec<WsFile>) {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
             out.push(WsFile {
-                rel: path.strip_prefix(root).unwrap_or(&path).to_string_lossy().to_string(),
+                rel: path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string(),
                 size: meta.len(),
                 modified,
                 text: is_text(&path),
@@ -103,7 +109,10 @@ pub fn read_context(dir: &Path, task_title: &str) -> (String, usize) {
         .filter(|w| w.chars().count() > 3)
         .map(|w| w.to_string())
         .collect();
-    let mut candidates: Vec<&WsFile> = files.iter().filter(|f| f.text && f.size < 512 * 1024).collect();
+    let mut candidates: Vec<&WsFile> = files
+        .iter()
+        .filter(|f| f.text && f.size < 512 * 1024)
+        .collect();
     candidates.sort_by_key(|f| {
         let name = f.rel.to_lowercase();
         let hits = keywords.iter().filter(|k| name.contains(*k)).count() as i64;
@@ -116,7 +125,9 @@ pub fn read_context(dir: &Path, task_title: &str) -> (String, usize) {
         if budget < 400 {
             break;
         }
-        let Ok(body) = std::fs::read_to_string(dir.join(&f.rel)) else { continue };
+        let Ok(body) = std::fs::read_to_string(dir.join(&f.rel)) else {
+            continue;
+        };
         let take = budget.min(1600);
         let excerpt = clip(body.trim(), take);
         budget = budget.saturating_sub(excerpt.chars().count());

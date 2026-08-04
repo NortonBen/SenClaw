@@ -73,7 +73,12 @@ pub async fn agent_run(
         .await
         .map_err(|e| format!("invalid agent.run response: {}", e))?;
     match v.get("status").and_then(|x| x.as_str()) {
-        Some("ok") => Ok(v.get("text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string()),
+        Some("ok") => Ok(v
+            .get("text")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string()),
         _ => Err(v
             .get("message")
             .and_then(|x| x.as_str())
@@ -100,7 +105,11 @@ pub async fn knowledge_recall(space: &str, query: &str) -> Result<String, String
         json!({ "query": query, "space": space, "limit": 5 }),
     )
     .await?;
-    Ok(v.get("answer").and_then(|x| x.as_str()).unwrap_or("").trim().to_string())
+    Ok(v.get("answer")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string())
 }
 
 /// Browse an agent's space (for the staff-detail dialog / desktop UI).
@@ -125,7 +134,8 @@ pub async fn knowledge_nodes(space: &str, limit: i64) -> Result<Value, String> {
     };
     if !daemon_supports_spaces {
         return Err(
-            "daemon SenClaw chưa hỗ trợ knowledge spaces — cập nhật daemon rồi khởi động lại".into(),
+            "daemon SenClaw chưa hỗ trợ knowledge spaces — cập nhật daemon rồi khởi động lại"
+                .into(),
         );
     }
     let url = format!(
@@ -162,10 +172,18 @@ pub async fn stt(audio: Vec<u8>, filename: &str, language: Option<&str>) -> Resu
     if !resp.status().is_success() {
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("daemon STT {}: {}", code, body.chars().take(200).collect::<String>()));
+        return Err(format!(
+            "daemon STT {}: {}",
+            code,
+            body.chars().take(200).collect::<String>()
+        ));
     }
     let v: Value = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(v.get("text").and_then(|x| x.as_str()).unwrap_or("").trim().to_string())
+    Ok(v.get("text")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string())
 }
 
 /// Synthesize speech through the daemon's TTS endpoint. Returns WAV bytes.
@@ -181,7 +199,11 @@ pub async fn tts(text: &str) -> Result<Vec<u8>, String> {
     if !resp.status().is_success() {
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("daemon TTS {}: {}", code, body.chars().take(200).collect::<String>()));
+        return Err(format!(
+            "daemon TTS {}: {}",
+            code,
+            body.chars().take(200).collect::<String>()
+        ));
     }
     Ok(resp.bytes().await.map_err(|e| e.to_string())?.to_vec())
 }
@@ -205,7 +227,11 @@ pub async fn skills_inventory() -> Result<std::collections::HashMap<String, Stri
             }
         }
     }
-    if let Ok(resp) = http().get(format!("{}/api/cowork/personas", base)).send().await {
+    if let Ok(resp) = http()
+        .get(format!("{}/api/cowork/personas", base))
+        .send()
+        .await
+    {
         if resp.status().is_success() {
             if let Ok(v) = resp.json::<Value>().await {
                 for p in v.as_array().unwrap_or(&Vec::new()) {
@@ -242,7 +268,11 @@ pub async fn skills_inventory_grouped() -> Value {
             }
         }
     }
-    if let Ok(resp) = http().get(format!("{}/api/cowork/personas", base)).send().await {
+    if let Ok(resp) = http()
+        .get(format!("{}/api/cowork/personas", base))
+        .send()
+        .await
+    {
         if resp.status().is_success() {
             if let Ok(v) = resp.json::<Value>().await {
                 for p in v.as_array().unwrap_or(&Vec::new()) {
@@ -269,7 +299,10 @@ pub async fn knowledge_count(space: &str) -> Result<usize, String> {
 // ---- wiki (kho tài liệu chung của văn phòng) ----
 
 /// Search the wiki; returns up to `limit` hits as `(path, title, snippet)`.
-pub async fn wiki_search(query: &str, limit: usize) -> Result<Vec<(String, String, String)>, String> {
+pub async fn wiki_search(
+    query: &str,
+    limit: usize,
+) -> Result<Vec<(String, String, String)>, String> {
     let url = format!(
         "{}/api/wiki/search?q={}&limit={}",
         base_url().trim_end_matches('/'),

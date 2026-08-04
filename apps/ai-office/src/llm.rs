@@ -42,8 +42,12 @@ pub async fn bridge_llm(
     system: &str,
     user: &str,
     max_tokens: u32,
-) -> Result<(String, String, String), String> {
-    let url = format!("{}/api/space/apps/{}/bridge", base_url().trim_end_matches('/'), app_id());
+) -> Result<(String, String, String, Option<(i64, i64)>), String> {
+    let url = format!(
+        "{}/api/space/apps/{}/bridge",
+        base_url().trim_end_matches('/'),
+        app_id()
+    );
     let body = json!({
         "action": "llm.request",
         "payload": { "system": system, "prompt": user, "maxTokens": max_tokens },
@@ -69,11 +73,30 @@ pub async fn bridge_llm(
             }
         };
         return match v.get("status").and_then(|x| x.as_str()) {
-            Some("ok") => Ok((
-                v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("model").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                v.get("finish").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-            )),
+            Some("ok") => {
+                // Real provider usage (daemons ≥ token-accounting; None on
+                // older daemons or usage-less providers → caller falls back
+                // to the chars/4 estimate).
+                let usage = v.get("usage").filter(|u| u.is_object()).map(|u| {
+                    let n = |k: &str| u.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
+                    (n("inputTokens"), n("outputTokens"))
+                });
+                Ok((
+                    v.get("text")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    v.get("model")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    v.get("finish")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    usage,
+                ))
+            }
             Some("pending") => Err("bridge LLM chưa được bật trong daemon này".to_string()),
             _ => Err(v
                 .get("message")
@@ -88,7 +111,12 @@ pub async fn bridge_llm(
 /// Info for the Cài đặt panel: whether a live LLM is reachable and which model is active.
 pub async fn llm_info() -> Value {
     let url = format!("{}/api/llm-config", base_url().trim_end_matches('/'));
-    match http().get(&url).timeout(Duration::from_secs(4)).send().await {
+    match http()
+        .get(&url)
+        .timeout(Duration::from_secs(4))
+        .send()
+        .await
+    {
         Ok(resp) if resp.status().is_success() => {
             let v: Value = resp.json().await.unwrap_or_default();
             json!({ "available": true, "config": v })

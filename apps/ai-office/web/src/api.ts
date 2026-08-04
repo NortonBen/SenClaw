@@ -1,7 +1,12 @@
 import type {
   Agent,
+  Board,
+  Dashboard,
   DirListing,
+  Goal,
+  KeyResult,
   KnowledgeSummary,
+  Meeting,
   OfficeEvent,
   OfficeFeatures,
   OfficeSettings,
@@ -60,8 +65,28 @@ export const api = {
   tasks: (limit = 30, team?: string) =>
     get<{ tasks: Task[] }>(`tasks?limit=${limit}${team ? `&team=${encodeURIComponent(team)}` : ''}`),
   task: (id: number) => get<{ task: Task; steps: Step[] }>(`tasks/${id}`),
-  createTask: (title: string, team: string) =>
-    send<{ task: Task; queued: boolean }>('POST', 'tasks', { title, team }),
+  createTask: (title: string, team: string, opts?: { goalId?: number; start?: boolean }) =>
+    send<{ task: Task; queued: boolean }>('POST', 'tasks', { title, team, ...opts }),
+  updateTask: (id: number, patch: { title?: string; goalId?: number }) =>
+    send<{ ok: boolean }>('PATCH', `tasks/${id}`, patch),
+  deleteTask: (id: number) => send<{ ok: boolean }>('DELETE', `tasks/${id}`),
+  approveTask: (id: number) => send<{ ok: boolean }>('POST', `tasks/${id}/approve`),
+  returnTask: (id: number, note: string) =>
+    send<{ ok: boolean }>('POST', `tasks/${id}/return`, { note }),
+  startTask: (id: number) => send<{ ok: boolean; queued: boolean }>('POST', `tasks/${id}/start`),
+  board: () => get<Board>('board'),
+  dashboard: () => get<Dashboard>('dashboard'),
+  goals: () => get<{ goals: Goal[] }>('goals'),
+  addGoal: (body: { title: string; quarter?: string; keyResults?: KeyResult[] }) =>
+    send<{ goal: Goal }>('POST', 'goals', body),
+  updateGoal: (
+    id: number,
+    patch: { title?: string; quarter?: string; keyResults?: KeyResult[]; archived?: boolean },
+  ) => send<{ goal: Goal }>('PATCH', `goals/${id}`, patch),
+  deleteGoal: (id: number) => send<{ ok: boolean }>('DELETE', `goals/${id}`),
+  meetings: (limit = 14) => get<{ meetings: Meeting[] }>(`meetings?limit=${limit}`),
+  runMeeting: (kind: 'morning' | 'evening') =>
+    send<{ meeting: Meeting }>('POST', 'meetings', { kind }),
   events: (taskId: number, after = 0) =>
     get<{ events: OfficeEvent[] }>(`tasks/${taskId}/events?after=${after}`),
   recentEvents: (limit = 40) => get<{ events: OfficeEvent[] }>(`events/recent?limit=${limit}`),

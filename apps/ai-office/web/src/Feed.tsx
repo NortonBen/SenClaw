@@ -108,6 +108,13 @@ export function Feed({
                 🔧 {hhmmss(e.created_at)} — {nameOf(e.actor)}: {e.text}
               </div>
             )
+          case 'boss':
+            // Vòng duyệt của Sếp: nộp chờ duyệt / duyệt / trả lại.
+            return (
+              <div key={e.id} className="logline" style={{ color: 'var(--working)', fontStyle: 'normal' }}>
+                👑 {hhmmss(e.created_at)} — {e.text}
+              </div>
+            )
           case 'system':
             return (
               <div key={e.id} className="sysline">

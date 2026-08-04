@@ -15,3 +15,4 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 futures-util = "0.3"
 async-stream = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+chrono = { version = "0.4", features = ["clock"] }
