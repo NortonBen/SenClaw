@@ -1,0 +1,13 @@
+{
+  "version": "1.0.0",
+  "permissions": {
+    "exec": ["./drawio"],
+    "network": ["127.0.0.1", "github.com", "objects.githubusercontent.com"]
+  },
+  "updater": "none",
+  "platform": "darwin-arm64",
+  "category": "productivity",
+  "keywords": ["diagram", "drawio", "flowchart", "architecture", "ai", "mermaid"],
+  "repo_url": "https://github.com/midea-ai/SenClaw",
+  "artifact": "drawio-app.zip"
+}
