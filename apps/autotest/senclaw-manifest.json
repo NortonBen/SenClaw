@@ -1,0 +1,64 @@
+{
+  "id": "autotest",
+  "name": "Tự Động Kiểm Thử",
+  "description": "Tự động hoá kiểm thử cục bộ 100%: định nghĩa bộ kiểm thử (suite) gồm các test case 3 loại — API HTTP (method/url/headers/body + assertion status, body chứa, JSON path, header, thời gian phản hồi), script/CLI (chạy lệnh shell + assertion exit code, stdout/stderr), và web UI (điều khiển trình duyệt qua app Mini Browser: navigate, hành động ngôn ngữ tự nhiên tự-kiểm-chứng, assert nội dung trang/URL). Biến môi trường {{var}} theo từng environment + trích xuất biến từ response nối chuỗi giữa các case (login lấy token → case sau dùng). Chạy tay hoặc theo lịch định kỳ, lưu toàn bộ lịch sử chạy + log + kết quả từng assertion, dashboard tỷ lệ pass, phát hiện test flaky (lúc pass lúc fail), thống kê case hay hỏng nhất. AI qua bridge SenClaw: sinh test case từ mô tả/OpenAPI/curl và chẩn đoán nguyên nhân lần chạy fail. App chỉ chạy test do người dùng tự định nghĩa trên máy mình.",
+  "icon": "🤖",
+  "runtime": {
+    "kind": "server",
+    "start": "./autotest",
+    "healthPath": "/api/status",
+    "port": 4640
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request"
+    ]
+  },
+  "mcp": {
+    "name": "autotest-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw AutoTest MCP: tự động hoá kiểm thử — quản lý bộ kiểm thử và test case 3 loại http/script/web (autotest_suite_*, autotest_case_*), môi trường biến {{var}} (autotest_env_*), CHẠY test và đợi kết quả chi tiết từng assertion (autotest_run_suite, autotest_run_case), lịch sử chạy + log (autotest_run_list, autotest_run_get), báo cáo tỷ lệ pass / test flaky / case hay hỏng (autotest_report), lịch chạy định kỳ (autotest_schedule_*), AI sinh test case từ mô tả hoặc OpenAPI/curl (autotest_ai_generate) và AI chẩn đoán lần chạy fail (autotest_ai_diagnose). Test web UI cần app Mini Browser (port 4360) đang chạy.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "autotest-runner",
+      "path": "skills/autotest-runner",
+      "triggers": [
+        "kiểm thử",
+        "tự động hoá kiểm thử",
+        "chạy test",
+        "test case",
+        "bộ kiểm thử",
+        "test suite",
+        "test api",
+        "test tự động",
+        "kết quả test",
+        "test fail",
+        "test flaky",
+        "smoke test",
+        "regression test",
+        "viết test",
+        "sinh test case",
+        "automation test",
+        "run tests",
+        "test report",
+        "pass rate"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "qa-engineer",
+      "path": "personas/qa-engineer.md",
+      "description": "Kỹ sư QA tự động hoá — thiết kế bộ kiểm thử, viết test case http/script/web bằng tool, chạy test và đọc kết quả từng assertion, theo dõi flaky, chẩn đoán nguyên nhân fail và đề xuất sửa."
+    }
+  ]
+}
