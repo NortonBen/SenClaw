@@ -171,7 +171,7 @@ async fn start_auth_code(
     def: &'static OauthProviderDef,
 ) -> Result<StartedFlow> {
     let listener = bind_callback(def).await?;
-    let port = listener.local_addr()?.port();
+    let port = listener.port()?;
     let redirect_uri = def.redirect_uri(port);
 
     let pkce = Pkce::generate();
@@ -217,18 +217,69 @@ async fn start_auth_code(
     })
 }
 
-async fn bind_callback(def: &OauthProviderDef) -> Result<TcpListener> {
+/// The loopback listener pair behind one redirect URI.
+///
+/// The redirect is `http://localhost:<port>/…`, and `localhost` resolves to
+/// BOTH loopback addresses — on Windows the resolver even prefers `::1`. A
+/// v4-only listener mostly still works (the browser falls back when `::1`
+/// refuses), but if any other process listens on `::1:<port>` the redirect
+/// lands there instead. Holding both stacks closes that hole; v6 stays
+/// best-effort because machines with IPv6 disabled must keep working.
+#[derive(Debug)]
+struct CallbackListener {
+    v4: TcpListener,
+    v6: Option<TcpListener>,
+}
+
+impl CallbackListener {
+    fn port(&self) -> Result<u16> {
+        Ok(self.v4.local_addr()?.port())
+    }
+
+    async fn accept(&self) -> std::io::Result<TcpStream> {
+        match &self.v6 {
+            Some(v6) => tokio::select! {
+                r = self.v4.accept() => r.map(|(s, _)| s),
+                r = v6.accept() => r.map(|(s, _)| s),
+            },
+            None => self.v4.accept().await.map(|(s, _)| s),
+        }
+    }
+}
+
+async fn bind_callback(def: &OauthProviderDef) -> Result<CallbackListener> {
     match def.callback_port {
-        CallbackPort::Ephemeral => TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .context("bind loopback callback port"),
-        CallbackPort::Fixed(port) => TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| {
-            anyhow!(
-                "port {port} is required by {} but is already in use ({e}). \
-                 Close whatever is listening on it and try again.",
-                def.display_name
-            )
-        }),
+        CallbackPort::Ephemeral => {
+            // The two stacks must share one port number (there is only one
+            // redirect URI). An ephemeral v4 port may already be taken on v6
+            // by an unrelated process, so try a few draws before settling for
+            // v4-only.
+            for _ in 0..5 {
+                let v4 = TcpListener::bind(("127.0.0.1", 0))
+                    .await
+                    .context("bind loopback callback port")?;
+                let port = v4.local_addr()?.port();
+                if let Ok(v6) = TcpListener::bind(("::1", port)).await {
+                    return Ok(CallbackListener { v4, v6: Some(v6) });
+                }
+            }
+            let v4 = TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .context("bind loopback callback port")?;
+            Ok(CallbackListener { v4, v6: None })
+        }
+        CallbackPort::Fixed(port) => {
+            let v4 = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| {
+                anyhow!(
+                    "port {port} is required by {} but is already in use ({e}). \
+                     Close whatever is listening on it and try again.",
+                    def.display_name
+                )
+            })?;
+            // No port to renegotiate here — a v6 failure just means v4-only.
+            let v6 = TcpListener::bind(("::1", port)).await.ok();
+            Ok(CallbackListener { v4, v6 })
+        }
     }
 }
 
@@ -267,7 +318,7 @@ pub fn build_authorize_url(
 async fn run_callback(
     manager: &OauthManager,
     def: &'static OauthProviderDef,
-    listener: TcpListener,
+    listener: CallbackListener,
     redirect_uri: &str,
     verifier: &str,
     state: &str,
@@ -306,11 +357,11 @@ async fn run_callback(
 /// Accept connections until one looks like the OAuth redirect. Browsers also
 /// probe `/favicon.ico`, and a stray request must not end the flow.
 async fn wait_for_redirect(
-    listener: &TcpListener,
+    listener: &CallbackListener,
     def: &OauthProviderDef,
 ) -> Result<HashMap<String, String>> {
     loop {
-        let (mut stream, _) = listener.accept().await.context("accept callback")?;
+        let mut stream = listener.accept().await.context("accept callback")?;
         let Some(target) = read_request_target(&mut stream).await? else {
             respond(&mut stream, 400, "Bad request").await;
             continue;
@@ -516,12 +567,45 @@ mod tests {
     async fn ephemeral_bind_picks_a_free_loopback_port() {
         let def = provider::get("claude").unwrap();
         let listener = bind_callback(def).await.unwrap();
-        let addr = listener.local_addr().unwrap();
+        let addr = listener.v4.local_addr().unwrap();
         assert!(
             addr.ip().is_loopback(),
             "must not bind a routable interface"
         );
         assert_ne!(addr.port(), 0);
+        assert_eq!(listener.port().unwrap(), addr.port());
+
+        // When the machine has IPv6 at all, both stacks must share the port —
+        // there is only one redirect URI.
+        if let Some(v6) = &listener.v6 {
+            let a6 = v6.local_addr().unwrap();
+            assert!(a6.ip().is_loopback());
+            assert_eq!(a6.port(), addr.port(), "v4/v6 ports diverged");
+        }
+    }
+
+    /// `localhost` resolves to ::1 first on some systems (Windows notably);
+    /// the code must arrive even when the browser never touches 127.0.0.1.
+    #[tokio::test]
+    async fn callback_arrives_over_ipv6_loopback() {
+        let def = provider::get("claude").unwrap();
+        let listener = bind_callback(def).await.unwrap();
+        if listener.v6.is_none() {
+            return; // machine has no usable ::1 — nothing to exercise
+        }
+        let port = listener.port().unwrap();
+
+        let server = tokio::spawn(async move { wait_for_redirect(&listener, def).await });
+
+        let mut real = TcpStream::connect(("::1", port)).await.unwrap();
+        real.write_all(b"GET /callback?code=v6code&state=s HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut body = Vec::new();
+        let _ = real.read_to_end(&mut body).await;
+
+        let params = server.await.unwrap().unwrap();
+        assert_eq!(params.get("code").unwrap(), "v6code");
     }
 
     #[tokio::test]
@@ -543,8 +627,11 @@ mod tests {
     #[tokio::test]
     async fn callback_server_ignores_stray_requests_and_returns_the_real_one() {
         let def = provider::get("claude").unwrap();
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let listener = CallbackListener {
+            v4: TcpListener::bind(("127.0.0.1", 0)).await.unwrap(),
+            v6: None,
+        };
+        let port = listener.port().unwrap();
 
         let server = tokio::spawn(async move { wait_for_redirect(&listener, def).await });
 
@@ -580,8 +667,11 @@ mod tests {
     #[tokio::test]
     async fn callback_server_surfaces_a_denial() {
         let def = provider::get("claude").unwrap();
-        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
+        let listener = CallbackListener {
+            v4: TcpListener::bind(("127.0.0.1", 0)).await.unwrap(),
+            v6: None,
+        };
+        let port = listener.port().unwrap();
         let server = tokio::spawn(async move { wait_for_redirect(&listener, def).await });
 
         let mut deny = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
