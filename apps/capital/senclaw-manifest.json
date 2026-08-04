@@ -1,0 +1,66 @@
+{
+  "id": "capital",
+  "name": "Nguồn Vốn",
+  "description": "Quản lý nguồn vốn cục bộ 100%: theo dõi các nguồn vốn (vốn chủ sở hữu, vốn góp nhà đầu tư, vay ngân hàng, hạn mức tín dụng quay vòng, vay cá nhân, trái phiếu, tài trợ), sổ cái giải ngân / trả gốc / trả lãi / phí, lịch trả nợ sinh tự động theo 3 phương pháp (niên kim, gốc chia đều, lãi định kỳ + gốc cuối kỳ), phân bổ vốn theo mục đích/dự án, dashboard dư nợ + hệ số D/E + lãi suất bình quân gia quyền + dòng tiền 12 tháng. SMART: đánh giá sức khoẻ vốn bằng rule engine (điểm 0–100 + phát hiện good/warn/crit trên 8 tiêu chí), mô phỏng what-if vay thêm / trả trước hạn (so sánh trước–sau, không ghi sổ), MỤC TIÊU tài chính đo tự động từ sổ + đánh giá tiến độ (on_track/behind/at_risk) + AI lên kế hoạch bước hành động, phân tích SỬ DỤNG tiền theo mục đích (chưa phân loại, vượt ngân sách, vốn nhàn rỗi), chấm điểm TỪNG nguồn tiền (A–D + verdict), và AI phân tích diễn giải các phát hiện qua bridge SenClaw. App chỉ GHI SỔ — không kết nối ngân hàng, không chuyển tiền thật.",
+  "icon": "💰",
+  "runtime": {
+    "kind": "server",
+    "start": "./capital",
+    "healthPath": "/api/status",
+    "port": 4620
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request"
+    ]
+  },
+  "mcp": {
+    "name": "capital-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Capital MCP: quản lý nguồn vốn — thêm/sửa nguồn vốn (capital_source_*), ghi sổ giải ngân/trả gốc/trả lãi/phí (capital_tx_*), sinh & theo dõi lịch trả nợ niên kim/gốc đều/lãi định kỳ (capital_schedule_*), phân bổ vốn theo dự án (capital_alloc_*), dashboard dư nợ/D-E/dòng tiền (capital_dashboard, capital_report_cashflow), ĐÁNH GIÁ sức khoẻ vốn rule-engine điểm 0-100 + phát hiện (capital_evaluate), MÔ PHỎNG what-if vay thêm/trả trước hạn không ghi sổ (capital_simulate), MỤC TIÊU đo tự động từ sổ + đánh giá tiến độ + AI lên kế hoạch (capital_goal_add/list/update/plan/steps), phân tích SỬ DỤNG tiền theo mục đích (capital_usage), chấm điểm TỪNG nguồn A-D (capital_source_rate) và AI phân tích diễn giải phát hiện (capital_analyze). Toàn bộ là ghi sổ cục bộ — không có tool nào chuyển tiền thật.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "capital-manager",
+      "path": "skills/capital-manager",
+      "triggers": [
+        "nguồn vốn",
+        "quản lý vốn",
+        "khoản vay",
+        "vay ngân hàng",
+        "hạn mức tín dụng",
+        "giải ngân",
+        "trả nợ",
+        "lịch trả nợ",
+        "dư nợ",
+        "trả gốc",
+        "trả lãi",
+        "lãi vay",
+        "vốn chủ sở hữu",
+        "vốn góp",
+        "phân bổ vốn",
+        "cơ cấu vốn",
+        "dòng tiền vay",
+        "capital source",
+        "loan schedule",
+        "debt outstanding",
+        "amortization"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "capital-keeper",
+      "path": "personas/capital-keeper.md",
+      "description": "Kế toán nguồn vốn — ghi sổ nguồn vốn/giải ngân/trả nợ chính xác bằng tool, theo dõi lịch trả nợ và cảnh báo kỳ đến hạn, phân tích cơ cấu vốn khi được hỏi."
+    }
+  ]
+}
