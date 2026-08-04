@@ -62,13 +62,75 @@ class _DesktopWebViewState extends State<_DesktopWebView> {
     return InAppWebView(
       key: ValueKey('${widget.instanceKey ?? ''}-${widget.url}'),
       initialUrlRequest: URLRequest(url: WebUri(widget.url)),
-      initialSettings: InAppWebViewSettings(transparentBackground: true),
+      initialSettings: InAppWebViewSettings(
+        transparentBackground: true,
+        // Needed so window.open / target=_blank surface via onCreateWindow
+        // (which we redirect to the system browser) instead of being swallowed.
+        javaScriptCanOpenWindowsAutomatically: true,
+        supportMultipleWindows: true,
+        // Route every top-frame navigation through shouldOverrideUrlLoading so
+        // plain <a href> links (no target=_blank) can't hijack the embed.
+        useShouldOverrideUrlLoading: true,
+      ),
       initialUserScripts: _readyBridge,
       onWebViewCreated: (c) {
         _ctrl = c;
         // The app announces it's ready → (re)send the current theme.
         c.addJavaScriptHandler(
             handlerName: 'senclawReady', callback: (_) => _post('senclaw:init'));
+        // The app asks us to open a URL in the REAL browser (OAuth, docs). A
+        // Space App can't do Facebook OAuth inside this embedded webview, so it
+        // calls flutter_inappwebview.callHandler('senclawOpenExternal', url).
+        c.addJavaScriptHandler(
+            handlerName: 'senclawOpenExternal',
+            callback: (args) {
+              final url = args.isNotEmpty ? args.first?.toString() : null;
+              if (url != null && url.isNotEmpty) {
+                launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+              }
+            });
+      },
+      // Safety net #2: plain <a href> links (no target=_blank) fire a top-frame
+      // navigation, not onCreateWindow. Keep the embed pinned to its own origin
+      // and push everything external to the system browser. Sub-frame (iframe)
+      // navigations pass through untouched — drawio & co. embed same-origin
+      // iframes that must keep working.
+      shouldOverrideUrlLoading: (controller, action) async {
+        if (action.isForMainFrame == false) {
+          return NavigationActionPolicy.ALLOW;
+        }
+        final uri = action.request.url;
+        if (uri == null) return NavigationActionPolicy.ALLOW;
+        final scheme = uri.scheme.toLowerCase();
+        // Internal page mechanics — never leave the webview for these.
+        if (scheme == 'about' ||
+            scheme == 'data' ||
+            scheme == 'blob' ||
+            scheme == 'javascript' ||
+            scheme.isEmpty) {
+          return NavigationActionPolicy.ALLOW;
+        }
+        if (scheme == 'http' || scheme == 'https') {
+          final origin = Uri.tryParse(widget.url);
+          final sameOrigin = origin != null &&
+              uri.host == origin.host &&
+              uri.port == origin.port &&
+              scheme == origin.scheme.toLowerCase();
+          if (sameOrigin) return NavigationActionPolicy.ALLOW;
+        }
+        // External http(s) origin, mailto:, tel:, custom schemes → OS handler.
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+        return NavigationActionPolicy.CANCEL;
+      },
+      // Safety net: any window.open / target=_blank (e.g. an app that didn't use
+      // the bridge) opens in the system browser rather than a broken in-webview
+      // popup. Same-webview navigations (the app's own pages) are unaffected.
+      onCreateWindow: (controller, createWindowAction) async {
+        final url = createWindowAction.request.url;
+        if (url != null) {
+          await launchUrl(url, mode: LaunchMode.externalApplication);
+        }
+        return false;
       },
       onLoadStop: (_, _) => _post('senclaw:init'),
     );
