@@ -1118,7 +1118,7 @@ impl AgentMode {
 // Model types
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelProfile {
     pub name: String,
     pub provider: String,
@@ -1137,6 +1137,32 @@ pub struct ModelProfile {
     /// Vision capability - explicit override. If None, inferred from model name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<bool>,
+
+    /// OAuth provider id (`claude` / `codex` / `antigravity`) when this profile
+    /// is credentialed by an OAuth account rather than an API key. `None` means
+    /// [`Self::api_key`] is a plain key and the usual auth header applies.
+    #[serde(
+        rename = "oauthProvider",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub oauth_provider: Option<String>,
+    /// Account id backing [`Self::oauth_provider`], so the transport can ask
+    /// for a refreshed token after a 401.
+    #[serde(
+        rename = "oauthAccountId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub oauth_account_id: Option<String>,
+}
+
+impl ModelProfile {
+    /// True when requests built from this profile carry a bearer token from
+    /// the OAuth store instead of an API key.
+    pub fn is_oauth(&self) -> bool {
+        self.oauth_provider.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

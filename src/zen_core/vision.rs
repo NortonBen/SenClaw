@@ -101,6 +101,7 @@ mod tests {
             context_length: 4000,
             adapt: None,
             vision: Some(true),
+            ..Default::default()
         };
         assert!(model_has_vision(&profile_with_vision));
 
@@ -114,6 +115,7 @@ mod tests {
             context_length: 4000,
             adapt: None,
             vision: Some(false),
+            ..Default::default()
         };
         assert!(!model_has_vision(&profile_without_vision));
     }
@@ -130,6 +132,7 @@ mod tests {
             context_length: 4000,
             adapt: None,
             vision: None,
+            ..Default::default()
         };
         assert!(model_has_vision(&profile));
 
@@ -143,6 +146,7 @@ mod tests {
             context_length: 4000,
             adapt: None,
             vision: None,
+            ..Default::default()
         };
         assert!(!model_has_vision(&profile_no_vision));
     }

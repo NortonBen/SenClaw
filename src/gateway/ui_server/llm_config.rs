@@ -36,6 +36,13 @@ pub(crate) struct NewLlmConfigBody {
     /// Explicitly declare whether vision input is supported; undefined = auto-infer from modelName
     #[serde(default)]
     vision: Option<bool>,
+    /// `"oauth"` to draw the credential from the OAuth account store instead
+    /// of [`Self::api_key`]; omitted or `"api_key"` keeps the classic path.
+    #[serde(default)]
+    auth: Option<String>,
+    /// Required when `auth == "oauth"` — which stored account to use.
+    #[serde(rename = "oauthAccountId", default)]
+    oauth_account_id: Option<String>,
 }
 
 /// Body for setting active model.
@@ -104,6 +111,8 @@ pub(crate) async fn llm_config_create(
         max_tokens: body.max_tokens,
         context_length: body.context_length,
         vision: body.vision,
+        auth: body.auth,
+        oauth_account_id: body.oauth_account_id,
     };
     save_llm_config(&s.config.paths.global_config_path, &cfg)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -614,6 +623,7 @@ mod tests {
             max_tokens: 1024,
             context_length: 8192,
             vision: None,
+            ..Default::default()
         }
     }
 

@@ -1389,6 +1389,7 @@ pub(crate) async fn local_models_use_as_llm(
             max_tokens: DEFAULT_MLX_MAX_NEW_TOKENS,
             context_length,
             vision: Some(false),
+            ..Default::default()
         }
     } else {
         LlmConfig {
@@ -1402,6 +1403,7 @@ pub(crate) async fn local_models_use_as_llm(
             max_tokens: DEFAULT_CANDLE_MAX_NEW_TOKENS,
             context_length,
             vision: Some(false),
+            ..Default::default()
         }
     };
     save_llm_config(&state.config.paths.global_config_path, &cfg)

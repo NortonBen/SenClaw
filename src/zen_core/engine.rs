@@ -355,9 +355,8 @@ impl ZenEngine {
         // Rename aliases (Plugins → Alias) applied at the funnel so a toggle
         // takes effect on the next turn without re-registering tools.
         // Overrides don't touch the roster — they redirect at dispatch time.
-        let tools = crate::tools::tool_alias::apply_alias_names(
-            self.builtin_tools.read().unwrap().clone(),
-        );
+        let tools =
+            crate::tools::tool_alias::apply_alias_names(self.builtin_tools.read().unwrap().clone());
 
         let mut filtered: Vec<Arc<dyn Tool>> = if use_tools.is_empty() {
             tools.clone()
@@ -481,9 +480,8 @@ impl ZenEngine {
         let is_dag = opts.agent_mode == AgentMode::Dag;
         // Same rename decoration as `tools_for_main_agent` so ToolSearch and
         // the deferred-tools reminder show the aliased names.
-        let tools = crate::tools::tool_alias::apply_alias_names(
-            self.builtin_tools.read().unwrap().clone(),
-        );
+        let tools =
+            crate::tools::tool_alias::apply_alias_names(self.builtin_tools.read().unwrap().clone());
 
         // Resolve the whitelist like `tools_for_main_agent` does — a naive
         // exact match on `use_tools` silently drops every MCP tool listed by
@@ -808,12 +806,29 @@ impl ZenEngine {
                 selected.provider.clone()
             };
 
+            // An OAuth-backed config stores only an account id; the bearer
+            // token comes from the OAuth store. This function is synchronous
+            // and cannot await a refresh, so it takes whatever the background
+            // refresher last cached — a token that expired in between is
+            // handled by the 401 retry in the transport layer.
+            let (api_key, oauth_provider, oauth_account_id) = if selected.is_oauth() {
+                let account_id = selected.oauth_account_id.clone().unwrap_or_default();
+                let token =
+                    crate::providers::oauth::access_token_for(&account_id).unwrap_or_default();
+                let provider_id = crate::providers::oauth::global()
+                    .and_then(|m| m.account(&account_id))
+                    .map(|a| a.provider);
+                (token, provider_id, Some(account_id))
+            } else {
+                (selected.api_key, None, None)
+            };
+
             return ModelProfile {
                 name: selected.label,
                 provider,
                 model_name: selected.model_name,
                 base_url: selected.base_url,
-                api_key: selected.api_key,
+                api_key,
                 max_tokens: selected.max_tokens,
                 context_length: selected.context_length,
                 adapt: if selected.adapt.trim().is_empty() {
@@ -821,7 +836,11 @@ impl ZenEngine {
                 } else {
                     Some(selected.adapt)
                 },
-                vision: None,
+                // Carry the user's explicit vision flag through instead of
+                // dropping it; `None` still means "infer from the model name".
+                vision: selected.vision,
+                oauth_provider,
+                oauth_account_id,
             };
         }
 
@@ -858,7 +877,7 @@ impl ZenEngine {
             max_tokens: 4096,
             context_length: 128000,
             adapt: Some("openai".into()),
-            vision: None,
+            ..Default::default()
         }
     }
 
@@ -3300,6 +3319,7 @@ mod tests {
             max_tokens: 4096,
             context_length: 128000,
             vision: None,
+            ..Default::default()
         }
     }
 

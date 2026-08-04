@@ -583,6 +583,7 @@ mod tests {
             max_tokens: 4096,
             context_length: 200_000,
             vision: None,
+            ..Default::default()
         };
         save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
         set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some("test-anthropic"))

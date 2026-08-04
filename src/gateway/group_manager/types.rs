@@ -124,7 +124,11 @@ pub struct DefaultsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<String>,
     /// Engine for `browser_search`: `google` | `bing`.
-    #[serde(rename = "searchEngine", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "searchEngine",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub search_engine: Option<String>,
     /// Default note store: `space-notes` | `wiki` | `memory`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -253,7 +257,7 @@ pub struct EmbeddingConfig {
     pub dimensions: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub id: String,
     pub label: String,
@@ -273,6 +277,28 @@ pub struct LlmConfig {
     /// Explicitly declare whether vision input is supported; undefined = auto-infer from modelName
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vision: Option<bool>,
+
+    /// How this config authenticates: `None`/`"api_key"` uses [`Self::api_key`],
+    /// `"oauth"` resolves a token from the OAuth account store instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<String>,
+    /// Account id in `oauth.json` when [`Self::auth`] is `"oauth"`.
+    ///
+    /// Only the *id* lives here. Token material deliberately stays out of
+    /// `config.json`, which is world-readable through `GET /api/llm-config`.
+    #[serde(
+        rename = "oauthAccountId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub oauth_account_id: Option<String>,
+}
+
+impl LlmConfig {
+    /// True when this config draws its credential from the OAuth store.
+    pub fn is_oauth(&self) -> bool {
+        self.auth.as_deref() == Some("oauth")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -29,6 +29,7 @@ pub mod marketplace;
 pub mod mcp;
 pub mod memory;
 pub mod plugins;
+pub mod providers;
 pub mod scheduler;
 pub mod security;
 pub mod setup;
@@ -1383,6 +1384,19 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         &cfg.telegram.agent_folder,
     );
     tracing::info!("[SenClaw] Main agent directory ensured");
+
+    // OAuth account store. Installed before anything can resolve a model
+    // profile, because an OAuth-backed LlmConfig reads its bearer token from
+    // here synchronously. The background task then keeps tokens ahead of
+    // expiry so a refresh never stalls a user-visible reply.
+    let oauth_manager = providers::oauth::init(providers::oauth::store::default_path(
+        &cfg.paths.global_config_path,
+    ));
+    let oauth_accounts = oauth_manager.accounts_redacted().len();
+    if oauth_accounts > 0 {
+        tracing::info!("[SenClaw] OAuth accounts loaded: {oauth_accounts}");
+    }
+    providers::oauth::spawn_background_refresher(Arc::clone(&oauth_manager));
 
     // ===== 2. GroupManager & Other Managers =====
     // Load group bindings from DB; reconcile with config.json
