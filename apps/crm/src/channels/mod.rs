@@ -22,6 +22,7 @@
 //! adapter's own business and never reaches a `Db` method.
 
 pub mod facebook;
+pub mod social;
 pub mod telegram;
 pub mod tiktok;
 pub mod zalo;
@@ -59,13 +60,19 @@ pub(crate) fn http() -> &'static reqwest::Client {
 
 /// Unix SECONDS — the unit every `Db` method takes.
 pub(crate) fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Unix MILLIS — the unit Zalo/Facebook stamp their messages with, and so the
 /// unit those adapters keep their `cursor` in.
 pub(crate) fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 pub struct ChannelManager {
@@ -77,7 +84,11 @@ pub struct ChannelManager {
 
 impl ChannelManager {
     pub fn new(db: Arc<Db>, events: broadcast::Sender<String>) -> Arc<Self> {
-        Arc::new(Self { db, events, tg_running: Mutex::new(HashSet::new()) })
+        Arc::new(Self {
+            db,
+            events,
+            tg_running: Mutex::new(HashSet::new()),
+        })
     }
 
     /// Spawn the background pollers.
@@ -94,12 +105,13 @@ impl ChannelManager {
             let channels = self.db.enabled_channels().unwrap_or_default();
             for ch in channels
                 .iter()
-                .filter(|c| matches!(c.kind.as_str(), "zalo" | "facebook" | "tiktok"))
+                .filter(|c| matches!(c.kind.as_str(), "zalo" | "facebook" | "tiktok" | "social"))
             {
                 let res = match ch.kind.as_str() {
                     "zalo" => zalo::poll(&self.db, ch).await,
                     "facebook" => facebook::poll(&self.db, ch).await,
                     "tiktok" => tiktok::poll(&self.db, ch).await,
+                    "social" => social::poll(&self.db, ch).await,
                     _ => Ok(Vec::new()),
                 };
                 match res {
@@ -115,7 +127,9 @@ impl ChannelManager {
                         );
                     }
                     Err(e) => {
-                        let _ = self.db.set_channel_sync(ch.id, "error", &e, None, now_secs());
+                        let _ = self
+                            .db
+                            .set_channel_sync(ch.id, "error", &e, None, now_secs());
                     }
                 }
             }
@@ -164,7 +178,9 @@ impl ChannelManager {
                     );
                 }
                 Err(e) => {
-                    let _ = self.db.set_channel_sync(ch.id, "error", &e, None, now_secs());
+                    let _ = self
+                        .db
+                        .set_channel_sync(ch.id, "error", &e, None, now_secs());
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             }
@@ -218,12 +234,18 @@ impl ChannelManager {
 
     /// Deliver text to a counterpart on `channel`. The single egress point for
     /// every platform — operator replies, approved sales drafts, MCP sends.
-    pub async fn send_raw(&self, ch: &Channel, external_id: &str, text: &str) -> Result<(), String> {
+    pub async fn send_raw(
+        &self,
+        ch: &Channel,
+        external_id: &str,
+        text: &str,
+    ) -> Result<(), String> {
         match ch.kind.as_str() {
             "telegram" => telegram::send(&self.db, ch, external_id, text).await,
             "zalo" => zalo::send(&self.db, ch, external_id, text).await,
             "facebook" => facebook::send(&self.db, ch, external_id, text).await,
             "tiktok" => tiktok::send(&self.db, ch, external_id, text).await,
+            "social" => social::send(&self.db, ch, external_id, text).await,
             "websocket" => {
                 // No HTTP call to make: the connected browser socket picks this
                 // up off the event bus.
@@ -241,15 +263,26 @@ impl ChannelManager {
     /// Send to a conversation, resolving its channel first. A thread imported or
     /// seeded before any account was wired carries `channel_id = 0`, so fall back
     /// to whichever enabled account of that kind exists.
-    pub async fn send_to_conversation(&self, conv: &Conversation, text: &str) -> Result<(), String> {
-        let ch = match self.db.get_channel(conv.channel_id).map_err(|e| e.to_string())? {
+    pub async fn send_to_conversation(
+        &self,
+        conv: &Conversation,
+        text: &str,
+    ) -> Result<(), String> {
+        let ch = match self
+            .db
+            .get_channel(conv.channel_id)
+            .map_err(|e| e.to_string())?
+        {
             Some(c) => c,
             None => self
                 .db
                 .channel_of_kind(&conv.channel_kind)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| {
-                    format!("không tìm thấy kênh '{}' đang bật để gửi", conv.channel_kind)
+                    format!(
+                        "không tìm thấy kênh '{}' đang bật để gửi",
+                        conv.channel_kind
+                    )
                 })?,
         };
         self.send_raw(&ch, &conv.external_id, text).await
@@ -261,7 +294,12 @@ impl ChannelManager {
     /// what the config can tell us and let the first poll be the true test.
     pub async fn probe(&self, ch: &Channel) -> Result<String, String> {
         let has = |key: &str| {
-            !ch.config.get(key).and_then(|v| v.as_str()).unwrap_or("").trim().is_empty()
+            !ch.config
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .is_empty()
         };
         match ch.kind.as_str() {
             "telegram" => telegram::health_check(ch).await,
@@ -281,6 +319,7 @@ impl ChannelManager {
                 }
             }
             "tiktok" => Err("TikTok Shop IM là kênh thử nghiệm".to_string()),
+            "social" => social::health_check(ch).await,
             other => Err(format!("kênh '{other}' không hỗ trợ kiểm tra")),
         }
     }

@@ -27,7 +27,11 @@ fn cfg<'a>(ch: &'a Channel, key: &str) -> &'a str {
 pub fn extract_data_array(v: &Value) -> Vec<Value> {
     match &v["data"] {
         Value::Array(a) => a.clone(),
-        Value::Object(o) => o.get("data").and_then(|x| x.as_array()).cloned().unwrap_or_default(),
+        Value::Object(o) => o
+            .get("data")
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default(),
         _ => Vec::new(),
     }
 }
@@ -52,7 +56,12 @@ pub fn normalize_messages(
         let t = m.get("time").and_then(|x| x.as_i64()).unwrap_or(0);
         newest = newest.max(t);
         let is_customer = m.get("src").and_then(|x| x.as_i64()).unwrap_or(0) == 1;
-        let text = m.get("message").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+        let text = m
+            .get("message")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if is_customer && t > since_ms && !text.is_empty() {
             out.push(Inbound {
                 external_id: user_id.to_string(),
@@ -81,7 +90,10 @@ async fn zalo_get(
             .send()
             .await
             .map_err(|e| format!("zalo {path} lỗi: {e}"))?;
-        let v: Value = resp.json().await.map_err(|e| format!("zalo phản hồi lỗi: {e}"))?;
+        let v: Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("zalo phản hồi lỗi: {e}"))?;
         if error_code(&v) == -216 && attempt == 0 {
             token = refresh_token(db, ch).await?;
             continue;
@@ -97,9 +109,18 @@ pub async fn poll(db: &Arc<Db>, ch: &Channel) -> Result<Vec<Inbound>, String> {
         return Err("kênh Zalo thiếu access_token".into());
     }
     // Cold start backfills a week rather than the whole history.
-    let since: i64 = ch.cursor.parse().unwrap_or_else(|_| now_ms() - 7 * 24 * 3600 * 1000);
-    let recent =
-        zalo_get(db, ch, OA_V2, "listrecentchat", &json!({ "offset": 0, "count": 10 })).await?;
+    let since: i64 = ch
+        .cursor
+        .parse()
+        .unwrap_or_else(|_| now_ms() - 7 * 24 * 3600 * 1000);
+    let recent = zalo_get(
+        db,
+        ch,
+        OA_V2,
+        "listrecentchat",
+        &json!({ "offset": 0, "count": 10 }),
+    )
+    .await?;
     let chats = extract_data_array(&recent);
 
     let mut out = Vec::new();
@@ -152,7 +173,10 @@ pub async fn send(db: &Arc<Db>, ch: &Channel, external_id: &str, text: &str) -> 
             .send()
             .await
             .map_err(|e| format!("zalo gửi lỗi: {e}"))?;
-        let v: Value = resp.json().await.map_err(|e| format!("zalo phản hồi lỗi: {e}"))?;
+        let v: Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("zalo phản hồi lỗi: {e}"))?;
         match error_code(&v) {
             0 => return Ok(()),
             -216 if attempt == 0 => {
@@ -192,12 +216,17 @@ async fn refresh_token(db: &Arc<Db>, ch: &Channel) -> Result<String, String> {
         .send()
         .await
         .map_err(|e| format!("zalo refresh lỗi: {e}"))?;
-    let v: Value = resp.json().await.map_err(|e| format!("zalo refresh phản hồi lỗi: {e}"))?;
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("zalo refresh phản hồi lỗi: {e}"))?;
     let new_access = v["access_token"].as_str().unwrap_or("").to_string();
     if new_access.is_empty() {
         return Err(format!(
             "zalo refresh thất bại: {}",
-            v.get("error_description").and_then(|x| x.as_str()).unwrap_or("không có access_token")
+            v.get("error_description")
+                .and_then(|x| x.as_str())
+                .unwrap_or("không có access_token")
         ));
     }
     let mut new_cfg = ch.config.clone();
@@ -207,7 +236,10 @@ async fn refresh_token(db: &Arc<Db>, ch: &Channel) -> Result<String, String> {
     }
     let _ = db.update_channel_cfg(
         ch.id,
-        &ChannelPatch { config: Some(new_cfg), ..Default::default() },
+        &ChannelPatch {
+            config: Some(new_cfg),
+            ..Default::default()
+        },
     );
     Ok(new_access)
 }
@@ -228,10 +260,10 @@ mod tests {
     #[test]
     fn normalizes_only_new_customer_messages() {
         let list = vec![
-            json!({ "src": 1, "message": "cũ", "time": 100 }),   // old
-            json!({ "src": 1, "message": "mới", "time": 300 }),  // new customer
+            json!({ "src": 1, "message": "cũ", "time": 100 }), // old
+            json!({ "src": 1, "message": "mới", "time": 300 }), // new customer
             json!({ "src": 0, "message": "OA trả lời", "time": 400 }), // OA, skip
-            json!({ "src": 1, "message": "   ", "time": 500 }),  // empty, skip
+            json!({ "src": 1, "message": "   ", "time": 500 }), // empty, skip
         ];
         let (msgs, newest) = normalize_messages("u1", "An", &list, 200);
         assert_eq!(msgs.len(), 1);

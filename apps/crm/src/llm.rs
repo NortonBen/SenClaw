@@ -25,7 +25,11 @@ async fn bridge(system: &str, user: &str, max_tokens: u32) -> Result<(String, St
 /// Every prompt in this file is a fixed CRM task with its own system prompt;
 /// this is the escape hatch for callers that compose their own — the sales
 /// engine, whose system prompt is assembled from the brand-voice setting.
-pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<(String, String), String> {
+pub async fn bridge_llm(
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<(String, String), String> {
     bridge(system, user, max_tokens).await
 }
 
@@ -39,7 +43,10 @@ pub async fn list_models() -> Result<Value, String> {
 }
 
 pub async fn set_active_model(id: &str) -> Result<(), String> {
-    client().set_active_model(id).await.map_err(|e| e.to_string())
+    client()
+        .set_active_model(id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 const SUMMARY_SYSTEM: &str = "You are the CRM assistant. Given a customer profile and the most \
@@ -49,7 +56,10 @@ reverse-chronological order, (3) a one-line 'Next step' recommendation. Plain ma
 — no preface, no code fences.";
 
 /// Compose a briefing for a customer + their recent interactions.
-pub async fn summarize(customer: &Customer, interactions: &[Interaction]) -> Result<(String, String), String> {
+pub async fn summarize(
+    customer: &Customer,
+    interactions: &[Interaction],
+) -> Result<(String, String), String> {
     let mut prompt = String::new();
     prompt.push_str("Customer profile:\n");
     prompt.push_str(&format!("- Name: {}\n", customer.name));
@@ -96,21 +106,35 @@ const NEXT_SYSTEM: &str = "You suggest ONE concrete next action for a CRM user t
 this customer. Return one short sentence in the SAME language as the input, starting with a \
 verb. No preamble, no bullets, no code fences.";
 
-pub async fn suggest_next_step(customer: &Customer, interactions: &[Interaction]) -> Result<(String, String), String> {
+pub async fn suggest_next_step(
+    customer: &Customer,
+    interactions: &[Interaction],
+) -> Result<(String, String), String> {
     let mut prompt = String::from("Customer:\n");
-    prompt.push_str(&format!("{} ({}) — {}\n", customer.name, customer.role, customer.company));
+    prompt.push_str(&format!(
+        "{} ({}) — {}\n",
+        customer.name, customer.role, customer.company
+    ));
     if !customer.tags.is_empty() {
         prompt.push_str(&format!("Tags: {}\n", customer.tags.join(", ")));
     }
     if !customer.notes.trim().is_empty() {
-        prompt.push_str(&format!("Notes: {}\n", truncate(customer.notes.trim(), 400)));
+        prompt.push_str(&format!(
+            "Notes: {}\n",
+            truncate(customer.notes.trim(), 400)
+        ));
     }
     prompt.push_str("\nRecent interactions:\n");
     if interactions.is_empty() {
         prompt.push_str("(none yet — this is a fresh lead)\n");
     } else {
         for i in interactions.iter().take(10) {
-            prompt.push_str(&format!("- [{}] {}: {}\n", format_ts(i.occurred_at), i.kind, i.summary));
+            prompt.push_str(&format!(
+                "- [{}] {}: {}\n",
+                format_ts(i.occurred_at),
+                i.kind,
+                i.summary
+            ));
         }
     }
     prompt.push_str("\nSuggest the single next action.");
@@ -165,7 +189,10 @@ pub async fn aggregate_report(snap: &ReportSnapshot<'_>) -> Result<(String, Stri
             for (stage, info) in by_stage {
                 let count = info.get("count").and_then(|v| v.as_i64()).unwrap_or(0);
                 let value = info.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                prompt.push_str(&format!("- {stage}: {count} deals ({})\n", fmt_money(value)));
+                prompt.push_str(&format!(
+                    "- {stage}: {count} deals ({})\n",
+                    fmt_money(value)
+                ));
             }
         }
     }
@@ -187,7 +214,11 @@ pub async fn aggregate_report(snap: &ReportSnapshot<'_>) -> Result<(String, Stri
     if !snap.top_active_customers.is_empty() {
         prompt.push_str("\nMost active customers (by interaction count):\n");
         for (c, n) in snap.top_active_customers.iter().take(5) {
-            let tags = if c.tags.is_empty() { String::new() } else { format!(" · tags: {}", c.tags.join(",")) };
+            let tags = if c.tags.is_empty() {
+                String::new()
+            } else {
+                format!(" · tags: {}", c.tags.join(","))
+            };
             prompt.push_str(&format!(
                 "- {} ({}) · {} interactions · role {}{}\n",
                 c.name, c.company, n, c.role, tags,
@@ -198,7 +229,10 @@ pub async fn aggregate_report(snap: &ReportSnapshot<'_>) -> Result<(String, Stri
     if !snap.recent_activity.is_empty() {
         prompt.push_str("\nMost recent activity:\n");
         for a in snap.recent_activity.iter().take(8) {
-            let cust = a.get("customer_name").and_then(|v| v.as_str()).unwrap_or("?");
+            let cust = a
+                .get("customer_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
             let kind = a.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
             let summary = a.get("summary").and_then(|v| v.as_str()).unwrap_or("");
             prompt.push_str(&format!("- [{kind}] {cust}: {summary}\n"));
@@ -209,7 +243,10 @@ pub async fn aggregate_report(snap: &ReportSnapshot<'_>) -> Result<(String, Stri
         if !birthdays.is_empty() {
             prompt.push_str("\nUpcoming birthdays:\n");
             for b in birthdays.iter().take(5) {
-                let name = b.get("customer_name").and_then(|v| v.as_str()).unwrap_or("?");
+                let name = b
+                    .get("customer_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
                 let bday = b.get("birthday").and_then(|v| v.as_str()).unwrap_or("");
                 prompt.push_str(&format!("- {name} — {bday}\n"));
             }
@@ -247,10 +284,12 @@ fn fmt_money_currency(n: f64, currency: &str) -> String {
 }
 
 fn iso_today() -> String {
-    format_ts(std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0))
+    format_ts(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    )
 }
 
 const EXTRACT_SYSTEM: &str = "You extract a knowledge graph from a customer's stored CRM \
@@ -280,7 +319,9 @@ pub struct ExtractedPerson {
     #[serde(default = "half_conf")]
     pub confidence: f64,
 }
-fn half_conf() -> f64 { 0.5 }
+fn half_conf() -> f64 {
+    0.5
+}
 
 /// Ask the LLM to extract every person mentioned in a customer's stored context.
 pub async fn extract_graph(
@@ -288,7 +329,10 @@ pub async fn extract_graph(
     interactions: &[Interaction],
 ) -> Result<(Vec<ExtractedPerson>, String), String> {
     let mut prompt = String::new();
-    prompt.push_str(&format!("Customer: {} (role: {})\n", customer.name, customer.role));
+    prompt.push_str(&format!(
+        "Customer: {} (role: {})\n",
+        customer.name, customer.role
+    ));
     if !customer.company.is_empty() {
         prompt.push_str(&format!("Company: {}\n", customer.company));
     }
@@ -316,7 +360,11 @@ pub async fn extract_graph(
             // complete `}` outside a string and close the still-open brackets.
             let repaired = repair_truncated_json(&cleaned).unwrap_or_else(|| cleaned.clone());
             serde_json::from_str(&repaired).map_err(|e| {
-                format!("could not parse extract JSON ({}):\n{}", e, truncate(&text, 300))
+                format!(
+                    "could not parse extract JSON ({}):\n{}",
+                    e,
+                    truncate(&text, 300)
+                )
             })?
         }
     };
@@ -358,7 +406,9 @@ pub async fn find_common_themes(
     others: &[(i64, String, String)],
 ) -> Result<(Vec<CommonTheme>, String), String> {
     let mut prompt = String::new();
-    prompt.push_str(&format!("Focus customer (id={focus_id}, name={focus_name}):\n"));
+    prompt.push_str(&format!(
+        "Focus customer (id={focus_id}, name={focus_name}):\n"
+    ));
     prompt.push_str(focus_ctx);
     prompt.push_str("\n\nOther customers:\n");
     // Cap the total prompt so we don't blow past the model's context. Trim each
@@ -391,7 +441,10 @@ pub async fn find_common_themes(
         Err(_) => {
             let repaired = repair_truncated_json(&cleaned).unwrap_or_else(|| cleaned.clone());
             serde_json::from_str(&repaired).map_err(|e| {
-                format!("could not parse common-themes JSON ({e}):\n{}", truncate(&text, 400))
+                format!(
+                    "could not parse common-themes JSON ({e}):\n{}",
+                    truncate(&text, 400)
+                )
             })?
         }
     };
@@ -448,7 +501,10 @@ pub async fn path_ai(
     bfs_path_names: Option<&[String]>,
 ) -> Result<(AiPathOut, String), String> {
     let mut prompt = String::new();
-    prompt.push_str(&format!("A (id={}, {}):\n{}\n\n", from.id, from.name, from_ctx));
+    prompt.push_str(&format!(
+        "A (id={}, {}):\n{}\n\n",
+        from.id, from.name, from_ctx
+    ));
     prompt.push_str(&format!("B (id={}, {}):\n{}\n\n", to.id, to.name, to_ctx));
     match bfs_path_names {
         Some(p) if !p.is_empty() => {
@@ -466,7 +522,10 @@ pub async fn path_ai(
         Err(_) => {
             let repaired = repair_truncated_json(&cleaned).unwrap_or_else(|| cleaned.clone());
             serde_json::from_str(&repaired).map_err(|e| {
-                format!("could not parse ai-path JSON ({e}):\n{}", truncate(&text, 400))
+                format!(
+                    "could not parse ai-path JSON ({e}):\n{}",
+                    truncate(&text, 400)
+                )
             })?
         }
     };
@@ -485,9 +544,13 @@ fn repair_truncated_json(text: &str) -> Option<String> {
     let mut last_close: Option<usize> = None;
     for (i, &b) in bytes.iter().enumerate() {
         if in_str {
-            if esc { esc = false; }
-            else if b == b'\\' { esc = true; }
-            else if b == b'"' { in_str = false; }
+            if esc {
+                esc = false;
+            } else if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
             continue;
         }
         match b {
@@ -503,16 +566,22 @@ fn repair_truncated_json(text: &str) -> Option<String> {
     let mut esc = false;
     for &b in head.as_bytes() {
         if in_str {
-            if esc { esc = false; }
-            else if b == b'\\' { esc = true; }
-            else if b == b'"' { in_str = false; }
+            if esc {
+                esc = false;
+            } else if b == b'\\' {
+                esc = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
             continue;
         }
         match b {
             b'"' => in_str = true,
             b'{' => stack.push(b'}'),
             b'[' => stack.push(b']'),
-            b'}' | b']' => { stack.pop(); }
+            b'}' | b']' => {
+                stack.pop();
+            }
             _ => {}
         }
     }
@@ -537,15 +606,24 @@ fn strip_fences(t: &str) -> String {
         let mut esc = false;
         for (i, &b) in bytes.iter().enumerate() {
             if in_str {
-                if esc { esc = false; }
-                else if b == b'\\' { esc = true; }
-                else if b == b'"' { in_str = false; }
+                if esc {
+                    esc = false;
+                } else if b == b'\\' {
+                    esc = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
                 continue;
             }
             match b {
                 b'"' => in_str = true,
                 b'{' => depth += 1,
-                b'}' => { depth -= 1; if depth == 0 { return t[start..=start+i].to_string(); } }
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return t[start..=start + i].to_string();
+                    }
+                }
                 _ => {}
             }
         }

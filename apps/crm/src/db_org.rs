@@ -278,10 +278,11 @@ impl Db {
 
     pub fn update_organization(&self, id: i64, patch: &OrganizationPatch, now: i64) -> Result<()> {
         self.with(|c| {
-            let exists: i64 =
-                c.query_row("SELECT COUNT(*) FROM organizations WHERE id=?1", params![id], |r| {
-                    r.get(0)
-                })?;
+            let exists: i64 = c.query_row(
+                "SELECT COUNT(*) FROM organizations WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )?;
             if exists == 0 {
                 return Err(anyhow!("organization {id} not found"));
             }
@@ -290,14 +291,23 @@ impl Db {
                 if v.is_empty() {
                     return Err(anyhow!("organization name cannot be empty"));
                 }
-                c.execute("UPDATE organizations SET name=?2 WHERE id=?1", params![id, v])?;
+                c.execute(
+                    "UPDATE organizations SET name=?2 WHERE id=?1",
+                    params![id, v],
+                )?;
             }
             if let Some(v) = &patch.kind {
                 let v = normalize(v, crate::db::ORG_KINDS, "direct_customer");
-                c.execute("UPDATE organizations SET kind=?2 WHERE id=?1", params![id, v])?;
+                c.execute(
+                    "UPDATE organizations SET kind=?2 WHERE id=?1",
+                    params![id, v],
+                )?;
             }
             if let Some(v) = &patch.website {
-                c.execute("UPDATE organizations SET website=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE organizations SET website=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = &patch.domain {
                 c.execute(
@@ -306,25 +316,46 @@ impl Db {
                 )?;
             }
             if let Some(v) = &patch.industry {
-                c.execute("UPDATE organizations SET industry=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE organizations SET industry=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = &patch.size {
-                c.execute("UPDATE organizations SET size=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE organizations SET size=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = &patch.address {
-                c.execute("UPDATE organizations SET address=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE organizations SET address=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = &patch.logo_url {
-                c.execute("UPDATE organizations SET logo_url=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE organizations SET logo_url=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = &patch.notes {
-                c.execute("UPDATE organizations SET notes=?2 WHERE id=?1", params![id, v])?;
+                c.execute(
+                    "UPDATE organizations SET notes=?2 WHERE id=?1",
+                    params![id, v],
+                )?;
             }
             if let Some(v) = &patch.tags {
                 let tags = serde_json::to_string(v).unwrap_or_else(|_| "[]".into());
-                c.execute("UPDATE organizations SET tags_json=?2 WHERE id=?1", params![id, tags])?;
+                c.execute(
+                    "UPDATE organizations SET tags_json=?2 WHERE id=?1",
+                    params![id, tags],
+                )?;
             }
-            c.execute("UPDATE organizations SET updated_at=?2 WHERE id=?1", params![id, now])?;
+            c.execute(
+                "UPDATE organizations SET updated_at=?2 WHERE id=?1",
+                params![id, now],
+            )?;
             Ok(())
         })?;
         let _ = self.reindex_organization(id);
@@ -335,8 +366,14 @@ impl Db {
     /// them — the company going away doesn't mean you stop knowing the person.
     pub fn delete_organization(&self, id: i64) -> Result<()> {
         self.with(|c| {
-            c.execute("DELETE FROM customer_organizations WHERE organization_id=?1", params![id])?;
-            c.execute("UPDATE deals SET organization_id=0 WHERE organization_id=?1", params![id])?;
+            c.execute(
+                "DELETE FROM customer_organizations WHERE organization_id=?1",
+                params![id],
+            )?;
+            c.execute(
+                "UPDATE deals SET organization_id=0 WHERE organization_id=?1",
+                params![id],
+            )?;
             c.execute(
                 "DELETE FROM search_index WHERE entity_type='organization' AND entity_id=?1",
                 params![id],
@@ -406,7 +443,12 @@ impl Db {
         Ok(())
     }
 
-    pub fn unlink_customer_org(&self, customer_id: i64, organization_id: i64, now: i64) -> Result<()> {
+    pub fn unlink_customer_org(
+        &self,
+        customer_id: i64,
+        organization_id: i64,
+        now: i64,
+    ) -> Result<()> {
         self.with(|c| {
             let n = c.execute(
                 "DELETE FROM customer_organizations WHERE customer_id=?1 AND organization_id=?2",
@@ -610,8 +652,11 @@ impl Db {
 
     pub fn update_service(&self, id: i64, patch: &ServicePatch, now: i64) -> Result<()> {
         self.with(|c| {
-            let exists: i64 =
-                c.query_row("SELECT COUNT(*) FROM services WHERE id=?1", params![id], |r| r.get(0))?;
+            let exists: i64 = c.query_row(
+                "SELECT COUNT(*) FROM services WHERE id=?1",
+                params![id],
+                |r| r.get(0),
+            )?;
             if exists == 0 {
                 return Err(anyhow!("service {id} not found"));
             }
@@ -637,21 +682,39 @@ impl Db {
             }
             if let Some(v) = &patch.pricing_model {
                 let v = normalize(v, crate::db::PRICING_MODELS, "fixed");
-                c.execute("UPDATE services SET pricing_model=?2 WHERE id=?1", params![id, v])?;
+                c.execute(
+                    "UPDATE services SET pricing_model=?2 WHERE id=?1",
+                    params![id, v],
+                )?;
             }
             if let Some(v) = &patch.unit {
-                c.execute("UPDATE services SET unit=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE services SET unit=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = &patch.sku {
-                c.execute("UPDATE services SET sku=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE services SET sku=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = &patch.description {
-                c.execute("UPDATE services SET description=?2 WHERE id=?1", params![id, v])?;
+                c.execute(
+                    "UPDATE services SET description=?2 WHERE id=?1",
+                    params![id, v],
+                )?;
             }
             if let Some(v) = patch.active {
-                c.execute("UPDATE services SET active=?2 WHERE id=?1", params![id, v as i64])?;
+                c.execute(
+                    "UPDATE services SET active=?2 WHERE id=?1",
+                    params![id, v as i64],
+                )?;
             }
-            c.execute("UPDATE services SET updated_at=?2 WHERE id=?1", params![id, now])?;
+            c.execute(
+                "UPDATE services SET updated_at=?2 WHERE id=?1",
+                params![id, now],
+            )?;
             Ok(())
         })?;
         let _ = self.reindex_service(id);
@@ -944,9 +1007,15 @@ impl Db {
     pub(crate) fn reindex_catalog(&self) -> Result<usize> {
         let (orgs, svcs): (Vec<i64>, Vec<i64>) = self.with(|c| {
             let mut a = c.prepare("SELECT id FROM organizations")?;
-            let orgs: Vec<i64> = a.query_map([], |r| r.get(0))?.filter_map(|r| r.ok()).collect();
+            let orgs: Vec<i64> = a
+                .query_map([], |r| r.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
             let mut b = c.prepare("SELECT id FROM services")?;
-            let svcs: Vec<i64> = b.query_map([], |r| r.get(0))?.filter_map(|r| r.ok()).collect();
+            let svcs: Vec<i64> = b
+                .query_map([], |r| r.get(0))?
+                .filter_map(|r| r.ok())
+                .collect();
             Ok((orgs, svcs))
         })?;
         let n = orgs.len() + svcs.len();

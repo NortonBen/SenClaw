@@ -452,7 +452,9 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
                 Ok(Some(org)) => {
                     let contacts = state.db.contacts_of_org(id).unwrap_or_default();
                     let deals = state.db.deals_of_organization(id).unwrap_or_default();
-                    json_result(json!({ "organization": org, "contacts": contacts, "deals": deals }))
+                    json_result(
+                        json!({ "organization": org, "contacts": contacts, "deals": deals }),
+                    )
                 }
                 Ok(None) => error_result(format!("organization {id} not found")),
                 Err(e) => error_result(e.to_string()),
@@ -468,7 +470,9 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
         }
         "crm_create_organization" => match serde_json::from_value(args.clone()) {
             Ok(input) => match state.db.create_organization(&input, now) {
-                Ok(id) => json_result(json!({ "created": true, "organization": state.db.get_organization(id).ok().flatten() })),
+                Ok(id) => json_result(
+                    json!({ "created": true, "organization": state.db.get_organization(id).ok().flatten() }),
+                ),
                 Err(e) => error_result(e.to_string()),
             },
             Err(e) => error_result(format!("bad input: {e}")),
@@ -477,7 +481,9 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
             let id = args["id"].as_i64().unwrap_or(0);
             match serde_json::from_value(args.clone()) {
                 Ok(patch) => match state.db.update_organization(id, &patch, now) {
-                    Ok(()) => json_result(json!({ "updated": true, "organization": state.db.get_organization(id).ok().flatten() })),
+                    Ok(()) => json_result(
+                        json!({ "updated": true, "organization": state.db.get_organization(id).ok().flatten() }),
+                    ),
                     Err(e) => error_result(e.to_string()),
                 },
                 Err(e) => error_result(format!("bad input: {e}")),
@@ -494,7 +500,11 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
             let cid = args["customer_id"].as_i64().unwrap_or(0);
             let org_id = match args["organization_id"].as_i64() {
                 Some(v) => Some(v),
-                None => match args["organization_name"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                None => match args["organization_name"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
                     Some(name) => match state.db.find_organization_by_name(name) {
                         Ok(Some(id)) => Some(id),
                         Ok(None) => state
@@ -564,7 +574,9 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
         }
         "crm_create_service" => match serde_json::from_value(args.clone()) {
             Ok(input) => match state.db.create_service(&input, now) {
-                Ok(id) => json_result(json!({ "created": true, "service": state.db.get_service(id).ok().flatten() })),
+                Ok(id) => json_result(
+                    json!({ "created": true, "service": state.db.get_service(id).ok().flatten() }),
+                ),
                 Err(e) => error_result(e.to_string()),
             },
             Err(e) => error_result(format!("bad input: {e}")),
@@ -573,7 +585,9 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
             let id = args["id"].as_i64().unwrap_or(0);
             match serde_json::from_value(args.clone()) {
                 Ok(patch) => match state.db.update_service(id, &patch, now) {
-                    Ok(()) => json_result(json!({ "updated": true, "service": state.db.get_service(id).ok().flatten() })),
+                    Ok(()) => json_result(
+                        json!({ "updated": true, "service": state.db.get_service(id).ok().flatten() }),
+                    ),
                     Err(e) => error_result(e.to_string()),
                 },
                 Err(e) => error_result(format!("bad input: {e}")),
@@ -592,7 +606,10 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
             let qty = args["quantity"].as_f64().unwrap_or(1.0);
             let unit = args["unit_amount"].as_f64();
             let note = args["note"].as_str().unwrap_or("");
-            match state.db.attach_service(deal_id, service_id, qty, unit, note, now) {
+            match state
+                .db
+                .attach_service(deal_id, service_id, qty, unit, note, now)
+            {
                 Ok(_) => json_result(json!({
                     "attached": true,
                     "services": state.db.services_of_deal(deal_id).unwrap_or_default()
@@ -674,7 +691,9 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
                     } else {
                         None
                     };
-                    json_result(json!({ "conversation": conv, "messages": messages, "customer": customer }))
+                    json_result(
+                        json!({ "conversation": conv, "messages": messages, "customer": customer }),
+                    )
                 }
                 Ok(None) => error_result(format!("conversation {id} not found")),
                 Err(e) => error_result(e.to_string()),
@@ -792,7 +811,9 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
                 args["lead_score"].as_i64(),
                 now,
             ) {
-                Ok(()) => json_result(json!({ "updated": true, "lead": state.db.sale_state(cid).ok().flatten() })),
+                Ok(()) => json_result(
+                    json!({ "updated": true, "lead": state.db.sale_state(cid).ok().flatten() }),
+                ),
                 Err(e) => error_result(e.to_string()),
             }
         }
@@ -803,7 +824,11 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
             let context = args["context"].as_str().unwrap_or("{}");
             match state.db.create_escalation(cid, reason, context, draft, now) {
                 Ok(id) => {
-                    crate::api::emit(&state.events, "escalation", json!({ "id": id, "action": "created" }));
+                    crate::api::emit(
+                        &state.events,
+                        "escalation",
+                        json!({ "id": id, "action": "created" }),
+                    );
                     json_result(json!({ "escalated": true, "id": id }))
                 }
                 Err(e) => error_result(e.to_string()),
@@ -921,7 +946,10 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
                 let out: Vec<Value> = list
                     .into_iter()
                     .map(|c| {
-                        match state.db.run_chart(&c.element, &c.metric, &c.grouping, &c.filters) {
+                        match state
+                            .db
+                            .run_chart(&c.element, &c.metric, &c.grouping, &c.filters)
+                        {
                             Ok(d) => json!({ "chart": c, "data": d }),
                             Err(e) => json!({ "chart": c, "error": e.to_string() }),
                         }
@@ -947,8 +975,14 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
             };
             match state.db.create_chart(&input, now) {
                 Ok(id) => {
-                    crate::api::emit(&state.events, "chart", json!({ "id": id, "action": "created" }));
-                    json_result(json!({ "created": true, "chart": state.db.get_chart(id).ok().flatten() }))
+                    crate::api::emit(
+                        &state.events,
+                        "chart",
+                        json!({ "id": id, "action": "created" }),
+                    );
+                    json_result(
+                        json!({ "created": true, "chart": state.db.get_chart(id).ok().flatten() }),
+                    )
                 }
                 Err(e) => error_result(e.to_string()),
             }
@@ -957,7 +991,11 @@ pub async fn call_tool_ext(state: &Arc<AppState>, name: &str, args: &Value) -> O
             let id = args["id"].as_i64().unwrap_or(0);
             match state.db.delete_chart(id) {
                 Ok(()) => {
-                    crate::api::emit(&state.events, "chart", json!({ "id": id, "action": "deleted" }));
+                    crate::api::emit(
+                        &state.events,
+                        "chart",
+                        json!({ "id": id, "action": "deleted" }),
+                    );
                     json_result(json!({ "deleted": true }))
                 }
                 Err(e) => error_result(e.to_string()),

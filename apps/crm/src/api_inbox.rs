@@ -30,7 +30,10 @@ pub fn routes() -> Router<Arc<AppState>> {
             axum::routing::patch(update_channel).delete(delete_channel),
         )
         .route("/inbox/channels/:id/test", post(test_channel))
-        .route("/inbox/conversations", get(list_conversations).post(start_conversation))
+        .route(
+            "/inbox/conversations",
+            get(list_conversations).post(start_conversation),
+        )
         .route("/inbox/conversations/:id", get(get_conversation))
         .route("/inbox/conversations/:id/send", post(send_message))
         .route("/inbox/conversations/:id/link", post(link_conversation))
@@ -50,21 +53,20 @@ async fn stats(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> 
 /// for a mask, and `merge_config` on the way back in treats the mask as
 /// "unchanged" so re-saving a form can't clobber the real value.
 async fn list_channels(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    let channels: Vec<Value> = s
-        .db
-        .list_channels_all()
-        .map_err(server)?
-        .into_iter()
-        .map(|c| {
-            json!({
-                "id": c.id, "kind": c.kind, "name": c.name,
-                "config": redact_config(&c.config),
-                "enabled": c.enabled, "last_sync_at": c.last_sync_at,
-                "last_status": c.last_status, "last_error": c.last_error,
-                "created_at": c.created_at,
+    let channels: Vec<Value> =
+        s.db.list_channels_all()
+            .map_err(server)?
+            .into_iter()
+            .map(|c| {
+                json!({
+                    "id": c.id, "kind": c.kind, "name": c.name,
+                    "config": redact_config(&c.config),
+                    "enabled": c.enabled, "last_sync_at": c.last_sync_at,
+                    "last_status": c.last_status, "last_error": c.last_error,
+                    "created_at": c.created_at,
+                })
             })
-        })
-        .collect();
+            .collect();
     Ok(Json(json!({ "channels": channels })))
 }
 
@@ -73,7 +75,11 @@ async fn create_channel(
     Json(input): Json<ChannelInput>,
 ) -> Result<Json<Value>, ApiError> {
     let id = s.db.create_channel(&input, now_ts()).map_err(bad)?;
-    emit(&s.events, "channel", json!({ "id": id, "action": "created" }));
+    emit(
+        &s.events,
+        "channel",
+        json!({ "id": id, "action": "created" }),
+    );
     Ok(Json(json!({ "id": id })))
 }
 
@@ -83,7 +89,11 @@ async fn update_channel(
     Json(patch): Json<ChannelPatch>,
 ) -> Result<Json<Value>, ApiError> {
     s.db.update_channel_cfg(id, &patch).map_err(bad)?;
-    emit(&s.events, "channel", json!({ "id": id, "action": "updated" }));
+    emit(
+        &s.events,
+        "channel",
+        json!({ "id": id, "action": "updated" }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -92,7 +102,11 @@ async fn delete_channel(
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
     s.db.delete_channel_cfg(id).map_err(not_found)?;
-    emit(&s.events, "channel", json!({ "id": id, "action": "deleted" }));
+    emit(
+        &s.events,
+        "channel",
+        json!({ "id": id, "action": "deleted" }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -101,11 +115,10 @@ async fn test_channel(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let ch = s
-        .db
-        .get_channel(id)
-        .map_err(server)?
-        .ok_or_else(|| not_found(format!("channel {id} not found")))?;
+    let ch =
+        s.db.get_channel(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found(format!("channel {id} not found")))?;
     match s.channels.probe(&ch).await {
         Ok(info) => Ok(Json(json!({ "ok": true, "info": info }))),
         Err(e) => Ok(Json(json!({ "ok": false, "error": e }))),
@@ -127,9 +140,8 @@ async fn list_conversations(
     State(s): State<Arc<AppState>>,
     Query(q): Query<ConvQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let convs = s
-        .db
-        .list_conversations(
+    let convs =
+        s.db.list_conversations(
             q.status.as_deref(),
             q.kind.as_deref(),
             q.customer_id,
@@ -144,11 +156,10 @@ async fn get_conversation(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let conv = s
-        .db
-        .get_conversation(id)
-        .map_err(server)?
-        .ok_or_else(|| not_found(format!("conversation {id} not found")))?;
+    let conv =
+        s.db.get_conversation(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found(format!("conversation {id} not found")))?;
     let messages = s.db.list_conv_messages(id, 200).map_err(server)?;
     // The linked profile, when there is one — the operator needs to know who
     // they're talking to without leaving the thread.
@@ -157,7 +168,9 @@ async fn get_conversation(
     } else {
         None
     };
-    Ok(Json(json!({ "conversation": conv, "messages": messages, "customer": customer })))
+    Ok(Json(
+        json!({ "conversation": conv, "messages": messages, "customer": customer }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -179,25 +192,27 @@ async fn send_message(
     if text.is_empty() {
         return Err(bad("text is required"));
     }
-    let conv = s
-        .db
-        .get_conversation(id)
-        .map_err(server)?
-        .ok_or_else(|| not_found(format!("conversation {id} not found")))?;
+    let conv =
+        s.db.get_conversation(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found(format!("conversation {id} not found")))?;
     s.channels
         .send_to_conversation(&conv, text)
         .await
         .map_err(|e| ApiError(axum::http::StatusCode::BAD_GATEWAY, e))?;
     let now = now_ts();
-    let msg_id = s
-        .db
-        .add_conv_message(id, "outbound", "operator", text, "sent", now)
-        .map_err(server)?;
+    let msg_id =
+        s.db.add_conv_message(id, "outbound", "operator", text, "sent", now)
+            .map_err(server)?;
     if conv.handoff_state == crate::db_inbox::HANDOFF_BOT {
         let _ = s.db.set_handoff(id, crate::db_inbox::HANDOFF_OPERATOR);
     }
     let _ = s.db.mark_conversation_read(id);
-    emit(&s.events, "message", json!({ "conversation_id": id, "id": msg_id, "by": input.by }));
+    emit(
+        &s.events,
+        "message",
+        json!({ "conversation_id": id, "id": msg_id, "by": input.by }),
+    );
     Ok(Json(json!({ "ok": true, "id": msg_id })))
 }
 
@@ -240,7 +255,10 @@ async fn start_conversation(
                 .find(|c| c.kind == ch.kind)
                 .map(|c| c.value)
                 .ok_or_else(|| {
-                    bad(format!("customer {cid} has no '{}' identity on file", ch.kind))
+                    bad(format!(
+                        "customer {cid} has no '{}' identity on file",
+                        ch.kind
+                    ))
                 })?
         }
     };
@@ -250,10 +268,9 @@ async fn start_conversation(
         .and_then(|cid| s.db.get_customer(cid).ok().flatten())
         .map(|c| c.name)
         .unwrap_or_default();
-    let conv = s
-        .db
-        .get_or_create_conversation(ch.id, &ch.kind, &external_id, &name, now)
-        .map_err(server)?;
+    let conv =
+        s.db.get_or_create_conversation(ch.id, &ch.kind, &external_id, &name, now)
+            .map_err(server)?;
     if let Some(cid) = input.customer_id {
         if conv.customer_id == 0 {
             s.db.link_conversation(conv.id, cid, now).map_err(bad)?;
@@ -261,7 +278,12 @@ async fn start_conversation(
     }
     // Deliver before persisting: a failed send must not leave a phantom message
     // in a transcript that never reached anyone.
-    if let Some(text) = input.text.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+    if let Some(text) = input
+        .text
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
         s.channels
             .send_raw(&ch, &external_id, text)
             .await
@@ -269,7 +291,11 @@ async fn start_conversation(
         s.db.add_conv_message(conv.id, "outbound", "operator", text, "sent", now)
             .map_err(server)?;
     }
-    emit(&s.events, "conversation", json!({ "id": conv.id, "action": "created" }));
+    emit(
+        &s.events,
+        "conversation",
+        json!({ "id": conv.id, "action": "created" }),
+    );
     let conv = s.db.get_conversation(conv.id).map_err(server)?;
     Ok(Json(json!({ "conversation": conv })))
 }
@@ -284,9 +310,16 @@ async fn link_conversation(
     Path(id): Path<i64>,
     Json(input): Json<LinkInput>,
 ) -> Result<Json<Value>, ApiError> {
-    s.db.link_conversation(id, input.customer_id, now_ts()).map_err(bad)?;
-    emit(&s.events, "conversation", json!({ "id": id, "action": "linked" }));
-    Ok(Json(json!({ "conversation": s.db.get_conversation(id).map_err(server)? })))
+    s.db.link_conversation(id, input.customer_id, now_ts())
+        .map_err(bad)?;
+    emit(
+        &s.events,
+        "conversation",
+        json!({ "id": id, "action": "linked" }),
+    );
+    Ok(Json(
+        json!({ "conversation": s.db.get_conversation(id).map_err(server)? }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -299,8 +332,13 @@ async fn set_status(
     Path(id): Path<i64>,
     Json(input): Json<StatusInput>,
 ) -> Result<Json<Value>, ApiError> {
-    s.db.set_conversation_status(id, &input.status).map_err(bad)?;
-    emit(&s.events, "conversation", json!({ "id": id, "action": "status" }));
+    s.db.set_conversation_status(id, &input.status)
+        .map_err(bad)?;
+    emit(
+        &s.events,
+        "conversation",
+        json!({ "id": id, "action": "status" }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -315,7 +353,11 @@ async fn set_handoff(
     Json(input): Json<HandoffInput>,
 ) -> Result<Json<Value>, ApiError> {
     s.db.set_handoff(id, &input.state).map_err(bad)?;
-    emit(&s.events, "handoff", json!({ "id": id, "state": input.state }));
+    emit(
+        &s.events,
+        "handoff",
+        json!({ "id": id, "state": input.state }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 

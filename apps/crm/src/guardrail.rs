@@ -26,11 +26,15 @@ pub fn fold(s: &str) -> String {
         .map(|c| match c {
             'á' | 'à' | 'ả' | 'ã' | 'ạ' | 'ă' | 'ắ' | 'ằ' | 'ẳ' | 'ẵ' | 'ặ' | 'â' | 'ấ' | 'ầ'
             | 'ẩ' | 'ẫ' | 'ậ' => 'a',
-            'é' | 'è' | 'ẻ' | 'ẽ' | 'ẹ' | 'ê' | 'ế' | 'ề' | 'ể' | 'ễ' | 'ệ' => 'e',
+            'é' | 'è' | 'ẻ' | 'ẽ' | 'ẹ' | 'ê' | 'ế' | 'ề' | 'ể' | 'ễ' | 'ệ' => {
+                'e'
+            }
             'í' | 'ì' | 'ỉ' | 'ĩ' | 'ị' => 'i',
             'ó' | 'ò' | 'ỏ' | 'õ' | 'ọ' | 'ô' | 'ố' | 'ồ' | 'ổ' | 'ỗ' | 'ộ' | 'ơ' | 'ớ' | 'ờ'
             | 'ở' | 'ỡ' | 'ợ' => 'o',
-            'ú' | 'ù' | 'ủ' | 'ũ' | 'ụ' | 'ư' | 'ứ' | 'ừ' | 'ử' | 'ữ' | 'ự' => 'u',
+            'ú' | 'ù' | 'ủ' | 'ũ' | 'ụ' | 'ư' | 'ứ' | 'ừ' | 'ử' | 'ữ' | 'ự' => {
+                'u'
+            }
             'ý' | 'ỳ' | 'ỷ' | 'ỹ' | 'ỵ' => 'y',
             'đ' => 'd',
             other => other,
@@ -57,8 +61,10 @@ fn keywords(db: &Arc<Db>, key: &str) -> Vec<String> {
 /// keep firing inside longer runs of text.
 pub fn matched(text: &str, kws: &[String]) -> Vec<String> {
     let folded = fold(text);
-    let words: Vec<&str> =
-        folded.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let words: Vec<&str> = folded
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
     kws.iter()
         .filter(|kw| {
             if kw.contains(' ') {
@@ -113,7 +119,10 @@ pub fn gate(
     if unsubscribed {
         return Gate::Blocked("khách đã hủy nhận tin (unsubscribed)".into());
     }
-    let max: i64 = db.setting_or("max_messages_per_customer_24h", "3").parse().unwrap_or(3);
+    let max: i64 = db
+        .setting_or("max_messages_per_customer_24h", "3")
+        .parse()
+        .unwrap_or(3);
     let sent = db.count_outbound_24h(customer_id, now).unwrap_or(0);
     if sent >= max {
         return Gate::Review("rate_limit_exceeded".into());
@@ -172,14 +181,28 @@ mod tests {
         let db = test_db();
         let id = customer(&db, "A");
         let g = gate(&db, id, true, "xin chào", false, true, 10_000);
-        assert!(matches!(g, Gate::Blocked(_)), "unsubscribe must survive bypass_risky");
+        assert!(
+            matches!(g, Gate::Blocked(_)),
+            "unsubscribe must survive bypass_risky"
+        );
     }
 
     #[test]
     fn clean_draft_passes() {
         let db = test_db();
         let id = customer(&db, "B");
-        assert_eq!(gate(&db, id, false, "chào anh, em gửi tài liệu ạ", false, false, 10_000), Gate::Send);
+        assert_eq!(
+            gate(
+                &db,
+                id,
+                false,
+                "chào anh, em gửi tài liệu ạ",
+                false,
+                false,
+                10_000
+            ),
+            Gate::Send
+        );
     }
 
     #[test]
@@ -205,13 +228,16 @@ mod tests {
                 1_000,
             )
             .unwrap();
-        let conv = db.get_or_create_conversation(ch, "websocket", "u1", "D", 1_000).unwrap();
+        let conv = db
+            .get_or_create_conversation(ch, "websocket", "u1", "D", 1_000)
+            .unwrap();
         db.link_conversation(conv.id, id, 1_000).unwrap();
 
         let now = 10_000;
         // Three delivered messages inside the window hits the default cap of 3.
         for _ in 0..3 {
-            db.add_conv_message(conv.id, "outbound", "assistant", "hi", "sent", now - 100).unwrap();
+            db.add_conv_message(conv.id, "outbound", "assistant", "hi", "sent", now - 100)
+                .unwrap();
         }
         assert_eq!(
             gate(&db, id, false, "chào anh", false, false, now),
@@ -229,14 +255,20 @@ mod tests {
                 1_000,
             )
             .unwrap();
-        let conv = db.get_or_create_conversation(ch, "websocket", "u2", "E", 1_000).unwrap();
+        let conv = db
+            .get_or_create_conversation(ch, "websocket", "u2", "E", 1_000)
+            .unwrap();
         db.link_conversation(conv.id, id, 1_000).unwrap();
 
         let now = 10_000;
         for _ in 0..5 {
-            db.add_conv_message(conv.id, "outbound", "assistant", "hi", "queued", now - 100).unwrap();
+            db.add_conv_message(conv.id, "outbound", "assistant", "hi", "queued", now - 100)
+                .unwrap();
         }
-        assert_eq!(gate(&db, id, false, "chào anh", false, false, now), Gate::Send);
+        assert_eq!(
+            gate(&db, id, false, "chào anh", false, false, now),
+            Gate::Send
+        );
     }
 
     #[test]
@@ -249,15 +281,21 @@ mod tests {
                 1_000,
             )
             .unwrap();
-        let conv = db.get_or_create_conversation(ch, "websocket", "u3", "F", 1_000).unwrap();
+        let conv = db
+            .get_or_create_conversation(ch, "websocket", "u3", "F", 1_000)
+            .unwrap();
         db.link_conversation(conv.id, id, 1_000).unwrap();
 
         let now = 200_000;
         for _ in 0..3 {
             // 25 hours ago — outside the window.
-            db.add_conv_message(conv.id, "outbound", "assistant", "hi", "sent", now - 90_000).unwrap();
+            db.add_conv_message(conv.id, "outbound", "assistant", "hi", "sent", now - 90_000)
+                .unwrap();
         }
-        assert_eq!(gate(&db, id, false, "chào anh", false, false, now), Gate::Send);
+        assert_eq!(
+            gate(&db, id, false, "chào anh", false, false, now),
+            Gate::Send
+        );
     }
 
     #[test]

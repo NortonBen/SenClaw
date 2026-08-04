@@ -66,7 +66,11 @@ fn fmt_money_short(n: f64, currency: &str) -> String {
 }
 
 fn empty_or(s: &str) -> String {
-    if s.is_empty() { "(trống)".into() } else { s.to_string() }
+    if s.is_empty() {
+        "(trống)".into()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Compute a customer diff summary + detail lines. Returns None when nothing changed.
@@ -76,10 +80,18 @@ fn diff_customer(old: &Customer, new: &Customer) -> Option<(String, String)> {
     let push = |k: &str, o: &str, n: &str, out_f: &mut Vec<&str>, out_l: &mut Vec<String>| {
         if o != n {
             let field: &'static str = match k {
-                "Tên" => "Tên", "Email" => "Email", "Điện thoại" => "Điện thoại",
-                "Công ty" => "Công ty", "Chức danh" => "Chức danh", "Vai trò" => "Vai trò",
-                "Địa chỉ" => "Địa chỉ", "Sinh nhật" => "Sinh nhật", "Nguồn" => "Nguồn",
-                "Ghi chú" => "Ghi chú", "Tags" => "Tags", "Avatar" => "Avatar",
+                "Tên" => "Tên",
+                "Email" => "Email",
+                "Điện thoại" => "Điện thoại",
+                "Công ty" => "Công ty",
+                "Chức danh" => "Chức danh",
+                "Vai trò" => "Vai trò",
+                "Địa chỉ" => "Địa chỉ",
+                "Sinh nhật" => "Sinh nhật",
+                "Nguồn" => "Nguồn",
+                "Ghi chú" => "Ghi chú",
+                "Tags" => "Tags",
+                "Avatar" => "Avatar",
                 _ => "khác",
             };
             out_f.push(field);
@@ -88,19 +100,51 @@ fn diff_customer(old: &Customer, new: &Customer) -> Option<(String, String)> {
     };
     push("Tên", &old.name, &new.name, &mut fields, &mut lines);
     push("Email", &old.email, &new.email, &mut fields, &mut lines);
-    push("Điện thoại", &old.phone, &new.phone, &mut fields, &mut lines);
-    push("Công ty", &old.company, &new.company, &mut fields, &mut lines);
+    push(
+        "Điện thoại",
+        &old.phone,
+        &new.phone,
+        &mut fields,
+        &mut lines,
+    );
+    push(
+        "Công ty",
+        &old.company,
+        &new.company,
+        &mut fields,
+        &mut lines,
+    );
     push("Chức danh", &old.title, &new.title, &mut fields, &mut lines);
     if old.role != new.role {
         fields.push("Vai trò");
-        lines.push(format!("- Vai trò: {} → {}", role_label(&old.role), role_label(&new.role)));
+        lines.push(format!(
+            "- Vai trò: {} → {}",
+            role_label(&old.role),
+            role_label(&new.role)
+        ));
     }
-    push("Địa chỉ", &old.address, &new.address, &mut fields, &mut lines);
-    push("Sinh nhật", &old.birthday, &new.birthday, &mut fields, &mut lines);
+    push(
+        "Địa chỉ",
+        &old.address,
+        &new.address,
+        &mut fields,
+        &mut lines,
+    );
+    push(
+        "Sinh nhật",
+        &old.birthday,
+        &new.birthday,
+        &mut fields,
+        &mut lines,
+    );
     push("Nguồn", &old.source, &new.source, &mut fields, &mut lines);
     if old.tags != new.tags {
         fields.push("Tags");
-        lines.push(format!("- Tags: [{}] → [{}]", old.tags.join(", "), new.tags.join(", ")));
+        lines.push(format!(
+            "- Tags: [{}] → [{}]",
+            old.tags.join(", "),
+            new.tags.join(", ")
+        ));
     }
     if old.notes != new.notes {
         fields.push("Ghi chú");
@@ -114,7 +158,10 @@ fn diff_customer(old: &Customer, new: &Customer) -> Option<(String, String)> {
     if fields.is_empty() {
         return None;
     }
-    Some((format!("Cập nhật hồ sơ: {}", fields.join(", ")), lines.join("\n")))
+    Some((
+        format!("Cập nhật hồ sơ: {}", fields.join(", ")),
+        lines.join("\n"),
+    ))
 }
 
 /// Deal diff. Returns None when nothing changed.
@@ -123,7 +170,11 @@ fn diff_deal(old: &Deal, new: &Deal) -> Option<(String, String)> {
     let mut lines: Vec<String> = Vec::new();
     if old.title != new.title {
         fields.push("Tên");
-        lines.push(format!("- Tên: {} → {}", empty_or(&old.title), empty_or(&new.title)));
+        lines.push(format!(
+            "- Tên: {} → {}",
+            empty_or(&old.title),
+            empty_or(&new.title)
+        ));
     }
     if (old.amount - new.amount).abs() > f64::EPSILON || old.currency != new.currency {
         fields.push("Giá trị");
@@ -135,11 +186,18 @@ fn diff_deal(old: &Deal, new: &Deal) -> Option<(String, String)> {
     }
     if old.stage != new.stage {
         fields.push("Giai đoạn");
-        lines.push(format!("- Giai đoạn: {} → {}", stage_label(&old.stage), stage_label(&new.stage)));
+        lines.push(format!(
+            "- Giai đoạn: {} → {}",
+            stage_label(&old.stage),
+            stage_label(&new.stage)
+        ));
     }
     if old.probability != new.probability {
         fields.push("Xác suất");
-        lines.push(format!("- Xác suất: {}% → {}%", old.probability, new.probability));
+        lines.push(format!(
+            "- Xác suất: {}% → {}%",
+            old.probability, new.probability
+        ));
     }
     if old.expected_close_at != new.expected_close_at {
         fields.push("Ngày dự kiến");
@@ -153,7 +211,15 @@ fn diff_deal(old: &Deal, new: &Deal) -> Option<(String, String)> {
         return None;
     }
     Some((
-        format!("Cập nhật deal \"{}\": {}", if new.title.is_empty() { old.title.clone() } else { new.title.clone() }, fields.join(", ")),
+        format!(
+            "Cập nhật deal \"{}\": {}",
+            if new.title.is_empty() {
+                old.title.clone()
+            } else {
+                new.title.clone()
+            },
+            fields.join(", ")
+        ),
         lines.join("\n"),
     ))
 }
@@ -202,7 +268,12 @@ pub fn make_state() -> Arc<AppState> {
     // path, where it has no state handle to thread it through.
     crate::sale::set_channels(channels.clone());
     crate::sale::spawn_scheduler(db.clone(), events.clone(), channels.clone());
-    Arc::new(AppState { db, mcp_tx, events, channels })
+    Arc::new(AppState {
+        db,
+        mcp_tx,
+        events,
+        channels,
+    })
 }
 
 /// Publish a UI event. Fire-and-forget: `send` errors only when nobody is
@@ -228,7 +299,10 @@ pub fn server(e: impl std::fmt::Display) -> ApiError {
 }
 
 pub fn now_ts() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 pub fn api_router(state: Arc<AppState>) -> Router {
@@ -237,32 +311,67 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/stats", get(get_stats))
         .route("/tags", get(get_tags))
         .route("/customers", get(list_customers).post(create_customer))
-        .route("/customers/:id", get(get_customer).patch(update_customer).delete(delete_customer))
-        .route("/customers/:id/interactions", get(list_interactions).post(add_interaction))
-        .route("/customers/:id/deals", get(list_customer_deals).post(create_deal))
-        .route("/customers/:id/tasks", get(list_customer_tasks).post(create_task_for_customer))
+        .route(
+            "/customers/:id",
+            get(get_customer)
+                .patch(update_customer)
+                .delete(delete_customer),
+        )
+        .route(
+            "/customers/:id/interactions",
+            get(list_interactions).post(add_interaction),
+        )
+        .route(
+            "/customers/:id/deals",
+            get(list_customer_deals).post(create_deal),
+        )
+        .route(
+            "/customers/:id/tasks",
+            get(list_customer_tasks).post(create_task_for_customer),
+        )
         .route("/customers/:id/summary", post(post_summary))
         .route("/customers/:id/next-step", post(post_next_step))
         .route("/interactions/:id", delete(delete_interaction))
         .route("/deals", get(list_deals))
-        .route("/deals/:id", axum::routing::patch(update_deal).delete(delete_deal))
+        .route(
+            "/deals/:id",
+            axum::routing::patch(update_deal).delete(delete_deal),
+        )
         .route("/tasks", get(list_tasks).post(create_task))
-        .route("/tasks/:id", axum::routing::patch(update_task).delete(delete_task))
+        .route(
+            "/tasks/:id",
+            axum::routing::patch(update_task).delete(delete_task),
+        )
         .route("/upcoming", get(get_upcoming))
         .route("/activity", get(get_activity))
         .route("/report", post(post_report))
-        .route("/customers/:id/relationships", get(list_customer_relationships))
+        .route(
+            "/customers/:id/relationships",
+            get(list_customer_relationships),
+        )
         .route("/customers/:id/extract", post(post_extract))
-        .route("/relationships", get(list_all_relationships).post(create_relationship))
+        .route(
+            "/relationships",
+            get(list_all_relationships).post(create_relationship),
+        )
         .route("/relationships/:id", delete(delete_relationship))
         .route("/graph", get(get_graph))
         .route("/graph/path", get(get_graph_path))
         .route("/graph/path_ai", post(post_graph_path_ai))
         .route("/graph/expand", get(get_graph_expand))
-        .route("/state/:key", get(get_state).put(put_state).delete(delete_state))
+        .route(
+            "/state/:key",
+            get(get_state).put(put_state).delete(delete_state),
+        )
         .route("/customers/:id/similar", get(get_similar))
-        .route("/customers/:id/channels", get(list_channels).post(add_channel))
-        .route("/channels/:id", axum::routing::patch(update_channel).delete(delete_channel))
+        .route(
+            "/customers/:id/channels",
+            get(list_channels).post(add_channel),
+        )
+        .route(
+            "/channels/:id",
+            axum::routing::patch(update_channel).delete(delete_channel),
+        )
         .route("/customers/:id/find_common", post(post_find_common))
         .route("/search", get(get_search))
         .route("/mentions", get(list_mentions))
@@ -271,7 +380,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/sync/callback", post(post_sync_callback))
         .route("/export.csv", get(export_csv))
         .route("/models", get(get_models).post(post_active_model))
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         // Merged-in surfaces, each kept in its own module so this file stays the
         // core-CRM router rather than a dumping ground.
@@ -311,9 +423,13 @@ async fn list_customers(
     State(s): State<Arc<AppState>>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let list = s
-        .db
-        .list_customers(q.q.as_deref(), q.tag.as_deref(), q.role.as_deref(), q.limit.unwrap_or(100))
+    let list =
+        s.db.list_customers(
+            q.q.as_deref(),
+            q.tag.as_deref(),
+            q.role.as_deref(),
+            q.limit.unwrap_or(100),
+        )
         .map_err(server)?;
     Ok(Json(json!({ "customers": list, "count": list.len() })))
 }
@@ -323,7 +439,10 @@ async fn create_customer(
     Json(body): Json<CustomerCreate>,
 ) -> Result<Json<Customer>, ApiError> {
     let id = s.db.create_customer(&body, now_ts()).map_err(bad)?;
-    let c = s.db.get_customer(id).map_err(server)?.ok_or_else(|| server("just-inserted customer vanished"))?;
+    let c =
+        s.db.get_customer(id)
+            .map_err(server)?
+            .ok_or_else(|| server("just-inserted customer vanished"))?;
     // Kick off the welcome sequence, but only for an actual lead and only when
     // the operator has opted in (`auto_welcome`, off by default). Adding a
     // contact to a CRM is a filing action; it must not message them by itself.
@@ -337,7 +456,10 @@ async fn get_customer(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let c = s.db.get_customer(id).map_err(server)?.ok_or_else(|| not_found("customer not found"))?;
+    let c =
+        s.db.get_customer(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found("customer not found"))?;
     // Include the 20 most recent interactions in the same response so the UI's
     // detail pane can render in one round-trip.
     let interactions = s.db.list_interactions(id, 20).map_err(server)?;
@@ -352,17 +474,27 @@ async fn update_customer(
     // Pluck the optional user-supplied change note before deserializing the
     // patch (unknown fields on CustomerPatch are ignored, but reading it first
     // keeps the intent explicit).
-    let change_note = body.get("change_note").and_then(|v| v.as_str()).map(str::to_string);
+    let change_note = body
+        .get("change_note")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let patch: CustomerPatch = serde_json::from_value(body).map_err(bad)?;
-    let old = s.db.get_customer(id).map_err(server)?.ok_or_else(|| not_found("customer not found"))?;
+    let old =
+        s.db.get_customer(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found("customer not found"))?;
     let now = now_ts();
     s.db.update_customer(id, &patch, now).map_err(bad)?;
-    let new = s.db.get_customer(id).map_err(server)?.ok_or_else(|| not_found("customer not found"))?;
+    let new =
+        s.db.get_customer(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found("customer not found"))?;
     // Auto-log a `profile_update` interaction so the change is visible in the
     // activity feed. Silent when nothing actually changed.
     if let Some((summary, diff)) = diff_customer(&old, &new) {
         let details = compose_details(&diff, change_note.as_deref());
-        let _ = s.db.add_interaction(id, "profile_update", &summary, &details, now, now);
+        let _ =
+            s.db.add_interaction(id, "profile_update", &summary, &details, now, now);
     }
     Ok(Json(new))
 }
@@ -405,10 +537,9 @@ async fn add_interaction(
 ) -> Result<Json<Interaction>, ApiError> {
     let now = now_ts();
     let occurred = body.occurred_at.unwrap_or(now);
-    let new_id = s
-        .db
-        .add_interaction(id, &body.kind, &body.summary, &body.details, occurred, now)
-        .map_err(bad)?;
+    let new_id =
+        s.db.add_interaction(id, &body.kind, &body.summary, &body.details, occurred, now)
+            .map_err(bad)?;
     let list = s.db.list_interactions(id, 500).map_err(server)?;
     let created = list
         .into_iter()
@@ -429,7 +560,10 @@ async fn post_summary(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let c = s.db.get_customer(id).map_err(server)?.ok_or_else(|| not_found("customer not found"))?;
+    let c =
+        s.db.get_customer(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found("customer not found"))?;
     let interactions = s.db.list_interactions(id, 20).map_err(server)?;
     match llm::summarize(&c, &interactions).await {
         Ok((text, model)) => Ok(Json(json!({ "text": text, "model": model }))),
@@ -441,7 +575,10 @@ async fn post_next_step(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let c = s.db.get_customer(id).map_err(server)?.ok_or_else(|| not_found("customer not found"))?;
+    let c =
+        s.db.get_customer(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found("customer not found"))?;
     let interactions = s.db.list_interactions(id, 10).map_err(server)?;
     match llm::suggest_next_step(&c, &interactions).await {
         Ok((text, model)) => Ok(Json(json!({ "text": text, "model": model }))),
@@ -517,13 +654,12 @@ async fn create_deal(
         period_end: b.period_end,
     };
     let id = s.db.create_deal(&create, now_ts()).map_err(bad)?;
-    let deal = s
-        .db
-        .list_deals(None)
-        .map_err(server)?
-        .into_iter()
-        .find(|d| d.id == id)
-        .ok_or_else(|| server("deal vanished after insert"))?;
+    let deal =
+        s.db.list_deals(None)
+            .map_err(server)?
+            .into_iter()
+            .find(|d| d.id == id)
+            .ok_or_else(|| server("deal vanished after insert"))?;
     Ok(Json(deal))
 }
 
@@ -532,22 +668,28 @@ async fn update_deal(
     Path(id): Path<i64>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    let change_note = body.get("change_note").and_then(|v| v.as_str()).map(str::to_string);
+    let change_note = body
+        .get("change_note")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     let patch: DealPatch = serde_json::from_value(body).map_err(bad)?;
     let all = s.db.list_deals(None).map_err(server)?;
-    let old = all.into_iter().find(|d| d.id == id).ok_or_else(|| not_found("deal not found"))?;
-    let now = now_ts();
-    s.db.update_deal(id, &patch, now).map_err(bad)?;
-    let new = s
-        .db
-        .list_deals(None)
-        .map_err(server)?
+    let old = all
         .into_iter()
         .find(|d| d.id == id)
         .ok_or_else(|| not_found("deal not found"))?;
+    let now = now_ts();
+    s.db.update_deal(id, &patch, now).map_err(bad)?;
+    let new =
+        s.db.list_deals(None)
+            .map_err(server)?
+            .into_iter()
+            .find(|d| d.id == id)
+            .ok_or_else(|| not_found("deal not found"))?;
     if let Some((summary, diff)) = diff_deal(&old, &new) {
         let details = compose_details(&diff, change_note.as_deref());
-        let _ = s.db.add_interaction(new.customer_id, "deal_update", &summary, &details, now, now);
+        let _ =
+            s.db.add_interaction(new.customer_id, "deal_update", &summary, &details, now, now);
     }
     Ok(Json(json!({ "deal": new })))
 }
@@ -574,10 +716,9 @@ async fn list_tasks(
     State(s): State<Arc<AppState>>,
     Query(q): Query<TasksQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let tasks = s
-        .db
-        .list_tasks(q.open_only.unwrap_or(true), q.limit.unwrap_or(200))
-        .map_err(server)?;
+    let tasks =
+        s.db.list_tasks(q.open_only.unwrap_or(true), q.limit.unwrap_or(200))
+            .map_err(server)?;
     Ok(Json(json!({ "tasks": tasks, "count": tasks.len() })))
 }
 
@@ -618,9 +759,8 @@ async fn create_task_common(
     customer_id: Option<i64>,
     b: TaskBody,
 ) -> Result<Json<Task>, ApiError> {
-    let id = s
-        .db
-        .create_task(
+    let id =
+        s.db.create_task(
             &TaskCreate {
                 customer_id,
                 title: b.title,
@@ -630,13 +770,12 @@ async fn create_task_common(
             now_ts(),
         )
         .map_err(bad)?;
-    let task = s
-        .db
-        .list_tasks(false, 1000)
-        .map_err(server)?
-        .into_iter()
-        .find(|t| t.id == id)
-        .ok_or_else(|| server("task vanished after insert"))?;
+    let task =
+        s.db.list_tasks(false, 1000)
+            .map_err(server)?
+            .into_iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| server("task vanished after insert"))?;
     Ok(Json(task))
 }
 
@@ -677,7 +816,9 @@ async fn get_upcoming(
     State(s): State<Arc<AppState>>,
     Query(q): Query<UpcomingQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let up = s.db.upcoming(now_ts(), q.days.unwrap_or(14)).map_err(server)?;
+    let up =
+        s.db.upcoming(now_ts(), q.days.unwrap_or(14))
+            .map_err(server)?;
     Ok(Json(up))
 }
 
@@ -691,7 +832,9 @@ async fn get_activity(
     State(s): State<Arc<AppState>>,
     Query(q): Query<ActivityQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let items = s.db.recent_activity(q.limit.unwrap_or(100)).map_err(server)?;
+    let items =
+        s.db.recent_activity(q.limit.unwrap_or(100))
+            .map_err(server)?;
     Ok(Json(json!({ "items": items })))
 }
 
@@ -750,13 +893,12 @@ async fn create_relationship(
     Json(body): Json<RelationshipCreate>,
 ) -> Result<Json<Relationship>, ApiError> {
     let id = s.db.add_relationship(&body, now_ts()).map_err(bad)?;
-    let rel = s
-        .db
-        .all_relationships()
-        .map_err(server)?
-        .into_iter()
-        .find(|r| r.id == id)
-        .ok_or_else(|| server("relationship vanished"))?;
+    let rel =
+        s.db.all_relationships()
+            .map_err(server)?
+            .into_iter()
+            .find(|r| r.id == id)
+            .ok_or_else(|| server("relationship vanished"))?;
     Ok(Json(rel))
 }
 
@@ -794,11 +936,17 @@ async fn get_graph_path(
             let id_set: std::collections::BTreeSet<i64> = ids.iter().copied().collect();
             let filtered: Vec<Value> = all_nodes
                 .into_iter()
-                .filter(|n| n.get("id").and_then(|v| v.as_i64()).map(|i| id_set.contains(&i)).unwrap_or(false))
+                .filter(|n| {
+                    n.get("id")
+                        .and_then(|v| v.as_i64())
+                        .map(|i| id_set.contains(&i))
+                        .unwrap_or(false)
+                })
                 .collect();
             // Only include edges that lie on the path itself.
             let all = s.db.all_relationships().map_err(server)?;
-            let mut edge_set: std::collections::HashSet<(i64, i64)> = std::collections::HashSet::new();
+            let mut edge_set: std::collections::HashSet<(i64, i64)> =
+                std::collections::HashSet::new();
             for w in ids.windows(2) {
                 edge_set.insert((w[0], w[1]));
                 edge_set.insert((w[1], w[0]));
@@ -830,8 +978,12 @@ async fn get_graph_expand(
     State(s): State<Arc<AppState>>,
     Query(q): Query<ExpandQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let (nodes, edges) = s.db.subgraph_within(q.focus, q.hops.unwrap_or(1)).map_err(server)?;
-    Ok(Json(json!({ "focus": q.focus, "hops": q.hops.unwrap_or(1), "nodes": nodes, "edges": edges })))
+    let (nodes, edges) =
+        s.db.subgraph_within(q.focus, q.hops.unwrap_or(1))
+            .map_err(server)?;
+    Ok(Json(
+        json!({ "focus": q.focus, "hops": q.hops.unwrap_or(1), "nodes": nodes, "edges": edges }),
+    ))
 }
 
 async fn get_state(
@@ -868,8 +1020,14 @@ async fn post_graph_path_ai(
     State(s): State<Arc<AppState>>,
     Query(q): Query<PathAiQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let a = s.db.get_customer(q.from).map_err(server)?.ok_or_else(|| not_found("from customer not found"))?;
-    let b = s.db.get_customer(q.to).map_err(server)?.ok_or_else(|| not_found("to customer not found"))?;
+    let a =
+        s.db.get_customer(q.from)
+            .map_err(server)?
+            .ok_or_else(|| not_found("from customer not found"))?;
+    let b =
+        s.db.get_customer(q.to)
+            .map_err(server)?
+            .ok_or_else(|| not_found("to customer not found"))?;
     let a_ctx = s.db.compact_context(q.from).map_err(server)?;
     let b_ctx = s.db.compact_context(q.to).map_err(server)?;
     // BFS path (names) for grounding.
@@ -879,9 +1037,15 @@ async fn post_graph_path_ai(
             let all_nodes = s.db.graph_nodes().map_err(server)?;
             let by_id: std::collections::HashMap<i64, String> = all_nodes
                 .iter()
-                .filter_map(|n| Some((n.get("id")?.as_i64()?, n.get("name")?.as_str()?.to_string())))
+                .filter_map(|n| {
+                    Some((n.get("id")?.as_i64()?, n.get("name")?.as_str()?.to_string()))
+                })
                 .collect();
-            Some(ids.iter().map(|i| by_id.get(i).cloned().unwrap_or_default()).collect())
+            Some(
+                ids.iter()
+                    .map(|i| by_id.get(i).cloned().unwrap_or_default())
+                    .collect(),
+            )
         }
         None => None,
     };
@@ -912,14 +1076,15 @@ async fn add_channel(
     Path(customer_id): Path<i64>,
     Json(body): Json<ChannelCreate>,
 ) -> Result<Json<CustomerChannel>, ApiError> {
-    let id = s.db.add_channel(customer_id, &body, now_ts()).map_err(bad)?;
-    let ch = s
-        .db
-        .list_channels(customer_id)
-        .map_err(server)?
-        .into_iter()
-        .find(|c| c.id == id)
-        .ok_or_else(|| server("channel vanished"))?;
+    let id =
+        s.db.add_channel(customer_id, &body, now_ts())
+            .map_err(bad)?;
+    let ch =
+        s.db.list_channels(customer_id)
+            .map_err(server)?
+            .into_iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| server("channel vanished"))?;
     Ok(Json(ch))
 }
 
@@ -944,10 +1109,15 @@ async fn post_find_common(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let focus = s.db.get_customer(id).map_err(server)?.ok_or_else(|| not_found("customer not found"))?;
+    let focus =
+        s.db.get_customer(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found("customer not found"))?;
     let focus_ctx = s.db.compact_context(id).map_err(server)?;
     // Collect (id, name, compact_context) for every other customer.
-    let others_meta = s.db.list_customers(None, None, None, 2000).map_err(server)?;
+    let others_meta =
+        s.db.list_customers(None, None, None, 2000)
+            .map_err(server)?;
     let others: Vec<(i64, String, String)> = others_meta
         .into_iter()
         .filter(|c| c.id != id)
@@ -1007,7 +1177,9 @@ async fn get_search(
     Query(qq): Query<SearchQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let hits = s.db.search(&qq.q, qq.limit.unwrap_or(30)).map_err(server)?;
-    Ok(Json(json!({ "q": qq.q, "count": hits.len(), "hits": hits })))
+    Ok(Json(
+        json!({ "q": qq.q, "count": hits.len(), "hits": hits }),
+    ))
 }
 
 // ---- extracted mentions ----
@@ -1024,10 +1196,9 @@ async fn list_mentions(
     State(s): State<Arc<AppState>>,
     Query(q): Query<MentionsQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let m = s
-        .db
-        .list_mentions(q.unresolved_only.unwrap_or(false), q.limit.unwrap_or(100))
-        .map_err(server)?;
+    let m =
+        s.db.list_mentions(q.unresolved_only.unwrap_or(false), q.limit.unwrap_or(100))
+            .map_err(server)?;
     Ok(Json(json!({ "mentions": m })))
 }
 
@@ -1037,7 +1208,10 @@ async fn post_extract(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let c = s.db.get_customer(id).map_err(server)?.ok_or_else(|| not_found("customer not found"))?;
+    let c =
+        s.db.get_customer(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found("customer not found"))?;
     let interactions = s.db.list_interactions(id, 30).map_err(server)?;
     let (people, model) = match llm::extract_graph(&c, &interactions).await {
         Ok(v) => v,
@@ -1047,7 +1221,9 @@ async fn post_extract(
     // insensitive substring OR exact). Auto-materialize a relationship when we
     // find a confident hit; otherwise save as an unresolved mention.
     let now = now_ts();
-    let all_customers = s.db.list_customers(None, None, None, 5000).map_err(server)?;
+    let all_customers =
+        s.db.list_customers(None, None, None, 5000)
+            .map_err(server)?;
     let mut created_rels = 0;
     let mut created_mentions = 0;
     let mut resolved_hits = Vec::new();
@@ -1058,20 +1234,41 @@ async fn post_extract(
         // Best-effort name match — prefer exact (case-insensitive), else the
         // first customer whose name contains all tokens of the extracted name.
         let name_lc = p.name.to_lowercase();
-        let resolved = all_customers.iter().find(|c| c.name.to_lowercase() == name_lc).map(|c| c.id).or_else(|| {
-            let tokens: Vec<String> = name_lc.split_whitespace().map(str::to_string).collect();
-            all_customers
-                .iter()
-                .find(|c| {
-                    let n = c.name.to_lowercase();
-                    tokens.iter().all(|t| n.contains(t))
-                })
-                .map(|c| c.id)
-        });
-        let kind = if p.kind.trim().is_empty() { "contact_of" } else { p.kind.trim() };
-        let role_guess = if p.role_guess.trim().is_empty() { "contact" } else { p.role_guess.trim() };
-        s.db.add_mention(id, &p.name, role_guess, kind, &p.context, p.confidence, resolved, now)
-            .map_err(bad)?;
+        let resolved = all_customers
+            .iter()
+            .find(|c| c.name.to_lowercase() == name_lc)
+            .map(|c| c.id)
+            .or_else(|| {
+                let tokens: Vec<String> = name_lc.split_whitespace().map(str::to_string).collect();
+                all_customers
+                    .iter()
+                    .find(|c| {
+                        let n = c.name.to_lowercase();
+                        tokens.iter().all(|t| n.contains(t))
+                    })
+                    .map(|c| c.id)
+            });
+        let kind = if p.kind.trim().is_empty() {
+            "contact_of"
+        } else {
+            p.kind.trim()
+        };
+        let role_guess = if p.role_guess.trim().is_empty() {
+            "contact"
+        } else {
+            p.role_guess.trim()
+        };
+        s.db.add_mention(
+            id,
+            &p.name,
+            role_guess,
+            kind,
+            &p.context,
+            p.confidence,
+            resolved,
+            now,
+        )
+        .map_err(bad)?;
         created_mentions += 1;
         if let Some(r) = resolved {
             if r != id {
@@ -1103,7 +1300,9 @@ struct SyncCalendarBody {
     #[serde(default = "default_true")]
     space_calendar: bool,
 }
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Push open tasks + upcoming birthdays to configured Space App calendars.
 /// The Space Apps live in the same daemon on their own ports — luna-calendar
@@ -1128,7 +1327,11 @@ async fn post_sync_calendar(
 pub async fn sync_calendar_impl(db: &Db, space_calendar: bool) -> Result<Value, String> {
     let tasks = db.list_tasks(true, 500).map_err(|e| e.to_string())?;
     let upcoming = db.upcoming(now_ts(), 365).map_err(|e| e.to_string())?;
-    let birthdays = upcoming.get("birthdays").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let birthdays = upcoming
+        .get("birthdays")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     // Build the event batch once — every target gets the same payload.
     let mut events: Vec<Value> = Vec::new();
@@ -1140,7 +1343,9 @@ pub async fn sync_calendar_impl(db: &Db, space_calendar: bool) -> Result<Value, 
             desc.push_str(&format!("👤 {}", name));
         }
         if !t.details.trim().is_empty() {
-            if !desc.is_empty() { desc.push_str("\n"); }
+            if !desc.is_empty() {
+                desc.push_str("\n");
+            }
             desc.push_str(t.details.trim());
         }
         events.push(json!({
@@ -1158,7 +1363,9 @@ pub async fn sync_calendar_impl(db: &Db, space_calendar: bool) -> Result<Value, 
             b.get("customer_id").and_then(|v| v.as_i64()),
             b.get("customer_name").and_then(|v| v.as_str()),
             b.get("next_at").and_then(|v| v.as_i64()),
-        ) else { continue };
+        ) else {
+            continue;
+        };
         events.push(json!({
             "source": "crm",
             "external_id": format!("crm-birthday-{}", cid),
@@ -1171,7 +1378,9 @@ pub async fn sync_calendar_impl(db: &Db, space_calendar: bool) -> Result<Value, 
     }
 
     let mut targets: Vec<&'static str> = Vec::new();
-    if space_calendar { targets.push("space-calendar"); }
+    if space_calendar {
+        targets.push("space-calendar");
+    }
     if targets.is_empty() {
         return Ok(json!({
             "ok": false,
@@ -1227,7 +1436,9 @@ pub async fn sync_calendar_impl(db: &Db, space_calendar: bool) -> Result<Value, 
                 per_target.push(json!({ "target": t, "ok": false, "http": r.status().as_u16() }));
             }
             Err(_) => {
-                warnings.push(format!("{t} không truy cập được (Space App có thể chưa cài hoặc chưa chạy)."));
+                warnings.push(format!(
+                    "{t} không truy cập được (Space App có thể chưa cài hoặc chưa chạy)."
+                ));
                 per_target.push(json!({ "target": t, "ok": false, "unreachable": true }));
             }
         }
@@ -1270,10 +1481,18 @@ async fn post_sync_callback(
 ) -> Result<Json<Value>, ApiError> {
     let (kind, id) = match parse_external_id(&body.external_id) {
         Some(v) => v,
-        None => return Ok(Json(json!({ "ok": false, "reason": "external_id không do CRM tạo" }))),
+        None => {
+            return Ok(Json(
+                json!({ "ok": false, "reason": "external_id không do CRM tạo" }),
+            ))
+        }
     };
     let now = now_ts();
-    let src = if body.source.is_empty() { "space-calendar".to_string() } else { body.source };
+    let src = if body.source.is_empty() {
+        "space-calendar".to_string()
+    } else {
+        body.source
+    };
 
     match (body.action.as_str(), kind) {
         ("delete", "task") => {
@@ -1282,21 +1501,33 @@ async fn post_sync_callback(
             // "why is this task gone?".
             let cid = 0; // task has no direct customer link retained after delete
             let _ = cid;
-            return Ok(Json(json!({ "ok": true, "action": "deleted_task", "task_id": id })));
+            return Ok(Json(
+                json!({ "ok": true, "action": "deleted_task", "task_id": id }),
+            ));
         }
         ("delete", "birthday") => {
-            return Ok(Json(json!({ "ok": true, "action": "ignored_birthday_delete", "customer_id": id })));
+            return Ok(Json(
+                json!({ "ok": true, "action": "ignored_birthday_delete", "customer_id": id }),
+            ));
         }
         ("update", "task") => {
             let new_due = body.changes.get("occurred_at").and_then(|v| v.as_i64());
-            let new_title = body.changes.get("title").and_then(|v| v.as_str()).map(str::to_string);
+            let new_title = body
+                .changes
+                .get("title")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
             let did_something = new_due.is_some() || new_title.is_some();
             if !did_something {
-                return Ok(Json(json!({ "ok": true, "reason": "no supported changes" })));
+                return Ok(Json(
+                    json!({ "ok": true, "reason": "no supported changes" }),
+                ));
             }
             // Update by touching the task row directly (there's no partial
             // task-patch endpoint; do it via a mini SQL escape hatch on the DB).
-            let ok = s.db.reverse_update_task(id, new_title.as_deref(), new_due, now).is_ok();
+            let ok =
+                s.db.reverse_update_task(id, new_title.as_deref(), new_due, now)
+                    .is_ok();
             if let Ok(t) = s.db.list_tasks(false, 5000) {
                 if let Some(tt) = t.iter().find(|t| t.id == id) {
                     if let Some(cid) = tt.customer_id {
@@ -1304,14 +1535,21 @@ async fn post_sync_callback(
                         // external edit.
                         let summary = format!("Cập nhật task \"{}\" từ {}", tt.title, src);
                         let details = format!("Thay đổi qua callback: {:?}", body.changes);
-                        let _ = s.db.add_interaction(cid, "sync_update", &summary, &details, now, now);
+                        let _ =
+                            s.db.add_interaction(cid, "sync_update", &summary, &details, now, now);
                     }
                 }
             }
-            return Ok(Json(json!({ "ok": ok, "action": "updated_task", "task_id": id })));
+            return Ok(Json(
+                json!({ "ok": ok, "action": "updated_task", "task_id": id }),
+            ));
         }
         ("update", "birthday") => {
-            let new_bday = body.changes.get("title").and_then(|v| v.as_str()).map(str::to_string);
+            let new_bday = body
+                .changes
+                .get("title")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
             let new_at = body.changes.get("occurred_at").and_then(|v| v.as_i64());
             if let Some(ts) = new_at {
                 // Convert unix ts → YYYY-MM-DD and store on customer.birthday.
@@ -1325,11 +1563,17 @@ async fn post_sync_callback(
                     now,
                 );
                 let _ = new_bday;
-                return Ok(Json(json!({ "ok": true, "action": "updated_birthday", "customer_id": id })));
+                return Ok(Json(
+                    json!({ "ok": true, "action": "updated_birthday", "customer_id": id }),
+                ));
             }
-            return Ok(Json(json!({ "ok": false, "reason": "birthday update needs occurred_at" })));
+            return Ok(Json(
+                json!({ "ok": false, "reason": "birthday update needs occurred_at" }),
+            ));
         }
-        _ => Ok(Json(json!({ "ok": false, "reason": format!("unknown action/kind: {} / {}", body.action, kind) }))),
+        _ => Ok(Json(
+            json!({ "ok": false, "reason": format!("unknown action/kind: {} / {}", body.action, kind) }),
+        )),
     }
 }
 
@@ -1385,7 +1629,10 @@ async fn export_csv(State(s): State<Arc<AppState>>) -> Response {
             (
                 [
                     ("content-type", "text/csv; charset=utf-8".to_string()),
-                    ("content-disposition", format!("attachment; filename=\"{filename}\"")),
+                    (
+                        "content-disposition",
+                        format!("attachment; filename=\"{filename}\""),
+                    ),
                 ],
                 body,
             )
@@ -1396,7 +1643,10 @@ async fn export_csv(State(s): State<Arc<AppState>>) -> Response {
 }
 
 async fn get_models() -> Result<Json<Value>, ApiError> {
-    llm::list_models().await.map(Json).map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))
+    llm::list_models()
+        .await
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))
 }
 
 #[derive(Deserialize)]
@@ -1404,6 +1654,8 @@ struct SetModelBody {
     id: String,
 }
 async fn post_active_model(Json(b): Json<SetModelBody>) -> Result<Json<Value>, ApiError> {
-    llm::set_active_model(&b.id).await.map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
+    llm::set_active_model(&b.id)
+        .await
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(json!({ "ok": true, "id": b.id })))
 }

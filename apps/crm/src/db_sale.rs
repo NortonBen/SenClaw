@@ -247,7 +247,10 @@ impl Db {
                     params![customer_id, s.clamp(0, 100)],
                 )?;
             }
-            c.execute("UPDATE customers SET updated_at=?2 WHERE id=?1", params![customer_id, now])?;
+            c.execute(
+                "UPDATE customers SET updated_at=?2 WHERE id=?1",
+                params![customer_id, now],
+            )?;
             Ok(())
         })
     }
@@ -306,7 +309,11 @@ impl Db {
     /// Customers who have gone quiet long enough to deserve a check-in, and
     /// whose last check-in is outside the cooldown. Never returns unsubscribed
     /// or already-churned people.
-    pub fn leads_for_checkin(&self, inactive_before: i64, cooldown_before: i64) -> Result<Vec<i64>> {
+    pub fn leads_for_checkin(
+        &self,
+        inactive_before: i64,
+        cooldown_before: i64,
+    ) -> Result<Vec<i64>> {
         self.with(|c| {
             let mut stmt = c.prepare(
                 "SELECT id FROM customers
@@ -318,7 +325,9 @@ impl Db {
                  LIMIT 50",
             )?;
             let rows = stmt
-                .query_map(params![inactive_before, cooldown_before], |r| r.get::<_, i64>(0))?
+                .query_map(params![inactive_before, cooldown_before], |r| {
+                    r.get::<_, i64>(0)
+                })?
                 .filter_map(|r| r.ok())
                 .collect();
             Ok(rows)
@@ -387,7 +396,14 @@ impl Db {
         })
     }
 
-    pub fn resolve_review(&self, id: i64, status: &str, edited: &str, by: &str, now: i64) -> Result<()> {
+    pub fn resolve_review(
+        &self,
+        id: i64,
+        status: &str,
+        edited: &str,
+        by: &str,
+        now: i64,
+    ) -> Result<()> {
         self.with(|c| {
             let n = c.execute(
                 "UPDATE sale_reviews SET status=?2, edited=?3, approved_by=?4, approved_at=?5
@@ -400,7 +416,6 @@ impl Db {
             Ok(())
         })
     }
-
 
     // ---- escalations ----
 
@@ -466,7 +481,6 @@ impl Db {
         })
     }
 
-
     // ---- agent action log ----
 
     pub fn log_action(
@@ -484,7 +498,15 @@ impl Db {
                 "INSERT INTO sale_actions(customer_id, action_type, reasoning, tool_calls, tokens,
                                           needs_review, created_at)
                  VALUES(?1,?2,?3,?4,?5,?6,?7)",
-                params![customer_id, action_type, reasoning, tool_calls, tokens, needs_review as i64, now],
+                params![
+                    customer_id,
+                    action_type,
+                    reasoning,
+                    tool_calls,
+                    tokens,
+                    needs_review as i64,
+                    now
+                ],
             )?;
             Ok(c.last_insert_rowid())
         })
@@ -529,7 +551,8 @@ impl Db {
                         key: r.get("key")?,
                         name: r.get("name")?,
                         description: r.get("description")?,
-                        steps: serde_json::from_str(&steps).unwrap_or(serde_json::Value::Array(vec![])),
+                        steps: serde_json::from_str(&steps)
+                            .unwrap_or(serde_json::Value::Array(vec![])),
                         enabled: r.get::<_, i64>("enabled")? != 0,
                         created_at: r.get("created_at")?,
                     })
@@ -706,16 +729,21 @@ impl Db {
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         self.with(|c| {
             let v = c
-                .query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| {
-                    r.get::<_, String>(0)
-                })
+                .query_row(
+                    "SELECT value FROM settings WHERE key=?1",
+                    params![key],
+                    |r| r.get::<_, String>(0),
+                )
                 .optional()?;
             Ok(v)
         })
     }
 
     pub fn setting_or(&self, key: &str, default: &str) -> String {
-        self.get_setting(key).ok().flatten().unwrap_or_else(|| default.to_string())
+        self.get_setting(key)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| default.to_string())
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
@@ -750,9 +778,8 @@ impl Db {
     /// the number sag every time a new lead arrives.
     pub fn sale_stats(&self) -> Result<serde_json::Value> {
         self.with(|c| {
-            let mut stmt = c.prepare(
-                "SELECT sale_stage, COUNT(*) FROM customers GROUP BY sale_stage",
-            )?;
+            let mut stmt =
+                c.prepare("SELECT sale_stage, COUNT(*) FROM customers GROUP BY sale_stage")?;
             let mut funnel = serde_json::Map::new();
             let rows = stmt
                 .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
@@ -760,14 +787,22 @@ impl Db {
             for (stage, n) in rows {
                 funnel.insert(stage, serde_json::json!(n));
             }
-            let won = funnel.get("closed_won").and_then(|v| v.as_i64()).unwrap_or(0);
+            let won = funnel
+                .get("closed_won")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
             let churned = funnel.get("churned").and_then(|v| v.as_i64()).unwrap_or(0);
             let decided = won + churned;
-            let win_rate = if decided > 0 { (won as f64) * 100.0 / (decided as f64) } else { 0.0 };
-            let hot: i64 =
-                c.query_row("SELECT COUNT(*) FROM customers WHERE temperature='hot'", [], |r| {
-                    r.get(0)
-                })?;
+            let win_rate = if decided > 0 {
+                (won as f64) * 100.0 / (decided as f64)
+            } else {
+                0.0
+            };
+            let hot: i64 = c.query_row(
+                "SELECT COUNT(*) FROM customers WHERE temperature='hot'",
+                [],
+                |r| r.get(0),
+            )?;
             let pending: i64 = c.query_row(
                 "SELECT COUNT(*) FROM sale_reviews WHERE status='pending'",
                 [],
@@ -778,10 +813,11 @@ impl Db {
                 [],
                 |r| r.get(0),
             )?;
-            let unsub: i64 =
-                c.query_row("SELECT COUNT(*) FROM customers WHERE unsubscribed=1", [], |r| {
-                    r.get(0)
-                })?;
+            let unsub: i64 = c.query_row(
+                "SELECT COUNT(*) FROM customers WHERE unsubscribed=1",
+                [],
+                |r| r.get(0),
+            )?;
             let tokens: i64 = c.query_row(
                 "SELECT COALESCE(SUM(tokens), 0) FROM sale_actions",
                 [],

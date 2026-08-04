@@ -55,7 +55,10 @@ fn channels() -> Option<&'static Arc<ChannelManager>> {
 /// meanings travelled with the operators who set them — and are converted to the
 /// seconds this schema stores at the point of use.
 fn knob(env_key: &str, default: i64) -> i64 {
-    std::env::var(env_key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    std::env::var(env_key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 /// What happened to one outbound attempt.
@@ -154,7 +157,15 @@ pub async fn send(
         .ok_or_else(|| format!("không có khách hàng {customer_id}"))?;
     let now = now_secs();
 
-    match guardrail::gate(db, customer_id, state.unsubscribed, text, is_reply, bypass_risky, now) {
+    match guardrail::gate(
+        db,
+        customer_id,
+        state.unsubscribed,
+        text,
+        is_reply,
+        bypass_risky,
+        now,
+    ) {
         Gate::Blocked(why) => {
             let _ = db.log_action(
                 Some(customer_id),
@@ -284,7 +295,10 @@ fn resolve_route(
         .into_iter()
         .find(|c| c.kind == kind && !c.value.trim().is_empty())
         .ok_or_else(|| {
-            format!("khách hàng {} chưa có định danh '{kind}' để gửi", state.customer_id)
+            format!(
+                "khách hàng {} chưa có định danh '{kind}' để gửi",
+                state.customer_id
+            )
         })?;
     let conv = db
         .get_or_create_conversation(ch.id, kind, identity.value.trim(), &state.name, now)
@@ -342,15 +356,24 @@ async fn build_context(db: &Arc<Db>, state: &SaleState, query: &str) -> String {
     }
     if let Ok(product) = senclaw::wiki_search(query).await {
         if !product.trim().is_empty() {
-            ctx.push_str(&format!("\n## Kiến thức sản phẩm (tham khảo)\n{}\n", product.trim()));
+            ctx.push_str(&format!(
+                "\n## Kiến thức sản phẩm (tham khảo)\n{}\n",
+                product.trim()
+            ));
         }
     }
 
-    let history = db.recent_messages_of_customer(state.customer_id, 10).unwrap_or_default();
+    let history = db
+        .recent_messages_of_customer(state.customer_id, 10)
+        .unwrap_or_default();
     if !history.is_empty() {
         ctx.push_str("\n## Hội thoại gần đây\n");
         for m in &history {
-            let who = if m.direction == "inbound" { "Khách" } else { "Mình" };
+            let who = if m.direction == "inbound" {
+                "Khách"
+            } else {
+                "Mình"
+            };
             ctx.push_str(&format!("{}: {}\n", who, m.content));
         }
     }
@@ -437,7 +460,17 @@ pub async fn next_action(
     if draft.is_empty() {
         return Err("mô hình trả về rỗng".into());
     }
-    let outcome = send(db, events, channels, customer_id, &kind, &draft, false, false).await?;
+    let outcome = send(
+        db,
+        events,
+        channels,
+        customer_id,
+        &kind,
+        &draft,
+        false,
+        false,
+    )
+    .await?;
     if let SendOutcome::Failed { error } = &outcome {
         return Err(error.clone());
     }
@@ -494,7 +527,9 @@ pub async fn on_inbound(
     let complaint = guardrail::detect_complaint(db, text);
     if !complaint.is_empty() {
         let context = json!({ "matched": complaint, "message": text }).to_string();
-        let esc = db.create_escalation(customer_id, "complaint", &context, "", now).ok();
+        let esc = db
+            .create_escalation(customer_id, "complaint", &context, "", now)
+            .ok();
         let _ = db.log_action(
             Some(customer_id),
             "escalate",
@@ -532,8 +567,17 @@ pub async fn on_inbound(
             return;
         }
     };
-    if let Err(e) =
-        send(db, events, channels, customer_id, &conv.channel_kind, &draft, true, false).await
+    if let Err(e) = send(
+        db,
+        events,
+        channels,
+        customer_id,
+        &conv.channel_kind,
+        &draft,
+        true,
+        false,
+    )
+    .await
     {
         eprintln!("crm/sale: gửi trả lời cho khách {customer_id} thất bại: {e}");
     }
@@ -551,17 +595,31 @@ pub async fn approve_review(
     edited: Option<&str>,
     by: &str,
 ) -> Result<Value, String> {
-    let review =
-        db.get_review(review_id).map_err(|e| e.to_string())?.ok_or("không có review")?;
+    let review = db
+        .get_review(review_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("không có review")?;
     if review.status != "pending" {
         return Err(format!("review đã {}", review.status));
     }
     let edited = edited.filter(|s| !s.trim().is_empty());
     let content = edited.unwrap_or(&review.draft);
-    let outcome =
-        send(db, events, channels, review.customer_id, &review.channel, content, false, true)
-            .await?;
-    let status = if edited.is_some() { "edited" } else { "approved" };
+    let outcome = send(
+        db,
+        events,
+        channels,
+        review.customer_id,
+        &review.channel,
+        content,
+        false,
+        true,
+    )
+    .await?;
+    let status = if edited.is_some() {
+        "edited"
+    } else {
+        "approved"
+    };
     let _ = db.resolve_review(review_id, status, edited.unwrap_or(""), by, now_secs());
     Ok(json!({
         "ok": outcome.is_sent(),
@@ -593,7 +651,10 @@ pub async fn start_sequence(
     if state.unsubscribed {
         return Err("khách đã hủy nhận tin".into());
     }
-    if db.has_active_run(customer_id, sequence_key).map_err(|e| e.to_string())? {
+    if db
+        .has_active_run(customer_id, sequence_key)
+        .map_err(|e| e.to_string())?
+    {
         return Err(format!("khách đã đang trong chuỗi '{sequence_key}'"));
     }
     let steps = db.sequence_steps(sequence_key).map_err(|e| e.to_string())?;
@@ -601,9 +662,12 @@ pub async fn start_sequence(
         return Err(format!("chuỗi '{sequence_key}' không tồn tại hoặc rỗng"));
     }
     let now = now_secs();
-    let run_id =
-        db.create_sequence_run(customer_id, sequence_key, now).map_err(|e| e.to_string())?;
-    let delay_h = step_field(&steps[0], "delay_hours").and_then(|v| v.as_i64()).unwrap_or(0);
+    let run_id = db
+        .create_sequence_run(customer_id, sequence_key, now)
+        .map_err(|e| e.to_string())?;
+    let delay_h = step_field(&steps[0], "delay_hours")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     let run_at = now + delay_h * 3600;
     db.enqueue_job(
         customer_id,
@@ -678,7 +742,13 @@ pub async fn run_job(
             .to_string();
         (intent, Some((run_id, key, step)))
     } else {
-        (payload["intent"].as_str().unwrap_or("share_value_content").to_string(), None)
+        (
+            payload["intent"]
+                .as_str()
+                .unwrap_or("share_value_content")
+                .to_string(),
+            None,
+        )
     };
 
     match next_action(db, events, channels, job.customer_id, &intent, None).await {
@@ -689,8 +759,9 @@ pub async fn run_job(
                 let steps = db.sequence_steps(&key).unwrap_or_default();
                 let next = step + 1;
                 if let Some(next_step) = steps.get(next as usize) {
-                    let delay_h =
-                        step_field(next_step, "delay_hours").and_then(|v| v.as_i64()).unwrap_or(24);
+                    let delay_h = step_field(next_step, "delay_hours")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(24);
                     let run_at = now_secs() + delay_h * 3600;
                     let _ = db.advance_run(run_id, next, "active", now_secs());
                     let _ = db.enqueue_job(
@@ -733,20 +804,29 @@ pub async fn check_inactive_pass(db: &Arc<Db>, events: &broadcast::Sender<String
         Err(_) => return,
     };
     for id in ids {
-        let Some(state) = db.sale_state(id).ok().flatten() else { continue };
+        let Some(state) = db.sale_state(id).ok().flatten() else {
+            continue;
+        };
         if state.checkin_count >= max_checkins {
             // Silent through the whole check-in streak → give up gracefully.
             let _ = db.update_sale_stage(id, Some("churned"), Some("churned"), None, now);
             let _ = db.log_action(
                 Some(id),
                 "auto_churn",
-                &format!("im lặng, {} lần check-in không hồi đáp", state.checkin_count),
+                &format!(
+                    "im lặng, {} lần check-in không hồi đáp",
+                    state.checkin_count
+                ),
                 &json!([{ "tool": "check_inactive" }]).to_string(),
                 0,
                 false,
                 now,
             );
-            emit(events, "lead", json!({ "customerId": id, "stage": "churned" }));
+            emit(
+                events,
+                "lead",
+                json!({ "customerId": id, "stage": "churned" }),
+            );
         } else {
             // Enqueue an immediate re-engage touch; the scheduler drafts + sends it.
             let _ = db.enqueue_job(

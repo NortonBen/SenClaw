@@ -40,7 +40,11 @@ pub fn http() -> &'static reqwest::Client {
 }
 
 pub fn bridge_url() -> String {
-    format!("{}/api/space/apps/{}/bridge", base_url().trim_end_matches('/'), app_id())
+    format!(
+        "{}/api/space/apps/{}/bridge",
+        base_url().trim_end_matches('/'),
+        app_id()
+    )
 }
 
 /// POST one action to the app bridge. Returns the whole envelope on
@@ -53,7 +57,10 @@ pub async fn bridge(action: &str, payload: Value) -> Result<Value, String> {
         .send()
         .await
         .map_err(|e| format!("bridge {action} failed ({url}): {e}"))?;
-    let v: Value = resp.json().await.map_err(|e| format!("invalid bridge response: {e}"))?;
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("invalid bridge response: {e}"))?;
     match v.get("status").and_then(|x| x.as_str()) {
         Some("ok") => Ok(v),
         _ => Err(v
@@ -73,9 +80,12 @@ pub fn lead_space(customer_id: i64) -> String {
 }
 
 pub async fn knowledge_save(space: &str, text: &str, source: &str) -> Result<(), String> {
-    bridge("knowledge.save", json!({ "text": text, "space": space, "source": source }))
-        .await
-        .map(|_| ())
+    bridge(
+        "knowledge.save",
+        json!({ "text": text, "space": space, "source": source }),
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Scoped recall with synthesis; empty when the space holds nothing relevant.
@@ -87,7 +97,11 @@ pub async fn knowledge_recall(space: &str, query: &str, limit: i64) -> Result<St
         json!({ "query": query, "space": space, "limit": limit, "mode": "hybrid" }),
     )
     .await?;
-    Ok(v.get("answer").and_then(|x| x.as_str()).unwrap_or("").trim().to_string())
+    Ok(v.get("answer")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string())
 }
 
 // ---- wiki (product knowledge for grounding) ----
@@ -95,8 +109,11 @@ pub async fn knowledge_recall(space: &str, query: &str, limit: i64) -> Result<St
 /// Top wiki snippets for a query, joined. Shape-tolerant: the daemon has
 /// returned `results`/`hits` carrying `snippet`/`body`/`content` over time.
 pub async fn wiki_search(query: &str) -> Result<String, String> {
-    let url =
-        format!("{}/api/wiki/search?q={}", base_url().trim_end_matches('/'), urlencode(query));
+    let url = format!(
+        "{}/api/wiki/search?q={}",
+        base_url().trim_end_matches('/'),
+        urlencode(query)
+    );
     let resp = http().get(&url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("wiki search: daemon trả về {}", resp.status()));

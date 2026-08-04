@@ -13,7 +13,10 @@ use serde_json::{json, Value};
 use std::{convert::Infallible, sync::Arc};
 
 use crate::api::{now_ts, AppState};
-use crate::db::{ChannelCreate, ChannelPatch, CustomerCreate, CustomerPatch, DealCreate, DealPatch, RelationshipCreate, TaskCreate};
+use crate::db::{
+    ChannelCreate, ChannelPatch, CustomerCreate, CustomerPatch, DealCreate, DealPatch,
+    RelationshipCreate, TaskCreate,
+};
 
 #[derive(Deserialize, Debug)]
 pub struct JsonRpcRequest {
@@ -64,7 +67,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "crm-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -449,7 +454,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let tag = args["tag"].as_str().map(str::to_string);
             let status = args["status"].as_str().map(str::to_string);
             let limit = args["limit"].as_i64().unwrap_or(50);
-            match state.db.list_customers(q.as_deref(), tag.as_deref(), status.as_deref(), limit) {
+            match state
+                .db
+                .list_customers(q.as_deref(), tag.as_deref(), status.as_deref(), limit)
+            {
                 Ok(list) => json_result(json!({ "count": list.len(), "customers": list })),
                 Err(e) => error_result(e.to_string()),
             }
@@ -488,8 +496,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 Ok(id) => {
                     // Link the named organization in the same call, resolving
                     // before creating so "Bayer" twice doesn't become two accounts.
-                    if let Some(name) =
-                        args["organization_name"].as_str().map(str::trim).filter(|s| !s.is_empty())
+                    if let Some(name) = args["organization_name"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
                     {
                         let org = match state.db.find_organization_by_name(name) {
                             Ok(Some(oid)) => Ok(oid),
@@ -627,7 +637,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let details = args["details"].as_str().unwrap_or("");
             let now = now_ts();
             let occurred = args["occurred_at"].as_i64().unwrap_or(now);
-            match state.db.add_interaction(cid, kind, summary, details, occurred, now) {
+            match state
+                .db
+                .add_interaction(cid, kind, summary, details, occurred, now)
+            {
                 Ok(id) => {
                     let list = state.db.list_interactions(cid, 500).unwrap_or_default();
                     let created = list.into_iter().find(|i| i.id == id);
@@ -661,7 +674,12 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             };
             match state.db.create_deal(&create, now_ts()) {
                 Ok(id) => {
-                    let deal = state.db.list_deals(None).unwrap_or_default().into_iter().find(|d| d.id == id);
+                    let deal = state
+                        .db
+                        .list_deals(None)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|d| d.id == id);
                     json_result(json!({ "deal": deal }))
                 }
                 Err(e) => error_result(e.to_string()),
@@ -677,7 +695,12 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             };
             match state.db.update_deal(id, &patch, now_ts()) {
                 Ok(()) => {
-                    let deal = state.db.list_deals(None).unwrap_or_default().into_iter().find(|d| d.id == id);
+                    let deal = state
+                        .db
+                        .list_deals(None)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|d| d.id == id);
                     json_result(json!({ "deal": deal }))
                 }
                 Err(e) => error_result(e.to_string()),
@@ -712,7 +735,12 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             };
             match state.db.create_task(&create, now_ts()) {
                 Ok(id) => {
-                    let task = state.db.list_tasks(false, 1000).unwrap_or_default().into_iter().find(|t| t.id == id);
+                    let task = state
+                        .db
+                        .list_tasks(false, 1000)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|t| t.id == id);
                     json_result(json!({ "task": task }))
                 }
                 Err(e) => error_result(e.to_string()),
@@ -756,7 +784,12 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             };
             match state.db.add_relationship(&create, now_ts()) {
                 Ok(id) => {
-                    let rel = state.db.all_relationships().unwrap_or_default().into_iter().find(|r| r.id == id);
+                    let rel = state
+                        .db
+                        .all_relationships()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|r| r.id == id);
                     json_result(json!({ "relationship": rel }))
                 }
                 Err(e) => error_result(e.to_string()),
@@ -807,9 +840,13 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 state.db.graph_nodes().ok().map(|nodes| {
                     let by_id: std::collections::HashMap<i64, String> = nodes
                         .iter()
-                        .filter_map(|n| Some((n.get("id")?.as_i64()?, n.get("name")?.as_str()?.to_string())))
+                        .filter_map(|n| {
+                            Some((n.get("id")?.as_i64()?, n.get("name")?.as_str()?.to_string()))
+                        })
                         .collect();
-                    ids.iter().map(|i| by_id.get(i).cloned().unwrap_or_default()).collect()
+                    ids.iter()
+                        .map(|i| by_id.get(i).cloned().unwrap_or_default())
+                        .collect()
                 })
             });
             match crate::llm::path_ai(&a, &a_ctx, &b, &b_ctx, path_names.as_deref()).await {
@@ -835,7 +872,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 Err(e) => return error_result(e.to_string()),
             };
             let focus_ctx = state.db.compact_context(id).unwrap_or_default();
-            let others_meta = state.db.list_customers(None, None, None, 2000).unwrap_or_default();
+            let others_meta = state
+                .db
+                .list_customers(None, None, None, 2000)
+                .unwrap_or_default();
             let others: Vec<(i64, String, String)> = others_meta
                 .into_iter()
                 .filter(|c| c.id != id)
@@ -891,14 +931,30 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             };
             match state.db.find_path(from, to) {
                 Ok(Some(path)) => {
-                    let names = state.db.graph_nodes().ok().and_then(|nodes| {
-                        let by_id: std::collections::HashMap<i64, String> = nodes
-                            .iter()
-                            .filter_map(|n| Some((n.get("id")?.as_i64()?, n.get("name")?.as_str()?.to_string())))
-                            .collect();
-                        Some(path.iter().map(|i| by_id.get(i).cloned().unwrap_or_default()).collect::<Vec<_>>())
-                    }).unwrap_or_default();
-                    json_result(json!({ "found": true, "hops": path.len() as i64 - 1, "path_ids": path, "path_names": names }))
+                    let names = state
+                        .db
+                        .graph_nodes()
+                        .ok()
+                        .and_then(|nodes| {
+                            let by_id: std::collections::HashMap<i64, String> = nodes
+                                .iter()
+                                .filter_map(|n| {
+                                    Some((
+                                        n.get("id")?.as_i64()?,
+                                        n.get("name")?.as_str()?.to_string(),
+                                    ))
+                                })
+                                .collect();
+                            Some(
+                                path.iter()
+                                    .map(|i| by_id.get(i).cloned().unwrap_or_default())
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    json_result(
+                        json!({ "found": true, "hops": path.len() as i64 - 1, "path_ids": path, "path_names": names }),
+                    )
                 }
                 Ok(None) => json_result(json!({ "found": false, "hops": -1 })),
                 Err(e) => error_result(e.to_string()),
@@ -910,7 +966,9 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             };
             let hops = args["hops"].as_i64().unwrap_or(1);
             match state.db.subgraph_within(focus, hops) {
-                Ok((nodes, edges)) => json_result(json!({ "focus": focus, "hops": hops, "nodes": nodes, "edges": edges })),
+                Ok((nodes, edges)) => json_result(
+                    json!({ "focus": focus, "hops": hops, "nodes": nodes, "edges": edges }),
+                ),
                 Err(e) => error_result(e.to_string()),
             }
         }
@@ -928,7 +986,12 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let all_nodes = state.db.graph_nodes().unwrap_or_default();
             let nodes: Vec<Value> = all_nodes
                 .into_iter()
-                .filter(|n| n.get("id").and_then(|v| v.as_i64()).map(|i| neighbour_ids.contains(&i)).unwrap_or(false))
+                .filter(|n| {
+                    n.get("id")
+                        .and_then(|v| v.as_i64())
+                        .map(|i| neighbour_ids.contains(&i))
+                        .unwrap_or(false)
+                })
                 .collect();
             json_result(json!({ "focus": cid, "nodes": nodes, "edges": rels }))
         }
@@ -958,7 +1021,10 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                 Err(e) => return error_result(e),
             };
             let now = now_ts();
-            let all_customers = state.db.list_customers(None, None, None, 5000).unwrap_or_default();
+            let all_customers = state
+                .db
+                .list_customers(None, None, None, 5000)
+                .unwrap_or_default();
             let mut saved = 0usize;
             let mut linked = Vec::new();
             for p in &people {
@@ -966,16 +1032,41 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
                     continue;
                 }
                 let name_lc = p.name.to_lowercase();
-                let resolved = all_customers.iter().find(|cc| cc.name.to_lowercase() == name_lc).map(|cc| cc.id).or_else(|| {
-                    let toks: Vec<String> = name_lc.split_whitespace().map(str::to_string).collect();
-                    all_customers.iter().find(|cc| {
-                        let n = cc.name.to_lowercase();
-                        toks.iter().all(|t| n.contains(t))
-                    }).map(|cc| cc.id)
-                });
-                let kind = if p.kind.trim().is_empty() { "contact_of" } else { p.kind.trim() };
-                let role_guess = if p.role_guess.trim().is_empty() { "contact" } else { p.role_guess.trim() };
-                let _ = state.db.add_mention(cid, &p.name, role_guess, kind, &p.context, p.confidence, resolved, now);
+                let resolved = all_customers
+                    .iter()
+                    .find(|cc| cc.name.to_lowercase() == name_lc)
+                    .map(|cc| cc.id)
+                    .or_else(|| {
+                        let toks: Vec<String> =
+                            name_lc.split_whitespace().map(str::to_string).collect();
+                        all_customers
+                            .iter()
+                            .find(|cc| {
+                                let n = cc.name.to_lowercase();
+                                toks.iter().all(|t| n.contains(t))
+                            })
+                            .map(|cc| cc.id)
+                    });
+                let kind = if p.kind.trim().is_empty() {
+                    "contact_of"
+                } else {
+                    p.kind.trim()
+                };
+                let role_guess = if p.role_guess.trim().is_empty() {
+                    "contact"
+                } else {
+                    p.role_guess.trim()
+                };
+                let _ = state.db.add_mention(
+                    cid,
+                    &p.name,
+                    role_guess,
+                    kind,
+                    &p.context,
+                    p.confidence,
+                    resolved,
+                    now,
+                );
                 saved += 1;
                 if let Some(r) = resolved {
                     if r != cid {

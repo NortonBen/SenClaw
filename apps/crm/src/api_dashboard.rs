@@ -41,7 +41,8 @@ async fn list_charts(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiE
     let out: Vec<Value> = charts
         .into_iter()
         .map(|c| {
-            let data = s.db.run_chart(&c.element, &c.metric, &c.grouping, &c.filters);
+            let data =
+                s.db.run_chart(&c.element, &c.metric, &c.grouping, &c.filters);
             match data {
                 Ok(d) => json!({ "chart": c, "data": d }),
                 // A chart that no longer compiles renders as a card with an
@@ -57,11 +58,10 @@ async fn get_chart(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let c = s
-        .db
-        .get_chart(id)
-        .map_err(server)?
-        .ok_or_else(|| not_found(format!("chart {id} not found")))?;
+    let c =
+        s.db.get_chart(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found(format!("chart {id} not found")))?;
     Ok(Json(json!({ "chart": c })))
 }
 
@@ -69,12 +69,13 @@ async fn chart_data(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let c = s
-        .db
-        .get_chart(id)
-        .map_err(server)?
-        .ok_or_else(|| not_found(format!("chart {id} not found")))?;
-    let d = s.db.run_chart(&c.element, &c.metric, &c.grouping, &c.filters).map_err(bad)?;
+    let c =
+        s.db.get_chart(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found(format!("chart {id} not found")))?;
+    let d =
+        s.db.run_chart(&c.element, &c.metric, &c.grouping, &c.filters)
+            .map_err(bad)?;
     Ok(Json(json!({ "data": d })))
 }
 
@@ -86,7 +87,9 @@ async fn create_chart(
     // here with a reason instead of saving a permanently broken card.
     let id = s.db.create_chart(&input, now_ts()).map_err(bad)?;
     emit(&s.events, "chart", json!({ "id": id, "action": "created" }));
-    Ok(Json(json!({ "chart": s.db.get_chart(id).map_err(server)? })))
+    Ok(Json(
+        json!({ "chart": s.db.get_chart(id).map_err(server)? }),
+    ))
 }
 
 async fn update_chart(
@@ -96,7 +99,9 @@ async fn update_chart(
 ) -> Result<Json<Value>, ApiError> {
     s.db.update_chart(id, &patch, now_ts()).map_err(bad)?;
     emit(&s.events, "chart", json!({ "id": id, "action": "updated" }));
-    Ok(Json(json!({ "chart": s.db.get_chart(id).map_err(server)? })))
+    Ok(Json(
+        json!({ "chart": s.db.get_chart(id).map_err(server)? }),
+    ))
 }
 
 async fn delete_chart(
@@ -142,9 +147,13 @@ async fn preview(
     State(s): State<Arc<AppState>>,
     Json(input): Json<PreviewInput>,
 ) -> Result<Json<Value>, ApiError> {
-    let d = s
-        .db
-        .run_chart(&input.element, &input.metric, &input.grouping, &input.filters)
+    let d =
+        s.db.run_chart(
+            &input.element,
+            &input.metric,
+            &input.grouping,
+            &input.filters,
+        )
         .map_err(bad)?;
     Ok(Json(json!({ "data": d })))
 }

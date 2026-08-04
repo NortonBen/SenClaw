@@ -114,7 +114,8 @@ const BOOL_VALUES: &[&str] = &["0", "1"];
 /// Primary organization of a contact. Two hops, and `is_primary = 1` keeps it
 /// 1:1 — without that predicate a contact in three orgs would triple its own
 /// count.
-const JOIN_PRIMARY_ORG: &str = "LEFT JOIN customer_organizations mo ON mo.customer_id = c.id AND mo.is_primary = 1 \
+const JOIN_PRIMARY_ORG: &str =
+    "LEFT JOIN customer_organizations mo ON mo.customer_id = c.id AND mo.is_primary = 1 \
      LEFT JOIN organizations o ON o.id = mo.organization_id";
 
 pub static ELEMENTS: &[ElementDef] = &[
@@ -122,7 +123,13 @@ pub static ELEMENTS: &[ElementDef] = &[
         key: "contact",
         from: "customers c",
         metrics: &[
-            MetricDef { key: "count", sql: "COUNT(DISTINCT c.id)", join: None, is_money: false, currency_sql: None },
+            MetricDef {
+                key: "count",
+                sql: "COUNT(DISTINCT c.id)",
+                join: None,
+                is_money: false,
+                currency_sql: None,
+            },
             MetricDef {
                 key: "dealValue",
                 sql: "COALESCE(SUM(dv.amount), 0)",
@@ -132,22 +139,91 @@ pub static ELEMENTS: &[ElementDef] = &[
             },
         ],
         fields: &[
-            FieldDef { key: "role", kind: FieldKind::Enum, sql: "c.role", join: None, groupable: true, values: ROLES },
-            FieldDef { key: "sale_stage", kind: FieldKind::Enum, sql: "c.sale_stage", join: None, groupable: true, values: crate::db::SALE_STAGES },
-            FieldDef { key: "temperature", kind: FieldKind::Enum, sql: "c.temperature", join: None, groupable: true, values: crate::db::TEMPERATURES },
-            FieldDef { key: "source", kind: FieldKind::Text, sql: "c.source", join: None, groupable: true, values: &[] },
-            FieldDef { key: "unsubscribed", kind: FieldKind::Bool, sql: "c.unsubscribed", join: None, groupable: true, values: BOOL_VALUES },
-            FieldDef { key: "organization", kind: FieldKind::Relation, sql: "COALESCE(o.name, '')", join: Some(JOIN_PRIMARY_ORG), groupable: true, values: &[] },
-            FieldDef { key: "lead_score", kind: FieldKind::Number, sql: "c.lead_score", join: None, groupable: false, values: &[] },
-            FieldDef { key: "created_at", kind: FieldKind::Date, sql: "c.created_at", join: None, groupable: false, values: &[] },
-            FieldDef { key: "updated_at", kind: FieldKind::Date, sql: "c.updated_at", join: None, groupable: false, values: &[] },
+            FieldDef {
+                key: "role",
+                kind: FieldKind::Enum,
+                sql: "c.role",
+                join: None,
+                groupable: true,
+                values: ROLES,
+            },
+            FieldDef {
+                key: "sale_stage",
+                kind: FieldKind::Enum,
+                sql: "c.sale_stage",
+                join: None,
+                groupable: true,
+                values: crate::db::SALE_STAGES,
+            },
+            FieldDef {
+                key: "temperature",
+                kind: FieldKind::Enum,
+                sql: "c.temperature",
+                join: None,
+                groupable: true,
+                values: crate::db::TEMPERATURES,
+            },
+            FieldDef {
+                key: "source",
+                kind: FieldKind::Text,
+                sql: "c.source",
+                join: None,
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "unsubscribed",
+                kind: FieldKind::Bool,
+                sql: "c.unsubscribed",
+                join: None,
+                groupable: true,
+                values: BOOL_VALUES,
+            },
+            FieldDef {
+                key: "organization",
+                kind: FieldKind::Relation,
+                sql: "COALESCE(o.name, '')",
+                join: Some(JOIN_PRIMARY_ORG),
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "lead_score",
+                kind: FieldKind::Number,
+                sql: "c.lead_score",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
+            FieldDef {
+                key: "created_at",
+                kind: FieldKind::Date,
+                sql: "c.created_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
+            FieldDef {
+                key: "updated_at",
+                kind: FieldKind::Date,
+                sql: "c.updated_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
         ],
     },
     ElementDef {
         key: "organization",
         from: "organizations o",
         metrics: &[
-            MetricDef { key: "count", sql: "COUNT(DISTINCT o.id)", join: None, is_money: false, currency_sql: None },
+            MetricDef {
+                key: "count",
+                sql: "COUNT(DISTINCT o.id)",
+                join: None,
+                is_money: false,
+                currency_sql: None,
+            },
             MetricDef {
                 key: "dealValue",
                 sql: "COALESCE(SUM(dv.amount), 0)",
@@ -160,20 +236,74 @@ pub static ELEMENTS: &[ElementDef] = &[
             // The account's own name — this is what makes "deal value by
             // organization" possible at all. Without it the only split is by
             // `kind`, which answers a different question than the title implies.
-            FieldDef { key: "name", kind: FieldKind::Text, sql: "o.name", join: None, groupable: true, values: &[] },
-            FieldDef { key: "kind", kind: FieldKind::Enum, sql: "o.kind", join: None, groupable: true, values: crate::db::ORG_KINDS },
-            FieldDef { key: "industry", kind: FieldKind::Text, sql: "o.industry", join: None, groupable: true, values: &[] },
-            FieldDef { key: "size", kind: FieldKind::Text, sql: "o.size", join: None, groupable: true, values: &[] },
-            FieldDef { key: "created_at", kind: FieldKind::Date, sql: "o.created_at", join: None, groupable: false, values: &[] },
-            FieldDef { key: "updated_at", kind: FieldKind::Date, sql: "o.updated_at", join: None, groupable: false, values: &[] },
+            FieldDef {
+                key: "name",
+                kind: FieldKind::Text,
+                sql: "o.name",
+                join: None,
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "kind",
+                kind: FieldKind::Enum,
+                sql: "o.kind",
+                join: None,
+                groupable: true,
+                values: crate::db::ORG_KINDS,
+            },
+            FieldDef {
+                key: "industry",
+                kind: FieldKind::Text,
+                sql: "o.industry",
+                join: None,
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "size",
+                kind: FieldKind::Text,
+                sql: "o.size",
+                join: None,
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "created_at",
+                kind: FieldKind::Date,
+                sql: "o.created_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
+            FieldDef {
+                key: "updated_at",
+                kind: FieldKind::Date,
+                sql: "o.updated_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
         ],
     },
     ElementDef {
         key: "deal",
         from: "deals d",
         metrics: &[
-            MetricDef { key: "count", sql: "COUNT(DISTINCT d.id)", join: None, is_money: false, currency_sql: None },
-            MetricDef { key: "dealValue", sql: "COALESCE(SUM(d.amount), 0)", join: None, is_money: true, currency_sql: Some("d.currency") },
+            MetricDef {
+                key: "count",
+                sql: "COUNT(DISTINCT d.id)",
+                join: None,
+                is_money: false,
+                currency_sql: None,
+            },
+            MetricDef {
+                key: "dealValue",
+                sql: "COALESCE(SUM(d.amount), 0)",
+                join: None,
+                is_money: true,
+                currency_sql: Some("d.currency"),
+            },
             MetricDef {
                 key: "dealQuantity",
                 sql: "COALESCE(SUM(dq.quantity), 0)",
@@ -183,22 +313,91 @@ pub static ELEMENTS: &[ElementDef] = &[
             },
         ],
         fields: &[
-            FieldDef { key: "stage", kind: FieldKind::Enum, sql: "d.stage", join: None, groupable: true, values: DEAL_STAGES },
-            FieldDef { key: "currency", kind: FieldKind::Text, sql: "d.currency", join: None, groupable: true, values: &[] },
-            FieldDef { key: "organization", kind: FieldKind::Relation, sql: "COALESCE(o.name, '')", join: Some("LEFT JOIN organizations o ON o.id = d.organization_id"), groupable: true, values: &[] },
-            FieldDef { key: "contact", kind: FieldKind::Relation, sql: "COALESCE(c.name, '')", join: Some("LEFT JOIN customers c ON c.id = d.customer_id"), groupable: true, values: &[] },
-            FieldDef { key: "amount", kind: FieldKind::Number, sql: "d.amount", join: None, groupable: false, values: &[] },
-            FieldDef { key: "probability", kind: FieldKind::Number, sql: "d.probability", join: None, groupable: false, values: &[] },
-            FieldDef { key: "expected_close_at", kind: FieldKind::Date, sql: "d.expected_close_at", join: None, groupable: false, values: &[] },
-            FieldDef { key: "created_at", kind: FieldKind::Date, sql: "d.created_at", join: None, groupable: false, values: &[] },
-            FieldDef { key: "updated_at", kind: FieldKind::Date, sql: "d.updated_at", join: None, groupable: false, values: &[] },
+            FieldDef {
+                key: "stage",
+                kind: FieldKind::Enum,
+                sql: "d.stage",
+                join: None,
+                groupable: true,
+                values: DEAL_STAGES,
+            },
+            FieldDef {
+                key: "currency",
+                kind: FieldKind::Text,
+                sql: "d.currency",
+                join: None,
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "organization",
+                kind: FieldKind::Relation,
+                sql: "COALESCE(o.name, '')",
+                join: Some("LEFT JOIN organizations o ON o.id = d.organization_id"),
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "contact",
+                kind: FieldKind::Relation,
+                sql: "COALESCE(c.name, '')",
+                join: Some("LEFT JOIN customers c ON c.id = d.customer_id"),
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "amount",
+                kind: FieldKind::Number,
+                sql: "d.amount",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
+            FieldDef {
+                key: "probability",
+                kind: FieldKind::Number,
+                sql: "d.probability",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
+            FieldDef {
+                key: "expected_close_at",
+                kind: FieldKind::Date,
+                sql: "d.expected_close_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
+            FieldDef {
+                key: "created_at",
+                kind: FieldKind::Date,
+                sql: "d.created_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
+            FieldDef {
+                key: "updated_at",
+                kind: FieldKind::Date,
+                sql: "d.updated_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
         ],
     },
     ElementDef {
         key: "service",
         from: "services s",
         metrics: &[
-            MetricDef { key: "count", sql: "COUNT(DISTINCT s.id)", join: None, is_money: false, currency_sql: None },
+            MetricDef {
+                key: "count",
+                sql: "COUNT(DISTINCT s.id)",
+                join: None,
+                is_money: false,
+                currency_sql: None,
+            },
             MetricDef {
                 key: "dealValue",
                 sql: "COALESCE(SUM(ds.quantity * ds.unit_amount), 0)",
@@ -217,31 +416,124 @@ pub static ELEMENTS: &[ElementDef] = &[
         fields: &[
             // Revenue per catalogue entry — "which service earns most" is the
             // question the Services page invites and `kind` can't answer.
-            FieldDef { key: "name", kind: FieldKind::Text, sql: "s.name", join: None, groupable: true, values: &[] },
-            FieldDef { key: "kind", kind: FieldKind::Enum, sql: "s.kind", join: None, groupable: true, values: crate::db::SERVICE_KINDS },
-            FieldDef { key: "pricing_model", kind: FieldKind::Enum, sql: "s.pricing_model", join: None, groupable: true, values: crate::db::PRICING_MODELS },
-            FieldDef { key: "currency", kind: FieldKind::Text, sql: "s.currency", join: None, groupable: true, values: &[] },
-            FieldDef { key: "active", kind: FieldKind::Bool, sql: "s.active", join: None, groupable: true, values: BOOL_VALUES },
-            FieldDef { key: "amount", kind: FieldKind::Number, sql: "s.amount", join: None, groupable: false, values: &[] },
-            FieldDef { key: "created_at", kind: FieldKind::Date, sql: "s.created_at", join: None, groupable: false, values: &[] },
-            FieldDef { key: "updated_at", kind: FieldKind::Date, sql: "s.updated_at", join: None, groupable: false, values: &[] },
+            FieldDef {
+                key: "name",
+                kind: FieldKind::Text,
+                sql: "s.name",
+                join: None,
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "kind",
+                kind: FieldKind::Enum,
+                sql: "s.kind",
+                join: None,
+                groupable: true,
+                values: crate::db::SERVICE_KINDS,
+            },
+            FieldDef {
+                key: "pricing_model",
+                kind: FieldKind::Enum,
+                sql: "s.pricing_model",
+                join: None,
+                groupable: true,
+                values: crate::db::PRICING_MODELS,
+            },
+            FieldDef {
+                key: "currency",
+                kind: FieldKind::Text,
+                sql: "s.currency",
+                join: None,
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "active",
+                kind: FieldKind::Bool,
+                sql: "s.active",
+                join: None,
+                groupable: true,
+                values: BOOL_VALUES,
+            },
+            FieldDef {
+                key: "amount",
+                kind: FieldKind::Number,
+                sql: "s.amount",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
+            FieldDef {
+                key: "created_at",
+                kind: FieldKind::Date,
+                sql: "s.created_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
+            FieldDef {
+                key: "updated_at",
+                kind: FieldKind::Date,
+                sql: "s.updated_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
         ],
     },
     ElementDef {
         key: "task",
         from: "tasks t",
-        metrics: &[MetricDef { key: "count", sql: "COUNT(DISTINCT t.id)", join: None, is_money: false, currency_sql: None }],
+        metrics: &[MetricDef {
+            key: "count",
+            sql: "COUNT(DISTINCT t.id)",
+            join: None,
+            is_money: false,
+            currency_sql: None,
+        }],
         fields: &[
-            FieldDef { key: "status", kind: FieldKind::Enum, sql: "CASE WHEN t.done = 1 THEN 'done' ELSE 'open' END", join: None, groupable: true, values: TASK_STATUS },
-            FieldDef { key: "contact", kind: FieldKind::Relation, sql: "COALESCE(c.name, '')", join: Some("LEFT JOIN customers c ON c.id = t.customer_id"), groupable: true, values: &[] },
-            FieldDef { key: "due_at", kind: FieldKind::Date, sql: "t.due_at", join: None, groupable: false, values: &[] },
-            FieldDef { key: "created_at", kind: FieldKind::Date, sql: "t.created_at", join: None, groupable: false, values: &[] },
+            FieldDef {
+                key: "status",
+                kind: FieldKind::Enum,
+                sql: "CASE WHEN t.done = 1 THEN 'done' ELSE 'open' END",
+                join: None,
+                groupable: true,
+                values: TASK_STATUS,
+            },
+            FieldDef {
+                key: "contact",
+                kind: FieldKind::Relation,
+                sql: "COALESCE(c.name, '')",
+                join: Some("LEFT JOIN customers c ON c.id = t.customer_id"),
+                groupable: true,
+                values: &[],
+            },
+            FieldDef {
+                key: "due_at",
+                kind: FieldKind::Date,
+                sql: "t.due_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
+            FieldDef {
+                key: "created_at",
+                kind: FieldKind::Date,
+                sql: "t.created_at",
+                join: None,
+                groupable: false,
+                values: &[],
+            },
         ],
     },
 ];
 
 fn element(key: &str) -> Result<&'static ElementDef> {
-    ELEMENTS.iter().find(|e| e.key == key).ok_or_else(|| anyhow!("unknown element '{key}'"))
+    ELEMENTS
+        .iter()
+        .find(|e| e.key == key)
+        .ok_or_else(|| anyhow!("unknown element '{key}'"))
 }
 
 fn metric<'a>(e: &'a ElementDef, key: &str) -> Result<&'a MetricDef> {
@@ -388,7 +680,11 @@ fn bind_of(v: &serde_json::Value) -> Bind {
 /// concatenated.
 fn filter_sql(def: &FieldDef, filter: &Filter, binds: &mut Vec<Bind>) -> Result<String> {
     if !def.kind.operators().contains(&filter.op.as_str()) {
-        return Err(anyhow!("operator '{}' is not valid for field '{}'", filter.op, def.key));
+        return Err(anyhow!(
+            "operator '{}' is not valid for field '{}'",
+            filter.op,
+            def.key
+        ));
     }
     let sql = def.sql;
     match filter.op.as_str() {
@@ -415,7 +711,10 @@ fn filter_sql(def: &FieldDef, filter: &Filter, binds: &mut Vec<Bind>) -> Result<
         "isNull" => Ok(format!("({sql} IS NULL OR {sql} = '')")),
         "isNotNull" => Ok(format!("({sql} IS NOT NULL AND {sql} <> '')")),
         "gt" | "gte" | "lt" | "lte" => {
-            let v = filter.values.first().ok_or_else(|| anyhow!("'{}' needs a value", filter.op))?;
+            let v = filter
+                .values
+                .first()
+                .ok_or_else(|| anyhow!("'{}' needs a value", filter.op))?;
             binds.push(bind_of(v));
             let cmp = match filter.op.as_str() {
                 "gt" => ">",
@@ -434,7 +733,10 @@ fn filter_sql(def: &FieldDef, filter: &Filter, binds: &mut Vec<Bind>) -> Result<
             Ok(format!("{sql} BETWEEN ? AND ?"))
         }
         "inLastDays" => {
-            let v = filter.values.first().ok_or_else(|| anyhow!("'inLastDays' needs a value"))?;
+            let v = filter
+                .values
+                .first()
+                .ok_or_else(|| anyhow!("'inLastDays' needs a value"))?;
             let days = v.as_f64().unwrap_or(0.0);
             binds.push(Bind::Num(days * 86_400.0));
             // Relative to now, evaluated by SQLite at query time so a saved
@@ -523,8 +825,11 @@ impl Db {
         }
 
         let join_sql = joins.join(" ");
-        let where_sql =
-            if wheres.is_empty() { String::new() } else { format!("WHERE {}", wheres.join(" AND ")) };
+        let where_sql = if wheres.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", wheres.join(" AND "))
+        };
 
         // Fetch one past the cap so a full page is distinguishable from an
         // exactly-full one.
@@ -568,7 +873,11 @@ impl Db {
                     e.from,
                     join_sql,
                     where_sql,
-                    if wheres.is_empty() { "WHERE c IS NOT NULL AND c <> ''" } else { "AND c IS NOT NULL AND c <> ''" },
+                    if wheres.is_empty() {
+                        "WHERE c IS NOT NULL AND c <> ''"
+                    } else {
+                        "AND c IS NOT NULL AND c <> ''"
+                    },
                 );
                 self.with(|conn| {
                     let mut stmt = conn.prepare(&cur_sql)?;
@@ -603,7 +912,10 @@ impl Db {
     pub fn list_charts(&self) -> Result<Vec<Chart>> {
         self.with(|c| {
             let mut stmt = c.prepare("SELECT * FROM dashboard_charts ORDER BY sort, id")?;
-            let rows = stmt.query_map([], row_to_chart)?.filter_map(|r| r.ok()).collect();
+            let rows = stmt
+                .query_map([], row_to_chart)?
+                .filter_map(|r| r.ok())
+                .collect();
             Ok(rows)
         })
     }
@@ -611,7 +923,11 @@ impl Db {
     pub fn get_chart(&self, id: i64) -> Result<Option<Chart>> {
         self.with(|c| {
             let row = c
-                .query_row("SELECT * FROM dashboard_charts WHERE id=?1", rusqlite::params![id], row_to_chart)
+                .query_row(
+                    "SELECT * FROM dashboard_charts WHERE id=?1",
+                    rusqlite::params![id],
+                    row_to_chart,
+                )
                 .ok();
             Ok(row)
         })
@@ -620,8 +936,15 @@ impl Db {
     /// Validate the spec by compiling it before it is stored — a chart that
     /// cannot run should fail at save time, where the author can see why, not
     /// silently render an error card forever after.
-    fn validate(&self, element: &str, metric: &str, grouping: &str, filters: &[Filter]) -> Result<()> {
-        self.run_chart(element, metric, grouping, filters).map(|_| ())
+    fn validate(
+        &self,
+        element: &str,
+        metric: &str,
+        grouping: &str,
+        filters: &[Filter],
+    ) -> Result<()> {
+        self.run_chart(element, metric, grouping, filters)
+            .map(|_| ())
     }
 
     pub fn create_chart(&self, input: &ChartInput, now: i64) -> Result<i64> {
@@ -629,7 +952,12 @@ impl Db {
         if name.is_empty() {
             return Err(anyhow!("chart name is required"));
         }
-        self.validate(&input.element, &input.metric, &input.grouping, &input.filters)?;
+        self.validate(
+            &input.element,
+            &input.metric,
+            &input.grouping,
+            &input.filters,
+        )?;
         let size = normalize_size(&input.size);
         let filters = serde_json::to_string(&input.filters)?;
         let display = if input.display.is_null() {
@@ -683,7 +1011,10 @@ impl Db {
                 if v.is_empty() {
                     return Err(anyhow!("chart name cannot be empty"));
                 }
-                c.execute("UPDATE dashboard_charts SET name=?2 WHERE id=?1", rusqlite::params![id, v])?;
+                c.execute(
+                    "UPDATE dashboard_charts SET name=?2 WHERE id=?1",
+                    rusqlite::params![id, v],
+                )?;
             }
             c.execute(
                 "UPDATE dashboard_charts SET element=?2, metric=?3, grouping=?4, filters_json=?5,
@@ -703,7 +1034,10 @@ impl Db {
                 )?;
             }
             if let Some(v) = patch.sort {
-                c.execute("UPDATE dashboard_charts SET sort=?2 WHERE id=?1", rusqlite::params![id, v])?;
+                c.execute(
+                    "UPDATE dashboard_charts SET sort=?2 WHERE id=?1",
+                    rusqlite::params![id, v],
+                )?;
             }
             if let Some(v) = patch.is_template {
                 c.execute(
@@ -717,7 +1051,10 @@ impl Db {
 
     pub fn delete_chart(&self, id: i64) -> Result<()> {
         self.with(|c| {
-            let n = c.execute("DELETE FROM dashboard_charts WHERE id=?1", rusqlite::params![id])?;
+            let n = c.execute(
+                "DELETE FROM dashboard_charts WHERE id=?1",
+                rusqlite::params![id],
+            )?;
             if n == 0 {
                 return Err(anyhow!("chart {id} not found"));
             }
@@ -773,14 +1110,56 @@ impl Db {
         }
         self.set_setting("dashboard_seeded", "1")?;
         let defaults = [
-            ("Tổ chức theo loại", "organization", "count", "kind", "doughnutChart", "small"),
+            (
+                "Tổ chức theo loại",
+                "organization",
+                "count",
+                "kind",
+                "doughnutChart",
+                "small",
+            ),
             // Group by `name`, not `kind`: the title promises revenue per
             // account, and `kind` silently answers "per account TYPE" instead.
-            ("Giá trị deal theo tổ chức", "organization", "dealValue", "name", "horizontalBarChartWithLabels", "medium"),
-            ("Giá trị deal theo loại dịch vụ", "service", "dealValue", "kind", "doughnutChart", "small"),
-            ("Phễu bán hàng", "contact", "count", "sale_stage", "verticalBarChart", "medium"),
-            ("Deal theo giai đoạn", "deal", "dealValue", "stage", "verticalBarChartWithLabels", "medium"),
-            ("Khách theo vai trò", "contact", "count", "role", "doughnutChart", "small"),
+            (
+                "Giá trị deal theo tổ chức",
+                "organization",
+                "dealValue",
+                "name",
+                "horizontalBarChartWithLabels",
+                "medium",
+            ),
+            (
+                "Giá trị deal theo loại dịch vụ",
+                "service",
+                "dealValue",
+                "kind",
+                "doughnutChart",
+                "small",
+            ),
+            (
+                "Phễu bán hàng",
+                "contact",
+                "count",
+                "sale_stage",
+                "verticalBarChart",
+                "medium",
+            ),
+            (
+                "Deal theo giai đoạn",
+                "deal",
+                "dealValue",
+                "stage",
+                "verticalBarChartWithLabels",
+                "medium",
+            ),
+            (
+                "Khách theo vai trò",
+                "contact",
+                "count",
+                "role",
+                "doughnutChart",
+                "small",
+            ),
         ];
         for (i, (name, element, metric, grouping, display, size)) in defaults.iter().enumerate() {
             let input = ChartInput {
@@ -830,7 +1209,11 @@ fn summarize_filter(f: &Filter) -> String {
         .collect();
     match f.op.as_str() {
         // Operand goes in the middle of the phrase, not appended to it.
-        "inLastDays" => format!("{} in last {} days", f.field, vals.first().cloned().unwrap_or_default()),
+        "inLastDays" => format!(
+            "{} in last {} days",
+            f.field,
+            vals.first().cloned().unwrap_or_default()
+        ),
         "between" if vals.len() >= 2 => format!("{} between {} and {}", f.field, vals[0], vals[1]),
         "isNull" => format!("{} is empty", f.field),
         "isNotNull" => format!("{} is not empty", f.field),
@@ -887,8 +1270,10 @@ mod tests {
     fn seed(db: &Db) -> (i64, i64) {
         let org = db
             .create_organization(
-                &serde_json::from_value(serde_json::json!({"name":"Bayer","kind":"direct_customer"}))
-                    .unwrap(),
+                &serde_json::from_value(
+                    serde_json::json!({"name":"Bayer","kind":"direct_customer"}),
+                )
+                .unwrap(),
                 100,
             )
             .unwrap();
@@ -939,7 +1324,8 @@ mod tests {
         let db = db();
         seed(&db);
         let r = db.run_chart("contact", "count", "role", &[]).unwrap();
-        let mut got: Vec<(String, f64)> = r.rows.iter().map(|x| (x.bucket.clone(), x.value)).collect();
+        let mut got: Vec<(String, f64)> =
+            r.rows.iter().map(|x| (x.bucket.clone(), x.value)).collect();
         got.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(got, vec![("customer".into(), 1.0), ("lead".into(), 1.0)]);
         assert_eq!(r.groups, 2);
@@ -952,7 +1338,10 @@ mod tests {
         let db = db();
         seed(&db);
         let r = db.run_chart("contact", "count", "", &[]).unwrap();
-        assert_eq!(r.rows[0].value, 2.0, "two contacts, regardless of deal count");
+        assert_eq!(
+            r.rows[0].value, 2.0,
+            "two contacts, regardless of deal count"
+        );
     }
 
     #[test]
@@ -973,11 +1362,26 @@ mod tests {
             op: op.into(),
             values: vals,
         };
-        assert_eq!(summarize_filter(&f("stage", "notIn", vec![json!("won"), json!("lost")])), "stage not in won, lost");
-        assert_eq!(summarize_filter(&f("created_at", "inLastDays", vec![json!(7)])), "created_at in last 7 days");
-        assert_eq!(summarize_filter(&f("amount", "between", vec![json!(1), json!(9)])), "amount between 1 and 9");
-        assert_eq!(summarize_filter(&f("source", "isNull", vec![])), "source is empty");
-        assert_eq!(summarize_filter(&f("amount", "gte", vec![json!(5)])), "amount ≥ 5");
+        assert_eq!(
+            summarize_filter(&f("stage", "notIn", vec![json!("won"), json!("lost")])),
+            "stage not in won, lost"
+        );
+        assert_eq!(
+            summarize_filter(&f("created_at", "inLastDays", vec![json!(7)])),
+            "created_at in last 7 days"
+        );
+        assert_eq!(
+            summarize_filter(&f("amount", "between", vec![json!(1), json!(9)])),
+            "amount between 1 and 9"
+        );
+        assert_eq!(
+            summarize_filter(&f("source", "isNull", vec![])),
+            "source is empty"
+        );
+        assert_eq!(
+            summarize_filter(&f("amount", "gte", vec![json!(5)])),
+            "amount ≥ 5"
+        );
     }
 
     #[test]
@@ -989,7 +1393,9 @@ mod tests {
             op: "notIn".into(),
             values: vec![serde_json::json!("lost")],
         };
-        let r = db.run_chart("deal", "dealValue", "", std::slice::from_ref(&f)).unwrap();
+        let r = db
+            .run_chart("deal", "dealValue", "", std::slice::from_ref(&f))
+            .unwrap();
         assert_eq!(r.rows[0].value, 100.0, "the lost deal must be excluded");
         assert_eq!(r.filter_summary, vec!["stage not in lost"]);
     }
@@ -1006,21 +1412,36 @@ mod tests {
             op: "in".into(),
             values: vec![serde_json::json!("lead'); DROP TABLE customers;--")],
         };
-        let r = db.run_chart("contact", "count", "", std::slice::from_ref(&f)).unwrap();
+        let r = db
+            .run_chart("contact", "count", "", std::slice::from_ref(&f))
+            .unwrap();
         assert_eq!(r.rows[0].value, 0.0);
         // The table is still there.
-        assert_eq!(db.run_chart("contact", "count", "", &[]).unwrap().rows[0].value, 2.0);
+        assert_eq!(
+            db.run_chart("contact", "count", "", &[]).unwrap().rows[0].value,
+            2.0
+        );
     }
 
     #[test]
     fn unknown_keys_are_rejected_not_concatenated() {
         let db = db();
-        assert!(db.run_chart("customers; DROP TABLE customers", "count", "", &[]).is_err());
+        assert!(db
+            .run_chart("customers; DROP TABLE customers", "count", "", &[])
+            .is_err());
         assert!(db.run_chart("contact", "count; --", "", &[]).is_err());
         assert!(db.run_chart("contact", "count", "role; --", &[]).is_err());
-        let f = Filter { field: "role; --".into(), op: "in".into(), values: vec![] };
+        let f = Filter {
+            field: "role; --".into(),
+            op: "in".into(),
+            values: vec![],
+        };
         assert!(db.run_chart("contact", "count", "", &[f]).is_err());
-        let bad_op = Filter { field: "role".into(), op: "; DROP".into(), values: vec![] };
+        let bad_op = Filter {
+            field: "role".into(),
+            op: "; DROP".into(),
+            values: vec![],
+        };
         assert!(db.run_chart("contact", "count", "", &[bad_op]).is_err());
     }
 
@@ -1031,8 +1452,10 @@ mod tests {
         let db = db();
         for i in 0..(MAX_BUCKETS + 25) {
             db.create_customer(
-                &serde_json::from_value(json!({ "name": format!("C{i}"), "source": format!("src{i}") }))
-                    .unwrap(),
+                &serde_json::from_value(
+                    json!({ "name": format!("C{i}"), "source": format!("src{i}") }),
+                )
+                .unwrap(),
                 100,
             )
             .unwrap();
@@ -1055,9 +1478,14 @@ mod tests {
     fn organizations_can_be_grouped_by_name() {
         let db = db();
         seed(&db);
-        let r = db.run_chart("organization", "dealValue", "name", &[]).unwrap();
-        assert!(r.rows.iter().any(|x| x.bucket == "Bayer"), "buckets must be account names, got {:?}",
-                r.rows.iter().map(|x| &x.bucket).collect::<Vec<_>>());
+        let r = db
+            .run_chart("organization", "dealValue", "name", &[])
+            .unwrap();
+        assert!(
+            r.rows.iter().any(|x| x.bucket == "Bayer"),
+            "buckets must be account names, got {:?}",
+            r.rows.iter().map(|x| &x.bucket).collect::<Vec<_>>()
+        );
     }
 
     /// SUM over mixed currencies is not an amount. The engine can't convert
@@ -1069,7 +1497,10 @@ mod tests {
             .create_customer(&serde_json::from_value(json!({"name":"A"})).unwrap(), 100)
             .unwrap();
         db.create_deal(
-            &serde_json::from_value(json!({"customer_id": c, "title":"vnd", "amount": 100.0, "currency":"VND"})).unwrap(),
+            &serde_json::from_value(
+                json!({"customer_id": c, "title":"vnd", "amount": 100.0, "currency":"VND"}),
+            )
+            .unwrap(),
             100,
         )
         .unwrap();
@@ -1078,16 +1509,30 @@ mod tests {
         assert_eq!(r.currencies, vec!["VND"]);
 
         db.create_deal(
-            &serde_json::from_value(json!({"customer_id": c, "title":"eur", "amount": 5.0, "currency":"EUR"})).unwrap(),
+            &serde_json::from_value(
+                json!({"customer_id": c, "title":"eur", "amount": 5.0, "currency":"EUR"}),
+            )
+            .unwrap(),
             100,
         )
         .unwrap();
         let r = db.run_chart("deal", "dealValue", "", &[]).unwrap();
-        assert_eq!(r.currencies, vec!["EUR", "VND"], "must admit it mixed two currencies");
-        assert_eq!(r.rows[0].value, 105.0, "and the number really is a meaningless 100+5");
+        assert_eq!(
+            r.currencies,
+            vec!["EUR", "VND"],
+            "must admit it mixed two currencies"
+        );
+        assert_eq!(
+            r.rows[0].value, 105.0,
+            "and the number really is a meaningless 100+5"
+        );
 
         // Filtering back down to one currency makes the total honest again.
-        let f = Filter { field: "currency".into(), op: "in".into(), values: vec![json!("VND")] };
+        let f = Filter {
+            field: "currency".into(),
+            op: "in".into(),
+            values: vec![json!("VND")],
+        };
         let r = db.run_chart("deal", "dealValue", "", &[f]).unwrap();
         assert_eq!(r.currencies, vec!["VND"]);
         assert_eq!(r.rows[0].value, 100.0);
@@ -1098,8 +1543,16 @@ mod tests {
     fn count_metric_claims_no_currency() {
         let db = db();
         seed(&db);
-        assert!(db.run_chart("contact", "count", "", &[]).unwrap().currencies.is_empty());
-        assert!(db.run_chart("deal", "dealQuantity", "", &[]).unwrap().currencies.is_empty());
+        assert!(db
+            .run_chart("contact", "count", "", &[])
+            .unwrap()
+            .currencies
+            .is_empty());
+        assert!(db
+            .run_chart("deal", "dealQuantity", "", &[])
+            .unwrap()
+            .currencies
+            .is_empty());
     }
 
     #[test]
@@ -1113,7 +1566,11 @@ mod tests {
     fn operator_must_match_the_field_kind() {
         let db = db();
         seed(&db);
-        let f = Filter { field: "role".into(), op: "between".into(), values: vec![] };
+        let f = Filter {
+            field: "role".into(),
+            op: "between".into(),
+            values: vec![],
+        };
         assert!(db.run_chart("contact", "count", "", &[f]).is_err());
     }
 
@@ -1121,7 +1578,9 @@ mod tests {
     fn grouping_by_relation_uses_the_related_name() {
         let db = db();
         seed(&db);
-        let r = db.run_chart("contact", "dealValue", "organization", &[]).unwrap();
+        let r = db
+            .run_chart("contact", "dealValue", "organization", &[])
+            .unwrap();
         let bayer = r.rows.iter().find(|x| x.bucket == "Bayer").unwrap();
         assert_eq!(bayer.value, 140.0);
     }
@@ -1163,9 +1622,23 @@ mod tests {
         };
         let a = db.create_chart(&mk("A"), 1).unwrap();
         let b = db.create_chart(&mk("B"), 1).unwrap();
-        assert_eq!(db.list_charts().unwrap().iter().map(|c| c.name.clone()).collect::<Vec<_>>(), vec!["A", "B"]);
+        assert_eq!(
+            db.list_charts()
+                .unwrap()
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["A", "B"]
+        );
         db.reorder_charts(&[b, a], 2).unwrap();
-        assert_eq!(db.list_charts().unwrap().iter().map(|c| c.name.clone()).collect::<Vec<_>>(), vec!["B", "A"]);
+        assert_eq!(
+            db.list_charts()
+                .unwrap()
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["B", "A"]
+        );
         db.delete_chart(a).unwrap();
         assert_eq!(db.list_charts().unwrap().len(), 1);
         assert!(db.delete_chart(a).is_err());
@@ -1178,7 +1651,11 @@ mod tests {
         let n = db.list_charts().unwrap().len();
         assert_eq!(n, 6);
         db.seed_charts(2).unwrap();
-        assert_eq!(db.list_charts().unwrap().len(), n, "seeding twice must not duplicate");
+        assert_eq!(
+            db.list_charts().unwrap().len(),
+            n,
+            "seeding twice must not duplicate"
+        );
 
         // Deleting every chart is a decision, not a fresh install: a later
         // startup must leave the dashboard empty rather than restore the seeds.
@@ -1186,7 +1663,11 @@ mod tests {
             db.delete_chart(c.id).unwrap();
         }
         db.seed_charts(3).unwrap();
-        assert_eq!(db.list_charts().unwrap().len(), 0, "a deliberate wipe must stick");
+        assert_eq!(
+            db.list_charts().unwrap().len(),
+            0,
+            "a deliberate wipe must stick"
+        );
     }
 
     #[test]

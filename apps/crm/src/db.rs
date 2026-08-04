@@ -611,13 +611,25 @@ pub struct DealPatch {
     /// maps JSON `null` onto `None`, so a plain `Option<Option<i64>>` collapses
     /// "clear it" and "don't touch it" into the same `None` and the clear path
     /// silently no-ops. `double_option` keeps them distinct.
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub expected_close_at: Option<Option<i64>>,
     pub notes: Option<String>,
     pub organization_id: Option<i64>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub period_start: Option<Option<i64>>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub period_end: Option<Option<i64>>,
 }
 
@@ -754,10 +766,22 @@ pub const SALE_STAGES: &[&str] = &[
 pub const TEMPERATURES: &[&str] = &["cold", "warm", "hot", "churned"];
 
 /// Connected-account kinds the channel layer knows how to drive.
-pub const CHANNEL_KINDS: &[&str] = &["telegram", "zalo", "facebook", "tiktok", "websocket"];
+pub const CHANNEL_KINDS: &[&str] = &[
+    "telegram",
+    "zalo",
+    "facebook",
+    "tiktok",
+    "websocket",
+    "social",
+];
 
-pub const ORG_KINDS: &[&str] =
-    &["direct_customer", "affiliated_company", "partner", "supplier", "prospect"];
+pub const ORG_KINDS: &[&str] = &[
+    "direct_customer",
+    "affiliated_company",
+    "partner",
+    "supplier",
+    "prospect",
+];
 
 pub const SERVICE_KINDS: &[&str] = &["service", "hardware"];
 
@@ -779,7 +803,9 @@ impl Db {
         for m in MIGRATIONS {
             let _ = conn.execute(m, []); // ignore "duplicate column" / column missing
         }
-        let db = Self { conn: Mutex::new(conn) };
+        let db = Self {
+            conn: Mutex::new(conn),
+        };
         db.seed_sales()?;
         db.seed_charts(now_secs())?;
         Ok(db)
@@ -810,7 +836,9 @@ impl Db {
             created_at: r.get("created_at")?,
             updated_at: r.get("updated_at")?,
             interaction_count: r.get::<_, i64>("interaction_count").unwrap_or(0),
-            last_interaction_at: r.get::<_, Option<i64>>("last_interaction_at").unwrap_or(None),
+            last_interaction_at: r
+                .get::<_, Option<i64>>("last_interaction_at")
+                .unwrap_or(None),
         })
     }
 
@@ -895,8 +923,13 @@ impl Db {
         if c.name.trim().is_empty() {
             return Err(anyhow!("name is required"));
         }
-        let tags_json = serde_json::to_string(&normalize_tags(&c.tags)).unwrap_or_else(|_| "[]".into());
-        let role = if c.role.trim().is_empty() { "lead" } else { c.role.trim() };
+        let tags_json =
+            serde_json::to_string(&normalize_tags(&c.tags)).unwrap_or_else(|_| "[]".into());
+        let role = if c.role.trim().is_empty() {
+            "lead"
+        } else {
+            c.role.trim()
+        };
         let id = self.with(|conn| {
             conn.execute(
                 "INSERT INTO customers(name, email, phone, company, title, avatar_url, notes, tags_json, role, source, address, birthday, created_at, updated_at)
@@ -926,9 +959,11 @@ impl Db {
 
     pub fn update_customer(&self, id: i64, patch: &CustomerPatch, now: i64) -> Result<()> {
         self.with(|c| {
-            if c.query_row("SELECT 1 FROM customers WHERE id=?1", params![id], |_| Ok(()))
-                .optional()?
-                .is_none()
+            if c.query_row("SELECT 1 FROM customers WHERE id=?1", params![id], |_| {
+                Ok(())
+            })
+            .optional()?
+            .is_none()
             {
                 return Err(anyhow!("customer {id} not found"));
             }
@@ -939,41 +974,76 @@ impl Db {
                 c.execute("UPDATE customers SET name=?2 WHERE id=?1", params![id, v])?;
             }
             if let Some(v) = patch.email.as_deref() {
-                c.execute("UPDATE customers SET email=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE customers SET email=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = patch.phone.as_deref() {
-                c.execute("UPDATE customers SET phone=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE customers SET phone=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = patch.company.as_deref() {
-                c.execute("UPDATE customers SET company=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE customers SET company=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = patch.title.as_deref() {
-                c.execute("UPDATE customers SET title=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE customers SET title=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = patch.avatar_url.as_deref() {
-                c.execute("UPDATE customers SET avatar_url=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE customers SET avatar_url=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = patch.notes.as_deref() {
                 c.execute("UPDATE customers SET notes=?2 WHERE id=?1", params![id, v])?;
             }
             if let Some(tags) = &patch.tags {
-                let tags_json = serde_json::to_string(&normalize_tags(tags)).unwrap_or_else(|_| "[]".into());
-                c.execute("UPDATE customers SET tags_json=?2 WHERE id=?1", params![id, tags_json])?;
+                let tags_json =
+                    serde_json::to_string(&normalize_tags(tags)).unwrap_or_else(|_| "[]".into());
+                c.execute(
+                    "UPDATE customers SET tags_json=?2 WHERE id=?1",
+                    params![id, tags_json],
+                )?;
             }
             if let Some(v) = patch.role.as_deref() {
-                let st = if v.trim().is_empty() { "lead" } else { v.trim() };
+                let st = if v.trim().is_empty() {
+                    "lead"
+                } else {
+                    v.trim()
+                };
                 c.execute("UPDATE customers SET role=?2 WHERE id=?1", params![id, st])?;
             }
             if let Some(v) = patch.source.as_deref() {
-                c.execute("UPDATE customers SET source=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE customers SET source=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = patch.address.as_deref() {
-                c.execute("UPDATE customers SET address=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE customers SET address=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = patch.birthday.as_deref() {
-                c.execute("UPDATE customers SET birthday=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE customers SET birthday=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
-            c.execute("UPDATE customers SET updated_at=?2 WHERE id=?1", params![id, now])?;
+            c.execute(
+                "UPDATE customers SET updated_at=?2 WHERE id=?1",
+                params![id, now],
+            )?;
             Ok(())
         })?;
         let _ = self.reindex_customer(id);
@@ -1100,13 +1170,20 @@ impl Db {
     pub fn delete_interaction(&self, id: i64, now: i64) -> Result<()> {
         self.with(|c| {
             let customer_id: Option<i64> = c
-                .query_row("SELECT customer_id FROM interactions WHERE id=?1", params![id], |r| r.get(0))
+                .query_row(
+                    "SELECT customer_id FROM interactions WHERE id=?1",
+                    params![id],
+                    |r| r.get(0),
+                )
                 .optional()?;
             let Some(cid) = customer_id else {
                 return Err(anyhow!("interaction {id} not found"));
             };
             c.execute("DELETE FROM interactions WHERE id=?1", params![id])?;
-            c.execute("UPDATE customers SET updated_at=?2 WHERE id=?1", params![cid, now])?;
+            c.execute(
+                "UPDATE customers SET updated_at=?2 WHERE id=?1",
+                params![cid, now],
+            )?;
             Ok(())
         })
     }
@@ -1207,8 +1284,16 @@ impl Db {
         if d.title.trim().is_empty() {
             return Err(anyhow!("title is required"));
         }
-        let stage = if d.stage.trim().is_empty() { "qualifying" } else { d.stage.trim() };
-        let currency = if d.currency.trim().is_empty() { "VND" } else { d.currency.trim() };
+        let stage = if d.stage.trim().is_empty() {
+            "qualifying"
+        } else {
+            d.stage.trim()
+        };
+        let currency = if d.currency.trim().is_empty() {
+            "VND"
+        } else {
+            d.currency.trim()
+        };
         let prob = d.probability.unwrap_or(50).clamp(0, 100);
         self.with(|c| {
             if c.query_row("SELECT 1 FROM customers WHERE id=?1", params![d.customer_id], |_| Ok(()))
@@ -1250,7 +1335,11 @@ impl Db {
     pub fn update_deal(&self, id: i64, patch: &DealPatch, now: i64) -> Result<()> {
         self.with(|c| {
             let cid: i64 = c
-                .query_row("SELECT customer_id FROM deals WHERE id=?1", params![id], |r| r.get(0))
+                .query_row(
+                    "SELECT customer_id FROM deals WHERE id=?1",
+                    params![id],
+                    |r| r.get(0),
+                )
                 .optional()?
                 .ok_or_else(|| anyhow!("deal {id} not found"))?;
             if let Some(v) = patch.title.as_deref().map(str::trim) {
@@ -1269,7 +1358,11 @@ impl Db {
             }
             if let Some(v) = patch.stage.as_deref().map(str::trim) {
                 if !v.is_empty() {
-                    let closed_at = if v == "won" || v == "lost" { Some(now) } else { None };
+                    let closed_at = if v == "won" || v == "lost" {
+                        Some(now)
+                    } else {
+                        None
+                    };
                     c.execute(
                         "UPDATE deals SET stage=?2, closed_at=?3 WHERE id=?1",
                         params![id, v, closed_at],
@@ -1277,32 +1370,54 @@ impl Db {
                 }
             }
             if let Some(v) = patch.probability {
-                c.execute("UPDATE deals SET probability=?2 WHERE id=?1", params![id, v.clamp(0, 100)])?;
+                c.execute(
+                    "UPDATE deals SET probability=?2 WHERE id=?1",
+                    params![id, v.clamp(0, 100)],
+                )?;
             }
             if let Some(v) = patch.expected_close_at {
-                c.execute("UPDATE deals SET expected_close_at=?2 WHERE id=?1", params![id, v])?;
+                c.execute(
+                    "UPDATE deals SET expected_close_at=?2 WHERE id=?1",
+                    params![id, v],
+                )?;
             }
             if let Some(v) = patch.notes.as_deref() {
                 c.execute("UPDATE deals SET notes=?2 WHERE id=?1", params![id, v])?;
             }
             if let Some(v) = patch.organization_id {
                 if v != 0
-                    && c.query_row("SELECT 1 FROM organizations WHERE id=?1", params![v], |_| Ok(()))
-                        .optional()?
-                        .is_none()
+                    && c.query_row(
+                        "SELECT 1 FROM organizations WHERE id=?1",
+                        params![v],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_none()
                 {
                     return Err(anyhow!("organization {v} not found"));
                 }
-                c.execute("UPDATE deals SET organization_id=?2 WHERE id=?1", params![id, v])?;
+                c.execute(
+                    "UPDATE deals SET organization_id=?2 WHERE id=?1",
+                    params![id, v],
+                )?;
             }
             if let Some(v) = patch.period_start {
-                c.execute("UPDATE deals SET period_start=?2 WHERE id=?1", params![id, v])?;
+                c.execute(
+                    "UPDATE deals SET period_start=?2 WHERE id=?1",
+                    params![id, v],
+                )?;
             }
             if let Some(v) = patch.period_end {
                 c.execute("UPDATE deals SET period_end=?2 WHERE id=?1", params![id, v])?;
             }
-            c.execute("UPDATE deals SET updated_at=?2 WHERE id=?1", params![id, now])?;
-            c.execute("UPDATE customers SET updated_at=?2 WHERE id=?1", params![cid, now])?;
+            c.execute(
+                "UPDATE deals SET updated_at=?2 WHERE id=?1",
+                params![id, now],
+            )?;
+            c.execute(
+                "UPDATE customers SET updated_at=?2 WHERE id=?1",
+                params![cid, now],
+            )?;
             Ok(())
         })
     }
@@ -1389,9 +1504,11 @@ impl Db {
         }
         self.with(|c| {
             if let Some(cid) = t.customer_id {
-                if c.query_row("SELECT 1 FROM customers WHERE id=?1", params![cid], |_| Ok(()))
-                    .optional()?
-                    .is_none()
+                if c.query_row("SELECT 1 FROM customers WHERE id=?1", params![cid], |_| {
+                    Ok(())
+                })
+                .optional()?
+                .is_none()
                 {
                     return Err(anyhow!("customer {cid} not found"));
                 }
@@ -1437,7 +1554,10 @@ impl Db {
             if let Some(d) = new_due {
                 c.execute("UPDATE tasks SET due_at=?2 WHERE id=?1", params![id, d])?;
             }
-            c.execute("UPDATE tasks SET updated_at=?2 WHERE id=?1", params![id, now])?;
+            c.execute(
+                "UPDATE tasks SET updated_at=?2 WHERE id=?1",
+                params![id, now],
+            )?;
             Ok(())
         })
     }
@@ -1547,11 +1667,16 @@ impl Db {
                 .collect();
             // Birthdays: customers with a `birthday` string of form YYYY-MM-DD or
             // MM-DD. Compute the next occurrence and keep it if within window.
-            let mut stmt = c.prepare(
-                "SELECT id, name, birthday FROM customers WHERE birthday <> ''",
-            )?;
+            let mut stmt =
+                c.prepare("SELECT id, name, birthday FROM customers WHERE birthday <> ''")?;
             let raw: Vec<(i64, String, String)> = stmt
-                .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })?
                 .filter_map(|r| r.ok())
                 .collect();
             let birthdays: Vec<serde_json::Value> = raw
@@ -1664,7 +1789,11 @@ impl Db {
         if r.from_id == r.to_id {
             return Err(anyhow!("from_id and to_id must differ"));
         }
-        let source = if r.source.trim().is_empty() { "user" } else { r.source.trim() };
+        let source = if r.source.trim().is_empty() {
+            "user"
+        } else {
+            r.source.trim()
+        };
         let conf = r.confidence.unwrap_or(1.0).clamp(0.0, 1.0);
         self.with(|c| {
             for id in [r.from_id, r.to_id] {
@@ -2077,7 +2206,11 @@ impl Db {
 
     /// Every extracted mention, resolved or not. `unresolved_only` skips ones
     /// already turned into relationships.
-    pub fn list_mentions(&self, unresolved_only: bool, limit: i64) -> Result<Vec<ExtractedMention>> {
+    pub fn list_mentions(
+        &self,
+        unresolved_only: bool,
+        limit: i64,
+    ) -> Result<Vec<ExtractedMention>> {
         self.with(|c| {
             let sql = if unresolved_only {
                 "SELECT m.*, c.name AS source_customer_name
@@ -2095,7 +2228,9 @@ impl Db {
                     Ok(ExtractedMention {
                         id: r.get("id")?,
                         source_customer_id: r.get("source_customer_id")?,
-                        source_customer_name: r.get::<_, String>("source_customer_name").unwrap_or_default(),
+                        source_customer_name: r
+                            .get::<_, String>("source_customer_name")
+                            .unwrap_or_default(),
                         name: r.get("name")?,
                         role_guess: r.get("role_guess")?,
                         kind_guess: r.get("kind_guess")?,
@@ -2121,12 +2256,19 @@ impl Db {
     ///   4. Extracted-mention overlap: names each side has mentioned
     /// Reasons are human-readable strings so the UI can render "vì cùng công ty
     /// Shop Co, cùng biết Tuấn Anh" without further work.
-    pub fn similar_customers(&self, id: i64, limit: i64) -> Result<Vec<(Customer, f64, Vec<String>)>> {
-        let focus = self.get_customer(id)?.ok_or_else(|| anyhow!("customer {id} not found"))?;
+    pub fn similar_customers(
+        &self,
+        id: i64,
+        limit: i64,
+    ) -> Result<Vec<(Customer, f64, Vec<String>)>> {
+        let focus = self
+            .get_customer(id)?
+            .ok_or_else(|| anyhow!("customer {id} not found"))?;
         let candidates = self.list_customers(None, None, None, 5000)?;
         let focus_neighbours = self.neighbour_ids(id)?;
         let focus_mentions = self.mention_names(id)?;
-        let focus_tags: std::collections::BTreeSet<String> = focus.tags.iter().map(|t| t.to_lowercase()).collect();
+        let focus_tags: std::collections::BTreeSet<String> =
+            focus.tags.iter().map(|t| t.to_lowercase()).collect();
 
         let mut scored: Vec<(Customer, f64, Vec<String>)> = Vec::new();
         for c in candidates {
@@ -2136,14 +2278,20 @@ impl Db {
             let mut score = 0.0f64;
             let mut reasons: Vec<String> = Vec::new();
 
-            let c_tags: std::collections::BTreeSet<String> = c.tags.iter().map(|t| t.to_lowercase()).collect();
+            let c_tags: std::collections::BTreeSet<String> =
+                c.tags.iter().map(|t| t.to_lowercase()).collect();
             let tag_j = jaccard(&focus_tags, &c_tags);
             if tag_j > 0.0 {
                 let shared: Vec<&String> = focus_tags.intersection(&c_tags).collect();
                 score += tag_j * 1.5;
                 reasons.push(format!(
                     "chung tag: {}",
-                    shared.iter().take(3).map(|s| format!("#{}", s)).collect::<Vec<_>>().join(", ")
+                    shared
+                        .iter()
+                        .take(3)
+                        .map(|s| format!("#{}", s))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
             }
 
@@ -2155,10 +2303,21 @@ impl Db {
             let c_neighbours = self.neighbour_ids(c.id).unwrap_or_default();
             let n_j = jaccard(&focus_neighbours, &c_neighbours);
             if n_j > 0.0 {
-                let shared_ids: Vec<i64> = focus_neighbours.intersection(&c_neighbours).copied().collect();
+                let shared_ids: Vec<i64> = focus_neighbours
+                    .intersection(&c_neighbours)
+                    .copied()
+                    .collect();
                 let shared_names = self.customer_names(&shared_ids).unwrap_or_default();
                 score += n_j * 1.2;
-                reasons.push(format!("cùng biết: {}", shared_names.iter().take(3).cloned().collect::<Vec<_>>().join(", ")));
+                reasons.push(format!(
+                    "cùng biết: {}",
+                    shared_names
+                        .iter()
+                        .take(3)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
 
             let c_mentions = self.mention_names(c.id).unwrap_or_default();
@@ -2168,7 +2327,12 @@ impl Db {
                 score += m_j * 1.0;
                 reasons.push(format!(
                     "trong ghi chú/tương tác cả 2 có nhắc: {}",
-                    m_shared.iter().take(3).map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                    m_shared
+                        .iter()
+                        .take(3)
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
             }
 
@@ -2207,7 +2371,9 @@ impl Db {
     /// case-insensitive intersection).
     fn mention_names(&self, customer_id: i64) -> Result<std::collections::BTreeSet<String>> {
         self.with(|c| {
-            let mut stmt = c.prepare("SELECT DISTINCT name FROM extracted_mentions WHERE source_customer_id = ?1")?;
+            let mut stmt = c.prepare(
+                "SELECT DISTINCT name FROM extracted_mentions WHERE source_customer_id = ?1",
+            )?;
             let names: std::collections::BTreeSet<String> = stmt
                 .query_map(params![customer_id], |r| r.get::<_, String>(0))?
                 .filter_map(|r| r.ok())
@@ -2222,13 +2388,24 @@ impl Db {
             return Ok(Vec::new());
         }
         self.with(|c| {
-            let placeholders = ids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect::<Vec<_>>().join(",");
+            let placeholders = ids
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(",");
             let sql = format!("SELECT id, name FROM customers WHERE id IN ({placeholders})");
             let mut stmt = c.prepare(&sql)?;
-            let params_vec: Vec<Box<dyn rusqlite::ToSql>> = ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>).collect();
-            let params_ref: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+            let params_vec: Vec<Box<dyn rusqlite::ToSql>> = ids
+                .iter()
+                .map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>)
+                .collect();
+            let params_ref: Vec<&dyn rusqlite::ToSql> =
+                params_vec.iter().map(|b| b.as_ref()).collect();
             let mut by_id: std::collections::BTreeMap<i64, String> = stmt
-                .query_map(params_ref.as_slice(), |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+                .query_map(params_ref.as_slice(), |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?
                 .filter_map(|r| r.ok())
                 .collect();
             // Preserve caller order.
@@ -2285,7 +2462,11 @@ impl Db {
 
     /// Every node reachable from `focus` within `hops` edges, plus every edge
     /// among those nodes. Used to build the "expand from focus" subgraph view.
-    pub fn subgraph_within(&self, focus: i64, hops: i64) -> Result<(Vec<serde_json::Value>, Vec<Relationship>)> {
+    pub fn subgraph_within(
+        &self,
+        focus: i64,
+        hops: i64,
+    ) -> Result<(Vec<serde_json::Value>, Vec<Relationship>)> {
         let all = self.all_relationships()?;
         let mut adj: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
         for r in &all {
@@ -2293,7 +2474,8 @@ impl Db {
             adj.entry(r.to_id).or_default().push(r.from_id);
         }
         let mut visited: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
-        let mut frontier: std::collections::BTreeSet<i64> = std::collections::BTreeSet::from([focus]);
+        let mut frontier: std::collections::BTreeSet<i64> =
+            std::collections::BTreeSet::from([focus]);
         visited.insert(focus);
         for _ in 0..hops.max(0) {
             let mut next: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
@@ -2315,7 +2497,12 @@ impl Db {
         let all_nodes = self.graph_nodes()?;
         let nodes: Vec<serde_json::Value> = all_nodes
             .into_iter()
-            .filter(|n| n.get("id").and_then(|v| v.as_i64()).map(|id| visited.contains(&id)).unwrap_or(false))
+            .filter(|n| {
+                n.get("id")
+                    .and_then(|v| v.as_i64())
+                    .map(|id| visited.contains(&id))
+                    .unwrap_or(false)
+            })
             .collect();
         let edges: Vec<Relationship> = all
             .into_iter()
@@ -2378,24 +2565,47 @@ impl Db {
     pub fn update_channel(&self, id: i64, patch: &ChannelPatch, now: i64) -> Result<()> {
         let cid = self.with(|c| {
             let cid: Option<i64> = c
-                .query_row("SELECT customer_id FROM customer_channels WHERE id=?1", params![id], |r| r.get(0))
+                .query_row(
+                    "SELECT customer_id FROM customer_channels WHERE id=?1",
+                    params![id],
+                    |r| r.get(0),
+                )
                 .optional()?;
             let Some(cid) = cid else {
                 return Err(anyhow!("channel {id} not found"));
             };
             if let Some(v) = patch.kind.as_deref().map(str::trim) {
-                if v.is_empty() { return Err(anyhow!("kind cannot be empty")); }
-                c.execute("UPDATE customer_channels SET kind=?2 WHERE id=?1", params![id, v])?;
+                if v.is_empty() {
+                    return Err(anyhow!("kind cannot be empty"));
+                }
+                c.execute(
+                    "UPDATE customer_channels SET kind=?2 WHERE id=?1",
+                    params![id, v],
+                )?;
             }
             if let Some(v) = patch.value.as_deref().map(str::trim) {
-                if v.is_empty() { return Err(anyhow!("value cannot be empty")); }
-                c.execute("UPDATE customer_channels SET value=?2 WHERE id=?1", params![id, v])?;
+                if v.is_empty() {
+                    return Err(anyhow!("value cannot be empty"));
+                }
+                c.execute(
+                    "UPDATE customer_channels SET value=?2 WHERE id=?1",
+                    params![id, v],
+                )?;
             }
             if let Some(v) = patch.label.as_deref() {
-                c.execute("UPDATE customer_channels SET label=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE customer_channels SET label=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
-            c.execute("UPDATE customer_channels SET updated_at=?2 WHERE id=?1", params![id, now])?;
-            c.execute("UPDATE customers SET updated_at=?2 WHERE id=?1", params![cid, now])?;
+            c.execute(
+                "UPDATE customer_channels SET updated_at=?2 WHERE id=?1",
+                params![id, now],
+            )?;
+            c.execute(
+                "UPDATE customers SET updated_at=?2 WHERE id=?1",
+                params![cid, now],
+            )?;
             Ok(cid)
         })?;
         let _ = self.reindex_customer(cid);
@@ -2405,7 +2615,11 @@ impl Db {
     pub fn delete_channel(&self, id: i64) -> Result<i64> {
         let cid = self.with(|c| {
             let cid: Option<i64> = c
-                .query_row("SELECT customer_id FROM customer_channels WHERE id=?1", params![id], |r| r.get(0))
+                .query_row(
+                    "SELECT customer_id FROM customer_channels WHERE id=?1",
+                    params![id],
+                    |r| r.get(0),
+                )
                 .optional()?;
             let Some(cid) = cid else {
                 return Err(anyhow!("channel {id} not found"));
@@ -2422,11 +2636,17 @@ impl Db {
     pub fn get_state(&self, key: &str) -> Result<Option<serde_json::Value>> {
         self.with(|c| {
             let row: Option<String> = c
-                .query_row("SELECT value_json FROM crm_state WHERE key=?1", params![key], |r| r.get(0))
+                .query_row(
+                    "SELECT value_json FROM crm_state WHERE key=?1",
+                    params![key],
+                    |r| r.get(0),
+                )
                 .optional()?;
             match row {
                 None => Ok(None),
-                Some(s) => Ok(Some(serde_json::from_str(&s).unwrap_or(serde_json::Value::Null))),
+                Some(s) => Ok(Some(
+                    serde_json::from_str(&s).unwrap_or(serde_json::Value::Null),
+                )),
             }
         })
     }
@@ -2454,7 +2674,9 @@ impl Db {
     /// tags / notes / last few interaction summaries + last few extracted-mention
     /// names. Kept short so many customers fit in one prompt.
     pub fn compact_context(&self, id: i64) -> Result<String> {
-        let c = self.get_customer(id)?.ok_or_else(|| anyhow!("customer {id} not found"))?;
+        let c = self
+            .get_customer(id)?
+            .ok_or_else(|| anyhow!("customer {id} not found"))?;
         let interactions = self.list_interactions(id, 6)?;
         let mentions = self.with(|conn| {
             let mut stmt = conn.prepare(
@@ -2487,7 +2709,11 @@ impl Db {
             let n = c.notes.trim();
             lines.push(format!(
                 "Notes: {}",
-                if n.chars().count() > 300 { n.chars().take(300).collect::<String>() + "…" } else { n.to_string() }
+                if n.chars().count() > 300 {
+                    n.chars().take(300).collect::<String>() + "…"
+                } else {
+                    n.to_string()
+                }
             ));
         }
         if !interactions.is_empty() {
@@ -2497,7 +2723,11 @@ impl Db {
                     String::new()
                 } else {
                     let dt = i.details.trim();
-                    let dt = if dt.chars().count() > 120 { dt.chars().take(120).collect::<String>() + "…" } else { dt.to_string() };
+                    let dt = if dt.chars().count() > 120 {
+                        dt.chars().take(120).collect::<String>() + "…"
+                    } else {
+                        dt.to_string()
+                    };
                     format!(" — {dt}")
                 };
                 acts.push(format!("[{}] {}{}", i.kind, i.summary, d));
@@ -2511,7 +2741,8 @@ impl Db {
         // "which social platforms is X active on".
         if let Ok(channels) = self.list_channels(id) {
             if !channels.is_empty() {
-                let parts: Vec<String> = channels.iter()
+                let parts: Vec<String> = channels
+                    .iter()
                     .map(|ch| {
                         if ch.label.is_empty() {
                             format!("{}={}", ch.kind, ch.value)
@@ -2572,7 +2803,9 @@ fn jaccard<T: Ord>(a: &std::collections::BTreeSet<T>, b: &std::collections::BTre
 /// CSV-quote a field per RFC 4180: wrap in `"…"` if it contains a comma, quote,
 /// CR, or LF; embedded quotes are doubled.
 fn csv_field(s: &str) -> String {
-    if s.chars().any(|c| c == ',' || c == '"' || c == '\n' || c == '\r') {
+    if s.chars()
+        .any(|c| c == ',' || c == '"' || c == '\n' || c == '\r')
+    {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
@@ -2692,7 +2925,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn now() -> i64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
     }
 
     fn tmp_db() -> Db {
@@ -2783,7 +3019,13 @@ mod tests {
     fn deals_lifecycle_and_stats() {
         let db = tmp_db();
         let cid = db
-            .create_customer(&CustomerCreate { name: "Acme".into(), ..Default::default() }, now())
+            .create_customer(
+                &CustomerCreate {
+                    name: "Acme".into(),
+                    ..Default::default()
+                },
+                now(),
+            )
             .unwrap();
         let did = db
             .create_deal(
@@ -2807,7 +3049,10 @@ mod tests {
         // Move to won → stats reflect closed value.
         db.update_deal(
             did,
-            &DealPatch { stage: Some("won".into()), ..Default::default() },
+            &DealPatch {
+                stage: Some("won".into()),
+                ..Default::default()
+            },
             now(),
         )
         .unwrap();
@@ -2822,9 +3067,34 @@ mod tests {
     #[test]
     fn tasks_open_and_done() {
         let db = tmp_db();
-        let cid = db.create_customer(&CustomerCreate { name: "Z".into(), ..Default::default() }, 1).unwrap();
-        let t1 = db.create_task(&TaskCreate { customer_id: Some(cid), title: "Gọi khách".into(), due_at: Some(100), ..Default::default() }, 1).unwrap();
-        db.create_task(&TaskCreate { title: "Việc chung không gắn khách".into(), ..Default::default() }, 1).unwrap();
+        let cid = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "Z".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let t1 = db
+            .create_task(
+                &TaskCreate {
+                    customer_id: Some(cid),
+                    title: "Gọi khách".into(),
+                    due_at: Some(100),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        db.create_task(
+            &TaskCreate {
+                title: "Việc chung không gắn khách".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
         let open = db.list_tasks(true, 20).unwrap();
         assert_eq!(open.len(), 2);
         assert!(open[0].due_at.is_some());
@@ -2844,7 +3114,11 @@ mod tests {
         let target_ymd = jd_to_ymd(target);
         let bday = format!("1990-{:02}-{:02}", target_ymd.1, target_ymd.2);
         db.create_customer(
-            &CustomerCreate { name: "Bday".into(), birthday: bday.clone(), ..Default::default() },
+            &CustomerCreate {
+                name: "Bday".into(),
+                birthday: bday.clone(),
+                ..Default::default()
+            },
             now(),
         )
         .unwrap();
@@ -2880,8 +3154,24 @@ mod tests {
     #[test]
     fn relationships_directional_and_upsert() {
         let db = tmp_db();
-        let a = db.create_customer(&CustomerCreate { name: "Anna".into(), ..Default::default() }, 1).unwrap();
-        let b = db.create_customer(&CustomerCreate { name: "Bob".into(), ..Default::default() }, 1).unwrap();
+        let a = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "Anna".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let b = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "Bob".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
         db.add_relationship(
             &RelationshipCreate {
                 from_id: a,
@@ -2932,11 +3222,17 @@ mod tests {
                 1,
             )
             .unwrap();
-        db.add_interaction(id, "note", "Gửi mẫu arabica cho khách", "", 100, 100).unwrap();
+        db.add_interaction(id, "note", "Gửi mẫu arabica cho khách", "", 100, 100)
+            .unwrap();
 
         let hits = db.search("arabica", 20).unwrap();
         // Should find at least 2 entries — the customer notes and the interaction.
-        assert!(hits.len() >= 2, "got {} hits: {:?}", hits.len(), hits.iter().map(|h| &h.title).collect::<Vec<_>>());
+        assert!(
+            hits.len() >= 2,
+            "got {} hits: {:?}",
+            hits.len(),
+            hits.iter().map(|h| &h.title).collect::<Vec<_>>()
+        );
         assert!(hits.iter().any(|h| h.entity_type == "customer"));
         assert!(hits.iter().any(|h| h.entity_type == "interaction"));
 
@@ -2948,10 +3244,35 @@ mod tests {
     #[test]
     fn add_mention_materializes_relationship_when_resolved() {
         let db = tmp_db();
-        let anna = db.create_customer(&CustomerCreate { name: "Anna".into(), ..Default::default() }, 1).unwrap();
-        let tuan = db.create_customer(&CustomerCreate { name: "Tuấn Anh".into(), ..Default::default() }, 1).unwrap();
-        db.add_mention(anna, "Tuấn Anh", "referrer", "referred_by", "Anna nói do anh Tuấn giới thiệu", 0.85, Some(tuan), 1)
+        let anna = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "Anna".into(),
+                    ..Default::default()
+                },
+                1,
+            )
             .unwrap();
+        let tuan = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "Tuấn Anh".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        db.add_mention(
+            anna,
+            "Tuấn Anh",
+            "referrer",
+            "referred_by",
+            "Anna nói do anh Tuấn giới thiệu",
+            0.85,
+            Some(tuan),
+            1,
+        )
+        .unwrap();
         let rels = db.relationships_of(anna).unwrap();
         assert_eq!(rels.len(), 1);
         assert_eq!(rels[0].to_name, "Tuấn Anh");
@@ -2962,13 +3283,68 @@ mod tests {
     fn similar_customers_scoring() {
         let db = tmp_db();
         // Anna & Bob share company "Shop Co" and tag "vip", plus both know Tuấn.
-        let anna = db.create_customer(&CustomerCreate { name: "Anna".into(), company: "Shop Co".into(), tags: vec!["vip".into(), "hà nội".into()], ..Default::default() }, 1).unwrap();
-        let bob = db.create_customer(&CustomerCreate { name: "Bob".into(), company: "Shop Co".into(), tags: vec!["vip".into()], ..Default::default() }, 1).unwrap();
-        let tuan = db.create_customer(&CustomerCreate { name: "Tuấn".into(), ..Default::default() }, 1).unwrap();
-        let alien = db.create_customer(&CustomerCreate { name: "Alien".into(), company: "Other".into(), ..Default::default() }, 1).unwrap();
+        let anna = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "Anna".into(),
+                    company: "Shop Co".into(),
+                    tags: vec!["vip".into(), "hà nội".into()],
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let bob = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "Bob".into(),
+                    company: "Shop Co".into(),
+                    tags: vec!["vip".into()],
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let tuan = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "Tuấn".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let alien = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "Alien".into(),
+                    company: "Other".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
 
-        db.add_relationship(&RelationshipCreate { from_id: anna, to_id: tuan, kind: "referred_by".into(), ..Default::default() }, 1).unwrap();
-        db.add_relationship(&RelationshipCreate { from_id: bob, to_id: tuan, kind: "referred_by".into(), ..Default::default() }, 1).unwrap();
+        db.add_relationship(
+            &RelationshipCreate {
+                from_id: anna,
+                to_id: tuan,
+                kind: "referred_by".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+        db.add_relationship(
+            &RelationshipCreate {
+                from_id: bob,
+                to_id: tuan,
+                kind: "referred_by".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
 
         let ranked = db.similar_customers(anna, 5).unwrap();
         assert!(!ranked.is_empty());
@@ -2978,45 +3354,175 @@ mod tests {
         assert!(ranked[0].2.iter().any(|r| r.contains("Shop Co")));
         assert!(ranked[0].2.iter().any(|r| r.contains("Tuấn")));
         // Alien should either be absent or score much lower than Bob.
-        let alien_score = ranked.iter().find(|(c, _, _)| c.id == alien).map(|(_, s, _)| *s).unwrap_or(0.0);
+        let alien_score = ranked
+            .iter()
+            .find(|(c, _, _)| c.id == alien)
+            .map(|(_, s, _)| *s)
+            .unwrap_or(0.0);
         assert!(alien_score < ranked[0].1);
     }
 
     #[test]
     fn find_path_bfs_shortest() {
         let db = tmp_db();
-        let a = db.create_customer(&CustomerCreate { name: "A".into(), ..Default::default() }, 1).unwrap();
-        let b = db.create_customer(&CustomerCreate { name: "B".into(), ..Default::default() }, 1).unwrap();
-        let c = db.create_customer(&CustomerCreate { name: "C".into(), ..Default::default() }, 1).unwrap();
-        let d = db.create_customer(&CustomerCreate { name: "D".into(), ..Default::default() }, 1).unwrap();
+        let a = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "A".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let b = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "B".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let c = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "C".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let d = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "D".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
 
-        db.add_relationship(&RelationshipCreate { from_id: a, to_id: b, kind: "colleague_of".into(), ..Default::default() }, 1).unwrap();
-        db.add_relationship(&RelationshipCreate { from_id: b, to_id: c, kind: "colleague_of".into(), ..Default::default() }, 1).unwrap();
-        db.add_relationship(&RelationshipCreate { from_id: c, to_id: d, kind: "colleague_of".into(), ..Default::default() }, 1).unwrap();
+        db.add_relationship(
+            &RelationshipCreate {
+                from_id: a,
+                to_id: b,
+                kind: "colleague_of".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+        db.add_relationship(
+            &RelationshipCreate {
+                from_id: b,
+                to_id: c,
+                kind: "colleague_of".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+        db.add_relationship(
+            &RelationshipCreate {
+                from_id: c,
+                to_id: d,
+                kind: "colleague_of".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
 
         let path = db.find_path(a, d).unwrap().unwrap();
         assert_eq!(path, vec![a, b, c, d]);
         // Isolated node -> no path.
-        let e = db.create_customer(&CustomerCreate { name: "E".into(), ..Default::default() }, 1).unwrap();
+        let e = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "E".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
         assert!(db.find_path(a, e).unwrap().is_none());
     }
 
     #[test]
     fn subgraph_within_expands_hops() {
         let db = tmp_db();
-        let a = db.create_customer(&CustomerCreate { name: "A".into(), ..Default::default() }, 1).unwrap();
-        let b = db.create_customer(&CustomerCreate { name: "B".into(), ..Default::default() }, 1).unwrap();
-        let c = db.create_customer(&CustomerCreate { name: "C".into(), ..Default::default() }, 1).unwrap();
-        let d = db.create_customer(&CustomerCreate { name: "D".into(), ..Default::default() }, 1).unwrap();
-        db.add_relationship(&RelationshipCreate { from_id: a, to_id: b, kind: "colleague_of".into(), ..Default::default() }, 1).unwrap();
-        db.add_relationship(&RelationshipCreate { from_id: b, to_id: c, kind: "colleague_of".into(), ..Default::default() }, 1).unwrap();
-        db.add_relationship(&RelationshipCreate { from_id: c, to_id: d, kind: "colleague_of".into(), ..Default::default() }, 1).unwrap();
+        let a = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "A".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let b = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "B".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let c = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "C".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        let d = db
+            .create_customer(
+                &CustomerCreate {
+                    name: "D".into(),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+        db.add_relationship(
+            &RelationshipCreate {
+                from_id: a,
+                to_id: b,
+                kind: "colleague_of".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+        db.add_relationship(
+            &RelationshipCreate {
+                from_id: b,
+                to_id: c,
+                kind: "colleague_of".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+        db.add_relationship(
+            &RelationshipCreate {
+                from_id: c,
+                to_id: d,
+                kind: "colleague_of".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
 
         let (nodes1, _edges1) = db.subgraph_within(a, 1).unwrap();
         assert_eq!(nodes1.len(), 2); // A + B
         let (nodes2, edges2) = db.subgraph_within(a, 2).unwrap();
         assert_eq!(nodes2.len(), 3); // A + B + C
-        // Only edges among visited nodes are returned.
+                                     // Only edges among visited nodes are returned.
         assert!(edges2.len() >= 2);
         let (nodes3, _) = db.subgraph_within(a, 3).unwrap();
         assert_eq!(nodes3.len(), 4); // all
@@ -3026,10 +3532,18 @@ mod tests {
     fn interactions_roundtrip_and_touch() {
         let db = tmp_db();
         let id = db
-            .create_customer(&CustomerCreate { name: "C".into(), ..Default::default() }, 1)
+            .create_customer(
+                &CustomerCreate {
+                    name: "C".into(),
+                    ..Default::default()
+                },
+                1,
+            )
             .unwrap();
-        db.add_interaction(id, "call", "Alo hỏi thăm", "", 100, 100).unwrap();
-        db.add_interaction(id, "email", "Gửi báo giá", "chi tiết…", 200, 200).unwrap();
+        db.add_interaction(id, "call", "Alo hỏi thăm", "", 100, 100)
+            .unwrap();
+        db.add_interaction(id, "email", "Gửi báo giá", "chi tiết…", 200, 200)
+            .unwrap();
         let list = db.list_interactions(id, 10).unwrap();
         assert_eq!(list.len(), 2);
         // Ordered by occurred_at DESC.
@@ -3052,17 +3566,27 @@ mod patch_tests {
     #[test]
     fn deal_patch_distinguishes_absent_null_and_value() {
         let absent: DealPatch = serde_json::from_str(r#"{"title":"x"}"#).unwrap();
-        assert_eq!(absent.expected_close_at, None, "absent key must mean leave alone");
+        assert_eq!(
+            absent.expected_close_at, None,
+            "absent key must mean leave alone"
+        );
 
         let cleared: DealPatch = serde_json::from_str(r#"{"expected_close_at":null}"#).unwrap();
-        assert_eq!(cleared.expected_close_at, Some(None), "explicit null must mean clear");
+        assert_eq!(
+            cleared.expected_close_at,
+            Some(None),
+            "explicit null must mean clear"
+        );
 
         let set: DealPatch = serde_json::from_str(r#"{"expected_close_at":123}"#).unwrap();
-        assert_eq!(set.expected_close_at, Some(Some(123)), "a value must mean set");
+        assert_eq!(
+            set.expected_close_at,
+            Some(Some(123)),
+            "a value must mean set"
+        );
 
         // Same three-way contract on the project period.
-        let p: DealPatch =
-            serde_json::from_str(r#"{"period_start":null,"period_end":9}"#).unwrap();
+        let p: DealPatch = serde_json::from_str(r#"{"period_start":null,"period_end":9}"#).unwrap();
         assert_eq!(p.period_start, Some(None));
         assert_eq!(p.period_end, Some(Some(9)));
     }
@@ -3073,7 +3597,10 @@ mod patch_tests {
         let dir = tempfile::tempdir().unwrap();
         let db = Db::open(&dir.path().join("t.db")).unwrap();
         let cid = db
-            .create_customer(&serde_json::from_value(serde_json::json!({"name":"A"})).unwrap(), 1)
+            .create_customer(
+                &serde_json::from_value(serde_json::json!({"name":"A"})).unwrap(),
+                1,
+            )
             .unwrap();
         let did = db
             .create_deal(
@@ -3084,16 +3611,28 @@ mod patch_tests {
                 1,
             )
             .unwrap();
-        let close = |d: &Db| d.list_deals(None).unwrap().into_iter().find(|x| x.id == did).unwrap().expected_close_at;
+        let close = |d: &Db| {
+            d.list_deals(None)
+                .unwrap()
+                .into_iter()
+                .find(|x| x.id == did)
+                .unwrap()
+                .expected_close_at
+        };
         assert_eq!(close(&db), Some(1_790_000_000));
 
         // Absent key leaves it alone.
-        db.update_deal(did, &serde_json::from_str(r#"{"title":"D2"}"#).unwrap(), 2).unwrap();
+        db.update_deal(did, &serde_json::from_str(r#"{"title":"D2"}"#).unwrap(), 2)
+            .unwrap();
         assert_eq!(close(&db), Some(1_790_000_000));
 
         // Explicit null clears it.
-        db.update_deal(did, &serde_json::from_str(r#"{"expected_close_at":null}"#).unwrap(), 3)
-            .unwrap();
+        db.update_deal(
+            did,
+            &serde_json::from_str(r#"{"expected_close_at":null}"#).unwrap(),
+            3,
+        )
+        .unwrap();
         assert_eq!(close(&db), None, "explicit null must clear the stored date");
     }
 }

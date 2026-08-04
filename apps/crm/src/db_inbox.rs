@@ -22,7 +22,13 @@ use crate::db::Db;
 /// real token for.
 pub const SECRET_MASK: &str = "••••••";
 
-const SECRET_KEYS: &[&str] = &["token", "access_token", "refresh_token", "app_secret", "api_key"];
+const SECRET_KEYS: &[&str] = &[
+    "token",
+    "access_token",
+    "refresh_token",
+    "app_secret",
+    "api_key",
+];
 
 #[derive(Serialize, Clone)]
 pub struct Channel {
@@ -151,7 +157,11 @@ impl Db {
     pub fn get_channel(&self, id: i64) -> Result<Option<Channel>> {
         self.with(|c| {
             let row = c
-                .query_row("SELECT * FROM channels WHERE id=?1", params![id], Self::row_to_channel)
+                .query_row(
+                    "SELECT * FROM channels WHERE id=?1",
+                    params![id],
+                    Self::row_to_channel,
+                )
                 .optional()?;
             Ok(row)
         })
@@ -194,11 +204,18 @@ impl Db {
     pub fn update_channel_cfg(&self, id: i64, patch: &ChannelPatch) -> Result<()> {
         self.with(|c| {
             let stored: Option<String> = c
-                .query_row("SELECT config FROM channels WHERE id=?1", params![id], |r| r.get(0))
+                .query_row(
+                    "SELECT config FROM channels WHERE id=?1",
+                    params![id],
+                    |r| r.get(0),
+                )
                 .optional()?;
             let stored = stored.ok_or_else(|| anyhow!("channel {id} not found"))?;
             if let Some(v) = &patch.name {
-                c.execute("UPDATE channels SET name=?2 WHERE id=?1", params![id, v.trim()])?;
+                c.execute(
+                    "UPDATE channels SET name=?2 WHERE id=?1",
+                    params![id, v.trim()],
+                )?;
             }
             if let Some(v) = &patch.config {
                 let cur: serde_json::Value =
@@ -210,7 +227,10 @@ impl Db {
                 )?;
             }
             if let Some(v) = patch.enabled {
-                c.execute("UPDATE channels SET enabled=?2 WHERE id=?1", params![id, v as i64])?;
+                c.execute(
+                    "UPDATE channels SET enabled=?2 WHERE id=?1",
+                    params![id, v as i64],
+                )?;
             }
             Ok(())
         })
@@ -242,7 +262,10 @@ impl Db {
                 params![id, status, error, now],
             )?;
             if let Some(cur) = cursor {
-                c.execute("UPDATE channels SET cursor=?2 WHERE id=?1", params![id, cur])?;
+                c.execute(
+                    "UPDATE channels SET cursor=?2 WHERE id=?1",
+                    params![id, cur],
+                )?;
             }
             Ok(())
         })
@@ -365,7 +388,14 @@ impl Db {
                 "INSERT OR IGNORE INTO conversations(channel_id, channel_kind, external_id,
                         customer_id, display_name, status, created_at)
                  VALUES(?1,?2,?3,?4,?5,'open',?6)",
-                params![channel_id, kind, external_id, customer_id, display_name.trim(), now],
+                params![
+                    channel_id,
+                    kind,
+                    external_id,
+                    customer_id,
+                    display_name.trim(),
+                    now
+                ],
             )?;
             // An existing thread may have been created before the person was in
             // the CRM; adopt the resolution now that one exists.
@@ -389,7 +419,11 @@ impl Db {
             .ok_or_else(|| anyhow!("failed to create conversation"))
     }
 
-    pub fn conversation_by_external(&self, kind: &str, external_id: &str) -> Result<Option<Conversation>> {
+    pub fn conversation_by_external(
+        &self,
+        kind: &str,
+        external_id: &str,
+    ) -> Result<Option<Conversation>> {
         self.with(|c| {
             let row = c
                 .query_row(
@@ -443,7 +477,10 @@ impl Db {
             );
             let mut stmt = c.prepare(&sql)?;
             let rows = stmt
-                .query_map(params![status, kind, customer_id, like, limit], Self::row_to_conversation)?
+                .query_map(
+                    params![status, kind, customer_id, like, limit],
+                    Self::row_to_conversation,
+                )?
                 .filter_map(|r| r.ok())
                 .collect();
             Ok(rows)
@@ -455,7 +492,10 @@ impl Db {
             return Err(anyhow!("unknown conversation status '{status}'"));
         }
         self.with(|c| {
-            let n = c.execute("UPDATE conversations SET status=?2 WHERE id=?1", params![id, status])?;
+            let n = c.execute(
+                "UPDATE conversations SET status=?2 WHERE id=?1",
+                params![id, status],
+            )?;
             if n == 0 {
                 return Err(anyhow!("conversation {id} not found"));
             }
@@ -468,8 +508,10 @@ impl Db {
             return Err(anyhow!("unknown handoff state '{state}'"));
         }
         self.with(|c| {
-            let n =
-                c.execute("UPDATE conversations SET handoff_state=?2 WHERE id=?1", params![id, state])?;
+            let n = c.execute(
+                "UPDATE conversations SET handoff_state=?2 WHERE id=?1",
+                params![id, state],
+            )?;
             if n == 0 {
                 return Err(anyhow!("conversation {id} not found"));
             }
@@ -495,31 +537,32 @@ impl Db {
         status: &str,
         now: i64,
     ) -> Result<i64> {
-        let id = self.with(|c| {
-            let conv: Option<(i64, String)> = c
-                .query_row(
-                    "SELECT customer_id, channel_kind FROM conversations WHERE id=?1",
-                    params![conversation_id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
-            let (customer_id, kind) =
-                conv.ok_or_else(|| anyhow!("conversation {conversation_id} not found"))?;
-            c.execute(
+        let id =
+            self.with(|c| {
+                let conv: Option<(i64, String)> = c
+                    .query_row(
+                        "SELECT customer_id, channel_kind FROM conversations WHERE id=?1",
+                        params![conversation_id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )
+                    .optional()?;
+                let (customer_id, kind) =
+                    conv.ok_or_else(|| anyhow!("conversation {conversation_id} not found"))?;
+                c.execute(
                 "INSERT INTO conv_messages(conversation_id, customer_id, direction, role, content,
                         channel, status, created_at)
                  VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![conversation_id, customer_id, direction, role, content, kind, status, now],
             )?;
-            let id = c.last_insert_rowid();
-            c.execute(
-                "UPDATE conversations SET last_message_at=?2,
+                let id = c.last_insert_rowid();
+                c.execute(
+                    "UPDATE conversations SET last_message_at=?2,
                         unread = CASE WHEN ?3 = 'inbound' THEN unread + 1 ELSE unread END
                  WHERE id=?1",
-                params![conversation_id, now, direction],
-            )?;
-            Ok(id)
-        })?;
+                    params![conversation_id, now, direction],
+                )?;
+                Ok(id)
+            })?;
         Ok(id)
     }
 
@@ -543,7 +586,11 @@ impl Db {
 
     /// Recent traffic with one person across every thread — the transcript the
     /// sales engine grounds a draft on.
-    pub fn recent_messages_of_customer(&self, customer_id: i64, limit: i64) -> Result<Vec<ConvMessage>> {
+    pub fn recent_messages_of_customer(
+        &self,
+        customer_id: i64,
+        limit: i64,
+    ) -> Result<Vec<ConvMessage>> {
         self.with(|c| {
             let mut stmt = c.prepare(
                 "SELECT * FROM (
@@ -588,10 +635,11 @@ impl Db {
 
     pub fn inbox_stats(&self) -> Result<serde_json::Value> {
         self.with(|c| {
-            let open: i64 =
-                c.query_row("SELECT COUNT(*) FROM conversations WHERE status='open'", [], |r| {
-                    r.get(0)
-                })?;
+            let open: i64 = c.query_row(
+                "SELECT COUNT(*) FROM conversations WHERE status='open'",
+                [],
+                |r| r.get(0),
+            )?;
             let unread: i64 = c.query_row(
                 "SELECT COUNT(*) FROM conversations WHERE unread > 0 AND status='open'",
                 [],
@@ -608,7 +656,9 @@ impl Db {
                 |r| r.get(0),
             )?;
             let channels: i64 =
-                c.query_row("SELECT COUNT(*) FROM channels WHERE enabled=1", [], |r| r.get(0))?;
+                c.query_row("SELECT COUNT(*) FROM channels WHERE enabled=1", [], |r| {
+                    r.get(0)
+                })?;
             Ok(serde_json::json!({
                 "openConversations": open,
                 "unread": unread,

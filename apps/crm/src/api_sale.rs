@@ -52,9 +52,8 @@ async fn list_leads(
     State(s): State<Arc<AppState>>,
     Query(q): Query<LeadQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let leads = s
-        .db
-        .list_leads(
+    let leads =
+        s.db.list_leads(
             q.stage.as_deref(),
             q.temperature.as_deref(),
             q.q.as_deref(),
@@ -70,11 +69,10 @@ async fn get_lead(
     State(s): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let state = s
-        .db
-        .sale_state(id)
-        .map_err(server)?
-        .ok_or_else(|| not_found(format!("customer {id} not found")))?;
+    let state =
+        s.db.sale_state(id)
+            .map_err(server)?
+            .ok_or_else(|| not_found(format!("customer {id} not found")))?;
     let customer = s.db.get_customer(id).map_err(server)?;
     Ok(Json(json!({
         "lead": state,
@@ -126,7 +124,9 @@ async fn draft(
     Json(input): Json<IntentInput>,
 ) -> Result<Json<Value>, ApiError> {
     let intent = input.intent.unwrap_or_else(|| "share_value_content".into());
-    let text = crate::sale::draft_message(&s.db, id, &intent).await.map_err(bad)?;
+    let text = crate::sale::draft_message(&s.db, id, &intent)
+        .await
+        .map_err(bad)?;
     Ok(Json(json!({ "draft": text })))
 }
 
@@ -159,7 +159,9 @@ async fn send_now(
     )
     .await
     .map_err(bad)?;
-    Ok(Json(json!({ "outcome": out, "action": out.action(), "detail": out.detail() })))
+    Ok(Json(
+        json!({ "outcome": out, "action": out.action(), "detail": out.detail() }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -183,7 +185,9 @@ async fn set_stage(
     )
     .map_err(bad)?;
     emit(&s.events, "lead", json!({ "id": id, "action": "stage" }));
-    Ok(Json(json!({ "lead": s.db.sale_state(id).map_err(server)? })))
+    Ok(Json(
+        json!({ "lead": s.db.sale_state(id).map_err(server)? }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -201,8 +205,14 @@ async fn unsubscribe(
     Json(input): Json<UnsubInput>,
 ) -> Result<Json<Value>, ApiError> {
     s.db.set_unsubscribed(id, input.on, now_ts()).map_err(bad)?;
-    emit(&s.events, "lead", json!({ "id": id, "action": "unsubscribe" }));
-    Ok(Json(json!({ "lead": s.db.sale_state(id).map_err(server)? })))
+    emit(
+        &s.events,
+        "lead",
+        json!({ "id": id, "action": "unsubscribe" }),
+    );
+    Ok(Json(
+        json!({ "lead": s.db.sale_state(id).map_err(server)? }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -218,11 +228,15 @@ async fn start_sequence(
     let run_id = crate::sale::start_sequence(&s.db, &s.events, id, &input.sequence_key)
         .await
         .map_err(bad)?;
-    Ok(Json(json!({ "run_id": run_id, "runs": s.db.list_runs(Some(id)).map_err(server)? })))
+    Ok(Json(
+        json!({ "run_id": run_id, "runs": s.db.list_runs(Some(id)).map_err(server)? }),
+    ))
 }
 
 async fn list_sequences(State(s): State<Arc<AppState>>) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!({ "sequences": s.db.list_sequences().map_err(server)? })))
+    Ok(Json(
+        json!({ "sequences": s.db.list_sequences().map_err(server)? }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -235,7 +249,8 @@ async fn set_sequence_enabled(
     Path(key): Path<String>,
     Json(input): Json<EnabledInput>,
 ) -> Result<Json<Value>, ApiError> {
-    s.db.set_sequence_enabled(&key, input.enabled).map_err(not_found)?;
+    s.db.set_sequence_enabled(&key, input.enabled)
+        .map_err(not_found)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -254,10 +269,9 @@ async fn list_reviews(
 ) -> Result<Json<Value>, ApiError> {
     let status = q.status.unwrap_or_else(|| "pending".into());
     let status = if status == "all" { None } else { Some(status) };
-    let reviews = s
-        .db
-        .list_reviews(status.as_deref(), q.limit.unwrap_or(100).clamp(1, 500))
-        .map_err(server)?;
+    let reviews =
+        s.db.list_reviews(status.as_deref(), q.limit.unwrap_or(100).clamp(1, 500))
+            .map_err(server)?;
     Ok(Json(json!({ "reviews": reviews })))
 }
 
@@ -275,10 +289,16 @@ async fn approve_review(
     Json(input): Json<ApproveInput>,
 ) -> Result<Json<Value>, ApiError> {
     let by = input.by.unwrap_or_else(|| "operator".into());
-    let out =
-        crate::sale::approve_review(&s.db, &s.events, &s.channels, id, input.edited.as_deref(), &by)
-            .await
-            .map_err(bad)?;
+    let out = crate::sale::approve_review(
+        &s.db,
+        &s.events,
+        &s.channels,
+        id,
+        input.edited.as_deref(),
+        &by,
+    )
+    .await
+    .map_err(bad)?;
     Ok(Json(out))
 }
 
@@ -288,8 +308,13 @@ async fn reject_review(
     Json(input): Json<ApproveInput>,
 ) -> Result<Json<Value>, ApiError> {
     let by = input.by.unwrap_or_else(|| "operator".into());
-    s.db.resolve_review(id, "rejected", "", &by, now_ts()).map_err(not_found)?;
-    emit(&s.events, "review", json!({ "id": id, "action": "rejected" }));
+    s.db.resolve_review(id, "rejected", "", &by, now_ts())
+        .map_err(not_found)?;
+    emit(
+        &s.events,
+        "review",
+        json!({ "id": id, "action": "rejected" }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -301,10 +326,9 @@ async fn list_escalations(
 ) -> Result<Json<Value>, ApiError> {
     let status = q.status.unwrap_or_else(|| "open".into());
     let status = if status == "all" { None } else { Some(status) };
-    let escalations = s
-        .db
-        .list_escalations(status.as_deref(), q.limit.unwrap_or(100).clamp(1, 500))
-        .map_err(server)?;
+    let escalations =
+        s.db.list_escalations(status.as_deref(), q.limit.unwrap_or(100).clamp(1, 500))
+            .map_err(server)?;
     Ok(Json(json!({ "escalations": escalations })))
 }
 
@@ -314,8 +338,13 @@ async fn resolve_escalation(
     Json(input): Json<ApproveInput>,
 ) -> Result<Json<Value>, ApiError> {
     let by = input.by.unwrap_or_else(|| "operator".into());
-    s.db.resolve_escalation(id, &by, now_ts()).map_err(not_found)?;
-    emit(&s.events, "escalation", json!({ "id": id, "action": "resolved" }));
+    s.db.resolve_escalation(id, &by, now_ts())
+        .map_err(not_found)?;
+    emit(
+        &s.events,
+        "escalation",
+        json!({ "id": id, "action": "resolved" }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -325,10 +354,9 @@ async fn list_actions(
     State(s): State<Arc<AppState>>,
     Query(q): Query<StatusQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let actions = s
-        .db
-        .list_actions(q.customer_id, q.limit.unwrap_or(100).clamp(1, 500))
-        .map_err(server)?;
+    let actions =
+        s.db.list_actions(q.customer_id, q.limit.unwrap_or(100).clamp(1, 500))
+            .map_err(server)?;
     Ok(Json(json!({ "actions": actions })))
 }
 
@@ -336,10 +364,9 @@ async fn list_jobs(
     State(s): State<Arc<AppState>>,
     Query(q): Query<StatusQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let jobs = s
-        .db
-        .list_jobs(q.customer_id, q.limit.unwrap_or(100).clamp(1, 500))
-        .map_err(server)?;
+    let jobs =
+        s.db.list_jobs(q.customer_id, q.limit.unwrap_or(100).clamp(1, 500))
+            .map_err(server)?;
     Ok(Json(json!({ "jobs": jobs })))
 }
 
@@ -372,7 +399,9 @@ async fn update_settings(
     State(s): State<Arc<AppState>>,
     Json(patch): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
-    let obj = patch.as_object().ok_or_else(|| bad("expected a JSON object"))?;
+    let obj = patch
+        .as_object()
+        .ok_or_else(|| bad("expected a JSON object"))?;
     for (k, v) in obj {
         if !EXPOSED.contains(&k.as_str()) {
             continue;
@@ -380,7 +409,13 @@ async fn update_settings(
         let val = match v {
             Value::String(s) => s.clone(),
             Value::Number(n) => n.to_string(),
-            Value::Bool(b) => if *b { "1".into() } else { "0".into() },
+            Value::Bool(b) => {
+                if *b {
+                    "1".into()
+                } else {
+                    "0".into()
+                }
+            }
             _ => continue,
         };
         if k == "language" && !["vi", "en"].contains(&val.as_str()) {
@@ -388,7 +423,9 @@ async fn update_settings(
         }
         if k == "max_messages_per_customer_24h" && val.parse::<i64>().map(|n| n < 1).unwrap_or(true)
         {
-            return Err(bad("max_messages_per_customer_24h must be a positive integer"));
+            return Err(bad(
+                "max_messages_per_customer_24h must be a positive integer",
+            ));
         }
         s.db.set_setting(k, &val).map_err(server)?;
     }
