@@ -243,6 +243,10 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			s.removeClient(channelID, senderID)
 			return
 		}
+		// Any inbound frame proves the peer is alive — extend the deadline so
+		// clients whose protocol-level pongs are swallowed by proxies still
+		// survive on app-level keepalive pings.
+		_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
 		if msgType != websocket.TextMessage {
 			continue
 		}

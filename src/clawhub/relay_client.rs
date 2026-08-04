@@ -208,8 +208,12 @@ impl RelayClient {
         });
 
         let cid_outbound = channel_id.clone();
+        let sid_outbound = sender_id.clone();
         tokio::spawn(async move {
-            let mut ping_tick = time::interval(Duration::from_secs(25));
+            // 20s < the hub's ~50s idle cutoff. The protocol-level Ping alone is
+            // not enough — the hub (and any proxy in front of it) only counts
+            // application frames, so send a JSON "ping" frame as well.
+            let mut ping_tick = time::interval(Duration::from_secs(20));
             ping_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
                 tokio::select! {
@@ -221,6 +225,31 @@ impl RelayClient {
                                 e
                             );
                             break;
+                        }
+                        let keepalive = RelayFrame {
+                            frame_type: "ping".to_string(),
+                            channel_id: cid_outbound.clone(),
+                            sender_id: sid_outbound.clone(),
+                            timestamp: chrono::Utc::now().timestamp_millis(),
+                            message_id: format!("keepalive-{}", uuid::Uuid::new_v4()),
+                            control_type: None,
+                            metadata: None,
+                            nonce: None,
+                            ciphertext: None,
+                            tag: None,
+                        };
+                        match serde_json::to_string(&keepalive) {
+                            Ok(payload) => {
+                                if let Err(e) = ws_write.send(WsMessage::Text(payload)).await {
+                                    tracing::warn!(
+                                        "Relay keepalive ping failed for channel {}: {}",
+                                        cid_outbound,
+                                        e
+                                    );
+                                    break;
+                                }
+                            }
+                            Err(e) => tracing::error!("Failed to encode relay keepalive: {}", e),
                         }
                     }
                     maybe_msg = outbound_rx.recv() => {
