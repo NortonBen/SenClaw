@@ -355,3 +355,9 @@ Found 3 notes:
 | Daily standup recap | **This skill** (journal template) |
 | Code documentation | Code skill or inline comments |
 | Todo/task tracking | **This skill** (todo template) |
+
+**User defaults override this table**: if the system prompt carries a
+`## User defaults` block naming a default note store (`wiki_write` or
+`memory_save` instead of `space_note_create`), send plain "ghi chú lại X"
+requests there. The table above then only applies where the user's intent
+clearly asks for a different store.

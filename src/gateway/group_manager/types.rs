@@ -106,6 +106,128 @@ pub struct TtsSettings {
     pub language: Option<String>,
 }
 
+/// User-set default flow handlers + widget disable list — the `defaults`
+/// section of `~/.senclaw/config.json`, edited from Plugins → Widget.
+///
+/// Every field is optional so the file round-trips; [`Self::effective_*`]
+/// resolve the hard-coded fallbacks (which match today's behavior exactly, so
+/// an absent section changes nothing).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DefaultsConfig {
+    /// Where a link opens: `system-browser` | `mini-browser` | `new-tab`.
+    #[serde(rename = "openLink", default, skip_serializing_if = "Option::is_none")]
+    pub open_link: Option<String>,
+    /// How media plays: `inline-widget` | `mini-browser` | `system-browser`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
+    /// Which search the agent should prefer: `browser` | `search-app`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    /// Engine for `browser_search`: `google` | `bing`.
+    #[serde(rename = "searchEngine", default, skip_serializing_if = "Option::is_none")]
+    pub search_engine: Option<String>,
+    /// Default note store: `space-notes` | `wiki` | `memory`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// Full widget ids (`chart`, `crm.pipeline`, …) the user switched off.
+    #[serde(
+        rename = "disabledWidgets",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub disabled_widgets: Option<Vec<String>>,
+}
+
+impl DefaultsConfig {
+    pub fn effective_open_link(&self) -> &str {
+        self.open_link.as_deref().unwrap_or("system-browser")
+    }
+    pub fn effective_media(&self) -> &str {
+        self.media.as_deref().unwrap_or("inline-widget")
+    }
+    pub fn effective_search(&self) -> &str {
+        self.search.as_deref().unwrap_or("browser")
+    }
+    pub fn effective_search_engine(&self) -> &str {
+        self.search_engine.as_deref().unwrap_or("google")
+    }
+    pub fn effective_note(&self) -> &str {
+        self.note.as_deref().unwrap_or("space-notes")
+    }
+
+    /// Render the `## User defaults` block injected into the agent system
+    /// prompt. `None` when the user has configured nothing — the prompt must
+    /// stay byte-identical to today's for untouched installs.
+    pub fn render_prompt_block(&self) -> Option<String> {
+        let mut lines: Vec<String> = Vec::new();
+        match self.search.as_deref() {
+            Some("search-app") => lines.push(
+                "- Search: prefer `mcp__search-mcp__search_query` (the Search app — federated \
+                 web + knowledge + wiki). Fall back to `browser_search` only if that tool is \
+                 unavailable."
+                    .to_string(),
+            ),
+            Some("browser") => {
+                if let Some(engine) = self.search_engine.as_deref() {
+                    lines.push(format!(
+                        "- Search: use `browser_search` with engine \"{engine}\"."
+                    ));
+                }
+            }
+            _ => {
+                if let Some(engine) = self.search_engine.as_deref() {
+                    lines.push(format!(
+                        "- Search: use `browser_search` with engine \"{engine}\"."
+                    ));
+                }
+            }
+        }
+        match self.note.as_deref() {
+            Some("wiki") => lines.push(
+                "- Notes: when the user asks to note/save something, store it in the wiki via \
+                 `wiki_write` (their default note store)."
+                    .to_string(),
+            ),
+            Some("memory") => lines.push(
+                "- Notes: when the user asks to note/save something, store it via `memory_save` \
+                 (their default note store)."
+                    .to_string(),
+            ),
+            Some("space-notes") => lines.push(
+                "- Notes: when the user asks to note/save something, use `space_note_create` \
+                 (their default note store)."
+                    .to_string(),
+            ),
+            _ => {}
+        }
+        match self.media.as_deref() {
+            Some("inline-widget") => lines.push(
+                "- Media: when asked to play a video/audio URL, use `emit_widget` (kind `video` \
+                 or `audio`) so it plays inline in the chat."
+                    .to_string(),
+            ),
+            Some("mini-browser") => lines.push(
+                "- Media: when asked to play a video/audio URL, open it in the Mini Browser app \
+                 (`mcp__mini-browser-mcp__browser_navigate`)."
+                    .to_string(),
+            ),
+            _ => {}
+        }
+        if self.open_link.as_deref() == Some("mini-browser") {
+            lines.push(
+                "- Links: when asked to open a URL for the user, open it in the Mini Browser app \
+                 (`mcp__mini-browser-mcp__browser_navigate`) instead of the system browser."
+                    .to_string(),
+            );
+        }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(format!("## User defaults\n{}", lines.join("\n")))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingConfig {
     /// Provider: "openai" | "openrouter" | "ollama" | "local" | "none"
@@ -276,6 +398,10 @@ pub(super) struct GlobalConfig {
         rename = "dispatchEnabled"
     )]
     pub(super) dispatch_enabled: Option<bool>,
+    /// User-set default flow handlers (open link / media / search / note) plus
+    /// the per-widget disable list. Edited from Plugins → Widget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) defaults: Option<DefaultsConfig>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -391,4 +517,75 @@ pub struct LlmConfigResult {
     pub active_id: Option<String>,
     pub active_quick_id: Option<String>,
     pub active_cognitive_id: Option<String>,
+}
+
+#[cfg(test)]
+mod defaults_tests {
+    use super::DefaultsConfig;
+
+    #[test]
+    fn empty_defaults_render_no_prompt_block() {
+        // Untouched installs must keep a byte-identical system prompt.
+        assert_eq!(DefaultsConfig::default().render_prompt_block(), None);
+    }
+
+    #[test]
+    fn effective_fallbacks_match_today() {
+        let d = DefaultsConfig::default();
+        assert_eq!(d.effective_open_link(), "system-browser");
+        assert_eq!(d.effective_media(), "inline-widget");
+        assert_eq!(d.effective_search(), "browser");
+        assert_eq!(d.effective_search_engine(), "google");
+        assert_eq!(d.effective_note(), "space-notes");
+    }
+
+    #[test]
+    fn prompt_block_covers_configured_flows() {
+        let d = DefaultsConfig {
+            search: Some("search-app".into()),
+            note: Some("wiki".into()),
+            media: Some("inline-widget".into()),
+            open_link: Some("mini-browser".into()),
+            ..Default::default()
+        };
+        let block = d.render_prompt_block().unwrap();
+        assert!(block.starts_with("## User defaults"));
+        assert!(block.contains("mcp__search-mcp__search_query"), "{block}");
+        assert!(block.contains("wiki_write"), "{block}");
+        assert!(block.contains("emit_widget"), "{block}");
+        assert!(block.contains("mini-browser-mcp"), "{block}");
+    }
+
+    #[test]
+    fn prompt_block_engine_only_when_browser_search() {
+        let d = DefaultsConfig {
+            search_engine: Some("bing".into()),
+            ..Default::default()
+        };
+        let block = d.render_prompt_block().unwrap();
+        assert!(block.contains("bing"), "{block}");
+        // But picking the search-app hides the engine line (engine is a
+        // browser_search knob).
+        let d2 = DefaultsConfig {
+            search: Some("search-app".into()),
+            search_engine: Some("bing".into()),
+            ..Default::default()
+        };
+        let block2 = d2.render_prompt_block().unwrap();
+        assert!(!block2.contains("bing"), "{block2}");
+    }
+
+    #[test]
+    fn defaults_round_trip_serde() {
+        let d = DefaultsConfig {
+            open_link: Some("mini-browser".into()),
+            disabled_widgets: Some(vec!["clock".into(), "crm.pipeline".into()]),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains("openLink"));
+        assert!(json.contains("disabledWidgets"));
+        let back: DefaultsConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, d);
+    }
 }

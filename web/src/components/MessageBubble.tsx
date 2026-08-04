@@ -12,6 +12,11 @@ import { WidgetCard } from './WidgetCard';
 import type { WidgetSpec, WidgetKind } from '../types';
 import { useAppContext } from '../contexts/AppContext';
 import { extractLeadingReasoningBlocks } from '../utils/reasoningBlocks';
+import { handleLinkPerDefaults, prefetchFlowDefaults } from '../utils/flowDefaults';
+
+// Warm the defaults cache so the (synchronous) link-click handler has a
+// snapshot by the time the user clicks anything.
+void prefetchFlowDefaults();
 import { speakPipelined, type SpeakHandle } from '../utils/ttsPipeline';
 import { ReasoningCollapsible } from './ReasoningCollapsible';
 
@@ -94,13 +99,13 @@ function SparkleIcon({ className }: { className?: string }) {
 }
 
 
-const WIDGET_FENCE_LANGS = new Set<string>(['widget', 'chart', 'weather', 'clock']);
+const WIDGET_FENCE_LANGS = new Set<string>(['widget', 'chart', 'weather', 'clock', 'video', 'audio', 'image']);
 
 /**
  * Try to interpret a fenced code block as a chat widget.
- *  - ```widget → body is a full WidgetSpec `{kind,title,data}`
- *  - ```chart / ```weather / ```clock → body is the kind-specific `data`,
- *    wrapped into `{ kind: <lang>, data: <json> }`.
+ *  - ```widget → body is a full WidgetSpec `{kind,title,data}` (incl. kind "app")
+ *  - ```chart / ```weather / ```clock / ```video / ```audio / ```image → body is
+ *    the kind-specific `data`, wrapped into `{ kind: <lang>, data: <json> }`.
  * Returns null (→ render as normal code) when the language isn't a widget
  * fence or the body isn't yet valid JSON (e.g. still streaming).
  */
@@ -114,7 +119,7 @@ function tryParseWidgetFence(lang: string, body: string): WidgetSpec | null {
       }
       return null;
     }
-    // chart/weather/clock: the body is the raw `data` payload.
+    // chart/weather/clock/video: the body is the raw `data` payload.
     return { kind: lang as WidgetKind, data: parsed } as WidgetSpec;
   } catch {
     return null; // incomplete/invalid JSON → fall back to code rendering
@@ -130,7 +135,18 @@ function MarkdownContent({ content, isDarkMode }: { content: string, isDarkMode:
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
-          a: ({ ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline" />,
+          a: ({ href, ...props }) => (
+            <a
+              {...props}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-400 hover:underline"
+              // Honors Plugins → Widget "Mở link" default (mini-browser routes
+              // in-app); falls through to the plain new tab otherwise.
+              onClick={(e) => handleLinkPerDefaults(e, href)}
+            />
+          ),
           p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
           pre: ({ children }) => <pre className="chat-markdown-pre">{children}</pre>,
           code: ({ className, children, ...props }) => {

@@ -117,6 +117,11 @@ pub trait CoreApi: Send + Sync {
     /// global `afterProcess` toggle before each turn). Default no-op.
     fn set_after_process(&self, _jid: &str, _enabled: bool) {}
 
+    /// Hot-update the rendered `## User defaults` system-prompt block for an
+    /// existing core (built from the global `defaults` config before each
+    /// turn; `None` = user configured nothing). Default no-op.
+    fn set_user_defaults(&self, _jid: &str, _block: Option<String>) {}
+
     /// Set the per-group LLM override for a core. `id` is an entry id in the
     /// global `llmConfigs` list, or `None` to use the globally active model.
     /// Applied to the live engine if present, and remembered so a lazily

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/tokens.dart';
+import 'widget_card.dart';
 
 /// Lightweight, dependency-free Markdown renderer for agent replies.
 ///
@@ -8,6 +9,11 @@ import '../theme/tokens.dart';
 /// inline `code`, **bold**, *italic*, `# headings`, and `-`/`*` bullet lists.
 /// Anything it doesn't recognise renders as plain paragraph text, so passing
 /// arbitrary plain text is always safe.
+///
+/// Fenced blocks tagged `widget` / `chart` / `weather` / `clock` whose body is
+/// valid JSON render as an inline [WidgetCard] instead of a code block — the
+/// channel-side fallback of the `chat:widget` feature, so widgets work purely
+/// from the LLM's text.
 class MarkdownText extends StatelessWidget {
   final String text;
 
@@ -38,6 +44,8 @@ class MarkdownText extends StatelessWidget {
   Widget _buildBlock(BuildContext context, Color color, _Block b) {
     switch (b.kind) {
       case _BlockKind.code:
+        final spec = WidgetCard.tryParseFence(b.lang, b.text);
+        if (spec != null) return WidgetCard(spec: spec);
         return _CodeBlock(code: b.text, fontSize: fontSize);
       case _BlockKind.heading:
         return Padding(
@@ -103,6 +111,7 @@ class MarkdownText extends StatelessWidget {
 
       if (trimmed.startsWith('```')) {
         flushPara();
+        final lang = trimmed.substring(3).trim();
         final buf = <String>[];
         i++;
         while (i < lines.length && !lines[i].trimLeft().startsWith('```')) {
@@ -110,7 +119,7 @@ class MarkdownText extends StatelessWidget {
           i++;
         }
         i++; // skip closing fence
-        blocks.add(_Block(_BlockKind.code, buf.join('\n')));
+        blocks.add(_Block(_BlockKind.code, buf.join('\n'), lang: lang));
         continue;
       }
 
@@ -188,7 +197,10 @@ class _Block {
   final _BlockKind kind;
   final String text;
   final int level;
-  _Block(this.kind, this.text, {this.level = 1});
+
+  /// Fence info string (language tag) for code blocks; empty otherwise.
+  final String lang;
+  _Block(this.kind, this.text, {this.level = 1, this.lang = ''});
 }
 
 class _CodeBlock extends StatelessWidget {

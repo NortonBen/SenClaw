@@ -168,11 +168,16 @@ Use **`browser_search`** — returns ranked SERP results without opening a tab. 
 ```
 mcp__senclaw-browser__browser_search {
   "query": "<user query in the user's language>",
-  "engine": "google",            // or "bing"; default "google"
+  "engine": "google",            // or "bing"; omit → the user's configured default engine
   "num_results": 10,             // default 10
   "language": "vi"               // optional
 }
 ```
+
+**User defaults**: if the system prompt carries a `## User defaults` block naming a
+preferred search tool (e.g. the Search app's `mcp__search-mcp__search_query`), use
+that tool for searches instead of `browser_search`. Omit `engine` unless the user
+asks for a specific one — the daemon fills in their configured default.
 
 Returns structured results (`title`, `url`, `snippet`, …). Treat snippets as a lead, not the final source, whenever the user asks for current data, prices, news, comparisons, summaries, or "tổng hợp".
 

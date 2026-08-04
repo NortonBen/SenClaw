@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/prefs.dart';
 import '../../theme/tokens.dart';
+import '../../core/transport/connection.dart';
 import '../../models/group.dart';
 import '../dock/right_dock.dart';
+import '../space/event_link.dart';
 import '../workflow/workflow_session_pane.dart';
 import 'agents_provider.dart';
+import 'flow_defaults.dart';
 import 'conversation_pane.dart';
 import 'groups_provider.dart';
 import 'new_chat_dialog.dart';
@@ -25,6 +28,12 @@ class ChatScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
+    // Chat links honor the user's "Mở link" default (Plugins → Widget): warm
+    // the cached defaults and (re-)register the in-app mini-browser opener
+    // with this build's (context, ref) — openEventLink guards on mounted.
+    ChatLinkFlow.prefetch(ref.read(appConfigProvider).httpBase);
+    ChatLinkFlow.openInternal =
+        (route) => openEventLink(context, ref, route);
     final groups = ref.watch(groupsProvider);
     final selected = ref.watch(selectedJidProvider);
     final sidebarWidth = ref.watch(chatSidebarWidthProvider);

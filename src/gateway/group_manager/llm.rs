@@ -6,8 +6,8 @@ use anyhow::Result;
 
 use super::config::{load_global_config, save_global_config};
 use super::types::{
-    AdminPermissions, AdminPermissionsSection, EmbeddingConfig, LlmConfig, LlmConfigResult,
-    OcrSettings, TtsSettings, WhisperSettings,
+    AdminPermissions, AdminPermissionsSection, DefaultsConfig, EmbeddingConfig, LlmConfig,
+    LlmConfigResult, OcrSettings, TtsSettings, WhisperSettings,
 };
 
 // ===== Admin permissions config =====
@@ -61,7 +61,9 @@ pub fn save_pre_trigger_skill_enabled(config_path: &Path, enabled: bool) -> Resu
 
 /// Pre-cognitive stage. Default OFF — opt-in cognitive-memory injection.
 pub fn get_pre_cognitive_enabled(config_path: &Path) -> bool {
-    load_global_config(config_path).pre_cognitive.unwrap_or(false)
+    load_global_config(config_path)
+        .pre_cognitive
+        .unwrap_or(false)
 }
 
 pub fn save_pre_cognitive_enabled(config_path: &Path, enabled: bool) -> Result<()> {
@@ -108,13 +110,67 @@ pub fn save_memory_recall_enabled(config_path: &Path, enabled: bool) -> Result<(
     save_global_config(config_path, &cfg)
 }
 
+// ===== Default flows + widget disable list (global, user-set) =====
+
+/// The `defaults` section (open-link / media / search / note handlers + the
+/// per-widget disable list). Absent section → all-`None` config whose
+/// `effective_*()` fallbacks reproduce today's behavior exactly.
+pub fn get_defaults_config(config_path: &Path) -> DefaultsConfig {
+    load_global_config(config_path).defaults.unwrap_or_default()
+}
+
+/// Merge-save: only `Some` fields in `patch` replace the stored values, so the
+/// UI can update one dropdown without resending the rest. Returns the merged
+/// result.
+pub fn save_defaults_config(config_path: &Path, patch: &DefaultsConfig) -> Result<DefaultsConfig> {
+    let mut cfg = load_global_config(config_path);
+    let mut current = cfg.defaults.take().unwrap_or_default();
+    if patch.open_link.is_some() {
+        current.open_link = patch.open_link.clone();
+    }
+    if patch.media.is_some() {
+        current.media = patch.media.clone();
+    }
+    if patch.search.is_some() {
+        current.search = patch.search.clone();
+    }
+    if patch.search_engine.is_some() {
+        current.search_engine = patch.search_engine.clone();
+    }
+    if patch.note.is_some() {
+        current.note = patch.note.clone();
+    }
+    if patch.disabled_widgets.is_some() {
+        current.disabled_widgets = patch.disabled_widgets.clone();
+    }
+    cfg.defaults = Some(current.clone());
+    save_global_config(config_path, &cfg)?;
+    Ok(current)
+}
+
+/// Toggle one widget id in `defaults.disabledWidgets`.
+pub fn set_widget_disabled(config_path: &Path, widget_id: &str, disabled: bool) -> Result<()> {
+    let mut cfg = load_global_config(config_path);
+    let mut current = cfg.defaults.take().unwrap_or_default();
+    let mut list = current.disabled_widgets.take().unwrap_or_default();
+    list.retain(|id| id != widget_id);
+    if disabled {
+        list.push(widget_id.to_string());
+    }
+    current.disabled_widgets = Some(list);
+    cfg.defaults = Some(current);
+    save_global_config(config_path, &cfg)
+}
+
 // ===== MCP dispatcher toggle (global, user-set) =====
 
 /// Autonomous MCP dispatcher. Default OFF — opt-in autonomous task execution:
 /// when enabled, ready tasks on dispatch sources (the Kanban board) are picked
 /// up and run by persona worker agents.
 pub fn get_dispatch_enabled(config_path: &Path) -> bool {
-    load_global_config(config_path).dispatch_enabled.unwrap_or(false)
+    load_global_config(config_path)
+        .dispatch_enabled
+        .unwrap_or(false)
 }
 
 pub fn save_dispatch_enabled(config_path: &Path, enabled: bool) -> Result<()> {

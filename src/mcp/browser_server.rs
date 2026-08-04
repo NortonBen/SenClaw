@@ -288,8 +288,10 @@ struct ExtractStructuredParams {
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct SearchParams {
     query: String,
-    #[serde(default = "default_search_engine2")]
-    engine: String,
+    /// `google` | `bing`. Omitted → the user's configured default engine
+    /// (`defaults.searchEngine` in the global config; falls back to google).
+    #[serde(default)]
+    engine: Option<String>,
     #[serde(default = "default_num_results2")]
     num_results: u8,
     #[serde(default)]
@@ -304,9 +306,6 @@ struct SearchParams {
     keep_open: bool,
 }
 
-fn default_search_engine2() -> String {
-    "google".into()
-}
 fn default_num_results2() -> u8 {
     10
 }
@@ -1263,7 +1262,11 @@ impl McpBrowserServer {
                 request_id: Self::request_id(),
                 agent_id: None,
                 query: p.query,
-                engine: p.engine,
+                // Explicit param wins; otherwise the user's configured default
+                // engine (Plugins → Widget → Mặc định), falling back to google.
+                engine: p
+                    .engine
+                    .unwrap_or_else(crate::widgets::configured_search_engine),
                 num_results: p.num_results,
                 language: p.language,
                 ephemeral: !p.keep_open,

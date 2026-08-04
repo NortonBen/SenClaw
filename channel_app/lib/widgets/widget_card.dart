@@ -2,26 +2,62 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:audioplayers/audioplayers.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-import '../../../theme/tokens.dart';
-import '../../../widgets/embedded_web.dart';
-import '../flow_defaults.dart';
+import '../services/language_service.dart';
+import '../theme/tokens.dart';
 
-/// Inline, one-way rich widget rendered in the chat stream (parity with the web
-/// `WidgetCard.tsx`). Reads a WidgetSpec map — `{kind, title, data}` — and
-/// switches on [kind]: chart / image / clock / weather / video. Display only, no
-/// response round-trip (unlike FormCard). Unknown kind or malformed data
-/// degrades to a small inline error chip; it never throws.
+/// Inline, one-way rich widget rendered in the chat stream (parity with the
+/// web `WidgetCard.tsx` / desktop `widget_card.dart`). Reads a WidgetSpec map
+/// — `{kind, title, data}` — and switches on [kind]: chart / image / clock /
+/// weather. Display only, no response round-trip (unlike the form cards).
+/// Unknown kind or malformed data degrades to a small inline error chip; it
+/// never throws.
 class WidgetCard extends StatelessWidget {
   const WidgetCard({super.key, required this.spec});
 
   /// The WidgetSpec: `{kind, title?, data}`.
   final Map<String, dynamic> spec;
+
+  /// Fence languages that map to a widget. ```widget carries a full spec;
+  /// the rest tag the body as that kind's data.
+  static const widgetLangs = {
+    'widget',
+    'chart',
+    'weather',
+    'clock',
+    'video',
+    'audio',
+    'image',
+  };
+
+  /// Try to parse a fenced block tagged as a widget into a WidgetSpec map.
+  /// Returns null when the language isn't a widget tag or the body isn't valid
+  /// JSON — the caller then renders a normal code block.
+  static Map<String, dynamic>? tryParseFence(String? lang, String code) {
+    final l = (lang ?? '').trim().toLowerCase();
+    if (!widgetLangs.contains(l)) return null;
+    try {
+      final decoded = jsonDecode(code.trim());
+      if (decoded is! Map) return null;
+      final map = decoded.cast<String, dynamic>();
+      if (l == 'widget') {
+        // Full spec: {kind, title?, data}. Require a kind to be present.
+        if (map['kind'] == null) return null;
+        return map;
+      }
+      // Language-tagged kind: wrap the body as {kind: <lang>, data: <json>}.
+      // Allow the body to optionally carry its own title.
+      return {
+        'kind': l,
+        if (map['title'] != null) 'title': map['title'],
+        'data': map.containsKey('data') ? map['data'] : map,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
 
   static const _palette = <Color>[
     Color(0xFF5B8FF9),
@@ -41,7 +77,8 @@ class WidgetCard extends StatelessWidget {
     final kind = '${spec['kind'] ?? ''}';
     final title = '${spec['title'] ?? ''}';
     final data = spec['data'];
-    final dataMap = data is Map ? data.cast<String, dynamic>() : const <String, dynamic>{};
+    final dataMap =
+        data is Map ? data.cast<String, dynamic>() : const <String, dynamic>{};
 
     Widget body;
     IconData icon;
@@ -54,18 +91,6 @@ class WidgetCard extends StatelessWidget {
         icon = Icons.image_outlined;
         body = _ImageBody(data: dataMap);
         break;
-      case 'video':
-        icon = Icons.play_circle_outline;
-        body = _VideoBody(data: dataMap);
-        break;
-      case 'audio':
-        icon = Icons.audiotrack_outlined;
-        body = _AudioBody(data: dataMap);
-        break;
-      case 'app':
-        icon = Icons.widgets_outlined;
-        body = _AppWidgetBody(data: dataMap);
-        break;
       case 'clock':
         icon = Icons.schedule;
         body = _ClockBody(data: dataMap);
@@ -74,53 +99,61 @@ class WidgetCard extends StatelessWidget {
         icon = Icons.wb_sunny_outlined;
         body = _WeatherBody(data: dataMap);
         break;
+      // The phone talks to the daemon over the relay — a `127.0.0.1` media or
+      // widget entry URL is unreachable from here. Render an informational
+      // card (caption/fallback + URL as selectable text) instead of a player.
+      case 'video':
+        icon = Icons.play_circle_outline;
+        body = _MediaInfoBody(data: dataMap, kindLabel: 'Video');
+        break;
+      case 'audio':
+        icon = Icons.audiotrack_outlined;
+        body = _MediaInfoBody(data: dataMap, kindLabel: 'Audio');
+        break;
+      case 'app':
+        icon = Icons.widgets_outlined;
+        body = _AppInfoBody(data: dataMap);
+        break;
       default:
-        return _errorChip(context, 'Unknown widget: "$kind"');
+        return _errorChip(
+            context, tr('Widget lạ: "$kind"', 'Unknown widget: "$kind"'));
     }
 
     final c = context.colors;
     return Container(
-      alignment: Alignment.centerLeft,
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppTokens.s24,
-        vertical: AppTokens.s6,
+      margin: const EdgeInsets.symmetric(vertical: AppTokens.s6),
+      padding: const EdgeInsets.all(AppTokens.s12),
+      decoration: BoxDecoration(
+        color: c.surface,
+        border: Border.all(color: c.border),
+        borderRadius: BorderRadius.circular(AppTokens.rXl),
       ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720),
-        child: Container(
-          padding: const EdgeInsets.all(AppTokens.s16),
-          decoration: BoxDecoration(
-            color: c.surface,
-            border: Border.all(color: c.border),
-            borderRadius: BorderRadius.circular(AppTokens.rLg),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (title.isNotEmpty) ...[
-                Row(
-                  children: [
-                    Icon(icon, size: 16, color: c.accent),
-                    const SizedBox(width: AppTokens.s8),
-                    Expanded(
-                      child: Text(
-                        title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: c.textPrimary,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (title.isNotEmpty) ...[
+            Row(
+              children: [
+                Icon(icon, size: 16, color: c.accent),
+                const SizedBox(width: AppTokens.s8),
+                Expanded(
+                  child: Text(
+                    title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: c.textPrimary,
+                      fontWeight: FontWeight.w700,
                     ),
-                  ],
+                  ),
                 ),
-                const SizedBox(height: AppTokens.s12),
               ],
-              body,
-            ],
-          ),
-        ),
+            ),
+            const SizedBox(height: AppTokens.s12),
+          ],
+          body,
+        ],
       ),
     );
   }
@@ -128,35 +161,30 @@ class WidgetCard extends StatelessWidget {
   /// Small inline error chip shown for an unknown kind or malformed data.
   static Widget _errorChip(BuildContext context, String msg) {
     final c = context.colors;
-    return Padding(
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: AppTokens.s4),
       padding: const EdgeInsets.symmetric(
-        horizontal: AppTokens.s24,
-        vertical: AppTokens.s4,
+        horizontal: AppTokens.s12,
+        vertical: AppTokens.s8,
       ),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppTokens.s12,
-          vertical: AppTokens.s8,
-        ),
-        decoration: BoxDecoration(
-          color: AppTokens.danger.withValues(alpha: 0.10),
-          border: Border.all(color: AppTokens.danger.withValues(alpha: 0.4)),
-          borderRadius: BorderRadius.circular(AppTokens.rMd),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.warning_amber_rounded,
-                size: 14, color: AppTokens.danger),
-            const SizedBox(width: AppTokens.s6),
-            Flexible(
-              child: Text(
-                msg,
-                style: TextStyle(color: c.textSecondary, fontSize: 12),
-              ),
+      decoration: BoxDecoration(
+        color: AppTokens.danger.withValues(alpha: 0.10),
+        border: Border.all(color: AppTokens.danger.withValues(alpha: 0.4)),
+        borderRadius: BorderRadius.circular(AppTokens.rMd),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.warning_amber_rounded,
+              size: 14, color: AppTokens.danger),
+          const SizedBox(width: AppTokens.s6),
+          Flexible(
+            child: Text(
+              msg,
+              style: TextStyle(color: c.textSecondary, fontSize: 12),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -261,8 +289,6 @@ class _ChartBody extends StatelessWidget {
     final maps = rows.whereType<Map>().toList();
     if (maps.isEmpty) return const [];
     final first = maps.first;
-    // x column: explicit `x` field → well-known name → first non-numeric
-    // string column → row index.
     String? xKey;
     final explicit = data['x'];
     if (explicit is String && first.containsKey(explicit)) xKey = explicit;
@@ -307,7 +333,7 @@ class _ChartBody extends StatelessWidget {
     final chartType = '${data['chartType'] ?? 'bar'}';
     final series = _series;
     if (series.isEmpty || series.every((s) => s.points.isEmpty)) {
-      return Text('No chart data',
+      return Text(tr('Không có dữ liệu', 'No chart data'),
           style: TextStyle(color: c.textMuted, fontSize: 12));
     }
 
@@ -335,7 +361,7 @@ class _ChartBody extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(height: 240, child: chart),
+        SizedBox(height: 200, child: chart),
         if (chartType != 'pie' && (xLabel.isNotEmpty || yLabel.isNotEmpty))
           Padding(
             padding: const EdgeInsets.only(top: AppTokens.s6),
@@ -406,7 +432,7 @@ class _ChartBody extends StatelessWidget {
     final c = context.colors;
     final style = TextStyle(color: c.textMuted, fontSize: 10);
     // Thin out x labels when crowded so they don't overlap.
-    final step = (categories.length / 8).ceil().clamp(1, 999);
+    final step = (categories.length / 6).ceil().clamp(1, 999);
     return FlTitlesData(
       show: true,
       topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
@@ -459,7 +485,6 @@ class _ChartBody extends StatelessWidget {
   Widget _bar(BuildContext context, List<_Series> series) {
     final categories = _categories(series);
     final stacked = data['stacked'] == true;
-    final idxOf = {for (var i = 0; i < categories.length; i++) categories[i]: i};
 
     final groups = <BarChartGroupData>[];
     for (var ci = 0; ci < categories.length; ci++) {
@@ -471,7 +496,8 @@ class _ChartBody extends StatelessWidget {
         for (var si = 0; si < series.length; si++) {
           final y = _valueAt(series[si], label);
           if (y == null) continue;
-          stackItems.add(BarChartRodStackItem(from, from + y, _colorFor(series[si], si)));
+          stackItems.add(
+              BarChartRodStackItem(from, from + y, _colorFor(series[si], si)));
           from += y;
         }
         rods.add(BarChartRodData(
@@ -493,8 +519,6 @@ class _ChartBody extends StatelessWidget {
         }
       }
       groups.add(BarChartGroupData(x: ci, barRods: rods, barsSpace: 2));
-      // suppress unused idxOf lints if categories empty
-      idxOf[label];
     }
 
     return BarChart(
@@ -527,7 +551,8 @@ class _ChartBody extends StatelessWidget {
   }
 
   // ── line / area ──────────────────────────────────────────────────────────
-  Widget _line(BuildContext context, List<_Series> series, {required bool area}) {
+  Widget _line(BuildContext context, List<_Series> series,
+      {required bool area}) {
     final categories = _categories(series);
     final bars = <LineChartBarData>[];
     for (var si = 0; si < series.length; si++) {
@@ -601,23 +626,24 @@ class _ChartBody extends StatelessWidget {
         borderData: _border,
         titlesData: FlTitlesData(
           show: true,
-          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           rightTitles:
               const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           leftTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 38,
-              getTitlesWidget: (v, meta) =>
-                  SideTitleWidget(meta: meta, child: Text(_fmtNum(v), style: style)),
+              getTitlesWidget: (v, meta) => SideTitleWidget(
+                  meta: meta, child: Text(_fmtNum(v), style: style)),
             ),
           ),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 26,
-              getTitlesWidget: (v, meta) =>
-                  SideTitleWidget(meta: meta, child: Text(_fmtNum(v), style: style)),
+              getTitlesWidget: (v, meta) => SideTitleWidget(
+                  meta: meta, child: Text(_fmtNum(v), style: style)),
             ),
           ),
         ),
@@ -631,19 +657,17 @@ class _ChartBody extends StatelessWidget {
     final total = pts.fold<double>(0, (a, p) => a + p.$2);
     final sections = <PieChartSectionData>[];
     for (var i = 0; i < pts.length; i++) {
-      final (x, y) = pts[i];
+      final (_, y) = pts[i];
       final color = palette[i % palette.length];
       final pct = total > 0 ? (y / total * 100) : 0;
       sections.add(PieChartSectionData(
         value: y,
         color: color,
         title: pct >= 5 ? '${pct.round()}%' : '',
-        radius: 82,
+        radius: 62,
         titleStyle: const TextStyle(
             color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700),
       ));
-      // keep label for legend below via _pieLegend
-      x;
     }
     return Row(
       children: [
@@ -653,7 +677,7 @@ class _ChartBody extends StatelessWidget {
             PieChartData(
               sections: sections,
               sectionsSpace: 2,
-              centerSpaceRadius: 32,
+              centerSpaceRadius: 26,
             ),
           ),
         ),
@@ -701,7 +725,10 @@ class _ChartBody extends StatelessWidget {
 /// Compact numeric label: drops a trailing `.0`, keeps up to 2 decimals.
 String _fmtNum(double v) {
   if (v == v.roundToDouble()) return v.toInt().toString();
-  return v.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  return v
+      .toStringAsFixed(2)
+      .replaceFirst(RegExp(r'0+$'), '')
+      .replaceFirst(RegExp(r'\.$'), '');
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -733,7 +760,8 @@ class _ImageBody extends StatelessWidget {
             InteractiveViewer(
               minScale: 0.5,
               maxScale: 5,
-              child: Center(child: Image(image: provider, fit: BoxFit.contain)),
+              child:
+                  Center(child: Image(image: provider, fit: BoxFit.contain)),
             ),
             Positioned(
               top: 24,
@@ -774,7 +802,10 @@ class _ImageBody extends StatelessWidget {
         children: [
           Icon(Icons.broken_image_outlined, size: 16, color: c.textMuted),
           const SizedBox(width: AppTokens.s6),
-          Text(alt.isNotEmpty ? alt : 'Image unavailable',
+          Text(
+              alt.isNotEmpty
+                  ? alt
+                  : tr('Không tải được ảnh', 'Image unavailable'),
               style: TextStyle(color: c.textMuted, fontSize: 12)),
         ],
       );
@@ -783,28 +814,25 @@ class _ImageBody extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            onTap: () => _showFullImage(context, provider!),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(AppTokens.rMd),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 360),
-                child: Image(
-                  image: provider,
-                  fit: BoxFit.contain,
-                  semanticLabel: alt.isNotEmpty ? alt : null,
-                  errorBuilder: (_, _, _) => Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.broken_image_outlined,
-                          size: 16, color: c.textMuted),
-                      const SizedBox(width: AppTokens.s6),
-                      Text('Failed to load image',
-                          style: TextStyle(color: c.textMuted, fontSize: 12)),
-                    ],
-                  ),
+        GestureDetector(
+          onTap: () => _showFullImage(context, provider!),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AppTokens.rMd),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 280),
+              child: Image(
+                image: provider,
+                fit: BoxFit.contain,
+                semanticLabel: alt.isNotEmpty ? alt : null,
+                errorBuilder: (_, _, _) => Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.broken_image_outlined,
+                        size: 16, color: c.textMuted),
+                    const SizedBox(width: AppTokens.s6),
+                    Text(tr('Lỗi tải ảnh', 'Failed to load image'),
+                        style: TextStyle(color: c.textMuted, fontSize: 12)),
+                  ],
                 ),
               ),
             ),
@@ -816,158 +844,6 @@ class _ImageBody extends StatelessWidget {
             child: Text(caption,
                 style: TextStyle(color: c.textMuted, fontSize: 12)),
           ),
-      ],
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Video
-// ─────────────────────────────────────────────────────────────────────────
-
-/// Inline video player. There is no native Flutter player wired into this app,
-/// so playback runs in the same embedded web surface the Space Apps use — a
-/// WKWebView/WebView2 on macOS & Windows, a real <iframe> on the Flutter-web
-/// build, and an "open in browser" card on Linux (no embedded webview there).
-///
-/// Click-to-play on purpose: a chat scrollback can hold many video cards, and
-/// spinning up a webview per card on first paint would be brutal. Until the
-/// user presses play this is just a poster image.
-class _VideoBody extends StatefulWidget {
-  const _VideoBody({required this.data});
-  final Map<String, dynamic> data;
-  @override
-  State<_VideoBody> createState() => _VideoBodyState();
-}
-
-class _VideoBodyState extends State<_VideoBody> {
-  bool _playing = false;
-
-  /// Only http(s) can be handed to the webview — a bare filesystem path or a
-  /// file:// URL is the common mistake and would render a blank frame.
-  String get _url {
-    final raw = '${widget.data['url'] ?? ''}'.trim();
-    final lower = raw.toLowerCase();
-    return (lower.startsWith('http://') || lower.startsWith('https://'))
-        ? raw
-        : '';
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _playing = widget.data['autoplay'] == true;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    final url = _url;
-    final caption = '${widget.data['caption'] ?? ''}';
-
-    if (url.isEmpty) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.videocam_off_outlined, size: 16, color: c.textMuted),
-          const SizedBox(width: AppTokens.s6),
-          Flexible(
-            child: Text(
-              'Video cần một URL http(s) phát được (không dùng đường dẫn file).',
-              style: TextStyle(color: c.textMuted, fontSize: 12),
-            ),
-          ),
-        ],
-      );
-    }
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(AppTokens.rMd),
-          child: SizedBox(
-            height: 380,
-            width: double.infinity,
-            child: _playing
-                ? embeddedWebView(
-                    url,
-                    title: caption.isNotEmpty ? caption : 'Video',
-                    theme: isDark ? 'dark' : 'light',
-                    instanceKey: 'chat-video',
-                  )
-                : _poster(context, url),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(top: AppTokens.s6),
-          child: Row(
-            children: [
-              if (caption.isNotEmpty)
-                Flexible(
-                  child: Text(
-                    caption,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: c.textMuted, fontSize: 12),
-                  ),
-                ),
-              const Spacer(),
-              TextButton.icon(
-                onPressed: () => launchUrl(Uri.parse(url),
-                    mode: LaunchMode.externalApplication),
-                icon: const Icon(Icons.open_in_new, size: 14),
-                label: const Text('Mở ngoài'),
-                style: TextButton.styleFrom(
-                  foregroundColor: c.textMuted,
-                  textStyle: const TextStyle(fontSize: 12),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: AppTokens.s8, vertical: 0),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Pre-playback surface: the poster frame (when supplied) under a play button.
-  Widget _poster(BuildContext context, String url) {
-    final poster = '${widget.data['poster'] ?? ''}'.trim();
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Container(color: Colors.black),
-        if (poster.isNotEmpty)
-          Image.network(
-            poster,
-            fit: BoxFit.contain,
-            errorBuilder: (_, _, _) => const SizedBox.shrink(),
-          ),
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () => setState(() => _playing = true),
-            child: Center(
-              child: Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.55),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white24),
-                ),
-                child: const Icon(Icons.play_arrow_rounded,
-                    size: 40, color: Colors.white),
-              ),
-            ),
-          ),
-        ),
       ],
     );
   }
@@ -1002,6 +878,8 @@ class _ClockBodyState extends State<_ClockBody> {
     super.dispose();
   }
 
+  static String _two(int n) => n.toString().padLeft(2, '0');
+
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
@@ -1014,11 +892,19 @@ class _ClockBodyState extends State<_ClockBody> {
     // Best-effort: local time. IANA tz conversion isn't done here, so the tz /
     // label is shown as-is for context.
     final now = _now;
-    final timePattern = format24h
-        ? (showSeconds ? 'HH:mm:ss' : 'HH:mm')
-        : (showSeconds ? 'hh:mm:ss a' : 'hh:mm a');
-    final timeStr = DateFormat(timePattern).format(now);
-    final dateStr = showDate ? DateFormat('EEE, d MMM yyyy').format(now) : '';
+    String timeStr;
+    if (format24h) {
+      timeStr = '${_two(now.hour)}:${_two(now.minute)}';
+      if (showSeconds) timeStr += ':${_two(now.second)}';
+    } else {
+      final h12 = now.hour % 12 == 0 ? 12 : now.hour % 12;
+      timeStr = '${_two(h12)}:${_two(now.minute)}';
+      if (showSeconds) timeStr += ':${_two(now.second)}';
+      timeStr += now.hour < 12 ? ' AM' : ' PM';
+    }
+    final dateStr = showDate
+        ? '${_two(now.day)}/${_two(now.month)}/${now.year}'
+        : '';
 
     return Row(
       children: [
@@ -1212,112 +1098,37 @@ class _WeatherBody extends StatelessWidget {
   }
 }
 
-/// Inline audio player (kind `audio`). Uses the same `audioplayers` package as
-/// the TTS AudioService — no new dependency. Streams from the URL; nothing is
-/// downloaded until the user presses play.
-class _AudioBody extends StatefulWidget {
-  const _AudioBody({required this.data});
+/// Video/audio on mobile: the daemon's media URLs are usually loopback-local
+/// and unreachable over the relay, so show the caption + a selectable URL the
+/// user can copy into a browser on the same network, instead of a dead player.
+class _MediaInfoBody extends StatelessWidget {
+  const _MediaInfoBody({required this.data, required this.kindLabel});
   final Map<String, dynamic> data;
-  @override
-  State<_AudioBody> createState() => _AudioBodyState();
-}
-
-class _AudioBodyState extends State<_AudioBody> {
-  AudioPlayer? _player;
-  PlayerState _state = PlayerState.stopped;
-  StreamSubscription<PlayerState>? _sub;
-
-  String get _url {
-    final raw = '${widget.data['url'] ?? ''}'.trim();
-    final lower = raw.toLowerCase();
-    return (lower.startsWith('http://') || lower.startsWith('https://'))
-        ? raw
-        : '';
-  }
-
-  Future<void> _toggle() async {
-    final url = _url;
-    if (url.isEmpty) return;
-    final p = _player ??= AudioPlayer();
-    _sub ??= p.onPlayerStateChanged.listen((s) {
-      if (mounted) setState(() => _state = s);
-    });
-    try {
-      if (_state == PlayerState.playing) {
-        await p.pause();
-      } else if (_state == PlayerState.paused) {
-        await p.resume();
-      } else {
-        await p.play(UrlSource(url));
-      }
-    } catch (_) {
-      // Undecodable stream — leave the "Mở ngoài" escape hatch.
-    }
-  }
-
-  @override
-  void dispose() {
-    _sub?.cancel();
-    _player?.dispose();
-    super.dispose();
-  }
+  final String kindLabel;
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final url = _url;
-    final caption = '${widget.data['caption'] ?? ''}';
-
-    if (url.isEmpty) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.music_off_outlined, size: 16, color: c.textMuted),
-          const SizedBox(width: AppTokens.s6),
-          Flexible(
-            child: Text(
-              'Audio cần một URL http(s) phát được (không dùng đường dẫn file).',
-              style: TextStyle(color: c.textMuted, fontSize: 12),
-            ),
-          ),
-        ],
-      );
-    }
-
-    final playing = _state == PlayerState.playing;
-    return Row(
+    final url = '${data['url'] ?? ''}'.trim();
+    final caption = '${data['caption'] ?? ''}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        IconButton(
-          onPressed: _toggle,
-          icon: Icon(
-            playing ? Icons.pause_circle_filled : Icons.play_circle_fill,
-            size: 34,
-            color: c.accent,
-          ),
-          padding: EdgeInsets.zero,
-          visualDensity: VisualDensity.compact,
-          tooltip: playing ? 'Tạm dừng' : 'Phát',
-        ),
-        const SizedBox(width: AppTokens.s8),
-        Expanded(
+        if (caption.isNotEmpty)
+          Text(caption,
+              style: TextStyle(color: c.textPrimary, fontSize: 13),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis),
+        if (url.isNotEmpty)
+          SelectableText(url,
+              maxLines: 2, style: TextStyle(color: c.accent, fontSize: 12)),
+        Padding(
+          padding: const EdgeInsets.only(top: AppTokens.s4),
           child: Text(
-            caption.isNotEmpty ? caption : Uri.parse(url).pathSegments.lastOrNull ?? url,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: c.textPrimary, fontSize: 13),
-          ),
-        ),
-        TextButton.icon(
-          onPressed: () =>
-              launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
-          icon: const Icon(Icons.open_in_new, size: 14),
-          label: const Text('Mở ngoài'),
-          style: TextButton.styleFrom(
-            foregroundColor: c.textMuted,
-            textStyle: const TextStyle(fontSize: 12),
-            padding:
-                const EdgeInsets.symmetric(horizontal: AppTokens.s8, vertical: 0),
-            minimumSize: Size.zero,
+            tr('$kindLabel phát trên SenClaw Web/Desktop',
+                '$kindLabel plays on SenClaw Web/Desktop'),
+            style: TextStyle(color: c.textMuted, fontSize: 11),
           ),
         ),
       ],
@@ -1325,112 +1136,23 @@ class _AudioBodyState extends State<_AudioBody> {
   }
 }
 
-/// Space-App widget (kind `app`) — the entry resolved by the daemon registry
-/// rendered in the shared embedded web surface. Click-to-load like
-/// [_VideoBody]: a long scrollback must not mount one webview per card.
-class _AppWidgetBody extends StatefulWidget {
-  const _AppWidgetBody({required this.data});
+/// Space-App widget on mobile: the embedded entry is desktop-only — show the
+/// text fallback the daemon rendered (or a pointer at the app).
+class _AppInfoBody extends StatelessWidget {
+  const _AppInfoBody({required this.data});
   final Map<String, dynamic> data;
-  @override
-  State<_AppWidgetBody> createState() => _AppWidgetBodyState();
-}
-
-class _AppWidgetBodyState extends State<_AppWidgetBody> {
-  bool _loaded = false;
-
-  static const _heights = {
-    'small': 180.0,
-    'medium': 320.0,
-    'large': 480.0,
-    'tall': 560.0,
-  };
-
-  /// The daemon resolves `entry` at emit time. A proxy-path entry
-  /// (`/api/space/apps/...`) is daemon-relative — absolutize it against the
-  /// configured HTTP base so the webview can load it.
-  String get _entry {
-    final raw = '${widget.data['entry'] ?? ''}'.trim();
-    if (raw.isEmpty) return '';
-    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
-    if (raw.startsWith('/')) return '${ChatLinkFlow.httpBase}$raw';
-    return '';
-  }
 
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
-    final entry = _entry;
-    final id = '${widget.data['id'] ?? widget.data['widget'] ?? ''}';
-    final fallback = '${widget.data['textFallback'] ?? ''}';
-
-    if (entry.isEmpty) {
-      // No resolvable entry (fence-emitted spec or app gone) — degrade to the
-      // text fallback, never a blank frame.
-      return Text(
-        fallback.isNotEmpty
-            ? fallback
-            : 'Widget $id không khả dụng — mở app trong mục Apps để xem.',
-        style: TextStyle(color: c.textSecondary, fontSize: 13),
-      );
-    }
-
-    final size = '${widget.data['size'] ?? 'medium'}';
-    final height = _heights[size] ?? _heights['medium']!;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(AppTokens.rMd),
-          child: SizedBox(
-            height: height,
-            width: double.infinity,
-            child: _loaded
-                ? embeddedWebView(
-                    entry,
-                    title: id,
-                    theme: isDark ? 'dark' : 'light',
-                    instanceKey: 'chat-widget-$id',
-                  )
-                : Material(
-                    color: c.surfaceAlt,
-                    child: InkWell(
-                      onTap: () => setState(() => _loaded = true),
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.widgets_outlined,
-                                size: 28, color: c.accent),
-                            const SizedBox(height: AppTokens.s8),
-                            Text(id,
-                                style: TextStyle(
-                                    color: c.textPrimary,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600)),
-                            const SizedBox(height: AppTokens.s4),
-                            Text('Bấm để tải widget',
-                                style: TextStyle(
-                                    color: c.textMuted, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-          ),
-        ),
-        if (fallback.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: AppTokens.s6),
-            child: Text(
-              fallback,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: c.textMuted, fontSize: 12),
-            ),
-          ),
-      ],
+    final id = '${data['id'] ?? data['widget'] ?? ''}';
+    final fallback = '${data['textFallback'] ?? ''}';
+    return Text(
+      fallback.isNotEmpty
+          ? fallback
+          : tr('Widget $id — xem trên SenClaw Web/Desktop',
+              'Widget $id — view on SenClaw Web/Desktop'),
+      style: TextStyle(color: c.textSecondary, fontSize: 13),
     );
   }
 }

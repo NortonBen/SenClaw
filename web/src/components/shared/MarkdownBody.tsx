@@ -7,6 +7,10 @@ import rehypeKatex from 'rehype-katex';
 import rehypeHighlight from 'rehype-highlight';
 import 'katex/dist/katex.min.css';
 import 'highlight.js/styles/github.css';
+import { handleLinkPerDefaults, prefetchFlowDefaults } from '../../utils/flowDefaults';
+
+// Warm the defaults cache so link clicks can honor the user's "Mở link" default.
+void prefetchFlowDefaults();
 
 interface MarkdownBodyProps {
   content: string;
@@ -144,7 +148,13 @@ export function MarkdownBody({ content, compact }: MarkdownBodyProps) {
             </blockquote>
           ),
           a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer" style={{ color: token.colorPrimary }}>
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: token.colorPrimary }}
+              onClick={(e) => handleLinkPerDefaults(e, href)}
+            >
               {children}
             </a>
           ),

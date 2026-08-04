@@ -26,8 +26,10 @@ pub mod task;
 pub mod task_done;
 pub mod time;
 pub mod todo_write;
+pub mod tool_alias;
 pub mod tool_search;
 pub mod web_fetch;
+pub mod widget_list;
 pub mod write;
 
 use std::sync::Arc;
@@ -62,6 +64,7 @@ pub use time::TimeTool;
 pub use todo_write::TodoWriteTool;
 pub use tool_search::{DeferredToolsFn, ToolSearchTool};
 pub use web_fetch::WebFetchTool;
+pub use widget_list::WidgetListTool;
 pub use write::WriteTool;
 
 /// All built-in tools (without engine dependencies).
@@ -73,9 +76,11 @@ pub fn all_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(AskUserQuestionTool),
         // Declarative interactive form — rich sibling of AskUserQuestion.
         Arc::new(FormUITool),
-        // One-way rich widget push (chart/image/clock/weather) — display-only
-        // sibling of FormUI (no user response round-trip).
+        // One-way rich widget push (chart/image/clock/weather/video/audio +
+        // Space-App widgets) — display-only sibling of FormUI (no user
+        // response round-trip). `widget_list` is its deferred discovery half.
         Arc::new(EmitWidgetTool),
+        Arc::new(WidgetListTool),
         Arc::new(BashTool),
         Arc::new(GlobTool),
         Arc::new(GrepTool),

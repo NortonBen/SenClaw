@@ -14,9 +14,10 @@ import {
   CartesianGrid, Tooltip, Legend,
 } from 'recharts';
 import type {
-  WidgetSpec, ChartData, ChartSeries, ImageData, ClockData,
-  WeatherData, WeatherIcon,
+  WidgetSpec, ChartData, ChartSeries, ChartPoint, ImageData, ClockData,
+  WeatherData, WeatherIcon, VideoData, AudioData, AppWidgetData,
 } from '../types';
+import { getWidgetCatalog } from '../utils/flowDefaults';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -61,9 +62,99 @@ function ErrorChip({ label }: { label: string }) {
 
 // ===== Chart =====
 
+/** Lenient number parse: numbers, "37", "33.5", comma-decimal "33,5". */
+function chartAsNum(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (!s) return null;
+    const direct = Number(s);
+    if (Number.isFinite(direct)) return direct;
+    if (s.includes(',') && !s.includes('.')) {
+      const n = Number(s.replace(',', '.'));
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
+}
+
+function normalizeChartPoints(raw: unknown): ChartPoint[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ChartPoint[] = [];
+  raw.forEach((p, i) => {
+    if (Array.isArray(p)) {
+      const y = p.length >= 2 ? chartAsNum(p[1]) : null;
+      if (y != null) out.push({ x: p[0] as string | number, y });
+    } else if (p && typeof p === 'object') {
+      const o = p as { x?: unknown; y?: unknown };
+      const y = chartAsNum(o.y);
+      if (y != null) out.push({ x: (o.x ?? i) as string | number, y });
+    } else {
+      const y = chartAsNum(p);
+      if (y != null) out.push({ x: i, y });
+    }
+  });
+  return out;
+}
+
+const X_KEY_HINTS = ['x', 'date', 'day', 'time', 'label', 'name', 'ngay', 'ngày'];
+
+/**
+ * Accepts the same shapes the daemon normalizer takes, so a fenced ```chart
+ * block written inline in the reply (which bypasses the daemon) renders
+ * identically to a tool-emitted chart: canonical `series` (points as {x,y},
+ * [x,y] pairs or bare numbers), `rows` (one object per x — every numeric
+ * column becomes a series), or `labels` + `values`.
+ */
+export function deriveChartSeries(data: ChartData): ChartSeries[] {
+  if (Array.isArray(data.series)) {
+    return data.series.map((s, i) => ({
+      name: s?.name ?? `series ${i + 1}`,
+      color: s?.color,
+      points: normalizeChartPoints(s?.points),
+    }));
+  }
+  if (Array.isArray(data.rows)) {
+    const maps = data.rows.filter(
+      (r): r is Record<string, unknown> => !!r && typeof r === 'object' && !Array.isArray(r),
+    );
+    if (!maps.length) return [];
+    let xKey = typeof data.x === 'string' && data.x in maps[0] ? data.x : undefined;
+    if (!xKey) xKey = X_KEY_HINTS.find((k) => k in maps[0]);
+    if (!xKey) {
+      xKey = Object.keys(maps[0]).find(
+        (k) => typeof maps[0][k] === 'string' && chartAsNum(maps[0][k]) == null,
+      );
+    }
+    const keys: string[] = [];
+    for (const r of maps) {
+      for (const k of Object.keys(r)) {
+        if (k !== xKey && !keys.includes(k) && chartAsNum(r[k]) != null) keys.push(k);
+      }
+    }
+    return keys.map((key) => ({
+      name: key,
+      points: maps.flatMap((r, i) => {
+        const y = chartAsNum(r[key]);
+        if (y == null) return [];
+        return [{ x: (xKey ? (r[xKey] as string | number) : i), y }];
+      }),
+    }));
+  }
+  if (Array.isArray(data.labels) && Array.isArray(data.values)) {
+    const points: ChartPoint[] = [];
+    data.labels.forEach((l, i) => {
+      const y = chartAsNum(data.values?.[i]);
+      if (y != null) points.push({ x: l, y });
+    });
+    return [{ name: typeof data.name === 'string' ? data.name : 'values', points }];
+  }
+  return [];
+}
+
 function ChartWidget({ data }: { data: ChartData }) {
   const { token } = theme.useToken();
-  const series = useMemo(() => (Array.isArray(data.series) ? data.series : []), [data.series]);
+  const series = useMemo(() => deriveChartSeries(data), [data]);
   const colorFor = (s: ChartSeries, i: number) => s.color || PALETTE[i % PALETTE.length];
 
   // Merge every series' points into row objects keyed by x so recharts can
@@ -112,7 +203,8 @@ function ChartWidget({ data }: { data: ChartData }) {
   );
 
   let chart: React.ReactElement;
-  switch (data.chartType) {
+  // Absent chartType → bar, matching the daemon normalizer and desktop.
+  switch (data.chartType ?? 'bar') {
     case 'bar':
       chart = (
         <BarChart data={rows} margin={{ top: 8, right: 12, bottom: data.xLabel ? 18 : 4, left: data.yLabel ? 12 : 0 }}>
@@ -217,6 +309,231 @@ function ImageWidget({ data }: { data: ImageData }) {
         </figcaption>
       ) : null}
     </figure>
+  );
+}
+
+// ===== Video =====
+
+/** Guess a MIME from the URL extension so <source type> stays useful when the
+ *  emitter omitted `mime`. Query string / fragment are stripped first. */
+function guessMime(url: string): string | undefined {
+  const ext = url.split(/[?#]/)[0].split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'mp4': case 'm4v': return 'video/mp4';
+    case 'webm': return 'video/webm';
+    case 'ogv':  return 'video/ogg';
+    case 'mov':  return 'video/quicktime';
+    default:     return undefined;
+  }
+}
+
+function VideoWidget({ data }: { data: VideoData }) {
+  const { token } = theme.useToken();
+  const [failed, setFailed] = useState(false);
+  const url = typeof data.url === 'string' ? data.url.trim() : '';
+
+  if (!url) return <ErrorChip label="Video has no url" />;
+
+  // Codec/container the browser can't decode (e.g. some .mov) — don't leave a
+  // black box, hand the user a way out to the system player.
+  if (failed) {
+    return (
+      <div className="flex flex-col gap-2 items-start">
+        <ErrorChip label="Không phát được video ở đây" />
+        <a
+          href={url} target="_blank" rel="noopener noreferrer"
+          className="text-[12px] underline"
+          style={{ color: token.colorLink }}
+        >
+          Mở video trong tab mới ↗
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <figure className="m-0">
+      {/* preload=metadata: a chat can accumulate many of these — fetch the
+          poster frame and duration, not the whole file, until the user plays. */}
+      <video
+        key={url}
+        src={url}
+        poster={data.poster || undefined}
+        controls
+        playsInline
+        autoPlay={data.autoplay === true}
+        muted={data.autoplay === true}
+        preload="metadata"
+        onError={() => setFailed(true)}
+        className="rounded-xl block"
+        style={{
+          maxHeight: 420,
+          maxWidth: '100%',
+          background: '#000',
+          border: `1px solid ${token.colorBorderSecondary}`,
+        }}
+      >
+        <source src={url} type={data.mime || guessMime(url)} />
+      </video>
+      <figcaption
+        className="text-[11px] mt-1.5 px-1 flex items-center gap-2"
+        style={{ color: token.colorTextSecondary }}
+      >
+        {data.caption ? <span className="truncate">{data.caption}</span> : null}
+        <a
+          href={url} target="_blank" rel="noopener noreferrer"
+          className="underline shrink-0 ml-auto"
+          style={{ color: token.colorTextTertiary }}
+        >
+          Mở ngoài ↗
+        </a>
+      </figcaption>
+    </figure>
+  );
+}
+
+// ===== Audio =====
+
+function guessAudioMime(url: string): string | undefined {
+  const ext = url.split(/[?#]/)[0].split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'mp3': return 'audio/mpeg';
+    case 'm4a': case 'aac': return 'audio/mp4';
+    case 'wav': return 'audio/wav';
+    case 'ogg': case 'oga': return 'audio/ogg';
+    case 'flac': return 'audio/flac';
+    default: return undefined;
+  }
+}
+
+function AudioWidget({ data }: { data: AudioData }) {
+  const { token } = theme.useToken();
+  const [failed, setFailed] = useState(false);
+  const url = typeof data.url === 'string' ? data.url.trim() : '';
+
+  if (!url) return <ErrorChip label="Audio has no url" />;
+  if (failed) {
+    return (
+      <div className="flex flex-col gap-2 items-start">
+        <ErrorChip label="Không phát được audio ở đây" />
+        <a
+          href={url} target="_blank" rel="noopener noreferrer"
+          className="text-[12px] underline" style={{ color: token.colorLink }}
+        >
+          Mở trong tab mới ↗
+        </a>
+      </div>
+    );
+  }
+  return (
+    <figure className="m-0">
+      <audio
+        key={url}
+        controls
+        preload="metadata"
+        onError={() => setFailed(true)}
+        className="block w-full"
+        style={{ minWidth: 260 }}
+      >
+        <source src={url} type={data.mime || guessAudioMime(url)} />
+      </audio>
+      {data.caption ? (
+        <figcaption className="text-[11px] mt-1.5 px-1" style={{ color: token.colorTextSecondary }}>
+          {data.caption}
+        </figcaption>
+      ) : null}
+    </figure>
+  );
+}
+
+// ===== App widget (Space App / plugin, iframe) =====
+
+const APP_WIDGET_HEIGHT: Record<string, number> = {
+  small: 180,
+  medium: 320,
+  large: 480,
+  tall: 560,
+};
+
+/**
+ * Kind `app`: sandboxed iframe on the entry the daemon resolved at emit time.
+ * Fence-emitted specs carry no `entry` — resolve it from `GET /api/widgets`
+ * by full id, appending `params` as a query string (params never change the
+ * path; the entry path is fixed by the app's manifest).
+ */
+function AppWidgetFrame({ data }: { data: AppWidgetData }) {
+  const { token } = theme.useToken();
+  const [entry, setEntry] = useState<string | null | undefined>(data.entry || undefined);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    if (data.entry) { setEntry(data.entry); return; }
+    let alive = true;
+    getWidgetCatalog().then((catalog) => {
+      if (!alive) return;
+      const def = catalog.find((w) => w.id === data.id && w.enabled);
+      if (!def?.entry) { setEntry(null); return; }
+      let url = def.entry;
+      const params = data.params ?? {};
+      const qs = Object.entries(params)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(typeof v === 'string' ? v : JSON.stringify(v))}`)
+        .join('&');
+      if (qs) url += (url.includes('?') ? '&' : '?') + qs;
+      setEntry(url);
+    });
+    return () => { alive = false; };
+  }, [data.entry, data.id, data.params]);
+
+  // refreshMs: reload the iframe on the declared cadence (proxy path has no
+  // WebSocket tunnel, so polling is the live-data mechanism there).
+  useEffect(() => {
+    if (!data.refreshMs || data.refreshMs < 1000) return;
+    const id = setInterval(() => setReloadKey((k) => k + 1), data.refreshMs);
+    return () => clearInterval(id);
+  }, [data.refreshMs]);
+
+  if (entry === null) {
+    // Unknown/disabled widget (or catalog unreachable): degrade to the text
+    // fallback + a deep link into the app, never a broken frame.
+    return (
+      <div className="flex flex-col gap-2 items-start px-1 py-1">
+        <span className="text-[13px]" style={{ color: token.colorText }}>
+          {data.textFallback || `Widget ${data.id} không khả dụng`}
+        </span>
+        <a
+          href={`/space/app/${encodeURIComponent(data.app)}`}
+          className="text-[12px] underline" style={{ color: token.colorLink }}
+        >
+          Mở app {data.app} ↗
+        </a>
+      </div>
+    );
+  }
+  if (entry === undefined) {
+    return <div className="text-[12px] px-1 py-2" style={{ color: token.colorTextTertiary }}>Đang tải widget…</div>;
+  }
+  const height = APP_WIDGET_HEIGHT[data.size ?? 'medium'] ?? APP_WIDGET_HEIGHT.medium;
+  return (
+    <div>
+      <iframe
+        key={`${entry}#${reloadKey}`}
+        src={entry}
+        title={data.id}
+        // Same sandbox as SpaceAppFrame; app widgets share the app's trust level.
+        sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+        className="rounded-xl block w-full"
+        style={{ height, border: `1px solid ${token.colorBorderSecondary}`, background: token.colorBgLayout }}
+      />
+      <div className="text-[11px] mt-1 px-1 flex items-center" style={{ color: token.colorTextTertiary }}>
+        <span className="truncate">{data.id}</span>
+        <a
+          href={`/space/app/${encodeURIComponent(data.app)}`}
+          className="underline shrink-0 ml-auto" style={{ color: token.colorTextTertiary }}
+        >
+          Mở app ↗
+        </a>
+      </div>
+    </div>
   );
 }
 
@@ -340,6 +657,9 @@ export function WidgetCard({ widget }: { widget: WidgetSpec }) {
     case 'image':  body = <ImageWidget data={data} />; break;
     case 'clock':  body = <ClockWidget data={data} />; break;
     case 'weather': body = <WeatherWidget data={data} />; break;
+    case 'video':  body = <VideoWidget data={data} />; break;
+    case 'audio':  body = <AudioWidget data={data} />; break;
+    case 'app':    body = <AppWidgetFrame data={data} />; break;
     default:       body = <ErrorChip label={`Unknown widget kind: ${String(widget.kind)}`} />;
   }
 

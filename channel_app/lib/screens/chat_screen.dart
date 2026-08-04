@@ -21,6 +21,7 @@ import '../theme/tokens.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/interaction_cards.dart';
 import '../widgets/markdown_text.dart';
+import '../widgets/widget_card.dart';
 import 'agent_select_screen.dart';
 import 'new_chat_screen.dart';
 
@@ -440,6 +441,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           (data['optionLabel'] ?? data['optionKey'] ?? '').toString());
     } else if (event.topic == 'question:resolved' && data is Map) {
       _markResolved((data['requestId'] ?? '').toString(), null);
+    } else if (event.topic == 'chat:widget' && data is Map) {
+      // One-way rich widget push. Key by widget id so a snapshot replay or
+      // re-broadcast doesn't duplicate the card.
+      final m = data.cast<String, dynamic>();
+      final widgetSpec = m['widget'];
+      if (widgetSpec is Map) {
+        _addInteraction('widget', 'widget:${m['id'] ?? ''}',
+            widgetSpec.cast<String, dynamic>());
+      }
     } else if (event.topic == 'plan:exit:request' && data is Map) {
       final m = data.cast<String, dynamic>();
       _addInteraction('plan', _planKey(m), m);
@@ -1540,6 +1550,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         resolved: msg.resolved,
         resolvedText: msg.resolvedText,
         onRespond: (selected) => _respondPlan(msg, selected),
+      );
+    }
+    if (msg.role == 'widget' && msg.interaction != null) {
+      // One-way rich widget (chart/image/clock/weather) — display only.
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.92,
+          ),
+          child: WidgetCard(spec: msg.interaction!),
+        ),
       );
     }
 

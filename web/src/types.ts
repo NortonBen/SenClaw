@@ -175,7 +175,7 @@ export interface FormMessage {
 
 // ===== Chat Widgets (one-way inline rich cards) =====
 
-export type WidgetKind = 'chart' | 'image' | 'clock' | 'weather';
+export type WidgetKind = 'chart' | 'image' | 'clock' | 'weather' | 'video' | 'audio' | 'app';
 
 export type ChartType = 'bar' | 'line' | 'area' | 'pie' | 'scatter';
 
@@ -192,8 +192,19 @@ export interface ChartSeries {
 }
 
 export interface ChartData {
-  chartType: ChartType;
-  series: ChartSeries[];
+  /** Absent → 'bar' (renderer default, matches the daemon normalizer). */
+  chartType?: ChartType;
+  /** Canonical form; alternatively pass `rows` or `labels`+`values`. */
+  series?: ChartSeries[];
+  /** Tabular shortcut: one object per x, every numeric column = a series. */
+  rows?: Array<Record<string, unknown>>;
+  /** Names the x column of `rows` (else auto-detected). */
+  x?: string;
+  /** With `values`: a single-series shortcut. */
+  labels?: Array<string | number>;
+  values?: Array<number | string>;
+  /** Series name for the labels/values shortcut. */
+  name?: string;
   xLabel?: string;
   yLabel?: string;
   /** bar/area only */
@@ -205,6 +216,17 @@ export interface ImageData {
   dataUrl?: string;
   caption?: string;
   alt?: string;
+}
+
+export interface VideoData {
+  /** http(s) URL the client can fetch; local filesystem paths won't play. */
+  url: string;
+  /** Poster frame shown before playback starts. */
+  poster?: string;
+  caption?: string;
+  /** Explicit MIME (e.g. `video/mp4`) when the URL has no useful extension. */
+  mime?: string;
+  autoplay?: boolean;
 }
 
 export interface ClockData {
@@ -248,11 +270,41 @@ export interface WeatherData {
   daily?: WeatherDay[];
 }
 
+export interface AudioData {
+  url: string;
+  caption?: string;
+  mime?: string;
+}
+
+/** kind `app` — a Space-App / plugin widget resolved by the daemon registry. */
+export interface AppWidgetData {
+  /** App id (deep link target: /space/app/<app>). */
+  app: string;
+  /** Short widget id within the app. */
+  widget: string;
+  /** Full registry id, e.g. "crm.pipeline". */
+  id: string;
+  params?: Record<string, unknown>;
+  /** Resolved iframe entry (absolute origin or daemon-proxy path) + params qs. */
+  entry?: string;
+  size?: 'small' | 'medium' | 'large' | 'tall' | string;
+  refreshMs?: number;
+  textFallback?: string;
+}
+
 export interface WidgetSpec {
   kind: WidgetKind;
   title?: string;
   /** kind-specific payload; validated/narrowed inside WidgetCard. */
-  data: ChartData | ImageData | ClockData | WeatherData | Record<string, unknown>;
+  data:
+    | ChartData
+    | ImageData
+    | ClockData
+    | WeatherData
+    | VideoData
+    | AudioData
+    | AppWidgetData
+    | Record<string, unknown>;
 }
 
 export interface WidgetMessage {
@@ -263,6 +315,34 @@ export interface WidgetMessage {
 }
 
 export type ChatMessage = TextMessage | PermissionMessage | QuestionMessage | ToolMessage | FormMessage | WidgetMessage;
+
+/** One row of GET /api/widgets — the daemon's widget catalog. */
+export interface WidgetCatalogEntry {
+  id: string;
+  source: string; // "builtin" | "app:<id>" | "plugin:<name>"
+  kind: 'template' | 'url';
+  name: string;
+  description: string;
+  surfaces: string[];
+  params?: Record<string, unknown>;
+  entryUrl?: string;
+  entry?: string;
+  size?: string;
+  refreshMs?: number;
+  textFallback?: string;
+  intents?: string[];
+  enabled: boolean;
+}
+
+/** GET/PUT /api/defaults — effective default-flow settings. */
+export interface FlowDefaults {
+  openLink: 'system-browser' | 'mini-browser' | 'new-tab' | string;
+  media: 'inline-widget' | 'mini-browser' | 'system-browser' | string;
+  search: 'browser' | 'search-app' | string;
+  searchEngine: 'google' | 'bing' | string;
+  note: 'space-notes' | 'wiki' | 'memory' | string;
+  disabledWidgets: string[];
+}
 
 export type AgentState = 'idle' | 'processing' | string;
 

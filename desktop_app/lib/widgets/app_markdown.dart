@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HardwareKeyboard;
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../features/chat/flow_defaults.dart';
 import '../features/chat/widgets/widget_card.dart';
 import '../theme/tokens.dart';
 
@@ -12,7 +13,7 @@ import '../theme/tokens.dart';
 /// already wraps. Used everywhere markdown is rendered.
 ///
 /// It also intercepts inline widget fenced blocks — ```widget (full WidgetSpec)
-/// or ```chart / ```weather / ```clock (kind-data body) — and renders them via
+/// or ```chart / ```weather / ```clock / ```video (kind-data body) — renders via
 /// [WidgetCard], so the chat-widget feature works purely from the LLM's text,
 /// with no backend tool wired. Incomplete/invalid JSON (e.g. while streaming)
 /// falls back to normal code rendering.
@@ -41,7 +42,15 @@ class AppMarkdown extends StatelessWidget {
     }
   }
 
-  static const _widgetLangs = {'widget', 'chart', 'weather', 'clock'};
+  static const _widgetLangs = {
+    'widget',
+    'chart',
+    'weather',
+    'clock',
+    'video',
+    'audio',
+    'image',
+  };
 
   /// Try to parse a fenced block tagged as a widget into a WidgetSpec map.
   /// Returns null when the language isn't a widget tag or the body isn't valid
@@ -79,8 +88,13 @@ class AppMarkdown extends StatelessWidget {
       onLinkTap: (url, title) {
         if (HardwareKeyboard.instance.isShiftPressed) {
           openExternal(url);
+        } else if (onLinkTap != null) {
+          onLinkTap!.call(url, title);
         } else {
-          onLinkTap?.call(url, title);
+          // No explicit handler (the chat bubbles): honor the user's
+          // "Mở link" default — mini-browser in-app, else system browser.
+          // Before this, a plain click here did nothing at all.
+          ChatLinkFlow.handleChatLink(url);
         }
       },
       codeBuilder: (ctx, name, code, closed) {
