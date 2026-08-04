@@ -1,11 +1,11 @@
 use axum::{
+    Json,
     extract::State,
     response::sse::{Event, Sse},
-    Json,
 };
 use futures_util::stream::Stream;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{convert::Infallible, sync::Arc};
 
 use crate::api::AppState;
@@ -66,7 +66,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "email-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -99,13 +101,13 @@ fn tools_list() -> Value {
         },
         {
             "name": "email_compose",
-            "description": "Compose and send an email via SMTP. Draft the body carefully and confirm with the user first.",
+            "description": "Compose and send an email via SMTP immediately. `to` accepts one or more addresses (comma/semicolon-separated string or array); if omitted or empty, the mail goes to the account's own address (self-report) — so in automated/scheduled runs never ask the user for a recipient. Generate subject and body from the task context yourself.",
             "inputSchema": { "type": "object", "properties": {
-                "to": { "type": "string" },
+                "to": { "type": "string", "description": "Recipient address(es), e.g. \"a@x.com, b@y.com\". Optional: defaults to the account's own address." },
                 "subject": { "type": "string" },
                 "body": { "type": "string" },
                 "account_id": { "type": "string" }
-            }, "required": ["to", "subject", "body"] }
+            }, "required": ["subject", "body"] }
         },
         {
             "name": "email_search",
@@ -132,12 +134,7 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             let account_id = args["account_id"].as_str().map(|s| s.to_string());
             let folder = args["folder"].as_str().map(|s| s.to_string());
             let limit = args["limit"].as_u64().unwrap_or(20) as u32;
-            match store::inbox(
-                &state.db,
-                account_id.as_deref(),
-                folder.as_deref(),
-                limit,
-            ) {
+            match store::inbox(&state.db, account_id.as_deref(), folder.as_deref(), limit) {
                 Ok(rows) => text_result(serde_json::to_string_pretty(&rows).unwrap_or_default()),
                 Err(e) => error_result(format!("Inbox failed: {e}")),
             }
@@ -179,16 +176,45 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             }
         }
         "email_compose" => {
-            let to = args["to"].as_str().unwrap_or("").to_string();
-            let subject = args["subject"].as_str().unwrap_or("").to_string();
+            // Automation-friendly: `to` may be a string, an array of strings,
+            // or absent — a blank recipient falls back to the account's own
+            // address so scheduled self-reports never stall on a missing param.
+            let to_arg = match &args["to"] {
+                Value::Array(items) => items
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                v => v.as_str().unwrap_or("").to_string(),
+            };
+            let subject = args["subject"].as_str().unwrap_or("").trim().to_string();
             let body = args["body"].as_str().unwrap_or("").to_string();
             let account_id = args["account_id"].as_str().map(|s| s.to_string());
 
+            if body.trim().is_empty() {
+                return error_result(
+                    "Missing \"body\": generate the email content from the task context (e.g. the report/digest text) and call email_compose again — do not ask the user for it."
+                        .to_string(),
+                );
+            }
+
             let acct = match store::account_secret(&state.db, account_id.as_deref()) {
                 Ok(a) => a,
-                Err(e) => return error_result(format!("No email account configured. Add one first: {e}")),
+                Err(e) => {
+                    return error_result(format!("No email account configured. Add one first: {e}"));
+                }
             };
             let from = acct.email.clone();
+            let to = if to_arg.trim().is_empty() {
+                from.clone()
+            } else {
+                to_arg
+            };
+            let subject = if subject.is_empty() {
+                "(no subject)".to_string()
+            } else {
+                subject
+            };
             let send_acct = acct.clone();
             let (sto, ssub, sbody) = (to.clone(), subject.clone(), body.clone());
             let send = tokio::task::spawn_blocking(move || {
@@ -197,10 +223,12 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             .await;
             match send {
                 Ok(Ok(())) => {
-                    let msg_id = store::record_sent(&state.db, &acct.id, &from, &to, &subject, &body)
-                        .unwrap_or_default();
+                    let msg_id =
+                        store::record_sent(&state.db, &acct.id, &from, &to, &subject, &body)
+                            .unwrap_or_default();
                     text_result(
-                        json!({ "success": true, "message_id": msg_id, "to": to }).to_string(),
+                        json!({ "success": true, "message_id": msg_id, "to": to, "from": from })
+                            .to_string(),
                     )
                 }
                 Ok(Err(e)) => error_result(format!("Send failed: {e}")),

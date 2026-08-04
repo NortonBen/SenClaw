@@ -6,7 +6,7 @@
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use imap::types::Flag;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Message, SmtpTransport, Transport};
@@ -18,6 +18,9 @@ use crate::models::AccountSecret;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 /// Cap on individual socket reads/writes once connected.
 const IO_TIMEOUT: Duration = Duration::from_secs(45);
+/// Cap SMTP connect + IO so a blocked submission port fails fast enough to
+/// retry the sibling port within the same send call.
+const SMTP_TIMEOUT: Duration = Duration::from_secs(20);
 
 type ImapSession = imap::Session<native_tls::TlsStream<TcpStream>>;
 
@@ -134,6 +137,31 @@ pub fn fetch_imap(acct: &AccountSecret, limit: u32) -> Result<Vec<FetchedMsg>> {
     Ok(out)
 }
 
+/// Parse a recipient string into mailboxes, forgiving the formats agents and
+/// users actually type: `a@b.c`, `Name <a@b.c>`, `mailto:a@b.c`, and several
+/// addresses separated by `,` / `;` / newlines. Errors name the offending
+/// token so an agent can self-correct instead of retrying blind.
+pub fn parse_recipients(to: &str) -> Result<Vec<lettre::message::Mailbox>> {
+    let mut out = Vec::new();
+    for raw in to.split(|c| c == ',' || c == ';' || c == '\n') {
+        let token = raw.trim();
+        let token = token.strip_prefix("mailto:").unwrap_or(token).trim();
+        if token.is_empty() {
+            continue;
+        }
+        let mailbox = token.parse().map_err(|e| {
+            anyhow!("Invalid to address \"{token}\": {e}. Expected \"user@example.com\" or \"Name <user@example.com>\"")
+        })?;
+        out.push(mailbox);
+    }
+    if out.is_empty() {
+        return Err(anyhow!(
+            "No recipient given: \"to\" is empty. Pass an email address, or omit it to send to the account's own address"
+        ));
+    }
+    Ok(out)
+}
+
 /// Send a message over SMTP (STARTTLS submission when `use_tls`, plaintext otherwise).
 pub fn send_smtp(
     acct: &AccountSecret,
@@ -142,25 +170,79 @@ pub fn send_smtp(
     subject: &str,
     body: &str,
 ) -> Result<()> {
-    let email = Message::builder()
-        .from(from_email.parse().map_err(|e| anyhow!("Invalid from address: {e}"))?)
-        .to(to.parse().map_err(|e| anyhow!("Invalid to address: {e}"))?)
-        .subject(subject)
-        .body(body.to_string())?;
+    let mut builder = Message::builder().from(
+        from_email
+            .parse()
+            .map_err(|e| anyhow!("Invalid from address \"{from_email}\": {e}"))?,
+    );
+    for mailbox in parse_recipients(to)? {
+        builder = builder.to(mailbox);
+    }
+    let email = builder.subject(subject).body(body.to_string())?;
 
     let creds = Credentials::new(acct.username.clone(), acct.plain_password());
-    let builder = if acct.use_tls {
-        SmtpTransport::relay(&acct.smtp_host)?
-    } else {
-        SmtpTransport::builder_dangerous(&acct.smtp_host)
-    };
-    let mailer = builder
-        .port(acct.smtp_port as u16)
-        .credentials(creds)
-        .build();
+    let host = acct.smtp_host.trim();
+    let port = acct.smtp_port as u16;
 
-    mailer.send(&email).map_err(|e| anyhow!("SMTP send failed: {e}"))?;
+    if !acct.use_tls {
+        let mailer = SmtpTransport::builder_dangerous(host)
+            .port(port)
+            .credentials(creds)
+            .timeout(Some(SMTP_TIMEOUT))
+            .build();
+        mailer
+            .send(&email)
+            .map_err(|e| anyhow!("SMTP send failed: {e}"))?;
+        return Ok(());
+    }
+
+    // TLS mode must match the port: 465 speaks TLS from the first byte
+    // (`relay` = implicit-TLS wrapper), while 587/25 greet in plaintext and
+    // upgrade via STARTTLS (`starttls_relay`). Using the wrapper against 587
+    // hangs in the handshake until the timeout.
+    let implicit = port == 465;
+    let first_err = match tls_mailer(host, port, implicit, creds.clone())?.send(&email) {
+        Ok(_) => return Ok(()),
+        Err(e) => e,
+    };
+
+    // Networks commonly block one of the two submission ports. On a
+    // connection-level failure, retry once on the sibling port with the
+    // matching mechanism (587/STARTTLS ↔ 465/SMTPS). Auth/protocol errors
+    // are not retried — they would fail identically and can double an
+    // account-lockout counter.
+    let msg = first_err.to_string().to_lowercase();
+    let conn_level =
+        msg.contains("connection") || msg.contains("timed out") || msg.contains("network");
+    if !conn_level {
+        return Err(anyhow!("SMTP send failed: {first_err}"));
+    }
+    let (alt_port, alt_implicit) = if implicit { (587, false) } else { (465, true) };
+    tls_mailer(host, alt_port, alt_implicit, creds)?
+        .send(&email)
+        .map_err(|e| {
+            anyhow!("SMTP send failed on port {port} ({first_err}) and fallback port {alt_port}: {e}")
+        })?;
     Ok(())
+}
+
+/// Build a TLS SMTP transport for one port/mechanism pairing.
+fn tls_mailer(
+    host: &str,
+    port: u16,
+    implicit_tls: bool,
+    creds: Credentials,
+) -> Result<SmtpTransport> {
+    let builder = if implicit_tls {
+        SmtpTransport::relay(host)?
+    } else {
+        SmtpTransport::starttls_relay(host)?
+    };
+    Ok(builder
+        .port(port)
+        .credentials(creds)
+        .timeout(Some(SMTP_TIMEOUT))
+        .build())
 }
 
 fn flag_token(flag: &Flag) -> String {
@@ -184,11 +266,7 @@ fn extract_bodies(part: &mailparse::ParsedMail) -> (Option<String>, Option<Strin
     (text, html)
 }
 
-fn collect(
-    part: &mailparse::ParsedMail,
-    text: &mut Option<String>,
-    html: &mut Option<String>,
-) {
+fn collect(part: &mailparse::ParsedMail, text: &mut Option<String>, html: &mut Option<String>) {
     let mime = part.ctype.mimetype.to_lowercase();
     if part.subparts.is_empty() {
         if mime == "text/plain" && text.is_none() {
@@ -200,5 +278,55 @@ fn collect(
         for sub in &part.subparts {
             collect(sub, text, html);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_recipients;
+
+    #[test]
+    fn single_plain_address() {
+        let r = parse_recipients("a@b.com").unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].email.to_string(), "a@b.com");
+    }
+
+    #[test]
+    fn name_addr_format() {
+        let r = parse_recipients("Anh Bảy <bay@example.com>").unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].email.to_string(), "bay@example.com");
+    }
+
+    #[test]
+    fn multiple_with_mixed_separators_and_whitespace() {
+        let r = parse_recipients(" a@b.com , c@d.com ;\n e@f.com ").unwrap();
+        let emails: Vec<String> = r.iter().map(|m| m.email.to_string()).collect();
+        assert_eq!(emails, vec!["a@b.com", "c@d.com", "e@f.com"]);
+    }
+
+    #[test]
+    fn strips_mailto_prefix() {
+        let r = parse_recipients("mailto:a@b.com").unwrap();
+        assert_eq!(r[0].email.to_string(), "a@b.com");
+    }
+
+    #[test]
+    fn empty_input_is_actionable_error() {
+        let err = parse_recipients("  ").unwrap_err().to_string();
+        assert!(err.contains("No recipient given"), "got: {err}");
+    }
+
+    #[test]
+    fn invalid_token_named_in_error() {
+        let err = parse_recipients("not-an-address").unwrap_err().to_string();
+        assert!(err.contains("not-an-address"), "got: {err}");
+    }
+
+    #[test]
+    fn trailing_separator_ignored() {
+        let r = parse_recipients("a@b.com,").unwrap();
+        assert_eq!(r.len(), 1);
     }
 }

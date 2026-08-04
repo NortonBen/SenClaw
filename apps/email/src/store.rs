@@ -1,8 +1,8 @@
 //! Query/mutation helpers over the SQLite store, shared by the REST API and MCP.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use rusqlite::params;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::db::Db;
@@ -126,7 +126,8 @@ pub fn account_secret(db: &Db, account_id: Option<&str>) -> Result<AccountSecret
                 use_tls: row.get::<_, i32>(8)? != 0,
             })
         };
-        let cols = "id, email, imap_host, imap_port, smtp_host, smtp_port, username, password, use_tls";
+        let cols =
+            "id, email, imap_host, imap_port, smtp_host, smtp_port, username, password, use_tls";
         let mut acct = match account_id {
             Some(id) => conn.query_row(
                 &format!("SELECT {cols} FROM space_email_accounts WHERE id=?1"),
@@ -134,7 +135,9 @@ pub fn account_secret(db: &Db, account_id: Option<&str>) -> Result<AccountSecret
                 map,
             ),
             None => conn.query_row(
-                &format!("SELECT {cols} FROM space_email_accounts ORDER BY created_at DESC LIMIT 1"),
+                &format!(
+                    "SELECT {cols} FROM space_email_accounts ORDER BY created_at DESC LIMIT 1"
+                ),
                 [],
                 map,
             ),
@@ -190,7 +193,10 @@ pub fn create_account(db: &Db, b: &AccountCreate) -> Result<Account> {
 pub fn delete_account(db: &Db, id: &str) -> Result<()> {
     db.with_conn(|conn| {
         conn.execute("DELETE FROM space_email_accounts WHERE id=?1", params![id])?;
-        conn.execute("DELETE FROM space_email_cache WHERE account_id=?1", params![id])?;
+        conn.execute(
+            "DELETE FROM space_email_cache WHERE account_id=?1",
+            params![id],
+        )?;
         Ok(())
     })
 }
@@ -283,9 +289,8 @@ pub fn folder_counts(db: &Db, account_id: Option<&str>) -> Result<Value> {
         let map = |row: &rusqlite::Row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?));
         let rows: Vec<(String, String)> = match account_id {
             Some(aid) => {
-                let mut stmt = conn.prepare(
-                    "SELECT folder, flags FROM space_email_cache WHERE account_id=?1",
-                )?;
+                let mut stmt = conn
+                    .prepare("SELECT folder, flags FROM space_email_cache WHERE account_id=?1")?;
                 stmt.query_map(params![aid], map)?
                     .filter_map(|r| r.ok())
                     .collect()
@@ -487,11 +492,20 @@ mod tests {
 
     #[test]
     fn strips_spaces_from_gmail_app_password() {
-        assert_eq!(normalize_app_password("abcd efgh ijkl mnop"), "abcdefghijklmnop");
+        assert_eq!(
+            normalize_app_password("abcd efgh ijkl mnop"),
+            "abcdefghijklmnop"
+        );
         // Not the 16-char app-password shape → left exactly as typed.
         assert_eq!(normalize_app_password("my real pass"), "my real pass");
-        assert_eq!(normalize_app_password("secret-with-no-spaces"), "secret-with-no-spaces");
-        assert_eq!(normalize_app_password("abcdefghijklmnop"), "abcdefghijklmnop");
+        assert_eq!(
+            normalize_app_password("secret-with-no-spaces"),
+            "secret-with-no-spaces"
+        );
+        assert_eq!(
+            normalize_app_password("abcdefghijklmnop"),
+            "abcdefghijklmnop"
+        );
     }
 
     #[test]
@@ -508,7 +522,10 @@ mod tests {
 
     #[test]
     fn snippet_collapses_whitespace_and_caps_length() {
-        assert_eq!(snippet(Some("  hello \n\n  world  ")).unwrap(), "hello world");
+        assert_eq!(
+            snippet(Some("  hello \n\n  world  ")).unwrap(),
+            "hello world"
+        );
         assert_eq!(snippet(Some("   ")), None);
         assert_eq!(snippet(None), None);
 

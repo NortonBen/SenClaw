@@ -1,12 +1,12 @@
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 use crate::db::Db;
@@ -52,7 +52,10 @@ pub fn api_router() -> Router {
         .route("/send", post(send))
         .route("/draft", post(draft))
         .route("/sync", post(sync))
-        .route("/mcp/sse", get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message))
+        .route(
+            "/mcp/sse",
+            get(crate::mcp::mcp_sse).post(crate::mcp::mcp_message),
+        )
         .route("/mcp/message", post(crate::mcp::mcp_message))
         .with_state(state)
 }
@@ -149,7 +152,8 @@ async fn read_message(
     State(s): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let v = store::read_msg(&s.db, &id).map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string()))?;
+    let v =
+        store::read_msg(&s.db, &id).map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string()))?;
     Ok(Json(v))
 }
 
@@ -210,7 +214,8 @@ async fn send(
     .map_err(server)?
     .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e.to_string()))?;
 
-    let msg_id = store::record_sent(&s.db, &acct.id, &from, &b.to, &b.subject, &b.body).map_err(server)?;
+    let msg_id =
+        store::record_sent(&s.db, &acct.id, &from, &b.to, &b.subject, &b.body).map_err(server)?;
     Ok(Json(json!({
         "success": true,
         "message_id": msg_id,
@@ -256,5 +261,7 @@ async fn sync(
         .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e.to_string()))?;
 
     let count = store::upsert_inbox(&s.db, &acct_id, &msgs).map_err(server)?;
-    Ok(Json(json!({ "success": true, "synced": count, "account_id": acct_id })))
+    Ok(Json(
+        json!({ "success": true, "synced": count, "account_id": acct_id }),
+    ))
 }
