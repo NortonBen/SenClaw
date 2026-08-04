@@ -8,6 +8,7 @@ import '../../widgets/note_body.dart';
 import '../../widgets/embedded_web.dart';
 import '../../widgets/schedule_editor.dart';
 import '../../widgets/section_scaffold.dart';
+import 'event_link.dart';
 import 'note_inline_editor.dart';
 import 'note_tags.dart';
 import 'space_providers.dart';
@@ -259,46 +260,17 @@ class _NoteView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = context.colors;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Slim action bar — the title + tags now live inside the editor.
-        Container(
-          height: 44,
-          padding: const EdgeInsets.symmetric(horizontal: AppTokens.s8),
-          decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: c.border)),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              IconButton(
-                  tooltip: note.pinned ? 'Unpin' : 'Pin',
-                  onPressed: onPin,
-                  icon: Icon(
-                      note.pinned ? Icons.push_pin : Icons.push_pin_outlined,
-                      size: 18,
-                      color: note.pinned ? AppTokens.brand : null)),
-              IconButton(
-                  tooltip: 'Delete',
-                  onPressed: onDelete,
-                  icon: const Icon(Icons.delete_outline,
-                      size: 18, color: AppTokens.danger)),
-            ],
-          ),
-        ),
-        Expanded(
-          // Key by note id so switching notes rebuilds the editor state
-          // (document + autosave guards) cleanly — edits never bleed across.
-          child: NoteInlineEditor(
-            key: ValueKey(note.id),
-            note: note,
-            onSave: onSave,
-            onTagTap: onTagTap,
-          ),
-        ),
-      ],
+    // Pin/delete live inside the editor's toolbar row — no separate action
+    // bar, the editor owns the whole pane. Key by note id so switching notes
+    // rebuilds the editor state (document + autosave guards) cleanly — edits
+    // never bleed across.
+    return NoteInlineEditor(
+      key: ValueKey(note.id),
+      note: note,
+      onSave: onSave,
+      onTagTap: onTagTap,
+      onPin: onPin,
+      onDelete: onDelete,
     );
   }
 }
@@ -833,6 +805,22 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
                             ],
                           ),
                         ),
+                        // An event that points at a Space-App screen (today's
+                        // lesson, a board, a report) opens it directly.
+                        if (isInternalAppLink(e.link))
+                          IconButton(
+                            tooltip: 'Mở ${e.linkAppId ?? 'nội dung'}',
+                            icon: Icon(Icons.open_in_new,
+                                size: 16, color: c.accent),
+                            onPressed: () async {
+                              final err =
+                                  await openEventLink(context, ref, e.link);
+                              if (err != null && context.mounted) {
+                                ScaffoldMessenger.of(context)
+                                    .showSnackBar(SnackBar(content: Text(err)));
+                              }
+                            },
+                          ),
                         IconButton(
                           tooltip: 'Edit',
                           icon: Icon(Icons.edit_outlined,
@@ -1097,6 +1085,22 @@ class _DayEventsDialog extends ConsumerWidget {
                             ],
                           ),
                         ),
+                        // An event that points at a Space-App screen (today's
+                        // lesson, a board, a report) opens it directly.
+                        if (isInternalAppLink(e.link))
+                          IconButton(
+                            tooltip: 'Mở ${e.linkAppId ?? 'nội dung'}',
+                            icon: Icon(Icons.open_in_new,
+                                size: 16, color: c.accent),
+                            onPressed: () async {
+                              final err =
+                                  await openEventLink(context, ref, e.link);
+                              if (err != null && context.mounted) {
+                                ScaffoldMessenger.of(context)
+                                    .showSnackBar(SnackBar(content: Text(err)));
+                              }
+                            },
+                          ),
                         IconButton(
                           tooltip: 'Edit',
                           icon: Icon(Icons.edit_outlined,

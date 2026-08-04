@@ -18,6 +18,51 @@ use crate::db::Db;
 use crate::mcp::schedule_server::ToolResult;
 use crate::types::{AgentMode, ContextMode, ScheduleType, ScheduledTask, TaskStatus};
 
+/// Validate an event's "open this" link.
+///
+/// A calendar event is a button the user taps without reading — often straight
+/// off a notification, often half-awake at the scheduled hour. That makes the
+/// link field a phishing surface if any app (including one installed from the
+/// hub) can point it anywhere. So only **internal Space-App routes** are
+/// accepted: `/space/app/<id>` optionally with a query string.
+///
+/// Rejections are errors, never silent drops — an event whose button quietly
+/// does nothing is worse than one that failed to be created.
+pub fn sanitize_event_link(raw: &str) -> Result<String, String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err("link rỗng".into());
+    }
+    if s.len() > 1_000 {
+        return Err("link quá dài".into());
+    }
+    // Reject anything that could resolve off-origin: a scheme, a
+    // protocol-relative `//host`, or a backslash the browser normalises to `/`.
+    if s.contains(':') && !s.starts_with("/space/app/") {
+        return Err(format!("link phải là đường dẫn nội bộ /space/app/…, nhận được: {s}"));
+    }
+    if s.starts_with("//") || s.contains('\\') {
+        return Err("link không được trỏ ra ngoài ứng dụng".into());
+    }
+    if !s.starts_with("/space/app/") {
+        return Err(format!("link phải bắt đầu bằng /space/app/, nhận được: {s}"));
+    }
+    let path = s.split(['?', '#']).next().unwrap_or("");
+    if path.contains("..") {
+        return Err("link không được chứa `..`".into());
+    }
+    let app = path.trim_start_matches("/space/app/");
+    let app_id = app.split('/').next().unwrap_or("");
+    if app_id.is_empty()
+        || !app_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!("id app trong link không hợp lệ: `{app_id}`"));
+    }
+    Ok(s.to_string())
+}
+
 /// Parse a wall-clock datetime string in the HOST-LOCAL timezone into Unix
 /// milliseconds. Accepts `YYYY-MM-DD HH:MM[:SS]` (a `T` separator is fine)
 /// and bare `YYYY-MM-DD` (midnight). Returns None if unparsable.
@@ -117,6 +162,14 @@ struct EventCreateParams {
     renotify_min: Option<i64>,
     #[serde(default)]
     color: Option<String>,
+    /// Where opening this event should take the user, as an INTERNAL Space-App
+    /// route — e.g. `/space/app/study?session=abc`. The calendar shows an
+    /// "Open" button when it is set. External URLs are rejected.
+    #[serde(default)]
+    link: Option<String>,
+    /// Id of the Space App that owns `link`.
+    #[serde(default)]
+    app_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -155,6 +208,12 @@ struct EventUpdateParams {
     all_day: Option<bool>,
     #[serde(default)]
     color: Option<String>,
+    /// Internal Space-App route to open from this event, e.g.
+    /// `/space/app/study?session=abc`. External URLs are rejected.
+    #[serde(default)]
+    link: Option<String>,
+    #[serde(default)]
+    app_id: Option<String>,
     /// Minutes before event to send reminder
     #[serde(default)]
     reminder_min: Option<i64>,
@@ -325,7 +384,9 @@ impl McpSpaceServer {
             .content
     }
 
-    #[rmcp::tool(description = "Tìm kiếm ghi chú full-text, có thể lọc theo tag. Full-text search across all notes, optionally filtered by tag.")]
+    #[rmcp::tool(
+        description = "Tìm kiếm ghi chú full-text, có thể lọc theo tag. Full-text search across all notes, optionally filtered by tag."
+    )]
     fn space_note_search(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -409,6 +470,8 @@ impl McpSpaceServer {
                 p.reminder_min,
                 p.renotify_min,
                 p.color,
+                p.link,
+                p.app_id,
                 &self.group_folder,
                 &self.chat_jid,
             )
@@ -461,6 +524,8 @@ impl McpSpaceServer {
                 p.color,
                 p.reminder_min,
                 p.renotify_min,
+                p.link,
+                p.app_id,
                 p.reset_reminder.unwrap_or(false),
             )
             .content
@@ -710,13 +775,11 @@ impl McpSpaceServer {
 
     // ── Recurring schedules (new model: each schedule owns a chat session) ─
 
-    #[rmcp::tool(
-        description = "Tạo lịch định kỳ tự động cho agent. \
+    #[rmcp::tool(description = "Tạo lịch định kỳ tự động cho agent. \
 Mỗi lịch sẽ tự tạo một chat session riêng và mỗi lần đến giờ agent sẽ chạy prompt trong chat đó. \
 Dùng `time_local` (HH:MM, giờ máy) + `frequency` (daily/weekdays/weekly/monthly/once/once_delete), hoặc `cron_advanced` (5 trường). \
 once = chạy 1 lần rồi giữ lại (completed); once_delete = chạy 1 lần rồi tự xoá lịch. \
-VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'."
-    )]
+VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'.")]
     async fn space_recurring_create(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -748,9 +811,7 @@ VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'
         self.inner().recurring_list().content
     }
 
-    #[rmcp::tool(
-        description = "Lấy chi tiết một lịch định kỳ kèm lịch sử 20 lần chạy gần nhất."
-    )]
+    #[rmcp::tool(description = "Lấy chi tiết một lịch định kỳ kèm lịch sử 20 lần chạy gần nhất.")]
     fn space_recurring_get(
         &self,
         rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
@@ -979,17 +1040,26 @@ impl SpaceServer {
         reminder_min: Option<i64>,
         renotify_min: Option<i64>,
         color: Option<String>,
+        link: Option<String>,
+        app_id: Option<String>,
         group_folder: &str,
         chat_jid: &str,
     ) -> ToolResult {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp_millis();
+        // A rejected link must not silently become a no-op button: refuse the
+        // whole create so the caller fixes its route.
+        let link = match link.as_deref().map(sanitize_event_link) {
+            Some(Err(e)) => return ToolResult::err(e),
+            Some(Ok(v)) => Some(v),
+            None => None,
+        };
 
         let result = self.db.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO space_events (id, title, description, start_at, end_at, all_day, location, color, reminder_min, renotify_min, source, created_at, updated_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'manual',?11,?11)",
-                params![id, title, description, start_at, end_at, all_day as i32, location, color, reminder_min, renotify_min, now],
+                "INSERT INTO space_events (id, title, description, start_at, end_at, all_day, location, color, reminder_min, renotify_min, link, app_id, source, created_at, updated_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'manual',?13,?13)",
+                params![id, title, description, start_at, end_at, all_day as i32, location, color, reminder_min, renotify_min, link, app_id, now],
             )?;
             Ok(())
         });
@@ -1035,7 +1105,7 @@ impl SpaceServer {
         let result = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, title, description, start_at, end_at, all_day, location, color,
-                        reminder_min, source, status, renotify_min
+                        reminder_min, source, status, renotify_min, link, app_id
                  FROM space_events
                  WHERE deleted_at IS NULL AND start_at >= ?1 AND start_at <= ?2
                  ORDER BY start_at ASC",
@@ -1055,6 +1125,8 @@ impl SpaceServer {
                         "source": row.get::<_,String>(9)?,
                         "status": row.get::<_,Option<String>>(10)?.unwrap_or_else(|| "upcoming".into()),
                         "renotify_min": row.get::<_,Option<i64>>(11)?,
+                        "link": row.get::<_,Option<String>>(12)?,
+                        "app_id": row.get::<_,Option<String>>(13)?,
                     }))
                 })?
                 .filter_map(|r| r.ok())
@@ -1079,8 +1151,15 @@ impl SpaceServer {
         color: Option<String>,
         reminder_min: Option<i64>,
         renotify_min: Option<i64>,
+        link: Option<String>,
+        app_id: Option<String>,
         reset_reminder: bool,
     ) -> ToolResult {
+        let link = match link.as_deref().map(sanitize_event_link) {
+            Some(Err(e)) => return ToolResult::err(e),
+            Some(Ok(v)) => Some(v),
+            None => None,
+        };
         let result = self.db.with_conn(|conn| {
             let now_ms = chrono::Utc::now().timestamp_millis();
             if let Some(v) = &title {
@@ -1113,6 +1192,12 @@ impl SpaceServer {
             }
             if let Some(v) = renotify_min {
                 conn.execute("UPDATE space_events SET renotify_min=?1 WHERE id=?2 AND deleted_at IS NULL", params![v, event_id])?;
+            }
+            if link.is_some() {
+                conn.execute("UPDATE space_events SET link=?1 WHERE id=?2 AND deleted_at IS NULL", params![link, event_id])?;
+            }
+            if app_id.is_some() {
+                conn.execute("UPDATE space_events SET app_id=?1 WHERE id=?2 AND deleted_at IS NULL", params![app_id, event_id])?;
             }
             if reset_reminder {
                 // Clear sent flags so EventNotifier fires the reminder again.
@@ -1169,7 +1254,7 @@ impl SpaceServer {
         let result = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, title, description, start_at, end_at, all_day, location, color,
-                        reminder_min, source, status, renotify_min
+                        reminder_min, source, status, renotify_min, link, app_id
                  FROM space_events
                  WHERE deleted_at IS NULL
                    AND start_at >= ?1 AND start_at <= ?2
@@ -1191,6 +1276,8 @@ impl SpaceServer {
                         "source":       row.get::<_,String>(9)?,
                         "status":       row.get::<_,Option<String>>(10)?.unwrap_or_else(|| "upcoming".into()),
                         "renotify_min": row.get::<_,Option<i64>>(11)?,
+                        "link": row.get::<_,Option<String>>(12)?,
+                        "app_id": row.get::<_,Option<String>>(13)?,
                     }))
                 })?
                 .filter_map(|r| r.ok())
@@ -1449,7 +1536,9 @@ impl SpaceServer {
             allowed_work_dirs: None,
             bot_token: None,
             max_messages: None,
-            llm_config_id: model_id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+            llm_config_id: model_id
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
             last_active: Some(now.clone()),
             added_at: now,
         }) {
@@ -1480,9 +1569,8 @@ impl SpaceServer {
             .unwrap_or("")
             .to_owned();
 
-        let resolved_agent_mode = crate::types::AgentMode::parse(
-            agent_mode.as_deref().unwrap_or("agent"),
-        );
+        let resolved_agent_mode =
+            crate::types::AgentMode::parse(agent_mode.as_deref().unwrap_or("agent"));
         if resolved_agent_mode != crate::types::AgentMode::Agent {
             let _ = self.db.with_conn(|c| {
                 c.execute(
@@ -1529,27 +1617,24 @@ impl SpaceServer {
             // task id differs from the id baked into the chat JID/folder.
             .find(|t| {
                 t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX)
-                    && (t.id == id
-                        || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
-            })
-        {
+                    && (t.id == id || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
+            }) {
             Some(t) => t,
             None => return ToolResult::err(format!("schedule not found: {id}")),
         };
         let runs = self.db.get_task_run_logs(id, 20).unwrap_or_default();
         let mut item = self.serialize_schedule(&task);
-        item["runs"] = serde_json::json!(
-            runs.iter()
-                .map(|l| serde_json::json!({
-                    "id":          l.id,
-                    "run_at":      l.run_at,
-                    "duration_ms": l.duration_ms,
-                    "status":      l.status.as_str(),
-                    "result":      l.result,
-                    "error":       l.error,
-                }))
-                .collect::<Vec<_>>()
-        );
+        item["runs"] = serde_json::json!(runs
+            .iter()
+            .map(|l| serde_json::json!({
+                "id":          l.id,
+                "run_at":      l.run_at,
+                "duration_ms": l.duration_ms,
+                "status":      l.status.as_str(),
+                "result":      l.result,
+                "error":       l.error,
+            }))
+            .collect::<Vec<_>>());
         ToolResult::ok(item.to_string())
     }
 
@@ -1570,10 +1655,8 @@ impl SpaceServer {
             // task id differs from the id baked into the chat JID/folder.
             .find(|t| {
                 t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX)
-                    && (t.id == id
-                        || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
-            })
-        {
+                    && (t.id == id || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
+            }) {
             Some(t) => t,
             None => return ToolResult::err(format!("schedule not found: {id}")),
         };
@@ -1585,16 +1668,13 @@ impl SpaceServer {
             .unwrap_or_else(chrono::Utc::now)
             .to_rfc3339();
 
-        if let Err(e) = self.db.advance_task_next_run(
-            &task.id,
-            Some(&now),
-            crate::types::TaskStatus::Active,
-        ) {
+        if let Err(e) =
+            self.db
+                .advance_task_next_run(&task.id, Some(&now), crate::types::TaskStatus::Active)
+        {
             return ToolResult::err(format!("set next_run: {e}"));
         }
-        ToolResult::ok(
-            serde_json::json!({ "id": task.id, "queued_at": now }).to_string(),
-        )
+        ToolResult::ok(serde_json::json!({ "id": task.id, "queued_at": now }).to_string())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1625,10 +1705,8 @@ impl SpaceServer {
             // task id differs from the id baked into the chat JID/folder.
             .find(|t| {
                 t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX)
-                    && (t.id == id
-                        || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
-            })
-        {
+                    && (t.id == id || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
+            }) {
             Some(t) => t,
             None => return ToolResult::err(format!("schedule not found: {id}")),
         };
@@ -1772,11 +1850,7 @@ impl SpaceServer {
             }
         }
 
-        if let Some(new_label) = label
-            .as_deref()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(new_label) = label.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
             if let Err(e) = self.db.with_conn(|c| {
                 c.execute(
                     "UPDATE groups SET name = ?1 WHERE jid = ?2",
@@ -1864,10 +1938,8 @@ impl SpaceServer {
             // task id differs from the id baked into the chat JID/folder.
             .find(|t| {
                 t.group_folder.starts_with(SCHEDULE_FOLDER_PREFIX)
-                    && (t.id == id
-                        || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
-            })
-        {
+                    && (t.id == id || t.group_folder == format!("{SCHEDULE_FOLDER_PREFIX}{id}"))
+            }) {
             Some(t) => t,
             None => return ToolResult::err(format!("schedule not found: {id}")),
         };
@@ -1951,8 +2023,7 @@ pub(crate) fn build_schedule_spec(
     let freq = frequency.unwrap_or("daily");
     if !has_advanced && (freq == "once" || freq == "once_delete") {
         let time = time_local.unwrap_or("").trim();
-        let (h, m) =
-            parse_hhmm(time).ok_or_else(|| "time_local must be HH:MM (24h)".to_owned())?;
+        let (h, m) = parse_hhmm(time).ok_or_else(|| "time_local must be HH:MM (24h)".to_owned())?;
         let at = resolve_once_instant(date_local, h, m)?;
         return Ok(ScheduleSpec::Once {
             at,
@@ -1978,8 +2049,9 @@ fn resolve_once_instant(
             local_naive_to_utc_rfc3339(date, h, m)
                 .ok_or_else(|| "could not resolve one-shot date/time".to_owned())
         }
-        None => next_local_occurrence(h, m)
-            .ok_or_else(|| "could not resolve one-shot time".to_owned()),
+        None => {
+            next_local_occurrence(h, m).ok_or_else(|| "could not resolve one-shot time".to_owned())
+        }
     }
 }
 
@@ -1992,7 +2064,9 @@ fn local_naive_to_utc_rfc3339(date: chrono::NaiveDate, h: u32, m: u32) -> Option
         LocalResult::Single(dt) => dt,
         LocalResult::Ambiguous(dt, _) => dt,
         // Skipped by a DST forward jump — nudge past the gap.
-        LocalResult::None => Local.from_local_datetime(&(naive + Duration::hours(1))).single()?,
+        LocalResult::None => Local
+            .from_local_datetime(&(naive + Duration::hours(1)))
+            .single()?,
     };
     Some(dt.with_timezone(&Utc).to_rfc3339())
 }
@@ -2007,7 +2081,9 @@ fn next_local_occurrence(h: u32, m: u32) -> Option<String> {
         LocalResult::Single(dt) => dt,
         LocalResult::Ambiguous(dt, _) => dt,
         // Skipped by a DST forward jump — nudge past the gap.
-        LocalResult::None => Local.from_local_datetime(&(naive + Duration::hours(1))).single()?,
+        LocalResult::None => Local
+            .from_local_datetime(&(naive + Duration::hours(1)))
+            .single()?,
     };
     if candidate <= now {
         candidate += Duration::days(1);
@@ -2177,7 +2253,7 @@ mod local_time_tests {
 
 #[cfg(test)]
 mod schedule_spec_tests {
-    use super::{build_schedule_spec, ScheduleSpec};
+    use super::{build_schedule_spec, sanitize_event_link, ScheduleSpec};
     use chrono::{DateTime, Datelike, Local, Timelike, Utc};
 
     #[test]
@@ -2196,7 +2272,10 @@ mod schedule_spec_tests {
             ScheduleSpec::Once { at, delete_after } => {
                 assert!(!delete_after, "plain 'once' must keep the row");
                 let parsed = DateTime::parse_from_rfc3339(&at).unwrap();
-                assert!(parsed > Utc::now(), "one-shot instant must be in the future");
+                assert!(
+                    parsed > Utc::now(),
+                    "one-shot instant must be in the future"
+                );
             }
             _ => panic!("'once' should be a one-shot spec"),
         }
@@ -2274,5 +2353,179 @@ mod schedule_spec_tests {
             ScheduleSpec::Cron(c) => assert_eq!(c, "*/5 * * * *"),
             _ => panic!("advanced cron should win"),
         }
+    }
+
+    // ── event link safety ───────────────────────────────────────────────────
+
+    #[test]
+    fn an_internal_space_app_route_is_accepted() {
+        assert_eq!(
+            sanitize_event_link("/space/app/study?session=abc").unwrap(),
+            "/space/app/study?session=abc"
+        );
+        assert!(sanitize_event_link("/space/app/luna-calendar").is_ok());
+    }
+
+    #[test]
+    fn external_urls_are_refused_so_an_event_cannot_be_a_phishing_button() {
+        for bad in [
+            "https://evil.example/login",
+            "http://127.0.0.1:1/",
+            "javascript:alert(1)",
+            "//evil.example/x",
+            "/space/app/../../etc/passwd",
+            "\\\\evil.example",
+            "/other/route",
+            "",
+        ] {
+            assert!(
+                sanitize_event_link(bad).is_err(),
+                "must reject event link: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rejected_link_is_an_error_not_a_silently_dropped_field() {
+        let err = sanitize_event_link("https://evil.example").unwrap_err();
+        assert!(!err.is_empty(), "the caller must be told why");
+    }
+}
+
+#[cfg(test)]
+mod event_link_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::db::Db;
+    use std::sync::Arc;
+
+    fn server() -> SpaceServer {
+        let db = Db::open_in_memory(&Config::from_env()).expect("open db");
+        SpaceServer::new(Arc::new(db))
+    }
+
+    fn only_event(srv: &SpaceServer) -> serde_json::Value {
+        let out = srv.event_list(0, i64::MAX);
+        assert!(!out.is_error, "{}", out.content);
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&out.content).expect("json");
+        assert_eq!(rows.len(), 1, "expected exactly one event");
+        rows.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn an_event_stores_and_returns_its_space_app_link() {
+        let srv = server();
+        let out = srv.event_create(
+            "Buổi 1/30 · Chương 1".into(),
+            1_800_000_000_000,
+            1_800_003_600_000,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            Some("/space/app/study?session=abc-123".into()),
+            Some("study".into()),
+            "default",
+            "",
+        );
+        assert!(!out.is_error, "{}", out.content);
+
+        let ev = only_event(&srv);
+        assert_eq!(ev["link"], "/space/app/study?session=abc-123");
+        assert_eq!(ev["app_id"], "study");
+    }
+
+    #[test]
+    fn an_event_without_a_link_still_works_and_reports_null() {
+        let srv = server();
+        let out = srv.event_create(
+            "Họp".into(),
+            1_800_000_000_000,
+            1_800_003_600_000,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "default",
+            "",
+        );
+        assert!(!out.is_error, "{}", out.content);
+        assert!(only_event(&srv)["link"].is_null());
+    }
+
+    #[test]
+    fn an_external_link_is_refused_and_no_event_is_created() {
+        let srv = server();
+        let out = srv.event_create(
+            "Bẫy".into(),
+            1_800_000_000_000,
+            1_800_003_600_000,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            Some("https://evil.example/login".into()),
+            None,
+            "default",
+            "",
+        );
+        assert!(out.is_error, "an external link must not be stored");
+
+        let list = srv.event_list(0, i64::MAX);
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&list.content).unwrap();
+        assert!(rows.is_empty(), "a rejected link must not leave a half-made event");
+    }
+
+    #[test]
+    fn updating_the_link_replaces_it_and_still_validates() {
+        let srv = server();
+        srv.event_create(
+            "Buổi 1".into(),
+            1_800_000_000_000,
+            1_800_003_600_000,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            Some("/space/app/study?session=one".into()),
+            Some("study".into()),
+            "default",
+            "",
+        );
+        let id = only_event(&srv)["id"].as_str().unwrap().to_string();
+
+        let ok = srv.event_update(
+            id.clone(),
+            None, None, None, None, None, None, None, None, None,
+            Some("/space/app/study?session=two".into()),
+            None,
+            false,
+        );
+        assert!(!ok.is_error, "{}", ok.content);
+        assert_eq!(only_event(&srv)["link"], "/space/app/study?session=two");
+
+        let bad = srv.event_update(
+            id,
+            None, None, None, None, None, None, None, None, None,
+            Some("javascript:alert(1)".into()),
+            None,
+            false,
+        );
+        assert!(bad.is_error);
+        assert_eq!(
+            only_event(&srv)["link"],
+            "/space/app/study?session=two",
+            "a rejected update must not clear the good link"
+        );
     }
 }

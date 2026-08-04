@@ -207,6 +207,34 @@ class RunningAppsController extends StateNotifier<RunningAppsState> {
     state = RunningAppsState(list, a.id);
   }
 
+  /// Launch an app at a specific internal route — the calendar's "open this
+  /// event" path (`/space/app/<id>?session=…`).
+  ///
+  /// An app already running at a different route is torn down and relaunched:
+  /// the web view is keyed by app id, so mutating the URL in place would leave
+  /// the old page mounted and the user staring at yesterday's lesson.
+  void openAt(SpaceApp a, String route) {
+    final query = _queryOf(route);
+    final url = query.isEmpty
+        ? a.url
+        : '${a.url}${a.url.contains('?') ? '&' : '?'}$query';
+    final relaunched = SpaceApp(a.id, a.name, a.icon, a.description, url,
+        a.enabled,
+        manifest: a.manifest);
+    final list = [
+      ...state.running.where((x) => x.id != a.id),
+      relaunched,
+    ];
+    state = RunningAppsState(list, a.id);
+  }
+
+  /// Query string of an internal `/space/app/<id>?…` route, without the `?`.
+  static String _queryOf(String route) {
+    final i = route.indexOf('?');
+    if (i < 0) return '';
+    return route.substring(i + 1).split('#').first;
+  }
+
   /// Minimize: keep every app running, show the launcher.
   void background() => state = RunningAppsState(state.running, null);
 

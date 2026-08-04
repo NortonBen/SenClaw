@@ -52,6 +52,12 @@ class SpaceEvent {
   final bool allDay;
   final String? location;
 
+  /// Internal Space-App route this event opens, e.g.
+  /// `/space/app/study?session=abc`. The daemon refuses to store anything that
+  /// is not a `/space/app/…` path, so it is safe to open in the embedded view.
+  final String? link;
+  final String? appId;
+
   const SpaceEvent({
     required this.id,
     required this.title,
@@ -60,6 +66,8 @@ class SpaceEvent {
     this.endAt = 0,
     this.allDay = false,
     this.location,
+    this.link,
+    this.appId,
   });
 
   factory SpaceEvent.fromJson(Map<String, dynamic> j) => SpaceEvent(
@@ -70,7 +78,21 @@ class SpaceEvent {
     endAt: (j['end_at'] as num?)?.toInt() ?? 0,
     allDay: j['all_day'] as bool? ?? false,
     location: j['location'] as String?,
+    link: (j['link'] as String?)?.trim().isEmpty ?? true
+        ? null
+        : j['link'] as String?,
+    appId: j['app_id'] as String?,
   );
+
+  /// App id the link points at, derived from the route when `app_id` is absent.
+  String? get linkAppId {
+    if (appId != null && appId!.isNotEmpty) return appId;
+    final l = link;
+    if (l == null || !l.startsWith('/space/app/')) return null;
+    final rest = l.substring('/space/app/'.length);
+    final id = rest.split(RegExp(r'[/?#]')).first;
+    return id.isEmpty ? null : id;
+  }
 
   DateTime get start => DateTime.fromMillisecondsSinceEpoch(startAt);
 }

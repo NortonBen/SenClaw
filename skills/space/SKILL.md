@@ -1,7 +1,7 @@
 ---
 name: space
-description: Personal productivity tools — manage notes and email via the Space MCP server. For calendar events see the "calendar" skill; for recurring schedules see the "schedule" skill.
-version: 1.1.0
+description: Personal productivity tools — manage notes via the Space MCP server, and email via the Email Space App's `email-mcp` server. For calendar events see the "calendar" skill; for recurring schedules see the "schedule" skill.
+version: 1.2.0
 when-to-use: When the user wants to manage notes (create, search, tag, organize) or email (check inbox, read, compose, search). For calendar events and reminders use the "calendar" skill; for recurring scheduled tasks use the "schedule" skill.
 triggers:
   # --- Notes (Vietnamese) ---
@@ -65,10 +65,14 @@ The Space feature gives you a personal productivity layer. This skill covers **n
 - **calendar** — event management, reminders, conflict detection, schedule organization
 - **schedule** — recurring agent tasks with Agent/DAG/Plan modes
 
-All tools register as `space_<verb>` on the `senclaw-space` MCP server. Call them by the
+**Notes** tools register as `space_<verb>` on the `senclaw-space` MCP server. Call them by the
 **canonical bridge name** `mcp__space__<verb>` — the resolver strips the redundant `space_`
 prefix once (e.g. `space_note_create` → `mcp__space__note_create`). The bare `space_<verb>(...)`
 notation used below maps to the same tool.
+
+**Email** is NOT on the space server — there are no `space_email_*` / `mcp__space__email_*`
+tools. Email lives in the Email Space App, MCP server `email-mcp`, full tool names
+`mcp__email-mcp__email_*` (see the Email section below).
 
 ## Required Tool Discovery
 
@@ -88,6 +92,10 @@ Only tell the user the item was created after the concrete tool call returns a s
 ---
 
 ## Notes
+
+> **User defaults**: if the system prompt carries a `## User defaults` block naming a
+> different default note store (`wiki_write` / `memory_save`), plain note requests go
+> there instead of `space_note_create`.
 
 ### Create a note
 ```
@@ -122,39 +130,50 @@ space_note_delete(id)
 
 ## Email
 
+Email is served by the **Email Space App** (MCP server `email-mcp`). Discover the tools first:
+
+```
+ToolSearch { query: "select:mcp__email-mcp__email_inbox,mcp__email-mcp__email_compose" }
+```
+
+If the exact select misses, search keywords `email compose` and use the returned names.
+There is a dedicated `email-reporting` skill installed by the Email App — prefer it for
+report/digest flows.
+
 ### Inbox
 ```
-space_email_inbox(account_id?, limit?)
+mcp__email-mcp__email_inbox(account_id?, folder?, limit?)
 ```
-Returns a list of recent messages with subject, sender, and flags.
+Returns recent cached messages with subject, sender, and flags. `folder`: `INBOX` (default) or `Sent`.
 
 ### Read a message
 ```
-space_email_read(message_id)
+mcp__email-mcp__email_read(message_id)
 ```
 Returns full message with body text.
 
 ### Compose and send
 ```
-space_email_compose(to, subject, body, account_id?)
+mcp__email-mcp__email_compose(to?, subject, body, account_id?)
 ```
-**Always draft and show to user before calling this tool.**
-Workflow:
-1. Draft the email body yourself
-2. Show it to the user: *"Đây là bản nháp email:"*
-3. Wait for confirmation ("gửi đi" / "send it")
-4. Only then call `space_email_compose`
+- `to` is **optional**: omitted/empty → the mail goes to the account's own address
+  (self-report). Accepts several addresses separated by commas, and `"Name <a@b.c>"`.
+- **Automated/scheduled runs**: generate subject/body from the task context and send
+  immediately — never ask for confirmation and never wait for user input.
+- **Interactive sends to a third party**: show the draft and confirm first
+  (*"Đây là bản nháp email:"* → wait for "gửi đi" / "send it").
+- "Gửi cho tôi" / "send me the report" → just send with `to` omitted, no confirmation.
 
 ### Search email
 ```
-space_email_search(query, account_id?, limit?)
+mcp__email-mcp__email_search(query, account_id?, limit?)
 ```
 
 ### Email summary
 ```
-space_email_summary(message_id)
+mcp__email-mcp__email_summary(message_id)
 ```
-Returns a structured summary (subject, sender, key points, action items).
+Returns the body plus a summarization instruction (key points, action items, sentiment).
 
 ---
 
@@ -186,17 +205,18 @@ All sync tools require an OAuth2 token. They are stubs — return instructions f
 | "xoá ghi chú" / "delete note" | `space_note_delete(id)` |
 | "gắn tag" / "add tag" | `space_note_update(id, tags: [...])` |
 
-### Email
+### Email (server `email-mcp`, tools `mcp__email-mcp__email_*`)
 | User says | Tool & parameters |
 |-----------|-------------------|
-| "kiểm tra mail" / "check email" / "có mail mới không?" | `space_email_inbox()` |
-| "đọc email từ X" / "read email from X" | `space_email_inbox()` → find → `space_email_read(message_id)` |
-| "viết email cho X" / "soạn email" / "compose email" | Draft → show → confirm → `space_email_compose` |
-| "trả lời email này" / "reply to this email" | Draft reply → show → confirm → `space_email_compose` |
-| "gửi email" / "send email" | `space_email_compose(to, subject, body)` — confirm first! |
-| "tìm email về X" / "search email about X" | `space_email_search(query)` |
-| "tóm tắt email" / "summarize email" | `space_email_summary(message_id)` |
-| "có email quan trọng không?" / "any important emails?" | `space_email_inbox()` → highlight flagged/urgent |
+| "kiểm tra mail" / "check email" / "có mail mới không?" | `email_inbox()` |
+| "đọc email từ X" / "read email from X" | `email_inbox()` → find → `email_read(message_id)` |
+| "viết email cho X" / "soạn email" / "compose email" | Draft → show → confirm → `email_compose` |
+| "trả lời email này" / "reply to this email" | Draft reply → show → confirm → `email_compose` |
+| "gửi email cho tôi" / báo cáo tự động / scheduled report | `email_compose(subject, body)` — omit `to` (self), send ngay, không hỏi |
+| "gửi email" / "send email" (người nhận khác) | `email_compose(to, subject, body)` — confirm khi chat trực tiếp |
+| "tìm email về X" / "search email about X" | `email_search(query)` |
+| "tóm tắt email" / "summarize email" | `email_summary(message_id)` |
+| "có email quan trọng không?" / "any important emails?" | `email_inbox()` → highlight flagged/urgent |
 
 ### Sync
 | User says | Tool & parameters |

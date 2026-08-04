@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     response::{Json, Response},
 };
 use axum_extra::extract::Multipart;
@@ -103,7 +103,7 @@ fn read_space_app_manifest_from_zip(zip_bytes: &[u8]) -> Result<serde_json::Valu
     ))
 }
 
-fn content_type_for(path: &Path) -> &'static str {
+pub(crate) fn content_type_for(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "html" => "text/html; charset=utf-8",
         "js" | "mjs" => "text/javascript; charset=utf-8",
@@ -392,7 +392,8 @@ pub(crate) async fn space_events_list(
         .with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, title, description, start_at, end_at, all_day,
-                        location, color, reminder_min, source, status, renotify_min
+                        location, color, reminder_min, source, status, renotify_min,
+                        link, app_id
                  FROM space_events
                  WHERE deleted_at IS NULL AND start_at >= ?1 AND start_at <= ?2
                  ORDER BY start_at ASC",
@@ -412,6 +413,8 @@ pub(crate) async fn space_events_list(
                         "source":       row.get::<_,String>(9)?,
                         "status":       row.get::<_,Option<String>>(10)?.unwrap_or_else(|| "upcoming".into()),
                         "renotify_min": row.get::<_,Option<i64>>(11)?,
+                        "link":         row.get::<_,Option<String>>(12)?,
+                        "app_id":       row.get::<_,Option<String>>(13)?,
                     }))
                 })?
                 .filter_map(|r| r.ok())
@@ -421,6 +424,54 @@ pub(crate) async fn space_events_list(
         .map_err(internal)?;
 
     Ok(Json(serde_json::to_value(rows).unwrap_or_default()))
+}
+
+/// One event by id.
+///
+/// Exists so a reminder — which arrives over WS carrying only the event id —
+/// can resolve the event's current `link` at the moment the user acts on it,
+/// rather than trusting a field copied into a notification payload that may be
+/// hours old.
+pub(crate) async fn space_events_get(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = db(&s)?;
+    let row: Option<serde_json::Value> = db
+        .with_conn(|conn| {
+            use rusqlite::OptionalExtension;
+            let mut stmt = conn.prepare(
+                "SELECT id, title, description, start_at, end_at, all_day,
+                        location, color, reminder_min, source, status, renotify_min,
+                        link, app_id
+                 FROM space_events WHERE id = ?1 AND deleted_at IS NULL",
+            )?;
+            let row = stmt
+                .query_row(params![id], |row| {
+                    Ok(serde_json::json!({
+                        "id":           row.get::<_,String>(0)?,
+                        "title":        row.get::<_,String>(1)?,
+                        "description":  row.get::<_,Option<String>>(2)?,
+                        "start_at":     row.get::<_,i64>(3)?,
+                        "end_at":       row.get::<_,i64>(4)?,
+                        "all_day":      row.get::<_,i32>(5)? != 0,
+                        "location":     row.get::<_,Option<String>>(6)?,
+                        "color":        row.get::<_,Option<String>>(7)?,
+                        "reminder_min": row.get::<_,Option<i64>>(8)?,
+                        "source":       row.get::<_,String>(9)?,
+                        "status":       row.get::<_,Option<String>>(10)?.unwrap_or_else(|| "upcoming".into()),
+                        "renotify_min": row.get::<_,Option<i64>>(11)?,
+                        "link":         row.get::<_,Option<String>>(12)?,
+                        "app_id":       row.get::<_,Option<String>>(13)?,
+                    }))
+                })
+                .optional()?;
+            Ok(row)
+        })
+        .map_err(internal)?;
+
+    row.map(Json)
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "event not found".into()))
 }
 
 #[derive(Deserialize)]
@@ -436,6 +487,10 @@ pub(crate) struct EventCreateBody {
     reminder_min: Option<i64>,
     renotify_min: Option<i64>,
     color: Option<String>,
+    /// Where "open this event" should go — an internal Space-App route.
+    /// Rejected unless it passes [`crate::mcp::space_server::sanitize_event_link`].
+    link: Option<String>,
+    app_id: Option<String>,
     /// Group + jid required to schedule a reminder task
     group_folder: Option<String>,
     chat_jid: Option<String>,
@@ -461,6 +516,8 @@ pub(crate) async fn space_events_create(
         b.reminder_min,
         b.renotify_min,
         b.color,
+        b.link,
+        b.app_id,
         b.group_folder.as_deref().unwrap_or("default"),
         b.chat_jid.as_deref().unwrap_or(""),
     );
@@ -486,6 +543,10 @@ pub(crate) struct EventUpdateBody {
     #[serde(default)]
     all_day: Option<bool>,
     #[serde(default)]
+    link: Option<String>,
+    #[serde(default)]
+    app_id: Option<String>,
+    #[serde(default)]
     reset_reminder: Option<bool>,
 }
 
@@ -495,6 +556,15 @@ pub(crate) async fn space_events_update(
     Json(b): Json<EventUpdateBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let db = db(&s)?;
+    let link = match b
+        .link
+        .as_deref()
+        .map(crate::mcp::space_server::sanitize_event_link)
+    {
+        Some(Err(e)) => return Err(AppError(StatusCode::BAD_REQUEST, e)),
+        Some(Ok(v)) => Some(v),
+        None => None,
+    };
     db.with_conn(|conn| {
         let now_ms = chrono::Utc::now().timestamp_millis();
         if let Some(v) = &b.title {
@@ -531,6 +601,12 @@ pub(crate) async fn space_events_update(
         }
         if let Some(v) = b.all_day {
             conn.execute("UPDATE space_events SET all_day=?1 WHERE id=?2", params![v as i32, id])?;
+        }
+        if link.is_some() {
+            conn.execute("UPDATE space_events SET link=?1 WHERE id=?2", params![link, id])?;
+        }
+        if b.app_id.is_some() {
+            conn.execute("UPDATE space_events SET app_id=?1 WHERE id=?2", params![b.app_id, id])?;
         }
         if b.reset_reminder.unwrap_or(false) {
             conn.execute(
@@ -910,7 +986,7 @@ pub(crate) async fn space_apps_register_local(
 pub(crate) async fn space_apps_install_zip(
     State(s): State<Arc<UiState>>,
     mut multipart: Multipart,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     let mut zip_bytes: Option<Vec<u8>> = None;
     // Optional text fields carrying install provenance (slug/version/…) so a
     // later update-check can resolve the source package. The file may arrive
@@ -958,19 +1034,58 @@ pub(crate) async fn space_apps_install_zip(
             })
     });
 
-    let out = install_app_from_zip(s.clone(), zip_bytes, origin).await?;
-    Ok(Json(out))
+    // Uploads carry `force=true` as a multipart field, so overriding a blocking
+    // scan is an explicit act by whoever submitted the form.
+    let force = fields
+        .get("force")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    let out = install_app_from_zip(s.clone(), zip_bytes, origin, force).await?;
+    Ok(out.into_response())
 }
 
 /// Extract a Space App zip, register it (skills / MCP / launch) and persist it —
 /// the shared core of first-time install and update. When `origin` is given it
 /// is stamped into the stored manifest as `hub` provenance, so a later
 /// update-check can resolve the source package and installed version.
+/// Outcome of a Space App install. `Blocked` is a value rather than an error
+/// string so the Web UI receives the findings as data and can offer a reviewed
+/// override instead of showing a wall of text in a toast.
+pub(crate) enum AppInstallOutcome {
+    Installed(serde_json::Value),
+    Blocked(crate::security::ScanReport),
+}
+
+impl AppInstallOutcome {
+    /// Render as an HTTP response: 200 with the app, or 422 with the report.
+    pub(crate) fn into_response(self) -> axum::response::Response {
+        use axum::response::IntoResponse as _;
+        match self {
+            AppInstallOutcome::Installed(v) => Json(v).into_response(),
+            AppInstallOutcome::Blocked(report) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "success": false,
+                    "blocked": true,
+                    "error": format!(
+                        "Blocked by the pre-install security scan (risk {}/100). \
+                         Nothing was installed and the extracted files were removed.",
+                        report.risk_score()
+                    ),
+                    "scan": report,
+                })),
+            )
+                .into_response(),
+        }
+    }
+}
+
 pub(crate) async fn install_app_from_zip(
     s: Arc<UiState>,
     zip_bytes: Vec<u8>,
     origin: Option<crate::marketplace::app_update::HubOrigin>,
-) -> Result<serde_json::Value, AppError> {
+    force: bool,
+) -> Result<AppInstallOutcome, AppError> {
     if zip_bytes.len() > 50 * 1024 * 1024 {
         return Err(AppError(
             StatusCode::BAD_REQUEST,
@@ -1058,6 +1173,44 @@ pub(crate) async fn install_app_from_zip(
         }
     }
 
+    // ── Pre-install security gate ────────────────────────────────────────────
+    // This is the last point where nothing from the package has run. The very
+    // next steps record the app and call `try_autoregister_app_mcp`, which
+    // executes `runtime.start` through `sh -c` and spawns the declared MCP
+    // command. Scan the extracted tree *and* the manifest here, and on a
+    // blocking verdict remove the directory so nothing is left staged.
+    let policy = crate::security::ScanPolicy::from_config(&s.config);
+    let scan = if policy.enabled {
+        let target_for_scan = target.clone();
+        let manifest_for_scan = manifest.clone();
+        let app_id_for_scan = app_id.clone();
+        let report = tokio::task::spawn_blocking(move || {
+            crate::security::scan_space_app(&target_for_scan, &manifest_for_scan, &app_id_for_scan)
+        })
+        .await
+        .map_err(internal)?;
+
+        if report.verdict(&policy) == crate::security::scan::Verdict::Block && !force {
+            let _ = tokio::fs::remove_dir_all(&target).await;
+            tracing::warn!(
+                "[space] blocked install of '{app_id}' (risk {}/100):\n{}",
+                report.risk_score(),
+                report.summary()
+            );
+            return Ok(AppInstallOutcome::Blocked(report));
+        }
+        if !report.findings.is_empty() {
+            tracing::warn!(
+                "[space] pre-install scan of '{app_id}' (risk {}/100, forced={force}):\n{}",
+                report.risk_score(),
+                report.summary()
+            );
+        }
+        Some(report)
+    } else {
+        None
+    };
+
     let now = now_ms();
     let manifest_str = serde_json::to_string(&manifest).unwrap_or_default();
     let db = db(&s)?;
@@ -1074,12 +1227,15 @@ pub(crate) async fn install_app_from_zip(
     // Auto-register the app's declared MCP server (launch + register) if any.
     try_autoregister_app_mcp(&s, &app_id, &manifest).await;
 
-    Ok(serde_json::json!({
+    Ok(AppInstallOutcome::Installed(serde_json::json!({
         "id": app_id,
         "manifest": manifest,
         "enabled": true,
         "installed_at": now,
-    }))
+        // Present even on success: a Warn verdict installs and still has
+        // findings the user needs to see.
+        "scan": scan,
+    })))
 }
 
 /// GET `/api/space/apps/updates` — check every hub-installed app against the
@@ -1113,8 +1269,9 @@ pub(crate) async fn space_apps_updates(
 pub(crate) async fn space_apps_update(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     use crate::marketplace::{app_update, publish, registry};
+    use axum::response::IntoResponse as _;
 
     let db = db(&s)?;
     let manifest: serde_json::Value = db
@@ -1149,7 +1306,8 @@ pub(crate) async fn space_apps_update(
             "updated": false,
             "installed": origin.version,
             "latest": ver.version,
-        })));
+        }))
+        .into_response());
     }
 
     let host = publish::host_platform();
@@ -1167,7 +1325,15 @@ pub(crate) async fn space_apps_update(
         integrity: dist.integrity.clone(),
         installed_at: Some(now_ms()),
     };
-    let app = install_app_from_zip(s.clone(), bytes, Some(new_origin)).await?;
+    // `force: false` — an update is fresh untrusted code from the hub, and a
+    // package that was benign at v1 is exactly how a supply-chain compromise
+    // arrives. Being already installed earns no exemption.
+    let app = match install_app_from_zip(s.clone(), bytes, Some(new_origin), false).await? {
+        // A blocked update leaves the previously installed version untouched —
+        // the extracted files are already removed at this point.
+        blocked @ AppInstallOutcome::Blocked(_) => return Ok(blocked.into_response()),
+        AppInstallOutcome::Installed(v) => v,
+    };
 
     Ok(Json(serde_json::json!({
         "id": id,
@@ -1175,7 +1341,8 @@ pub(crate) async fn space_apps_update(
         "from": origin.version,
         "latest": ver.version,
         "app": app,
-    })))
+    }))
+    .into_response())
 }
 
 pub(crate) async fn space_apps_delete(
@@ -1211,6 +1378,10 @@ pub(crate) async fn space_apps_delete(
     // unregister its MCP server.
     super::space_skills::remove_app_skills(&s.config, &id);
     super::space_personas::remove_app_personas(&s.config, &id);
+    // Drop the app's imported tool aliases (Plugins → Alias) and refresh the
+    // in-process registry so they stop resolving immediately.
+    let _ = db.delete_tool_aliases_by_source(&crate::db::tool_aliases::app_source(&id));
+    crate::tools::tool_alias::reload_from_db(&db);
     if let Some(launcher) = s.space_mcp_launcher.as_ref() {
         launcher.stop_app(&id).await;
     }
@@ -1346,7 +1517,10 @@ pub(crate) async fn space_screenshot_get(
     // Belt-and-braces after the name check: canonicalize resolves symlinks, so a
     // planted link inside the dir can't escape it either.
     if !canonical_path.starts_with(&canonical_root) || !canonical_path.is_file() {
-        return Err(AppError(StatusCode::NOT_FOUND, "Screenshot not found".into()));
+        return Err(AppError(
+            StatusCode::NOT_FOUND,
+            "Screenshot not found".into(),
+        ));
     }
     let bytes = tokio::fs::read(&canonical_path).await.map_err(internal)?;
     Ok(Response::builder()
@@ -1389,7 +1563,10 @@ pub(crate) async fn space_screenshot_extract(
         .canonicalize()
         .map_err(|_| AppError(StatusCode::NOT_FOUND, "Screenshot not found".into()))?;
     if !path.starts_with(&root) || !path.is_file() {
-        return Err(AppError(StatusCode::NOT_FOUND, "Screenshot not found".into()));
+        return Err(AppError(
+            StatusCode::NOT_FOUND,
+            "Screenshot not found".into(),
+        ));
     }
     let bytes = tokio::fs::read(&path).await.map_err(internal)?;
 
@@ -1404,7 +1581,7 @@ notes: chi tiết hỗ trợ ngắn, hoặc chuỗi rỗng. Không thêm chữ n
         .map_err(|e| AppError(StatusCode::BAD_REQUEST, e))?;
     let (raw, via) = if crate::zen_core::vision::infer_vision(&model) {
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        let (answer, _m, _f) = super::llm_config::chat_completion_vision(
+        let r = super::llm_config::chat_completion_vision(
             cfg_path,
             None,
             system,
@@ -1415,7 +1592,8 @@ notes: chi tiết hỗ trợ ngắn, hoặc chuỗi rỗng. Không thêm chữ n
         )
         .await
         .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
-        (answer, "vision")
+        super::llm_config::record_completion(&s.usage_recorder, "web:screenshot-note", "", &r);
+        (r.text, "vision")
     } else {
         // No vision — OCR the image, feed the text to a plain completion.
         let text = super::ocr::ocr_text_from_bytes(&s, bytes)
@@ -1429,14 +1607,13 @@ sẵn sàng. Chọn model có vision trong Settings → Models, hoặc cài OCR.
                     .into(),
             ));
         };
-        let user = format!(
-            "Văn bản trích từ ảnh chụp màn hình:\n\n{text}\n\nTrích tiêu đề và ghi chú."
-        );
-        let (answer, _m, _f) =
-            super::llm_config::chat_completion(cfg_path, None, system, &user, 400)
-                .await
-                .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
-        (answer, "ocr")
+        let user =
+            format!("Văn bản trích từ ảnh chụp màn hình:\n\n{text}\n\nTrích tiêu đề và ghi chú.");
+        let r = super::llm_config::chat_completion(cfg_path, None, system, &user, 400)
+            .await
+            .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
+        super::llm_config::record_completion(&s.usage_recorder, "web:screenshot-note", "", &r);
+        (r.text, "ocr")
     };
 
     let (title, notes) = parse_title_notes(&raw);
@@ -1550,6 +1727,7 @@ pub(crate) async fn space_apps_bridge(
             "capabilities": [
                 "llm.request", "agent.run", "mcp.call", "space.rest",
                 "knowledge.save", "knowledge.search", "knowledge.recall",
+                "usage.report",
             ],
             "status": "available",
         }))),
@@ -1560,7 +1738,10 @@ pub(crate) async fn space_apps_bridge(
             let payload = b.payload.clone().unwrap_or_default();
             let prompt = payload.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
             if prompt.trim().is_empty() {
-                return Err(AppError(StatusCode::BAD_REQUEST, "prompt is required".into()));
+                return Err(AppError(
+                    StatusCode::BAD_REQUEST,
+                    "prompt is required".into(),
+                ));
             }
             let Some(pool) = s.virtual_worker_pool.clone() else {
                 return Ok(Json(serde_json::json!({
@@ -1630,8 +1811,12 @@ pub(crate) async fn space_apps_bridge(
                 )
                 .await
             {
+                // No usage row is recorded HERE — the virtual pool already
+                // recorded each underlying LLM call (anti-double-count rule);
+                // the totals just ride back to the app.
                 Ok(r) => Ok(Json(serde_json::json!({
                     "appId": id, "status": "ok", "text": r.result, "durationMs": r.duration_ms,
+                    "usage": {"inputTokens": r.tokens_in, "outputTokens": r.tokens_out},
                 }))),
                 Err(e) => Ok(Json(serde_json::json!({
                     "appId": id, "status": "error", "message": e.to_string(),
@@ -1648,7 +1833,10 @@ pub(crate) async fn space_apps_bridge(
                 .unwrap_or("")
                 .to_string();
             if prompt.trim().is_empty() {
-                return Err(AppError(StatusCode::BAD_REQUEST, "prompt is required".into()));
+                return Err(AppError(
+                    StatusCode::BAD_REQUEST,
+                    "prompt is required".into(),
+                ));
             }
             let system = payload
                 .get("system")
@@ -1676,14 +1864,78 @@ pub(crate) async fn space_apps_bridge(
             )
             .await
             {
-                Ok((text, model, finish)) => Ok(Json(serde_json::json!({
-                    "appId": id, "status": "ok", "text": text, "model": model,
-                    "finish": finish,
-                }))),
+                Ok(r) => {
+                    super::llm_config::record_completion(
+                        &s.usage_recorder,
+                        &format!("app:{id}"),
+                        &id,
+                        &r,
+                    );
+                    // `usage` is null when the provider reported none (apps
+                    // fall back to their own estimates then). inputTokens is
+                    // the total billed input (cache included); the cache
+                    // fields break it down for providers that report them.
+                    let usage_json = r.usage.as_ref().map(|u| {
+                        serde_json::json!({
+                            "inputTokens": u.input(),
+                            "outputTokens": u.output(),
+                            "cacheReadTokens": u.cache_read_input_tokens.unwrap_or(0),
+                            "cacheCreationTokens": u.cache_creation_input_tokens.unwrap_or(0),
+                        })
+                    });
+                    Ok(Json(serde_json::json!({
+                        "appId": id, "status": "ok", "text": r.text, "model": r.model,
+                        "finish": r.finish, "usage": usage_json,
+                    })))
+                }
                 Err(e) => Ok(Json(serde_json::json!({
                     "appId": id, "status": "error", "message": e,
                 }))),
             }
+        }
+        // A Space App that calls a provider directly (rule-engine, video-cloner)
+        // reports its own token usage here so the daemon's accounting stays
+        // complete. Payload: { model, provider?, inputTokens, outputTokens,
+        // cacheReadTokens?, cacheCreationTokens?, latencyMs?, estimated? }.
+        "usage.report" => {
+            let payload = b.payload.clone().unwrap_or_default();
+            let model = payload
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let get_u64 = |k: &str| payload.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+            let input_tokens = get_u64("inputTokens");
+            let output_tokens = get_u64("outputTokens");
+            if model.is_empty() || (input_tokens == 0 && output_tokens == 0) {
+                return Err(AppError(
+                    StatusCode::BAD_REQUEST,
+                    "model and non-zero inputTokens/outputTokens are required".into(),
+                ));
+            }
+            if let Some(rec) = &s.usage_recorder {
+                rec.record(crate::usage::UsageEvent {
+                    jid: format!("app:{id}"),
+                    app_id: id.clone(),
+                    provider: payload
+                        .get("provider")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    model,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens: get_u64("cacheReadTokens"),
+                    cache_creation_tokens: get_u64("cacheCreationTokens"),
+                    latency_ms: get_u64("latencyMs"),
+                    estimated: payload
+                        .get("estimated")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    ..crate::usage::UsageEvent::new(crate::usage::UsageSource::AppDirect)
+                });
+            }
+            Ok(Json(serde_json::json!({ "appId": id, "status": "ok" })))
         }
         // Knowledge-space bridge: each Space App (and each of its internal
         // agents) can keep isolated memories. `space` defaults to the app id
@@ -1746,7 +1998,10 @@ pub(crate) async fn space_apps_bridge(
             let payload = b.payload.clone().unwrap_or_default();
             let query = payload.get("query").and_then(|v| v.as_str()).unwrap_or("");
             if query.trim().is_empty() {
-                return Err(AppError(StatusCode::BAD_REQUEST, "query is required".into()));
+                return Err(AppError(
+                    StatusCode::BAD_REQUEST,
+                    "query is required".into(),
+                ));
             }
             let Some(sys) = crate::memory::cognitive::try_get_instance() else {
                 return Ok(Json(serde_json::json!({
@@ -2405,12 +2660,9 @@ pub(crate) async fn space_sync_google_workspace(
         ));
     }
 
-    let services = b.services.unwrap_or_else(|| {
-        vec![
-            "calendar".to_string(),
-            "notes".to_string(),
-        ]
-    });
+    let services = b
+        .services
+        .unwrap_or_else(|| vec!["calendar".to_string(), "notes".to_string()]);
     let days = b.days.unwrap_or(7);
     let db_arc =
         s.db.clone()
@@ -2617,7 +2869,10 @@ mod parse_title_notes_tests {
         let raw = "```json\n{\"title\": \"Tạo giftcode 15k mốc cược 150k\", \"notes\": \"Khách yêu cầu tạo loại 15k cho mốc cược 150k, thêm code vip mốc 10m, mỗi đợt tạo là dùng đượ";
         let (t, n) = parse_title_notes(raw);
         assert_eq!(t, "Tạo giftcode 15k mốc cược 150k");
-        assert!(n.starts_with("Khách yêu cầu"), "notes salvaged partial: {n:?}");
+        assert!(
+            n.starts_with("Khách yêu cầu"),
+            "notes salvaged partial: {n:?}"
+        );
         assert!(!t.starts_with("```"), "must never surface the fence");
     }
 

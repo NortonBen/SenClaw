@@ -8,7 +8,7 @@ import {
   PlusOutlined, DeleteOutlined, BellOutlined, LeftOutlined, RightOutlined,
   EnvironmentOutlined, ClockCircleOutlined, EditOutlined, CloseOutlined,
   ReloadOutlined, CalendarOutlined, CheckCircleOutlined, SyncOutlined,
-  MinusCircleOutlined,
+  MinusCircleOutlined, ExportOutlined,
 } from '@ant-design/icons';
 import type { SpaceEvent, UseSpaceHook } from '../../../hooks/useSpace';
 import { useAppContext } from '../../../contexts/AppContext';
@@ -229,9 +229,23 @@ function EventDetailDrawer({ event, onClose, onEdit, onDelete, token }: DetailDr
 
       {/* Actions */}
       <div
-        className="absolute bottom-0 left-0 right-0 flex gap-2 px-5 py-3 border-t"
+        className="absolute bottom-0 left-0 right-0 flex flex-col gap-2 px-5 py-3 border-t"
         style={{ borderColor: token.colorBorderSecondary, background: token.colorBgContainer }}
       >
+        {/* An event can carry an internal Space-App route (e.g. today's
+            lesson). The daemon refuses to store anything but a /space/app/…
+            path, so navigating here cannot leave the app. */}
+        {event.link && (
+          <Button
+            type="primary"
+            block
+            icon={<ExportOutlined />}
+            onClick={() => { onClose(); window.location.assign(event.link as string); }}
+          >
+            Mở {event.app_id ? `trong ${event.app_id}` : 'nội dung'}
+          </Button>
+        )}
+        <div className="flex gap-2">
         <Button
           icon={<EditOutlined />}
           onClick={() => { onClose(); onEdit(event); }}
@@ -251,6 +265,7 @@ function EventDetailDrawer({ event, onClose, onEdit, onDelete, token }: DetailDr
             Delete
           </Button>
         </Popconfirm>
+        </div>
       </div>
     </Drawer>
   );

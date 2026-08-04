@@ -11,6 +11,7 @@ import 'package:record/record.dart';
 import '../../core/transport/connection.dart';
 import '../../models/chat_message.dart';
 import '../../theme/tokens.dart';
+import '../space/event_link.dart';
 import 'audio_service.dart';
 import 'conversation_provider.dart';
 import 'groups_provider.dart';
@@ -116,10 +117,40 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
   bool _awaitingVoiceReply = false;
   String? _spokenMsgId;
 
+  /// The event's "open this" route, fetched fresh when the dialog opens. Null
+  /// until resolved, and stays null when the event has no link.
+  String? _link;
+  String? _linkApp;
+
   @override
   void initState() {
     super.initState();
     _resolveChat();
+    _resolveLink();
+  }
+
+  /// Look the event up by id to find its current link.
+  ///
+  /// Deliberately not read from the WS notification payload: a reminder can
+  /// fire hours before the user acts on it, and the event may have been moved
+  /// or re-pointed since. Best-effort — a failure just hides the button.
+  Future<void> _resolveLink() async {
+    final id = widget.target.eventId;
+    if (id == null || id.isEmpty) return;
+    try {
+      final r = await ref
+          .read(apiClientProvider)
+          .get('/api/space/calendar/events/$id');
+      final m = r is Map ? r.cast<String, dynamic>() : const <String, dynamic>{};
+      final link = (m['link'] as String?)?.trim();
+      if (!mounted || !isInternalAppLink(link)) return;
+      setState(() {
+        _link = link;
+        _linkApp = (m['app_id'] as String?) ?? appIdOfLink(link!);
+      });
+    } catch (_) {
+      // No link shown; the rest of the dialog still works.
+    }
   }
 
   Future<void> _resolveChat() async {
@@ -471,6 +502,26 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
         spacing: AppTokens.s8,
         runSpacing: AppTokens.s6,
         children: [
+          // When the event points at a Space-App screen (today's lesson, a
+          // board), the first thing to offer is opening it — that is what the
+          // reminder is FOR. Resolved from the event itself rather than from
+          // the notification payload, so a rescheduled or re-pointed event
+          // opens the right thing.
+          if (_link != null)
+            ActionChip(
+              avatar: Icon(Icons.open_in_new, size: 14, color: c.accent),
+              label: Text('Mở ${_linkApp ?? 'nội dung'}',
+                  style: const TextStyle(fontSize: 12)),
+              onPressed: () async {
+                final err = await openEventLink(context, ref, _link);
+                if (err == null) {
+                  _close();
+                } else if (mounted) {
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(SnackBar(content: Text(err)));
+                }
+              },
+            ),
           for (final (label, prompt) in chips)
             ActionChip(
               label: Text(label, style: const TextStyle(fontSize: 12)),

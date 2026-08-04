@@ -18,6 +18,15 @@ interface Props {
   app: SpaceAppRuntime;
 }
 
+/// Forward the outer page's query string (e.g. a chat deep link
+/// /space/app/drawio?d=3) into the app iframe so apps can open a specific
+/// resource. Apps ignore params they don't know.
+function withOuterQuery(base: string): string {
+  const outer = window.location.search.replace(/^\?/, '');
+  if (!outer) return base;
+  return `${base}${base.includes('?') ? '&' : '?'}${outer}`;
+}
+
 export function SpaceAppFrame({ app }: Props) {
   const { token } = theme.useToken();
   const { isDarkMode } = useAppContext();
@@ -114,7 +123,7 @@ export function SpaceAppFrame({ app }: Props) {
         <Button size="small" icon={<ReloadOutlined />} onClick={() => {
           if (iframeRef.current) {
             setLoaded(false);
-            iframeRef.current.src = app.integration.url;
+            iframeRef.current.src = withOuterQuery(app.integration.url);
           }
         }}>
           Reload
@@ -133,7 +142,7 @@ export function SpaceAppFrame({ app }: Props) {
         <iframe
           ref={iframeRef}
           title={app.name}
-          src={app.integration.url === '/' ? `/api/space/apps/${app.id}/proxy/` : app.integration.url}
+          src={withOuterQuery(app.integration.url === '/' ? `/api/space/apps/${app.id}/proxy/` : app.integration.url)}
           onLoad={() => { setLoaded(true); sendInit(); }}
           sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
           style={{

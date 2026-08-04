@@ -27,6 +27,13 @@ export interface SpaceEvent {
   /** 'upcoming' | 'ongoing' | 'done' | 'cancelled' */
   status: string;
   source: string;
+  /**
+   * Internal Space-App route to open from this event, e.g.
+   * `/space/app/study?session=abc`. The daemon rejects anything that is not a
+   * `/space/app/…` path, so this is safe to navigate to directly.
+   */
+  link?: string | null;
+  app_id?: string | null;
 }
 
 export type AgentModeType = 'agent' | 'dag' | 'plan';
