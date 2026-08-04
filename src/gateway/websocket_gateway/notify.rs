@@ -123,7 +123,10 @@ impl WebSocketGateway {
                 "promptTokens": usage.usage.prompt_tokens,
             },
         });
-        self.broadcast_to_all(&payload).await;
+        // Subscription-filtered like `agent:reply` — this used to be
+        // broadcast_to_all, which leaked every agent's context-gauge to every
+        // authenticated client regardless of what they were subscribed to.
+        self.broadcast(agent_jid, &payload).await;
     }
 
     pub async fn notify_permission_request(

@@ -32,6 +32,8 @@ enum Command {
         #[command(subcommand)]
         cmd: senclaw::cli::commands::marketplace::MarketplaceCmd,
     },
+    /// Security-scan a plugin directory or Space App zip without installing it
+    Scan(senclaw::cli::commands::scan::ScanCmd),
     /// Manage Feishu wiki
     Wiki {
         #[command(subcommand)]
@@ -130,6 +132,8 @@ enum Command {
     OcrServer,
     /// Start the sandboxed JavaScript executor MCP server (stdio JSON-RPC)
     JsServer,
+    /// Start the token-usage accounting MCP server (stdio JSON-RPC)
+    UsageServer,
     /// Internal: brush (rust-bash) sandbox child — reads a script from stdin,
     /// runs it in-process, writes output to <dir>/stdout|stderr, exits with the
     /// script's code. Spawned by the code REPL so the timeout is kill-enforced.
@@ -188,6 +192,7 @@ async fn main() -> Result<()> {
                 | Command::CognitiveServer
                 | Command::OcrServer
                 | Command::JsServer
+                | Command::UsageServer
                 | Command::BrushSandbox { .. }
                 | Command::KanbanServer
         )
@@ -218,6 +223,7 @@ async fn main() -> Result<()> {
         Command::Clawhub { cmd } => senclaw::cli::commands::clawhub::run(cmd).await,
         Command::Hub { cmd } => senclaw::cli::commands::hub::run(cmd).await,
         Command::Marketplace { cmd } => senclaw::cli::commands::marketplace::run(cmd).await,
+        Command::Scan(cmd) => senclaw::cli::commands::scan::run(cmd).await,
         Command::Wiki { cmd } => senclaw::cli::commands::wiki::run(cmd).await,
         Command::Channel { cmd } => senclaw::cli::commands::channel::run(cmd).await,
         Command::AgentTask(cmd) => senclaw::cli::commands::agent_task::run(cmd).await,
@@ -234,9 +240,9 @@ async fn main() -> Result<()> {
             pid,
             sha256,
             relaunch,
-        } => senclaw::cli::commands::distrib::run_apply_update(
-            staged, target, pid, sha256, relaunch,
-        ),
+        } => {
+            senclaw::cli::commands::distrib::run_apply_update(staged, target, pid, sha256, relaunch)
+        }
 
         // MCP servers
         Command::ScheduleServer => senclaw::mcp::schedule_server::run_stdio_server().await,
@@ -254,6 +260,7 @@ async fn main() -> Result<()> {
         Command::CognitiveServer => senclaw::mcp::cognitive_server::run_stdio_server().await,
         Command::OcrServer => senclaw::mcp::ocr_server::run_stdio_server().await,
         Command::JsServer => senclaw::mcp::js_server::run_stdio_server().await,
+        Command::UsageServer => senclaw::mcp::usage_server::run_stdio_server().await,
         Command::BrushSandbox { dir } => {
             senclaw::gateway::ui_server::bash_sandbox::child_main(&dir).await
         }

@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 
 use crate::config::Config;
-use crate::marketplace::manager::MarketplaceManager;
+use crate::marketplace::manager::{InstallOutcome, MarketplaceManager};
 use crate::marketplace::types::{MarketplaceSource, SourceType};
 
 #[derive(Subcommand, Debug)]
@@ -56,6 +56,10 @@ pub enum MarketplaceCmd {
         /// Source id or name; defaults to the only hub when there is just one
         #[arg(long)]
         source: Option<String>,
+        /// Install even when the pre-install security scan says to stop.
+        /// The scan still runs and its report is still printed.
+        #[arg(long)]
+        force: bool,
     },
     /// Remove a plugin installed from a hub
     Uninstall {
@@ -134,7 +138,9 @@ fn resolve_plugin_source(
         .collect();
     match hubs.as_slice() {
         [one] => Ok(one.clone()),
-        [] => anyhow::bail!("No hub source configured. Add one with `senclaw marketplace add <url>`."),
+        [] => {
+            anyhow::bail!("No hub source configured. Add one with `senclaw marketplace add <url>`.")
+        }
         _ => anyhow::bail!("Several hubs configured — pass --source <id|name>."),
     }
 }
@@ -244,9 +250,16 @@ fn run_blocking(cmd: MarketplaceCmd) -> Result<()> {
                     all.extend(info.plugins);
                     continue;
                 }
-                println!("{} ({})", info.source.name, type_label(info.source.source_type));
+                println!(
+                    "{} ({})",
+                    info.source.name,
+                    type_label(info.source.source_type)
+                );
                 if info.plugins.is_empty() {
-                    println!("  (nothing yet — try `senclaw marketplace sync {}`)", short_id(&s.id));
+                    println!(
+                        "  (nothing yet — try `senclaw marketplace sync {}`)",
+                        short_id(&s.id)
+                    );
                 }
                 for p in info.plugins {
                     let state = match (p.installed, p.enabled) {
@@ -267,10 +280,37 @@ fn run_blocking(cmd: MarketplaceCmd) -> Result<()> {
             }
         }
 
-        MarketplaceCmd::Install { plugin, source } => {
+        MarketplaceCmd::Install {
+            plugin,
+            source,
+            force,
+        } => {
             let s = resolve_plugin_source(&manager, source.as_deref())?;
-            let dir = manager.install_hub_plugin(&s.id, &plugin)?;
-            println!("Installed {plugin} from {} → {}", s.name, dir.display());
+            let policy =
+                crate::security::ScanPolicy::from_config(&crate::config::Config::from_env());
+            match manager.install_hub_plugin(&s.id, &plugin, policy, force)? {
+                InstallOutcome::Blocked { report, staged_dir } => {
+                    eprintln!("{}", report.summary());
+                    eprintln!();
+                    anyhow::bail!(
+                        "Refusing to install {plugin}: it failed the pre-install security scan. \
+                         Nothing was recorded or enabled. The clone is left at {} so you can \
+                         review it. To install anyway, re-run with --force.",
+                        staged_dir.display(),
+                    );
+                }
+                InstallOutcome::Installed { dir, scan } => {
+                    // Warn-level findings print on success too — an install that
+                    // turned up something is not the same as a clean one.
+                    if let Some(report) = &scan {
+                        if !report.findings.is_empty() {
+                            println!("{}", report.summary());
+                            println!();
+                        }
+                    }
+                    println!("Installed {plugin} from {} → {}", s.name, dir.display());
+                }
+            }
         }
 
         MarketplaceCmd::Uninstall { plugin, source } => {
@@ -345,10 +385,7 @@ mod tests {
             infer_type("https://hub-store.bacnd.com/marketplace.json"),
             SourceType::Hub
         );
-        assert_eq!(
-            infer_type("https://github.com/owner/repo"),
-            SourceType::Git
-        );
+        assert_eq!(infer_type("https://github.com/owner/repo"), SourceType::Git);
         assert_eq!(infer_type("git@github.com:owner/repo.git"), SourceType::Git);
         assert_eq!(infer_type("/srv/plugins"), SourceType::Local);
     }
@@ -356,7 +393,10 @@ mod tests {
     #[test]
     fn names_sources_after_their_origin() {
         assert_eq!(
-            default_name("https://hub-store.bacnd.com/marketplace.json", SourceType::Hub),
+            default_name(
+                "https://hub-store.bacnd.com/marketplace.json",
+                SourceType::Hub
+            ),
             "hub-store.bacnd.com"
         );
         assert_eq!(

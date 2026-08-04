@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Typography, Card, Button, Table, Space, Tag, message, Modal, Form, Input, Select, Spin, Switch, Empty, Tooltip } from 'antd';
 import { PlusOutlined, CloudDownloadOutlined, DeleteOutlined, ReloadOutlined, SearchOutlined, DownloadOutlined, ShopOutlined } from '@ant-design/icons';
 import { ClawHubSearchDialog } from './ClawHubSearchDialog';
+import ScanReportDialog, { readScanError, type ScanReport } from '../security/ScanReportDialog';
 
 const { Title, Text } = Typography;
 
@@ -339,6 +340,11 @@ function SourcePlugins({ source }: { source: MarketplaceSource }) {
   const [plugins, setPlugins] = useState<MarketplacePlugin[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [scanState, setScanState] = useState<{
+    report: ScanReport;
+    plugin: MarketplacePlugin;
+    blocked: boolean;
+  } | null>(null);
 
   const load = async () => {
     try {
@@ -372,8 +378,39 @@ function SourcePlugins({ source }: { source: MarketplaceSource }) {
     }
   };
 
-  const install = (p: MarketplacePlugin) =>
-    call(p.name, `/api/marketplace/sources/${source.id}/plugins/${encodeURIComponent(p.name)}/install`, 'POST');
+  /**
+   * Install, routing a scan verdict to the review dialog. A blocked install
+   * (422) opens the dialog with an override; a successful install that still
+   * produced findings opens it read-only.
+   */
+  const install = async (p: MarketplacePlugin, force = false) => {
+    const path =
+      `/api/marketplace/sources/${source.id}/plugins/${encodeURIComponent(p.name)}/install` +
+      (force ? '?force=true' : '');
+    try {
+      setBusy(p.name);
+      const res = await fetch(path, { method: 'POST' });
+      if (!res.ok) {
+        const { blocked, error, scan } = await readScanError(res);
+        if (blocked && scan) {
+          setScanState({ report: scan, plugin: p, blocked: true });
+          return;
+        }
+        throw new Error(error);
+      }
+      const body = await res.json();
+      if (body?.scan?.findings?.length) {
+        setScanState({ report: body.scan, plugin: p, blocked: false });
+      } else {
+        message.success(`Installed ${p.name}`);
+      }
+      await load();
+    } catch (error: any) {
+      message.error(`Install ${p.name} failed: ${error?.message ?? error}`);
+    } finally {
+      setBusy(null);
+    }
+  };
   const uninstall = (p: MarketplacePlugin) =>
     call(p.name, `/api/marketplace/sources/${source.id}/plugins/${encodeURIComponent(p.name)}`, 'DELETE');
   const toggle = (p: MarketplacePlugin) =>
@@ -444,6 +481,20 @@ function SourcePlugins({ source }: { source: MarketplaceSource }) {
           </Space>
         </div>
       ))}
+
+      <ScanReportDialog
+        open={!!scanState}
+        report={scanState?.report}
+        target={scanState?.plugin.name}
+        blocked={!!scanState?.blocked}
+        busy={busy === scanState?.plugin.name}
+        onCancel={() => setScanState(null)}
+        onForceInstall={() => {
+          const p = scanState?.plugin;
+          setScanState(null);
+          if (p) void install(p, true);
+        }}
+      />
     </Space>
   );
 }

@@ -18,6 +18,7 @@ import {
   LinkOutlined, SyncOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import { SpaceAppDetailModal, type DetailApp } from '../space/SpaceAppDetailModal';
+import ScanReportDialog, { readScanError, type ScanReport } from '../security/ScanReportDialog';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -44,6 +45,11 @@ export const SpaceAppsSettings: React.FC = () => {
   const [apps, setApps] = useState<SpaceAppRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [scanState, setScanState] = useState<{
+    report: ScanReport;
+    file: File;
+    blocked: boolean;
+  } | null>(null);
   const [registering, setRegistering] = useState(false);
   const [detailApp, setDetailApp] = useState<DetailApp | null>(null);
   const [updates, setUpdates] = useState<Record<string, UpdateStatus>>({});
@@ -107,14 +113,27 @@ export const SpaceAppsSettings: React.FC = () => {
     loadApps().then(() => checkUpdates());
   }, []);
 
-  const installZip = async (file: File) => {
+  const installZip = async (file: File, force = false) => {
     setInstalling(true);
     try {
       const formData = new FormData();
       formData.append('file', file);
+      if (force) formData.append('force', 'true');
       const res = await fetch('/api/space/apps/install-zip', { method: 'POST', body: formData });
-      if (!res.ok) throw new Error(await res.text());
-      message.success('Space App installed');
+      if (!res.ok) {
+        const { blocked, error, scan } = await readScanError(res);
+        if (blocked && scan) {
+          setScanState({ report: scan, file, blocked: true });
+          return;
+        }
+        throw new Error(error);
+      }
+      const row = (await res.json()) as { scan?: ScanReport };
+      if (row?.scan?.findings?.length) {
+        setScanState({ report: row.scan, file, blocked: false });
+      } else {
+        message.success('Space App installed');
+      }
       await loadApps();
     } catch (err) {
       message.error(err instanceof Error ? err.message : 'Install failed');
@@ -297,6 +316,19 @@ export const SpaceAppsSettings: React.FC = () => {
         app={detailApp}
         open={!!detailApp}
         onClose={() => setDetailApp(null)}
+      />
+
+      <ScanReportDialog
+        open={!!scanState}
+        report={scanState?.report}
+        blocked={!!scanState?.blocked}
+        busy={installing}
+        onCancel={() => setScanState(null)}
+        onForceInstall={() => {
+          const f = scanState?.file;
+          setScanState(null);
+          if (f) void installZip(f, true);
+        }}
       />
     </div>
   );

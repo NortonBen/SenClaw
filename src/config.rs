@@ -47,6 +47,58 @@ pub struct AgentConfig {
     pub max_messages_per_group: u32,
 }
 
+/// Trust boundaries that are cheap to get wrong and expensive to get wrong.
+/// Every field here defaults to the safe value; each override widens what
+/// untrusted input may do.
+#[derive(Debug, Clone)]
+pub struct SecurityConfig {
+    /// Let plugin-marketplace `hooks.json` files register `type: "command"`
+    /// hooks — i.e. arbitrary `sh -c` at agent lifecycle events, with daemon
+    /// privileges, from third-party code.
+    ///
+    /// Default **false**: a marketplace plugin's `command` string is never
+    /// inspected, so allowing it is a supply-chain RCE and a
+    /// restart-surviving persistence foothold. User-authored global and
+    /// workspace `hooks.json` are unaffected — they keep full Command support.
+    ///
+    /// Override: `SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS=true`.
+    /// See `docs/agent-security-hooks.md` §3.4(b) and §6.5.
+    pub allow_marketplace_command_hooks: bool,
+
+    /// Statically scan a marketplace plugin or Space App package before the
+    /// daemon executes anything it ships (`SENCLAW_SCAN_BEFORE_INSTALL`,
+    /// default **true**).
+    ///
+    /// Installing is not passive: a Space App's `runtime.start` is run through
+    /// `sh -c` the moment extraction finishes, and a plugin is enabled in the
+    /// same call that clones it. The scan is the only point where a human sees
+    /// those strings before they run.
+    pub scan_before_install: bool,
+
+    /// Lowest finding severity that refuses an install
+    /// (`SENCLAW_SCAN_BLOCK_LEVEL`, default `critical`).
+    ///
+    /// Findings below it are reported and the install proceeds. Raising this to
+    /// `high` also stops packages that merely declare an MCP server command;
+    /// that is a defensible posture for a shared host but noisy for a personal
+    /// one, which is why the default only stops the unambiguous cases.
+    pub scan_block_level: crate::security::scan::Severity,
+}
+
+/// Written out rather than derived: `#[derive(Default)]` would make
+/// `scan_before_install` false and silently turn the install gate off for any
+/// caller that used `..Default::default()`. A security default has to be
+/// stated, not inferred from the type.
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        SecurityConfig {
+            allow_marketplace_command_hooks: false,
+            scan_before_install: true,
+            scan_block_level: crate::security::scan::Severity::Critical,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SchedulerConfig {
     pub interval_sec: u64,
@@ -274,6 +326,7 @@ pub struct Config {
     pub telegram: TelegramConfig,
     pub admin: AdminConfig,
     pub agent: AgentConfig,
+    pub security: SecurityConfig,
     pub scheduler: SchedulerConfig,
     pub paths: PathsConfig,
     pub memory: MemoryConfig,
@@ -395,6 +448,17 @@ impl Config {
             agent: AgentConfig {
                 max_concurrent: env_int("MAX_CONCURRENT_AGENTS", 5),
                 max_messages_per_group: env_int("MAX_MESSAGES_PER_GROUP", 100),
+            },
+            security: SecurityConfig {
+                allow_marketplace_command_hooks: env_bool(
+                    "SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS",
+                    false,
+                ),
+                scan_before_install: env_bool("SENCLAW_SCAN_BEFORE_INSTALL", true),
+                scan_block_level: std::env::var("SENCLAW_SCAN_BLOCK_LEVEL")
+                    .ok()
+                    .and_then(|v| crate::security::scan::Severity::parse(&v))
+                    .unwrap_or(crate::security::scan::Severity::Critical),
             },
             scheduler: SchedulerConfig {
                 interval_sec: env_int("SCHEDULER_INTERVAL_SEC", 60),

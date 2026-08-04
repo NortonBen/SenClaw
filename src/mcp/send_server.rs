@@ -204,6 +204,17 @@ impl SendServer {
             return ToolResult::err(format!("{err}"));
         }
 
+        // Egress gate — đường tool. Đường còn lại (reply) được gate trong lib.rs.
+        // Xem docs/agent-security-hooks.md §3.1.1.
+        if !crate::security::gate(target_jid, text) {
+            return ToolResult::err(
+                "Bị egress guard chặn: nội dung trùng lặp với tin nhắn đến, hoặc vượt giới \
+                 hạn tần suất/số người nhận. Nếu đây là gửi hợp lệ, hãy diễn đạt lại nội \
+                 dung hoặc báo quản trị viên."
+                    .to_string(),
+            );
+        }
+
         let payload = SendPayload {
             payload_type: "message".into(),
             chat_jid: target_jid.to_owned(),

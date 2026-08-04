@@ -19,7 +19,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::marketplace::manager::MarketplaceManager;
+use crate::marketplace::manager::{InstallOutcome, MarketplaceManager};
 use crate::marketplace::types::{MarketplaceSource, SourceType};
 
 pub const PLUGIN_HELP: &str = "\
@@ -29,6 +29,7 @@ pub const PLUGIN_HELP: &str = "\
   /plugin marketplace remove <name|url>      — remove a source
   /plugin list [source]                      — list plugins in a hub catalog
   /plugin install <name>[@source]            — install a plugin from a hub
+  /plugin install <name> --force             — install despite a blocking security scan
   /plugin uninstall <name>[@source]          — remove an installed plugin
   /plugin help                               — show this help";
 
@@ -70,7 +71,11 @@ pub async fn dispatch_plugin_command(
                 return Some("Usage: /plugin install <name>[@source]".to_string());
             };
             let (name, source_key) = parse_plugin_ref(arg);
-            Some(install_plugin(manager, name, source_key).await)
+            // `--force` has to be typed by the human on the command line. It is
+            // deliberately not inferable from anything the package or the agent
+            // says, so a plugin cannot talk its own way past the scan.
+            let force = parts.any(|p| p == "--force");
+            Some(install_plugin(manager, name, source_key, force).await)
         }
 
         "uninstall" | "remove" | "rm" | "uni" => {
@@ -97,9 +102,7 @@ async fn marketplace_subcommand(
     match action {
         "add" => {
             let Some(url) = rest.first().cloned() else {
-                return Some(
-                    "Usage: /plugin marketplace add <url> [as <name>]".to_string(),
-                );
+                return Some("Usage: /plugin marketplace add <url> [as <name>]".to_string());
             };
             // Optional `as <name>`.
             let name_override = match (rest.get(1), rest.get(2)) {
@@ -186,7 +189,10 @@ async fn list_sources(manager: Arc<Mutex<MarketplaceManager>>) -> String {
     if sources.is_empty() {
         return "📦 No marketplace sources configured.\n   Add one with `/plugin marketplace add <url>`.".to_string();
     }
-    let mut lines = vec![format!("📦 Marketplace sources ({})", sources.len()), String::new()];
+    let mut lines = vec![
+        format!("📦 Marketplace sources ({})", sources.len()),
+        String::new(),
+    ];
     for s in &sources {
         let flag = if s.enabled { "🟢" } else { "⚪" };
         let loc = s.url.as_deref().unwrap_or(&s.local_path);
@@ -241,12 +247,20 @@ async fn list_plugins(
         return format!("📭 Hub `{}` has no plugins in its catalog.", source.name);
     }
     let mut lines = vec![
-        format!("🧩 Plugins in `{}` ({})", source.name, catalog.plugins.len()),
+        format!(
+            "🧩 Plugins in `{}` ({})",
+            source.name,
+            catalog.plugins.len()
+        ),
         String::new(),
     ];
     for p in &catalog.plugins {
         let desc = p.description.as_deref().unwrap_or("");
-        let ver = p.version.as_deref().map(|v| format!(" v{v}")).unwrap_or_default();
+        let ver = p
+            .version
+            .as_deref()
+            .map(|v| format!(" v{v}"))
+            .unwrap_or_default();
         if desc.is_empty() {
             lines.push(format!("• {}{ver}", p.name));
         } else {
@@ -254,7 +268,10 @@ async fn list_plugins(
         }
     }
     lines.push(String::new());
-    lines.push(format!("Install with `/plugin install <name>@{}`.", source.name));
+    lines.push(format!(
+        "Install with `/plugin install <name>@{}`.",
+        source.name
+    ));
     lines.join("\n")
 }
 
@@ -262,18 +279,50 @@ async fn install_plugin(
     manager: Arc<Mutex<MarketplaceManager>>,
     name: String,
     source_key: Option<String>,
+    force: bool,
 ) -> String {
     let res = tokio::task::spawn_blocking(move || {
         let mut mgr = manager.lock().unwrap();
         let source = resolve_source(&mgr, source_key.as_deref(), true)?;
-        let dir = mgr
-            .install_hub_plugin(&source.id, &name)
+        let policy = crate::security::ScanPolicy::from_config(&crate::config::Config::from_env());
+        let outcome = mgr
+            .install_hub_plugin(&source.id, &name, policy, force)
             .map_err(|e| e.to_string())?;
-        Ok::<_, String>(format!(
+
+        let (dir, scan) = match outcome {
+            InstallOutcome::Blocked { report, staged_dir } => {
+                return Ok::<_, String>(format!(
+                    "🛑 Refusing to install `{name}`: it failed the pre-install security scan \
+                     (risk {}/100). Nothing was recorded or enabled.\n\n```\n{}\n```\n\
+                     The clone is left at `{}` if you want to review it. \
+                     To install anyway: `/plugin install {name}@{} --force`",
+                    report.risk_score(),
+                    report.summary(),
+                    staged_dir.display(),
+                    source.name,
+                ));
+            }
+            InstallOutcome::Installed { dir, scan } => (dir, scan),
+        };
+
+        let mut msg = format!(
             "✅ Installed `{name}` from `{}` → {}",
             source.name,
             dir.display()
-        ))
+        );
+        // A warn-level install still shows its report in chat: the whole point
+        // of scanning is that the human sees what they just took on.
+        if let Some(report) = &scan {
+            if !report.findings.is_empty() {
+                msg.push_str(&format!(
+                    "\n\n⚠️ The security scan flagged this package (risk {}/100) but did not \
+                     block it:\n```\n{}\n```",
+                    report.risk_score(),
+                    report.summary()
+                ));
+            }
+        }
+        Ok::<_, String>(msg)
     })
     .await;
     match res {
@@ -351,7 +400,8 @@ fn resolve_source(
     let Some(key) = key else {
         return match candidates.as_slice() {
             [] => Err(if hub_only {
-                "No hub sources configured. Add one with `/plugin marketplace add <url>`.".to_string()
+                "No hub sources configured. Add one with `/plugin marketplace add <url>`."
+                    .to_string()
             } else {
                 "No marketplace sources configured.".to_string()
             }),
@@ -367,10 +417,7 @@ fn resolve_source(
     };
 
     // 1. exact name (case-insensitive)
-    if let Some(s) = candidates
-        .iter()
-        .find(|s| s.name.eq_ignore_ascii_case(key))
-    {
+    if let Some(s) = candidates.iter().find(|s| s.name.eq_ignore_ascii_case(key)) {
         return Ok(s.clone());
     }
     // 2. unique substring match on name
@@ -476,7 +523,11 @@ async fn app_outdated() -> String {
     };
     let outdated: Vec<&serde_json::Value> = updates
         .iter()
-        .filter(|u| u.get("hasUpdate").and_then(|v| v.as_bool()).unwrap_or(false))
+        .filter(|u| {
+            u.get("hasUpdate")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        })
         .collect();
     if outdated.is_empty() {
         return "✅ Mọi app đã ở phiên bản mới nhất.".to_string();
@@ -511,7 +562,10 @@ async fn app_update_one(id: &str) -> Result<(bool, String), String> {
             .unwrap_or("(không rõ lý do)");
         return Err(format!("HTTP {status}: {msg}"));
     }
-    let updated = body.get("updated").and_then(|v| v.as_bool()).unwrap_or(false);
+    let updated = body
+        .get("updated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let latest = body
         .get("latest")
         .and_then(|v| v.as_str())
@@ -531,7 +585,11 @@ async fn app_update_cmd(target: &str) -> String {
         };
         let ids: Vec<String> = updates
             .iter()
-            .filter(|u| u.get("hasUpdate").and_then(|v| v.as_bool()).unwrap_or(false))
+            .filter(|u| {
+                u.get("hasUpdate")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
             .filter_map(|u| u.get("id").and_then(|v| v.as_str()).map(str::to_string))
             .collect();
         if ids.is_empty() {

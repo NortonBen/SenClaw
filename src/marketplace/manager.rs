@@ -13,10 +13,32 @@ use super::types::{
     MarketplacePluginSubagent, MarketplaceSource, MarketplaceSourceInfo,
     MarketplaceSourceItemState, MarketplaceStateFile, SourceType,
 };
+use crate::security::{ScanPolicy, ScanReport};
 
 /// Marker written next to the config the first time the default hub is seeded,
 /// so removing the hub source keeps it removed.
 const HUB_SEED_MARKER: &str = ".hub-seeded";
+
+/// Result of [`MarketplaceManager::install_hub_plugin`].
+///
+/// A blocked install is a value, not an error string: every caller — CLI, chat
+/// and the Web UI — needs the findings themselves to render a decision, and
+/// flattening them into a message would leave the UI parsing prose.
+pub enum InstallOutcome {
+    Installed {
+        /// Resolved plugin directory inside the clone.
+        dir: PathBuf,
+        /// `None` only when scanning was disabled by policy. Present even on a
+        /// clean install so callers can show a `Warn` verdict.
+        scan: Option<ScanReport>,
+    },
+    /// Refused by the scan. Nothing was recorded or enabled.
+    Blocked {
+        report: ScanReport,
+        /// The clone is deliberately left in place so the user can inspect it.
+        staged_dir: PathBuf,
+    },
+}
 
 /// Marketplace manager for hub/git/local plugin sources
 pub struct MarketplaceManager {
@@ -704,7 +726,9 @@ impl MarketplaceManager {
                     .description
                     .or_else(|| entry.and_then(|e| e.description.clone()))
                     .unwrap_or_default(),
-                version: meta.version.or_else(|| entry.and_then(|e| e.version.clone())),
+                version: meta
+                    .version
+                    .or_else(|| entry.and_then(|e| e.version.clone())),
                 author: self
                     .parse_author(&meta.author)
                     .or_else(|| entry.and_then(|e| self.parse_author(&e.author))),
@@ -820,8 +844,25 @@ impl MarketplaceManager {
     }
 
     /// Install one plugin from a hub catalog: clone its repo, resolve the plugin
-    /// directory inside it, record it, and enable it.
-    pub fn install_hub_plugin(&mut self, source_id: &str, plugin_name: &str) -> Result<PathBuf> {
+    /// directory inside it, **scan it**, then record it and enable it.
+    ///
+    /// The scan sits between the clone and the enable because enabling is the
+    /// point of no return: an enabled plugin's `mcp/` servers become
+    /// launchable and its `hooks/hooks.json` is read by the agent hook loader.
+    /// Once the verdict is [`Verdict::Block`] nothing is recorded, so the clone
+    /// on disk is inert — it is deliberately left in place for the user to
+    /// inspect rather than deleted.
+    ///
+    /// `force` still runs the scan and still returns the report; it only stops
+    /// a blocking verdict from aborting. Skipping the scan entirely is a
+    /// separate decision, expressed as `policy.enabled == false`.
+    pub fn install_hub_plugin(
+        &mut self,
+        source_id: &str,
+        plugin_name: &str,
+        policy: ScanPolicy,
+        force: bool,
+    ) -> Result<InstallOutcome> {
         let source = self
             .get_source(source_id)
             .ok_or_else(|| anyhow::anyhow!("Source not found: {}", source_id))?;
@@ -850,6 +891,32 @@ impl MarketplaceManager {
                 )
             })?;
 
+        // Gate: inspect the cloned tree before it becomes live.
+        let scan = if policy.enabled {
+            let report = crate::security::scan_plugin_dir(&dir, plugin_name);
+            if report.verdict(&policy) == crate::security::scan::Verdict::Block && !force {
+                tracing::warn!(
+                    "[marketplace] blocked install of '{plugin_name}' (risk {}/100):\n{}",
+                    report.risk_score(),
+                    report.summary()
+                );
+                return Ok(InstallOutcome::Blocked {
+                    report,
+                    staged_dir: dir,
+                });
+            }
+            if !report.findings.is_empty() {
+                tracing::warn!(
+                    "[marketplace] pre-install scan of '{plugin_name}' (risk {}/100, forced={force}):\n{}",
+                    report.risk_score(),
+                    report.summary()
+                );
+            }
+            Some(report)
+        } else {
+            None
+        };
+
         let mut installed = hub::read_installed(&local_path);
         installed.plugins.insert(
             plugin_name.to_string(),
@@ -868,7 +935,7 @@ impl MarketplaceManager {
         // every install a two-step.
         self.set_plugin_enabled(source_id, plugin_name, true)?;
 
-        Ok(dir)
+        Ok(InstallOutcome::Installed { dir, scan })
     }
 
     /// Remove a hub-installed plugin: drop its clone, manifest entry and state.
@@ -887,8 +954,7 @@ impl MarketplaceManager {
 
         let repo = hub::repo_path(&local_path, plugin_name);
         if repo.exists() {
-            fs::remove_dir_all(&repo)
-                .with_context(|| format!("Failed to remove {:?}", repo))?;
+            fs::remove_dir_all(&repo).with_context(|| format!("Failed to remove {:?}", repo))?;
         }
 
         self.set_plugin_enabled(source_id, plugin_name, false)?;
@@ -997,6 +1063,31 @@ impl MarketplaceManager {
         }
 
         all_servers
+    }
+
+    /// Enabled plugins' `(name, dir)` pairs across all enabled sources — the
+    /// widget registry scans these for `widgets/widgets.json`, and the plugin
+    /// widget-static route resolves plugin names through it. Mirrors
+    /// [`Self::get_enabled_mcp_servers`]'s source/enable filtering.
+    pub fn enabled_plugin_dirs(&self) -> Vec<(String, std::path::PathBuf)> {
+        let mut out = Vec::new();
+        for source in &self.config.sources {
+            if !source.enabled {
+                continue;
+            }
+            let st = self.get_source_state(&source.id);
+            if let Ok(plugins) = self.find_plugins(source) {
+                for def in plugins {
+                    let meta = self.read_plugin_json(&def);
+                    let name = self.plugin_name(&meta, &def);
+                    if !st.plugins.get(&name).copied().unwrap_or(false) {
+                        continue;
+                    }
+                    out.push((name, std::path::PathBuf::from(&def.dir)));
+                }
+            }
+        }
+        out
     }
 }
 
@@ -1149,10 +1240,16 @@ mod tests {
             },
         );
         hub::write_installed(&local_path, &installed).unwrap();
-        manager.set_plugin_enabled(&source.id, "demo", true).unwrap();
+        manager
+            .set_plugin_enabled(&source.id, "demo", true)
+            .unwrap();
 
         let info = manager.get_source_info(&source.id).unwrap().unwrap();
-        assert_eq!(info.plugins.len(), 1, "installed plugin must not be listed twice");
+        assert_eq!(
+            info.plugins.len(),
+            1,
+            "installed plugin must not be listed twice"
+        );
         assert!(info.plugins[0].installed);
         assert!(info.plugins[0].enabled);
 

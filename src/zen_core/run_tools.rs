@@ -47,7 +47,11 @@ pub fn classify_pre_permission(res: &super::hooks::AggregatedHookResult) -> PreP
 #[async_trait]
 pub trait PermissionChecker: Send + Sync {
     /// Returns `Ok(true)` if tool execution is allowed, `Ok(false)` if denied,
-    /// or `Err(...)` if the check itself failed (allow by default).
+    /// or `Err(...)` if the check itself failed.
+    ///
+    /// `Err(...)` is treated as a denial — the pipeline is fail-closed. An
+    /// implementation that cannot reach a decision must not expect the tool to
+    /// run; return `Ok(true)` explicitly if that is what you mean.
     async fn check(
         &self,
         tool: &dyn Tool,
@@ -112,12 +116,15 @@ pub async fn run_tools(
     cancel: &CancellationToken,
     ctx: &RunContext<'_>,
 ) -> Vec<ContentBlock> {
-    // Determine if all tools are read-only
+    // Determine if all tools are read-only. Classify via the same resolver
+    // dispatch uses so a configured alias/override (Plugins → Alias) is judged
+    // by the tool that will actually EXECUTE — overriding a read-only tool
+    // with a mutating one must not slip into the concurrent path.
     let all_read_only = tool_uses.iter().all(|tu| {
         if let ContentBlock::ToolUse { name, .. } = tu {
-            ctx.tools
-                .iter()
-                .any(|t| t.name() == name && t.is_read_only())
+            crate::tools::tool_search::resolve_tool_by_name(name, ctx.tools)
+                .map(|t| t.is_read_only())
+                .unwrap_or(false)
         } else {
             false
         }
@@ -448,6 +455,7 @@ async fn run_single_tool(
                         });
                         let (client, profile) = (ctx.hook_client.clone(), ctx.hook_profile.clone());
                         let hm_clone = hm.clone();
+                        let usage_bus = ctx.event_bus.cloned();
                         tokio::spawn(async move {
                             let _ = zen_hooks::execute_hooks(
                                 &hm_clone,
@@ -459,6 +467,7 @@ async fn run_single_tool(
                                     client: client.as_ref(),
                                     profile: profile.as_ref(),
                                     messages: None,
+                                    usage_bus: usage_bus.as_ref(),
                                 },
                             )
                             .await;
@@ -481,9 +490,22 @@ async fn run_single_tool(
                     is_error: true,
                 }];
             }
-            Err(_) => {
-                // Permission check error — allow by default in case of errors
-                warn!("Permission check error for {tool_name}, allowing by default");
+            Err(e) => {
+                // Fail closed. A checker that cannot answer is not a checker
+                // that said yes — if the permission system is broken we must
+                // deny, or any error path becomes a way to run Bash/Write/Edit
+                // with no approval at all.
+                warn!(
+                    "[RunTools] permission check FAILED — tool denied agent={} tool={} id={} error={e:#}",
+                    ctx.agent_id, tool_name, tool_id
+                );
+                return vec![ContentBlock::ToolResult {
+                    tool_use_id: tool_id,
+                    content: format!(
+                        "Tool execution denied: the permission check could not be completed ({e:#})."
+                    ),
+                    is_error: true,
+                }];
             }
         }
     }
@@ -960,6 +982,65 @@ mod tests {
             assert!(content.contains("interrupted"));
         } else {
             panic!("Expected ToolResult stop");
+        }
+    }
+
+    /// A checker whose check always errors — stands in for a broken/unreachable
+    /// permission backend.
+    struct FailingPermissions;
+
+    #[async_trait::async_trait]
+    impl PermissionChecker for FailingPermissions {
+        async fn check(
+            &self,
+            _tool: &dyn Tool,
+            _input: &serde_json::Value,
+            _cancel: &CancellationToken,
+            _agent_id: &str,
+        ) -> Result<bool> {
+            Err(anyhow::anyhow!("permission backend unavailable"))
+        }
+    }
+
+    /// The permission pipeline is fail-closed: when the checker itself errors,
+    /// the write tool must be denied rather than executed. A regression here
+    /// would let any error path run Bash/Write/Edit with no approval.
+    #[tokio::test]
+    async fn permission_check_error_denies_write_tool() {
+        let tool: Arc<dyn Tool> = Arc::new(TestWriteTool);
+        let tools = vec![tool];
+        let ctx = test_ctx(&tools, &FailingPermissions);
+        let cancel = CancellationToken::new();
+
+        let results = run_single_tool(
+            &ContentBlock::ToolUse {
+                id: "tu-1".into(),
+                name: "write".into(),
+                input: serde_json::json!({"path": "/tmp/test", "content": "x"}),
+            },
+            &cancel,
+            &ctx,
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        if let ContentBlock::ToolResult {
+            content, is_error, ..
+        } = &results[0]
+        {
+            assert!(*is_error, "denial must be reported as an error");
+            assert!(
+                content.contains("denied"),
+                "expected a denial message, got: {content}"
+            );
+            // The tool's own success output must never appear — proof that
+            // `call` was not reached.
+            assert!(
+                !content.contains("written"),
+                "tool executed despite a failed permission check: {content}"
+            );
+        } else {
+            panic!("Expected ToolResult denial");
         }
     }
 }

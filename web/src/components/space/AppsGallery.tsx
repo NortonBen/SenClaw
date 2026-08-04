@@ -7,6 +7,7 @@ import {
   PlusOutlined, DeleteOutlined, AppstoreOutlined, LinkOutlined, InfoCircleOutlined,
 } from '@ant-design/icons';
 import { SpaceAppDetailModal } from './SpaceAppDetailModal';
+import ScanReportDialog, { readScanError, type ScanReport } from '../security/ScanReportDialog';
 
 const { Paragraph } = Typography;
 
@@ -46,6 +47,11 @@ export function AppsGallery({ groupFolder, onAppsChanged, onOpenApp }: Props) {
   const [showRegister, setShowRegister] = useState(false);
   const [registering, setRegistering] = useState(false);
   const [installingZip, setInstallingZip] = useState(false);
+  const [scanState, setScanState] = useState<{
+    report: ScanReport;
+    file: File;
+    blocked: boolean;
+  } | null>(null);
   const [detailApp, setDetailApp] = useState<SpaceApp | null>(null);
   const [form] = Form.useForm();
 
@@ -90,22 +96,39 @@ export function AppsGallery({ groupFolder, onAppsChanged, onOpenApp }: Props) {
       .catch(() => {});
   };
 
-  const installZip = async (file: File) => {
+  const installZip = async (file: File, force = false) => {
     setInstallingZip(true);
     try {
       const formData = new FormData();
       formData.append('file', file);
+      // A Space App's `runtime.start` runs at install time, so an override has
+      // to be an explicit act — never a silent retry.
+      if (force) formData.append('force', 'true');
       const res = await fetch('/api/space/apps/install-zip', {
         method: 'POST',
         body: formData,
       });
-      if (!res.ok) throw new Error(await res.text());
-      const row = await res.json() as { id: string; manifest: any; enabled: boolean };
+      if (!res.ok) {
+        const { blocked, error, scan } = await readScanError(res);
+        if (blocked && scan) {
+          setScanState({ report: scan, file, blocked: true });
+          return;
+        }
+        throw new Error(error);
+      }
+      const row = await res.json() as {
+        id: string; manifest: any; enabled: boolean; scan?: ScanReport;
+      };
       const app = normalizeApp(row);
       setApps(prev => [...prev.filter(a => a.id !== app.id), app]);
       onAppsChanged?.();
-      message.success(`${app.name} installed`);
-      onOpenApp?.(app.id);
+      if (row.scan?.findings?.length) {
+        // Installed, but findings worth reading before the app is opened.
+        setScanState({ report: row.scan, file, blocked: false });
+      } else {
+        message.success(`${app.name} installed`);
+        onOpenApp?.(app.id);
+      }
     } catch (err) {
       message.error(err instanceof Error ? err.message : 'Install zip failed');
     } finally {
@@ -260,6 +283,19 @@ export function AppsGallery({ groupFolder, onAppsChanged, onOpenApp }: Props) {
         app={detailApp}
         open={!!detailApp}
         onClose={() => setDetailApp(null)}
+      />
+
+      <ScanReportDialog
+        open={!!scanState}
+        report={scanState?.report}
+        blocked={!!scanState?.blocked}
+        busy={installingZip}
+        onCancel={() => setScanState(null)}
+        onForceInstall={() => {
+          const f = scanState?.file;
+          setScanState(null);
+          if (f) void installZip(f, true);
+        }}
       />
     </div>
   );

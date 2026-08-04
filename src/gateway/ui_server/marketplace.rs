@@ -4,9 +4,9 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path as AxumPath, State},
+    extract::{Path as AxumPath, Query, State},
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json},
 };
 use serde::{Deserialize, Serialize};
 use tokio::task;
@@ -356,21 +356,38 @@ pub(crate) async fn marketplace_plugin_toggle(
             Some(v) => v,
             None => !manager.is_plugin_enabled(&id, &name),
         };
-        manager.set_plugin_enabled(&id, &name, enabled).map(|_| enabled)
+        manager
+            .set_plugin_enabled(&id, &name, enabled)
+            .map(|_| enabled)
     })
     .await
     .map_err(internal)?
     .map_err(internal)?;
 
-    Ok(Json(serde_json::json!({ "success": true, "enabled": enabled })))
+    Ok(Json(
+        serde_json::json!({ "success": true, "enabled": enabled }),
+    ))
+}
+
+#[derive(Deserialize, Default)]
+pub struct InstallQuery {
+    /// `?force=true` installs despite a blocking scan verdict. The scan still
+    /// runs and the report is still returned.
+    #[serde(default)]
+    force: bool,
 }
 
 /// POST /api/marketplace/sources/:id/plugins/:name/install - install one plugin
-/// from a hub catalog (clone + enable).
+/// from a hub catalog (scan + clone + enable).
+///
+/// A blocking scan verdict comes back as 422 with the full report in
+/// `scan`, so the UI can show the findings and offer an explicit override
+/// rather than a bare failure.
 pub(crate) async fn marketplace_plugin_install(
     State(s): State<Arc<UiState>>,
     AxumPath(params): AxumPath<(String, String)>,
-) -> Result<Json<serde_json::Value>, AppError> {
+    Query(q): Query<InstallQuery>,
+) -> Result<axum::response::Response, AppError> {
     let (id, name) = params;
 
     let manager = s
@@ -384,18 +401,42 @@ pub(crate) async fn marketplace_plugin_install(
         })?
         .clone();
 
-    let dir = task::spawn_blocking(move || {
+    let policy = crate::security::ScanPolicy::from_config(&s.config);
+    let outcome = task::spawn_blocking(move || {
         let mut manager = manager.lock().unwrap();
-        manager.install_hub_plugin(&id, &name)
+        manager.install_hub_plugin(&id, &name, policy, q.force)
     })
     .await
     .map_err(internal)?
     .map_err(|e| AppError(StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    Ok(Json(serde_json::json!({
-        "success": true,
-        "dir": dir.to_string_lossy(),
-    })))
+    match outcome {
+        // 422 with the findings as data, not prose: the UI renders them and
+        // offers an explicit override.
+        crate::marketplace::manager::InstallOutcome::Blocked { report, staged_dir } => Ok((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "success": false,
+                "blocked": true,
+                "error": format!(
+                    "Blocked by the pre-install security scan (risk {}/100). \
+                     Nothing was recorded or enabled.",
+                    report.risk_score()
+                ),
+                "stagedDir": staged_dir.to_string_lossy(),
+                "scan": report,
+            })),
+        )
+            .into_response()),
+        crate::marketplace::manager::InstallOutcome::Installed { dir, scan } => Ok(Json(
+            serde_json::json!({
+                "success": true,
+                "dir": dir.to_string_lossy(),
+                "scan": scan,
+            }),
+        )
+        .into_response()),
+    }
 }
 
 /// DELETE /api/marketplace/sources/:id/plugins/:name - uninstall a hub plugin.
@@ -424,7 +465,9 @@ pub(crate) async fn marketplace_plugin_uninstall(
     .map_err(internal)?
     .map_err(|e| AppError(StatusCode::BAD_REQUEST, e.to_string()))?;
 
-    Ok(Json(serde_json::json!({ "success": true, "removed": removed })))
+    Ok(Json(
+        serde_json::json!({ "success": true, "removed": removed }),
+    ))
 }
 
 /// GET /api/marketplace/sources/:id/catalog - the raw hub catalog.
@@ -472,4 +515,77 @@ pub(crate) async fn marketplace_mcp_status(
     // This would need to query the MCP manager for connection status
     // For now, return empty status
     Ok(Json(serde_json::json!({})))
+}
+
+/// GET /api/marketplace/plugins/:name/widget-static/*path — serve an enabled
+/// plugin's widget assets (`<pluginDir>/widgets/…`). Plugins have no server of
+/// their own, so this route is the only origin their `url` widgets load from
+/// (the registry resolves plugin `entryUrl`s against it). Same containment
+/// discipline as `space_apps_static`: no `..`/backslash, canonicalized-root
+/// prefix check, files only.
+pub(crate) async fn plugin_widget_static(
+    State(s): State<Arc<UiState>>,
+    AxumPath((name, req_path)): AxumPath<(String, String)>,
+) -> Result<axum::response::Response, AppError> {
+    use axum::body::Body;
+    use axum::http::header;
+
+    if req_path.contains("..") || req_path.contains('\\') {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid path".into()));
+    }
+    let manager = s
+        .marketplace_manager
+        .as_ref()
+        .ok_or_else(|| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Marketplace manager not available".into(),
+            )
+        })?
+        .clone();
+
+    // Resolving the plugin dir scans sources on disk — keep it off the async
+    // runtime thread, like the other marketplace handlers.
+    let wanted = name.clone();
+    let dir = task::spawn_blocking(move || {
+        let guard = manager.lock().ok()?;
+        guard
+            .enabled_plugin_dirs()
+            .into_iter()
+            .find(|(n, _)| n == &wanted)
+            .map(|(_, d)| d)
+    })
+    .await
+    .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .ok_or_else(|| {
+        AppError(
+            StatusCode::NOT_FOUND,
+            format!("Plugin '{name}' not found or not enabled"),
+        )
+    })?;
+
+    let root = dir.join("widgets");
+    let rel = req_path.trim_start_matches('/');
+    let rel = if rel.is_empty() { "index.html" } else { rel };
+    let path = root.join(rel);
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| AppError(StatusCode::NOT_FOUND, "Plugin has no widgets dir".into()))?;
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|_| AppError(StatusCode::NOT_FOUND, "File not found".into()))?;
+    if !canonical_path.starts_with(&canonical_root) || !canonical_path.is_file() {
+        return Err(AppError(StatusCode::NOT_FOUND, "File not found".into()));
+    }
+    let bytes = tokio::fs::read(&canonical_path)
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            header::CONTENT_TYPE,
+            super::space::content_type_for(&canonical_path),
+        )
+        .body(Body::from(bytes))
+        .unwrap())
 }

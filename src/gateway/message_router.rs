@@ -112,6 +112,12 @@ impl MessageRouter {
             &msg.content.chars().take(60).collect::<String>(),
         );
 
+        // Ghi vào sổ inbound của egress guard TRƯỚC mọi bước routing: nội dung này không
+        // tin cậy kể từ giây nó đến, và nếu nó quay trở ra ở một reply nào đó thì
+        // `security::egress` phải có bản gốc để đối chiếu. Ghi cả tin không thuộc group
+        // nào — worm không cần binding hợp lệ mới lây được.
+        crate::security::record_inbound(&msg.chat_jid, &msg.content);
+
         // 1. Find registered group binding (entity model first, then legacy)
         let mut group = self.resolve_binding(&msg).await;
 
@@ -176,7 +182,10 @@ impl MessageRouter {
         // 4a. `/plugin ...` marketplace commands (async: git/HTTP under the hood).
         if let Some(manager) = self.marketplace_manager.lock().await.clone() {
             if let Some(result) = dispatch_plugin_command(manager, &msg.content).await {
-                tracing::info!("[MessageRouter] Plugin command handled for {}", msg.chat_jid);
+                tracing::info!(
+                    "[MessageRouter] Plugin command handled for {}",
+                    msg.chat_jid
+                );
                 self.agent_api
                     .broadcast_reply(&msg.chat_jid, &result, group.bot_token.as_deref())
                     .await;
