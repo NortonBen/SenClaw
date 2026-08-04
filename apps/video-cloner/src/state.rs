@@ -4,9 +4,26 @@ use crate::config;
 use crate::dashws::DashHub;
 use crate::db::Db;
 use anyhow::{Context, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
+
+/// A YouTube (or other URL) download in progress.
+///
+/// Kept in memory only: a download that a restart interrupts is abandoned, and
+/// there is nothing worth resuming — the user simply pastes the link again.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImportState {
+    pub id: i64,
+    /// probing | downloading | completed | failed
+    pub status: String,
+    pub message: String,
+    pub url: String,
+    pub title: String,
+    pub project_id: Option<i64>,
+    pub updated_at: String,
+}
 
 pub struct Core {
     pub db: Db,
@@ -16,6 +33,8 @@ pub struct Core {
     /// Segments must be appended in order, so a project may only have one run
     /// in flight — a second concurrent call would interleave scenes.
     busy: Mutex<HashSet<i64>>,
+    imports: Mutex<HashMap<i64, ImportState>>,
+    import_seq: AtomicI64,
 }
 
 impl Core {
@@ -31,7 +50,69 @@ impl Core {
             db,
             dash: DashHub::new(),
             busy: Mutex::new(HashSet::new()),
+            imports: Mutex::new(HashMap::new()),
+            import_seq: AtomicI64::new(1),
         }))
+    }
+
+    // ---- URL imports (YouTube etc.) ----
+
+    /// Register a new import and return its id.
+    pub fn start_import(&self, url: &str) -> ImportState {
+        let id = self.import_seq.fetch_add(1, Ordering::SeqCst);
+        let st = ImportState {
+            id,
+            status: "probing".into(),
+            message: "đang lấy thông tin video".into(),
+            url: url.to_string(),
+            title: String::new(),
+            project_id: None,
+            updated_at: crate::db::now(),
+        };
+        self.imports.lock().unwrap().insert(id, st.clone());
+        st
+    }
+
+    pub fn update_import(
+        &self,
+        id: i64,
+        status: &str,
+        message: &str,
+        title: Option<&str>,
+        project_id: Option<i64>,
+    ) {
+        let mut map = self.imports.lock().unwrap();
+        if let Some(st) = map.get_mut(&id) {
+            st.status = status.to_string();
+            st.message = message.to_string();
+            if let Some(t) = title {
+                st.title = t.to_string();
+            }
+            if project_id.is_some() {
+                st.project_id = project_id;
+            }
+            st.updated_at = crate::db::now();
+            self.dash.emit(
+                "youtube:progress",
+                serde_json::to_value(&*st).unwrap_or_default(),
+            );
+        }
+        // Keep the map from growing without bound over a long-lived process.
+        if map.len() > 64 {
+            let mut done: Vec<i64> = map
+                .values()
+                .filter(|s| s.status == "completed" || s.status == "failed")
+                .map(|s| s.id)
+                .collect();
+            done.sort_unstable();
+            for old in done.iter().take(done.len().saturating_sub(16)) {
+                map.remove(old);
+            }
+        }
+    }
+
+    pub fn get_import(&self, id: i64) -> Option<ImportState> {
+        self.imports.lock().unwrap().get(&id).cloned()
     }
 
     /// Build a core around an already-open database, skipping the data-directory
@@ -42,6 +123,8 @@ impl Core {
             db,
             dash,
             busy: Mutex::new(HashSet::new()),
+            imports: Mutex::new(HashMap::new()),
+            import_seq: AtomicI64::new(1),
         })
     }
 
@@ -93,7 +176,23 @@ mod tests {
             db: Db::open_memory().unwrap(),
             dash: DashHub::new(),
             busy: Mutex::new(HashSet::new()),
+            imports: Mutex::new(HashMap::new()),
+            import_seq: AtomicI64::new(1),
         })
+    }
+
+    #[test]
+    fn an_import_moves_through_its_states() {
+        let c = core();
+        let st = c.start_import("https://youtu.be/x");
+        assert_eq!(st.status, "probing");
+        assert_eq!(c.get_import(st.id).unwrap().url, "https://youtu.be/x");
+
+        c.update_import(st.id, "completed", "xong", Some("Tiêu đề"), Some(7));
+        let done = c.get_import(st.id).unwrap();
+        assert_eq!(done.status, "completed");
+        assert_eq!(done.title, "Tiêu đề");
+        assert_eq!(done.project_id, Some(7));
     }
 
     #[test]

@@ -89,7 +89,11 @@ fn narrator_text(scene: &Value) -> String {
                     if text.is_empty() {
                         return None;
                     }
-                    let speaker = l.get("speaker").and_then(|v| v.as_str()).unwrap_or("").trim();
+                    let speaker = l
+                        .get("speaker")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim();
                     Some(if speaker.is_empty() {
                         text.to_string()
                     } else {
@@ -313,8 +317,8 @@ pub async fn push(base_url: &str, plan: &Value) -> Result<Pushed, String> {
     let project = post_json(&client, &format!("{base}/api/projects"), &plan["project"])
         .await
         .map_err(|e| format!("tạo project trong video-flow thất bại: {e}"))?;
-    let project_id = id_of(&project)
-        .ok_or_else(|| "video-flow không trả về id của project".to_string())?;
+    let project_id =
+        id_of(&project).ok_or_else(|| "video-flow không trả về id của project".to_string())?;
 
     let mut entity_count = 0usize;
     if let Some(entities) = plan["entities"].as_array() {
@@ -475,17 +479,25 @@ mod tests {
     fn every_mapped_enum_is_one_video_flow_accepts() {
         // The columns carry CHECK constraints; an invented value fails the insert.
         const SHOTS: [&str; 4] = ["WIDE", "MEDIUM", "CLOSE_UP", "EXTREME_CLOSE_UP"];
-        const MOVES: [&str; 7] = ["STATIC", "PAN", "TILT", "DOLLY", "ZOOM", "HANDHELD", "CRANE"];
+        const MOVES: [&str; 7] = [
+            "STATIC", "PAN", "TILT", "DOLLY", "ZOOM", "HANDHELD", "CRANE",
+        ];
         for probe in ["", "wide", "cận", "lia", "zoom", "gì đó", "handheld"] {
             assert!(SHOTS.contains(&shot_type(probe)), "bad shot for {probe}");
-            assert!(MOVES.contains(&camera_movement(probe)), "bad move for {probe}");
+            assert!(
+                MOVES.contains(&camera_movement(probe)),
+                "bad move for {probe}"
+            );
         }
     }
 
     #[test]
     fn the_first_scene_roots_the_chain_and_the_rest_continue_it() {
         assert_eq!(scene_row(0, &row(0, scene_json()))["chain_type"], "ROOT");
-        assert_eq!(scene_row(1, &row(1, scene_json()))["chain_type"], "CONTINUATION");
+        assert_eq!(
+            scene_row(1, &row(1, scene_json()))["chain_type"],
+            "CONTINUATION"
+        );
     }
 
     #[test]
@@ -497,7 +509,10 @@ mod tests {
     #[test]
     fn every_video_prompt_carries_the_negative_clause() {
         let r = scene_row(0, &row(0, scene_json()));
-        assert!(r["video_prompt"].as_str().unwrap().contains("Negative: subtitles"));
+        assert!(r["video_prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Negative: subtitles"));
     }
 
     #[test]

@@ -416,9 +416,8 @@ impl Db {
 
     pub fn scenes(&self, project_id: i64) -> Result<Vec<Scene>> {
         self.with_conn(|c| {
-            let mut st = c.prepare(
-                "SELECT * FROM scenes WHERE project_id = ?1 ORDER BY position, id",
-            )?;
+            let mut st =
+                c.prepare("SELECT * FROM scenes WHERE project_id = ?1 ORDER BY position, id")?;
             let rows = st.query_map(params![project_id], scene_from_row)?;
             rows.collect()
         })
@@ -484,7 +483,10 @@ impl Db {
 
     pub fn clear_scenes(&self, project_id: i64) -> Result<()> {
         self.with_conn(|c| {
-            c.execute("DELETE FROM scenes WHERE project_id = ?1", params![project_id])
+            c.execute(
+                "DELETE FROM scenes WHERE project_id = ?1",
+                params![project_id],
+            )
         })?;
         Ok(())
     }
@@ -497,7 +499,10 @@ impl Db {
         let ts = now();
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM scenes WHERE project_id = ?1", params![project_id])?;
+        tx.execute(
+            "DELETE FROM scenes WHERE project_id = ?1",
+            params![project_id],
+        )?;
         {
             let mut st = tx.prepare(
                 "INSERT INTO scenes (project_id, position, scene_id, json, job_id, created_at)
@@ -598,9 +603,8 @@ impl Db {
 
     pub fn list_jobs(&self, project_id: i64, limit: i64) -> Result<Vec<Job>> {
         self.with_conn(|c| {
-            let mut st = c.prepare(
-                "SELECT * FROM jobs WHERE project_id = ?1 ORDER BY id DESC LIMIT ?2",
-            )?;
+            let mut st =
+                c.prepare("SELECT * FROM jobs WHERE project_id = ?1 ORDER BY id DESC LIMIT ?2")?;
             let rows = st.query_map(params![project_id, limit], job_from_row)?;
             rows.collect()
         })
@@ -640,8 +644,12 @@ impl Db {
 
     pub fn job(&self, id: i64) -> Result<Option<Job>> {
         self.with_conn(|c| {
-            c.query_row("SELECT * FROM jobs WHERE id = ?1", params![id], job_from_row)
-                .optional()
+            c.query_row(
+                "SELECT * FROM jobs WHERE id = ?1",
+                params![id],
+                job_from_row,
+            )
+            .optional()
         })
     }
 
@@ -748,7 +756,11 @@ mod tests {
         let p = make_project(&db);
         db.append_scenes(
             p,
-            &[json!({"scene_id":"1"}), json!({"scene_id":"2"}), json!({"scene_id":"3"})],
+            &[
+                json!({"scene_id":"1"}),
+                json!({"scene_id":"2"}),
+                json!({"scene_id":"3"}),
+            ],
             1,
         )
         .unwrap();
@@ -769,7 +781,8 @@ mod tests {
         let p = make_project(&db);
         db.append_scenes(p, &[json!({"scene_id":"1"}), json!({"scene_id":"2"})], 1)
             .unwrap();
-        db.replace_all_scenes(p, &[(1, json!({"scene_id":"9"}))]).unwrap();
+        db.replace_all_scenes(p, &[(1, json!({"scene_id":"9"}))])
+            .unwrap();
 
         let scenes = db.scenes(p).unwrap();
         assert_eq!(scenes.len(), 1);
@@ -803,7 +816,10 @@ mod tests {
         db.append_scenes(p, &[json!({"scene_id":"1"}), json!({"scene_id":"2"})], 1)
             .unwrap();
 
-        let snap = db.snapshot(p, "analyze_start", "trước khi chạy lại").unwrap().unwrap();
+        let snap = db
+            .snapshot(p, "analyze_start", "trước khi chạy lại")
+            .unwrap()
+            .unwrap();
         db.clear_scenes(p).unwrap();
         assert_eq!(db.scenes(p).unwrap().len(), 0);
 
@@ -852,7 +868,10 @@ mod tests {
         db.append_scenes(p, &[json!({"scene_id":"1"})], 11).unwrap();
         db.append_scenes(p, &[json!({"scene_id":"2"})], 12).unwrap();
 
-        let edited = vec![(11, json!({"scene_id":"1","x":1})), (12, json!({"scene_id":"2","x":1}))];
+        let edited = vec![
+            (11, json!({"scene_id":"1","x":1})),
+            (12, json!({"scene_id":"2","x":1})),
+        ];
         db.replace_all_scenes(p, &edited).unwrap();
 
         let jobs: Vec<i64> = db.scenes(p).unwrap().iter().map(|s| s.job_id).collect();

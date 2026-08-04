@@ -71,7 +71,10 @@ pub fn start(core: &Arc<Core>, project: &Project, mode: Mode, cfg: CloneConfig) 
     };
 
     let existing = core.db.scenes(project.id)?;
-    let numbers: Vec<i64> = existing.iter().filter_map(|s| scenes::scene_number(&s.json)).collect();
+    let numbers: Vec<i64> = existing
+        .iter()
+        .filter_map(|s| scenes::scene_number(&s.json))
+        .collect();
     let from = resume_point(mode, &numbers);
 
     let temperature = prompts::temperature_for(&cfg);
@@ -226,14 +229,9 @@ async fn attach_video(core: &Arc<Core>, project: &Project, api_key: &str) -> Res
         json!({ "project_id": project.id, "size": project.video_size }),
     );
 
-    let uri = gemini::upload_file(
-        api_key,
-        path,
-        &project.video_mime,
-        &project.video_filename,
-    )
-    .await
-    .context("tải video lên Gemini Files API")?;
+    let uri = gemini::upload_file(api_key, path, &project.video_mime, &project.video_filename)
+        .await
+        .context("tải video lên Gemini Files API")?;
 
     core.db.set_file_uri(project.id, &uri)?;
     Ok(VideoPart::Remote {

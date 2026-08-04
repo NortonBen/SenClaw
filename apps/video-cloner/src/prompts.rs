@@ -239,7 +239,9 @@ mod tests {
 
     #[test]
     fn original_style_is_detected_in_both_languages() {
-        assert!(is_original_style("Phân tích theo video gốc (Original Style)"));
+        assert!(is_original_style(
+            "Phân tích theo video gốc (Original Style)"
+        ));
         assert!(is_original_style("Original Style"));
         assert!(!is_original_style("Dark fantasy, dramatic lighting"));
     }

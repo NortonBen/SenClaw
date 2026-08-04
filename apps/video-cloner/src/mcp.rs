@@ -71,7 +71,9 @@ pub async fn mcp_message(
             "serverInfo": { "name": "video-cloner-mcp", "version": "1.0.0" }
         })),
         "ping" => reply(json!({})),
-        "notifications/initialized" => Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} })),
+        "notifications/initialized" => {
+            Json(json!({ "jsonrpc": "2.0", "id": req.id, "result": {} }))
+        }
         "tools/list" => reply(json!({ "tools": tools_list() })),
         "tools/call" => {
             let params = req.params.clone().unwrap_or_default();
@@ -100,13 +102,18 @@ fn opt_s(args: &Value, key: &str) -> Option<String> {
 
 fn int(args: &Value, key: &str) -> i64 {
     args.get(key)
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .unwrap_or(0)
 }
 
 fn opt_int(args: &Value, key: &str) -> Option<i64> {
-    args.get(key)
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+    args.get(key).and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    })
 }
 
 fn opt_bool(args: &Value, key: &str) -> Option<bool> {
@@ -187,7 +194,9 @@ async fn write_wiki(path: &str, markdown: &str, project_name: &str) -> Result<()
         }))
         .send()
         .await
-        .map_err(|e| format!("không gọi được wiki tại {url}: {e} — daemon SenClaw có chạy không?"))?;
+        .map_err(|e| {
+            format!("không gọi được wiki tại {url}: {e} — daemon SenClaw có chạy không?")
+        })?;
 
     if resp.status().is_success() {
         Ok(())
@@ -207,6 +216,28 @@ fn tools_list() -> Value {
         "name": "vc_status",
         "description": "Trạng thái Video Cloner: có bao nhiêu dự án, đã có Gemini API key chưa, dự án nào đang chạy. GỌI TOOL NÀY TRƯỚC TIÊN trong mọi phiên làm việc — nếu chưa có API key thì mọi lệnh phân tích đều sẽ hỏng, phải báo Sếp vào Cài đặt nhập key trước.",
         "inputSchema": { "type": "object", "properties": {} }
+      },
+      {
+        "name": "vc_youtube_import",
+        "description": "Tải một video từ YouTube (hoặc URL video khác mà yt-dlp hỗ trợ) về làm nguồn dự án mới. CHẠY NỀN — trả về import_id NGAY, video dài tải mất một lúc; poll vc_youtube_status. Cần cài yt-dlp trên máy (vc_status cho biết đã có chưa). Sau khi tải xong sẽ có một dự án mới, rồi dùng vc_analyze để bóc tách như video tải tay.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": { "type": "string", "description": "Đường dẫn video http/https" },
+            "name": { "type": "string", "description": "Tên dự án; để trống sẽ lấy tiêu đề video" },
+            "style": { "type": "string", "description": "Phong cách đích ban đầu (xem vc_presets)" }
+          },
+          "required": ["url"]
+        }
+      },
+      {
+        "name": "vc_youtube_status",
+        "description": "Trạng thái một lượt tải video từ URL: probing | downloading | completed | failed. Khi completed sẽ có project_id để dùng với vc_analyze. Poll thưa (5-10 giây một lần).",
+        "inputSchema": {
+          "type": "object",
+          "properties": { "import_id": { "type": "integer" } },
+          "required": ["import_id"]
+        }
       },
       {
         "name": "vc_presets",
@@ -419,17 +450,69 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 .map(|p| p.id)
                 .collect();
             let has_key = !db.gemini_api_key().trim().is_empty();
+            let ytdlp = crate::youtube::available().await;
             json_result(json!({
                 "ok": true,
                 "projects": projects.len(),
                 "has_api_key": has_key,
                 "running_projects": running,
+                // Tells the agent whether vc_youtube_import can be used at all.
+                "youtube_download": ytdlp.is_some(),
+                "yt_dlp_version": ytdlp,
                 "next": if has_key {
-                    "sẵn sàng. Dùng vc_project_list để chọn dự án."
+                    "sẵn sàng. Dùng vc_project_list để chọn dự án, hoặc vc_youtube_import để tải video từ YouTube."
                 } else {
                     "CHƯA CÓ GEMINI API KEY — báo Sếp mở Cài đặt của Video Cloner để nhập key, đừng chạy vc_analyze."
                 },
             }))
+        }
+
+        "vc_youtube_import" => {
+            let url = s(args, "url");
+            if !crate::youtube::valid_url(&url) {
+                return error_result("URL không hợp lệ — dán đường dẫn video http/https".into());
+            }
+            if crate::youtube::available().await.is_none() {
+                return error_result(
+                    "chưa cài yt-dlp trên máy. Báo Sếp cài bằng: brew install yt-dlp".into(),
+                );
+            }
+            let st = state.core.start_import(&url);
+            let import_id = st.id;
+            state.core.dash.emit(
+                "youtube:progress",
+                serde_json::to_value(&st).unwrap_or_default(),
+            );
+            let core = state.core.clone();
+            let name = opt_s(args, "name").unwrap_or_default();
+            let style = opt_s(args, "style").unwrap_or_default();
+            tokio::spawn(async move {
+                crate::api::run_import_bg(core, import_id, url, name, style).await;
+            });
+            json_result(json!({
+                "import_id": import_id,
+                "status": "downloading",
+                "next": "ĐỪNG chờ. Poll vc_youtube_status với import_id này sau 5-10 giây. Xong sẽ có project_id để chạy vc_analyze.",
+            }))
+        }
+
+        "vc_youtube_status" => {
+            let id = int(args, "import_id");
+            match state.core.get_import(id) {
+                Some(st) => json_result(json!({
+                    "import_id": st.id,
+                    "status": st.status,
+                    "message": st.message,
+                    "title": st.title,
+                    "project_id": st.project_id,
+                    "next": match st.status.as_str() {
+                        "completed" => "xong — dùng project_id với vc_analyze để bóc tách",
+                        "failed" => "thất bại — đọc message; nếu do yt-dlp thiếu thì báo Sếp cài",
+                        _ => "đang tải — poll lại sau 5-10 giây",
+                    },
+                })),
+                None => error_result(format!("không tìm thấy lượt nhập {id}")),
+            }
         }
 
         "vc_presets" => json_result(json!({
@@ -534,7 +617,8 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             };
             if db.gemini_api_key().trim().is_empty() {
                 return error_result(
-                    "chưa có Gemini API key — báo Sếp mở Cài đặt của Video Cloner để nhập key".into(),
+                    "chưa có Gemini API key — báo Sếp mở Cài đặt của Video Cloner để nhập key"
+                        .into(),
                 );
             }
             let count = db.scene_count(id).unwrap_or(0);
@@ -589,7 +673,9 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         "vc_scenes" => {
             let id = int(args, "project_id");
             let offset = opt_int(args, "offset").unwrap_or(0).max(0);
-            let limit = opt_int(args, "limit").unwrap_or(DEFAULT_SCENE_LIMIT).clamp(1, 20);
+            let limit = opt_int(args, "limit")
+                .unwrap_or(DEFAULT_SCENE_LIMIT)
+                .clamp(1, 20);
             match db.scenes(id) {
                 Ok(items) => {
                     let total = items.len() as i64;
@@ -629,11 +715,9 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                         Some(voice) => {
                             voices.insert(char_id.clone(), voice);
                         }
-                        None => {
-                            return error_result(format!(
-                                "giọng không hợp lệ cho {char_id}: \"{raw}\" (chỉ nhận male | female)"
-                            ))
-                        }
+                        None => return error_result(format!(
+                            "giọng không hợp lệ cho {char_id}: \"{raw}\" (chỉ nhận male | female)"
+                        )),
                     }
                 }
             }
@@ -762,11 +846,14 @@ async fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             };
 
             let undo = db
-                .snapshot(id, "restore", &format!("trước khi khôi phục #{snapshot_id}"))
+                .snapshot(
+                    id,
+                    "restore",
+                    &format!("trước khi khôi phục #{snapshot_id}"),
+                )
                 .ok()
                 .flatten();
-            let entries: Vec<(i64, Value)> =
-                scene_values.iter().map(|v| (0, v.clone())).collect();
+            let entries: Vec<(i64, Value)> = scene_values.iter().map(|v| (0, v.clone())).collect();
 
             match db.replace_all_scenes(id, &entries) {
                 Ok(()) => {
@@ -1014,9 +1101,18 @@ mod tests {
         let id = st
             .core
             .db
-            .create_project("p", "/tmp/v.mp4", "video/mp4", 1, "v.mp4", &CloneConfig::default())
+            .create_project(
+                "p",
+                "/tmp/v.mp4",
+                "video/mp4",
+                1,
+                "v.mp4",
+                &CloneConfig::default(),
+            )
             .unwrap();
-        let many: Vec<Value> = (1..=12).map(|i| json!({ "scene_id": i.to_string() })).collect();
+        let many: Vec<Value> = (1..=12)
+            .map(|i| json!({ "scene_id": i.to_string() }))
+            .collect();
         st.core.db.append_scenes(id, &many, 1).unwrap();
 
         let out = call_tool(&st, "vc_scenes", &json!({ "project_id": id })).await;
@@ -1034,7 +1130,14 @@ mod tests {
         let id = st
             .core
             .db
-            .create_project("p", "/tmp/v.mp4", "video/mp4", 1, "v.mp4", &CloneConfig::default())
+            .create_project(
+                "p",
+                "/tmp/v.mp4",
+                "video/mp4",
+                1,
+                "v.mp4",
+                &CloneConfig::default(),
+            )
             .unwrap();
 
         let out = call_tool(
@@ -1052,9 +1155,19 @@ mod tests {
         let id = st
             .core
             .db
-            .create_project("p", "/tmp/v.mp4", "video/mp4", 1, "v.mp4", &CloneConfig::default())
+            .create_project(
+                "p",
+                "/tmp/v.mp4",
+                "video/mp4",
+                1,
+                "v.mp4",
+                &CloneConfig::default(),
+            )
             .unwrap();
-        st.core.db.append_scenes(id, &[json!({"scene_id":"1"})], 1).unwrap();
+        st.core
+            .db
+            .append_scenes(id, &[json!({"scene_id":"1"})], 1)
+            .unwrap();
 
         let out = call_tool(
             &st,
@@ -1071,13 +1184,22 @@ mod tests {
         let id = st
             .core
             .db
-            .create_project("p", "/tmp/v.mp4", "video/mp4", 1, "v.mp4", &CloneConfig::default())
+            .create_project(
+                "p",
+                "/tmp/v.mp4",
+                "video/mp4",
+                1,
+                "v.mp4",
+                &CloneConfig::default(),
+            )
             .unwrap();
-        st.core.db.append_scenes(id, &[json!({"scene_id":"1"})], 1).unwrap();
+        st.core
+            .db
+            .append_scenes(id, &[json!({"scene_id":"1"})], 1)
+            .unwrap();
 
         let out = call_tool(&st, "vc_export", &json!({ "project_id": id })).await;
-        let v: Value =
-            serde_json::from_str(out["content"][0]["text"].as_str().unwrap()).unwrap();
+        let v: Value = serde_json::from_str(out["content"][0]["text"].as_str().unwrap()).unwrap();
         assert!(v.get("preview").is_some());
         assert!(v.get("text").is_none());
     }

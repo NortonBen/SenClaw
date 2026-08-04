@@ -39,6 +39,14 @@ export default function App() {
   /// Bumped whenever the scene list changes, so the history panel refetches.
   const [sceneVersion, setSceneVersion] = useState(0);
 
+  const [youtube, setYoutube] = useState<{ available: boolean | null; hint: string }>({
+    available: null,
+    hint: "",
+  });
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const activeImportId = useRef<number | null>(null);
+
   const refreshSettings = useCallback(async () => {
     try {
       setSettings(await api.settings());
@@ -79,7 +87,30 @@ export default function App() {
     void refreshSettings();
     void refreshProjects();
     api.presets().then(setPresets).catch(() => setPresets(null));
+    api
+      .youtubeAvailable()
+      .then((r) => setYoutube({ available: r.available, hint: r.install_hint ?? "" }))
+      .catch(() => setYoutube({ available: false, hint: "brew install yt-dlp" }));
   }, [refreshSettings, refreshProjects]);
+
+  // Reflect a download's progress, and adopt the new project when it lands.
+  const onImportProgress = useCallback(
+    (data: { id?: number; status?: string; message?: string; project_id?: number | null }) => {
+      if (activeImportId.current == null || data.id !== activeImportId.current) return;
+      setImportMessage(data.message ?? null);
+      if (data.status === "completed") {
+        setImporting(false);
+        activeImportId.current = null;
+        void refreshProjects();
+        if (typeof data.project_id === "number") setActiveId(data.project_id);
+      } else if (data.status === "failed") {
+        setImporting(false);
+        activeImportId.current = null;
+        setError(data.message ?? "Tải video thất bại");
+      }
+    },
+    [refreshProjects],
+  );
 
   useEffect(() => {
     if (activeId == null) {
@@ -100,6 +131,10 @@ export default function App() {
   activeRef.current = activeId;
 
   useDashboardWS((event) => {
+    if (event.type === "youtube:progress") {
+      onImportProgress(event.data as Parameters<typeof onImportProgress>[0]);
+      return;
+    }
     const projectId = event.data?.project_id as number | undefined;
     if (event.type === "project:created" || event.type === "project:deleted") {
       void refreshProjects();
@@ -137,6 +172,35 @@ export default function App() {
       setUploading(false);
     }
   };
+
+  const importYoutube = async (url: string) => {
+    setError(null);
+    setImporting(true);
+    setImportMessage("đang lấy thông tin video");
+    try {
+      const { import_id } = await api.youtubeImport({ url });
+      activeImportId.current = import_id;
+    } catch (e) {
+      setImporting(false);
+      activeImportId.current = null;
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // Fallback poll: if the WS drops mid-download, still notice the outcome.
+  useEffect(() => {
+    if (!importing || activeImportId.current == null) return;
+    const timer = window.setInterval(async () => {
+      const id = activeImportId.current;
+      if (id == null) return;
+      try {
+        onImportProgress(await api.youtubeImportStatus(id));
+      } catch {
+        /* transient; keep polling */
+      }
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [importing, onImportProgress]);
 
   const analyze = async (mode: "start" | "continue" | "regenerate", cfg: CloneConfig) => {
     if (activeId == null) return;
@@ -193,8 +257,13 @@ export default function App() {
               projects={projects}
               activeId={activeId}
               uploading={uploading}
+              importing={importing}
+              importMessage={importMessage}
+              youtubeAvailable={youtube.available}
+              youtubeHint={youtube.hint}
               onSelect={setActiveId}
               onUpload={(f) => void upload(f)}
+              onImportYoutube={(u) => void importYoutube(u)}
               onDeleted={() => void refreshProjects()}
             />
 

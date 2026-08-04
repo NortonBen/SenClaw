@@ -98,7 +98,12 @@ pub async fn read_inline(path: &Path, mime: &str) -> Result<VideoPart> {
 /// Video uploads land in `PROCESSING` state; referencing the URI before it
 /// turns `ACTIVE` is rejected, so we poll here rather than letting the
 /// generate call fail.
-pub async fn upload_file(api_key: &str, path: &Path, mime: &str, display_name: &str) -> Result<String> {
+pub async fn upload_file(
+    api_key: &str,
+    path: &Path,
+    mime: &str,
+    display_name: &str,
+) -> Result<String> {
     let client = http()?;
     let size = tokio::fs::metadata(path)
         .await
@@ -264,7 +269,8 @@ pub fn extract_text(v: &Value) -> Result<String> {
         bail!(match finish {
             "SAFETY" => "Gemini chặn kết quả vì bộ lọc an toàn".to_string(),
             "RECITATION" => "Gemini chặn kết quả vì trùng nội dung có bản quyền".to_string(),
-            "MAX_TOKENS" => "Gemini cắt kết quả vì quá dài — thử lại từng đoạn ngắn hơn".to_string(),
+            "MAX_TOKENS" =>
+                "Gemini cắt kết quả vì quá dài — thử lại từng đoạn ngắn hơn".to_string(),
             other if !other.is_empty() => format!("Gemini không trả về nội dung ({other})"),
             _ => "Gemini không trả về nội dung".to_string(),
         });
@@ -299,7 +305,10 @@ mod tests {
             mime: "video/mp4".into(),
             uri: "https://x/files/1".into(),
         };
-        assert_eq!(remote.to_part()["file_data"]["file_uri"], "https://x/files/1");
+        assert_eq!(
+            remote.to_part()["file_data"]["file_uri"],
+            "https://x/files/1"
+        );
     }
 
     #[test]

@@ -87,13 +87,52 @@ pub fn video_flow_url() -> String {
     env_or("VIDEO_FLOW_URL", "http://127.0.0.1:4460")
 }
 
+/// Path to the `yt-dlp` binary used to fetch videos from YouTube (and any other
+/// site it supports). Overridable because Homebrew, pipx and system installs
+/// land it in different places.
+pub fn ytdlp_path() -> String {
+    env_or("VIDEO_CLONER_YTDLP", "yt-dlp")
+}
+
+/// Cap on downloaded resolution. Gemini re-reads the whole file on every
+/// segment, so pulling a 4K master when 720p analyses identically just wastes
+/// disk and upload time.
+pub fn youtube_max_height() -> u32 {
+    std::env::var("VIDEO_CLONER_YOUTUBE_MAX_HEIGHT")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .filter(|h| *h >= 144)
+        .unwrap_or(720)
+}
+
+/// Hard ceiling passed to yt-dlp's `--max-filesize`, so a mis-pasted link to a
+/// three-hour stream cannot fill the disk. yt-dlp size syntax (e.g. "500M").
+pub fn youtube_max_filesize() -> String {
+    env_or("VIDEO_CLONER_YOUTUBE_MAX_FILESIZE", "500M")
+}
+
+/// Browser to pull cookies from for yt-dlp (`--cookies-from-browser`).
+///
+/// YouTube throttles anonymous downloads with a "confirm you're not a bot"
+/// block after a few requests from one IP. Pointing yt-dlp at the user's own
+/// logged-in browser cookies clears it. Off by default (empty) because it reads
+/// the browser's cookie store, which the user should opt into explicitly.
+/// Values: `chrome`, `safari`, `firefox`, `edge`, `brave`, …
+pub fn ytdlp_cookies_browser() -> String {
+    env_or("VIDEO_CLONER_YTDLP_COOKIES", "")
+}
+
 /// Gemini API key taken from the environment.
 ///
 /// This is only the fallback: the key is normally set through the app's own
 /// Settings page and stored in `app_settings`, so the user does not have to
 /// restart the daemon to change it. See `db::gemini_api_key`.
 pub fn env_gemini_api_key() -> String {
-    for key in ["VIDEO_CLONER_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"] {
+    for key in [
+        "VIDEO_CLONER_GEMINI_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+    ] {
         let v = env_or(key, "");
         if !v.is_empty() {
             return v;

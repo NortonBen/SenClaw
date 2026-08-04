@@ -25,8 +25,10 @@ nguyên phong cách gốc, hoặc đổi sang phong cách/nhân vật/bối cả
 - **Phải có Gemini API key.** `vc_status` trả `has_api_key: false` nghĩa là mọi
   lệnh phân tích sẽ hỏng. Báo Sếp mở Cài đặt của Video Cloner nhập key trước,
   đừng gọi `vc_analyze` để "thử xem".
-- **Video phải được tải lên qua giao diện web.** MCP không nhận file. Nếu Sếp
-  chưa có dự án nào, hướng dẫn Sếp mở app kéo video vào, rồi quay lại.
+- **Nguồn video:** Sếp tải file lên qua giao diện web, hoặc dán link YouTube
+  (tab "YouTube"). Qua MCP thì chỉ có đường YouTube (`vc_youtube_import`) — MCP
+  không nhận file tải tay. Nếu Sếp chưa có dự án và cũng không có link, hướng
+  dẫn Sếp mở app kéo video vào.
 - Phân tích **chạy nền, mỗi đoạn 8 giây mất vài phút**. Không bao giờ chờ đồng bộ.
 
 ## Các bước
@@ -35,7 +37,12 @@ nguyên phong cách gốc, hoặc đổi sang phong cách/nhân vật/bối cả
    dự án nào đang chạy không.
 
 2. **Chọn dự án.** `mcp__video-cloner-mcp__vc_project_list` để lấy `project_id`.
-   Nếu danh sách rỗng, xem mục "Điều kiện tiên quyết" ở trên.
+   Nếu Sếp đưa link YouTube thay vì đã có dự án, dùng
+   `mcp__video-cloner-mcp__vc_youtube_import` với `url` — nó tải nền và trả
+   `import_id`; poll `mcp__video-cloner-mcp__vc_youtube_status` tới khi
+   `completed` để lấy `project_id`. Cần máy đã cài yt-dlp (`vc_status` có cờ
+   `youtube_download`); thiếu thì báo Sếp cài `brew install yt-dlp`.
+   Nếu danh sách rỗng và không có link, xem mục "Điều kiện tiên quyết" ở trên.
 
 3. **Đọc cấu hình hiện tại.** `mcp__video-cloner-mcp__vc_project_get` cho biết
    phong cách đang đặt, đã có bao nhiêu đoạn, và ID nhân vật đã phát hiện.

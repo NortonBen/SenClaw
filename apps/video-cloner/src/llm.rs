@@ -49,7 +49,11 @@ pub async fn bridge_llm(system: &str, user: &str, max_tokens: u32) -> Result<Str
 
     match v.get("status").and_then(|x| x.as_str()) {
         Some("ok") => {
-            let text = v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let text = v
+                .get("text")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             // A completion cut off at the token cap is a truncated translation,
             // which would silently ship half a prompt downstream.
             if v.get("finish").and_then(|x| x.as_str()) == Some("length") {

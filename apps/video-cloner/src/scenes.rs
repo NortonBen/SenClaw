@@ -23,7 +23,11 @@ pub fn truncate_chars(s: &str, max: usize) -> String {
 pub fn parse_scenes(raw: &str) -> Vec<Value> {
     let mut out = Vec::new();
     for line in raw.lines() {
-        let trimmed = line.trim().trim_start_matches("```json").trim_matches('`').trim();
+        let trimmed = line
+            .trim()
+            .trim_start_matches("```json")
+            .trim_matches('`')
+            .trim();
         if trimmed.len() < 2 {
             continue;
         }
@@ -240,7 +244,11 @@ pub fn apply_replace(scenes: &[Value], req: &ReplaceRequest) -> Result<ReplaceOu
     let target_id = target.as_ref().map(|c| c.id.clone());
 
     for scene in out.iter_mut() {
-        let Some(lock) = scene.get("character_lock").and_then(|v| v.as_object()).cloned() else {
+        let Some(lock) = scene
+            .get("character_lock")
+            .and_then(|v| v.as_object())
+            .cloned()
+        else {
             continue;
         };
 
@@ -313,8 +321,9 @@ pub fn apply_replace(scenes: &[Value], req: &ReplaceRequest) -> Result<ReplaceOu
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
-                    let matches =
-                        speaker == *char_id || speaker == *name || (!find.is_empty() && speaker == find);
+                    let matches = speaker == *char_id
+                        || speaker == *name
+                        || (!find.is_empty() && speaker == find);
                     if !matches {
                         continue;
                     }
@@ -431,9 +440,15 @@ mod tests {
         let out = apply_replace(&sample(), &r).unwrap();
         let s = &out.scenes[0];
 
-        assert_eq!(s["character_lock"]["CHAR_1"]["voice_id"], "MALE_CHAR_1_VOICE");
+        assert_eq!(
+            s["character_lock"]["CHAR_1"]["voice_id"],
+            "MALE_CHAR_1_VOICE"
+        );
         assert_eq!(s["character_lock"]["CHAR_1"]["gender"], "Male");
-        assert_eq!(s["audio_markers"]["voice_samples"]["CHAR_1"], "MALE_CHAR_1_VOICE");
+        assert_eq!(
+            s["audio_markers"]["voice_samples"]["CHAR_1"],
+            "MALE_CHAR_1_VOICE"
+        );
         assert_eq!(s["dialogue"][0]["voice_marker"], "MALE_CHAR_1_VOICE");
         assert_eq!(out.voices_applied, 1);
     }
@@ -469,7 +484,10 @@ mod tests {
     #[test]
     fn a_replacement_containing_quotes_does_not_corrupt_the_scene() {
         let out = apply_replace(&sample(), &req("Lan", "A \"B\" C")).unwrap();
-        assert_eq!(out.scenes[0]["character_lock"]["CHAR_1"]["name"], "A \"B\" C");
+        assert_eq!(
+            out.scenes[0]["character_lock"]["CHAR_1"]["name"],
+            "A \"B\" C"
+        );
     }
 
     #[test]

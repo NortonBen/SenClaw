@@ -15,6 +15,8 @@ hoàn toàn trong trình duyệt) sang Space App Rust + React.
 
 ## Làm được gì
 
+- **Nguồn video: tải lên tay hoặc dán link YouTube.** Tab "YouTube" tải video
+  về (qua `yt-dlp`) rồi tạo dự án như video tải tay.
 - Giữ nguyên phong cách gốc, hoặc đổi sang phong cách khác (7 preset + tự nhập).
 - Thay nhân vật chính bằng mô tả chữ **hoặc ảnh mẫu** (ảnh được gửi kèm cho model).
 - Thay bối cảnh, hoặc để trống cho AI tự sáng tạo bối cảnh hợp phong cách.
@@ -103,6 +105,29 @@ bản thuần, nên dùng model đã cấu hình sẵn trong daemon thay vì đ�
 
 Lưu ý: bridge quảng cáo `space.rest` nhưng **không có handler**, nên việc ghi
 wiki gọi thẳng `PUT {SENCLAW_BASE_URL}/api/wiki/file` của daemon.
+
+## Tải video từ YouTube
+
+Tab **YouTube** ở khung "Nguồn Video" nhận link, tải video về `media/` bằng
+`yt-dlp` rồi tạo dự án. Tải chạy nền (job trong bộ nhớ + WebSocket + poll dự
+phòng), nên video dài không treo request.
+
+- **Cần `yt-dlp`** (và `ffmpeg` để ghép luồng). Thiếu thì UI hiện hướng dẫn cài
+  thay vì ô nhập:
+  ```bash
+  brew install yt-dlp
+  ```
+- Tải tối đa **720p** (`VIDEO_CLONER_YOUTUBE_MAX_HEIGHT`) và tối đa **500M**
+  (`VIDEO_CLONER_YOUTUBE_MAX_FILESIZE`) để không đầy đĩa.
+- **Chặn "confirm you're not a bot":** YouTube giới hạn tải ẩn danh sau vài
+  lượt. Trỏ yt-dlp vào cookies trình duyệt đang đăng nhập để vượt:
+  ```bash
+  VIDEO_CLONER_YTDLP_COOKIES=chrome   # safari | firefox | edge | brave...
+  ```
+- yt-dlp hỗ trợ hàng nghìn trang, không chỉ YouTube — ô nhập nhận mọi URL
+  http/https. URL được truyền dạng tham số (sau `--`), không qua shell.
+- MCP: `vc_youtube_import` (trả `import_id`) + `vc_youtube_status`. `vc_status`
+  có cờ `youtube_download` cho biết máy đã có yt-dlp chưa.
 
 ## Cấu hình
 

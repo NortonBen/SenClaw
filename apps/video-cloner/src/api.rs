@@ -54,6 +54,10 @@ pub fn api_router(state: AppState) -> Router {
         .route("/settings", get(get_settings).put(put_settings))
         .route("/presets", get(presets))
         .route("/projects", get(list_projects).post(create_project))
+        .route("/youtube/available", get(youtube_available))
+        .route("/youtube/probe", post(youtube_probe))
+        .route("/youtube/import", post(youtube_import))
+        .route("/youtube/import/:id", get(youtube_import_status))
         .route("/projects/:id", get(get_project).delete(delete_project))
         .route("/projects/:id/config", put(update_config))
         .route("/projects/:id/char-image", post(upload_char_image))
@@ -203,7 +207,11 @@ async fn create_project(State(state): State<AppState>, mut mp: Multipart) -> Res
                     Ok(b) => b,
                     Err(e) => return err400(format!("đọc file video thất bại: {e}")),
                 };
-                let mime = if mime.is_empty() { "video/mp4".to_string() } else { mime };
+                let mime = if mime.is_empty() {
+                    "video/mp4".to_string()
+                } else {
+                    mime
+                };
                 video = Some((mime, file_name, bytes.to_vec()));
             }
             "char_image" => {
@@ -212,7 +220,11 @@ async fn create_project(State(state): State<AppState>, mut mp: Multipart) -> Res
                     Err(e) => return err400(format!("đọc ảnh nhân vật thất bại: {e}")),
                 };
                 if !bytes.is_empty() {
-                    let mime = if mime.is_empty() { "image/jpeg".to_string() } else { mime };
+                    let mime = if mime.is_empty() {
+                        "image/jpeg".to_string()
+                    } else {
+                        mime
+                    };
                     char_image = Some((mime, bytes.to_vec()));
                 }
             }
@@ -307,12 +319,184 @@ async fn store_media(bytes: &[u8], original: &str, kind: &str) -> anyhow::Result
         .and_then(|e| e.to_str())
         .filter(|e| e.len() <= 8 && e.chars().all(|c| c.is_ascii_alphanumeric()))
         .map(|e| format!(".{e}"))
-        .unwrap_or_else(|| if kind == "video" { ".mp4".into() } else { ".jpg".into() });
+        .unwrap_or_else(|| {
+            if kind == "video" {
+                ".mp4".into()
+            } else {
+                ".jpg".into()
+            }
+        });
 
     let stamp = chrono::Utc::now().format("%Y%m%d%H%M%S%3f");
     let path = dir.join(format!("{kind}-{stamp}{ext}"));
     tokio::fs::write(&path, bytes).await?;
     Ok(path.to_string_lossy().to_string())
+}
+
+// ---- import from a URL (YouTube etc.) ----
+
+async fn youtube_available(State(_): State<AppState>) -> Response {
+    match crate::youtube::available().await {
+        Some(version) => respond(json!({ "available": true, "version": version })),
+        None => respond(json!({
+            "available": false,
+            "install_hint": "brew install yt-dlp",
+        })),
+    }
+}
+
+#[derive(Deserialize)]
+struct UrlBody {
+    #[serde(default)]
+    url: String,
+}
+
+async fn youtube_probe(State(_): State<AppState>, body: Bytes) -> Response {
+    let req: UrlBody = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return err400(format!("body không hợp lệ: {e}")),
+    };
+    if !crate::youtube::valid_url(&req.url) {
+        return err400("URL không hợp lệ — dán đường dẫn video http/https");
+    }
+    match crate::youtube::probe(&req.url).await {
+        Ok(meta) => respond(serde_json::to_value(&meta).unwrap_or(Value::Null)),
+        Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct ImportBody {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    style: String,
+}
+
+/// Kick off a background download and return an import id to poll.
+async fn youtube_import(State(state): State<AppState>, body: Bytes) -> Response {
+    let req: ImportBody = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return err400(format!("body không hợp lệ: {e}")),
+    };
+    if !crate::youtube::valid_url(&req.url) {
+        return err400("URL không hợp lệ — dán đường dẫn video http/https");
+    }
+    if crate::youtube::available().await.is_none() {
+        return err(
+            StatusCode::BAD_GATEWAY,
+            "chưa cài yt-dlp. Cài bằng: brew install yt-dlp",
+        );
+    }
+
+    let st = state.core.start_import(&req.url);
+    let import_id = st.id;
+    state.core.dash.emit(
+        "youtube:progress",
+        serde_json::to_value(&st).unwrap_or_default(),
+    );
+
+    let core = state.core.clone();
+    tokio::spawn(async move {
+        run_import_bg(core, import_id, req.url, req.name, req.style).await;
+    });
+
+    respond(json!({ "import_id": import_id, "status": "probing" }))
+}
+
+/// The download → create-project pipeline, run off the request thread. Public so
+/// the MCP tool can start the same background work.
+pub(crate) async fn run_import_bg(
+    core: std::sync::Arc<crate::state::Core>,
+    import_id: i64,
+    url: String,
+    req_name: String,
+    style: String,
+) {
+    // Metadata is best-effort: it only names the project and previews the clip.
+    let meta = crate::youtube::probe(&url).await.ok();
+    let name = if !req_name.trim().is_empty() {
+        req_name.trim().to_string()
+    } else {
+        meta.as_ref()
+            .map(|m| m.title.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "Video từ URL".to_string())
+    };
+
+    core.update_import(
+        import_id,
+        "downloading",
+        "đang tải video về (có thể mất một lúc với video dài)",
+        Some(&name),
+        None,
+    );
+
+    let dir = crate::config::media_dir();
+    let stamp = crate::db::now().replace([':', '.', '-'], "");
+    let stem = format!("yt-{stamp}-{import_id}");
+
+    let dl = match crate::youtube::download(&url, &dir, &stem).await {
+        Ok(d) => d,
+        Err(e) => {
+            core.update_import(
+                import_id,
+                "failed",
+                &crate::scenes::truncate_chars(&format!("{e:#}"), 400),
+                None,
+                None,
+            );
+            return;
+        }
+    };
+
+    let cfg = crate::db::CloneConfig {
+        style: if style.trim().is_empty() {
+            crate::presets::STYLES[0].to_string()
+        } else {
+            style.trim().to_string()
+        },
+        model: core.db.setting("default_model", "gemini-3-flash-preview"),
+        visual_similarity: 100,
+        ..Default::default()
+    };
+
+    let path = dl.path.to_string_lossy().to_string();
+    match core
+        .db
+        .create_project(&name, &path, &dl.mime, dl.size as i64, &dl.filename, &cfg)
+    {
+        Ok(project_id) => {
+            core.update_import(
+                import_id,
+                "completed",
+                "đã tải xong và tạo dự án",
+                Some(&name),
+                Some(project_id),
+            );
+            core.dash
+                .emit("project:created", json!({ "project_id": project_id }));
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&dl.path).await;
+            core.update_import(
+                import_id,
+                "failed",
+                &format!("tải xong nhưng không tạo được dự án: {e}"),
+                None,
+                None,
+            );
+        }
+    }
+}
+
+async fn youtube_import_status(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+    match state.core.get_import(id) {
+        Some(st) => respond(serde_json::to_value(&st).unwrap_or(Value::Null)),
+        None => err404("không tìm thấy lượt nhập (có thể đã hết hạn)"),
+    }
 }
 
 async fn get_project(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
@@ -505,7 +689,10 @@ async fn analyze(State(state): State<AppState>, Path(id): Path<i64>, body: Bytes
         Err(e) => return err500(e),
     };
 
-    let mode_str = patch.get("mode").and_then(|v| v.as_str()).unwrap_or("start");
+    let mode_str = patch
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("start");
     let Some(mode) = Mode::parse(mode_str) else {
         return err400(format!(
             "mode không hợp lệ: {mode_str} (dùng start | continue | regenerate)"
@@ -585,7 +772,11 @@ async fn replace(State(state): State<AppState>, Path(id): Path<i64>, body: Bytes
             Some(voice) => {
                 voices.insert(char_id.clone(), voice);
             }
-            None => return err400(format!("giọng không hợp lệ cho {char_id}: {v} (male | female)")),
+            None => {
+                return err400(format!(
+                    "giọng không hợp lệ cho {char_id}: {v} (male | female)"
+                ))
+            }
         }
     }
 
@@ -614,7 +805,11 @@ async fn replace(State(state): State<AppState>, Path(id): Path<i64>, body: Bytes
     let label = if req.find.trim().is_empty() {
         "trước khi đổi giọng hàng loạt".to_string()
     } else {
-        format!("trước khi đổi \"{}\" → \"{}\"", req.find.trim(), req.replace.trim())
+        format!(
+            "trước khi đổi \"{}\" → \"{}\"",
+            req.find.trim(),
+            req.replace.trim()
+        )
     };
     let snapshot_id = state.core.db.snapshot(id, "replace", &label).ok().flatten();
 
@@ -679,7 +874,13 @@ async fn get_snapshot(State(state): State<AppState>, Path(id): Path<i64>) -> Res
         Ok(None) => return err404("không tìm thấy điểm khôi phục"),
         Err(e) => return err500(e),
     };
-    let scenes_json = state.core.db.snapshot_scenes(id).ok().flatten().unwrap_or_default();
+    let scenes_json = state
+        .core
+        .db
+        .snapshot_scenes(id)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     respond(json!({
         "snapshot": meta,
         "scenes": scenes_json,
@@ -726,7 +927,11 @@ async fn restore(State(state): State<AppState>, Path(id): Path<i64>, body: Bytes
     let undo = state
         .core
         .db
-        .snapshot(id, "restore", &format!("trước khi khôi phục #{}", req.snapshot_id))
+        .snapshot(
+            id,
+            "restore",
+            &format!("trước khi khôi phục #{}", req.snapshot_id),
+        )
         .ok()
         .flatten();
 
@@ -751,7 +956,10 @@ async fn restore(State(state): State<AppState>, Path(id): Path<i64>, body: Bytes
 // ---- export & handoff ----
 
 /// Load a project plus its scenes, or the response explaining why not.
-fn load_for_export(state: &AppState, id: i64) -> Result<(crate::db::Project, Vec<crate::db::Scene>), Response> {
+fn load_for_export(
+    state: &AppState,
+    id: i64,
+) -> Result<(crate::db::Project, Vec<crate::db::Scene>), Response> {
     let project = match state.core.db.project(id) {
         Ok(Some(p)) => p,
         Ok(None) => return Err(err404("không tìm thấy dự án")),
@@ -790,7 +998,10 @@ async fn export_bundle(
     let body = serde_json::to_string_pretty(&bundle).unwrap_or_default();
     (
         [
-            (header::CONTENT_TYPE, "application/json; charset=utf-8".to_string()),
+            (
+                header::CONTENT_TYPE,
+                "application/json; charset=utf-8".to_string(),
+            ),
             (
                 header::CONTENT_DISPOSITION,
                 format!(
@@ -820,7 +1031,10 @@ async fn export_markdown(
     }
     (
         [
-            (header::CONTENT_TYPE, "text/markdown; charset=utf-8".to_string()),
+            (
+                header::CONTENT_TYPE,
+                "text/markdown; charset=utf-8".to_string(),
+            ),
             (
                 header::CONTENT_DISPOSITION,
                 format!(
@@ -861,11 +1075,8 @@ async fn export_to_dir(State(state): State<AppState>, Path(id): Path<i64>) -> Re
     {
         return err500(format!("ghi {} thất bại: {e}", bundle_path.display()));
     }
-    if let Err(e) = tokio::fs::write(
-        &md_path,
-        crate::export::markdown(&project, &stored, &now),
-    )
-    .await
+    if let Err(e) =
+        tokio::fs::write(&md_path, crate::export::markdown(&project, &stored, &now)).await
     {
         return err500(format!("ghi {} thất bại: {e}", md_path.display()));
     }
@@ -1075,7 +1286,10 @@ async fn export(
     );
     (
         [
-            (header::CONTENT_TYPE, "text/plain; charset=utf-8".to_string()),
+            (
+                header::CONTENT_TYPE,
+                "text/plain; charset=utf-8".to_string(),
+            ),
             (
                 header::CONTENT_DISPOSITION,
                 format!("attachment; filename=\"{filename}\""),
@@ -1122,20 +1336,38 @@ mod tests {
     #[test]
     fn merge_config_clamps_the_similarity_slider() {
         let base = CloneConfig::default();
-        assert_eq!(merge_config(&base, &json!({"visual_similarity": 900})).visual_similarity, 100);
-        assert_eq!(merge_config(&base, &json!({"visual_similarity": -5})).visual_similarity, 0);
+        assert_eq!(
+            merge_config(&base, &json!({"visual_similarity": 900})).visual_similarity,
+            100
+        );
+        assert_eq!(
+            merge_config(&base, &json!({"visual_similarity": -5})).visual_similarity,
+            0
+        );
     }
 
     #[test]
     fn blank_style_does_not_wipe_the_stored_one() {
-        let base = CloneConfig { style: "Keep me".into(), ..Default::default() };
-        assert_eq!(merge_config(&base, &json!({ "style": "  " })).style, "Keep me");
+        let base = CloneConfig {
+            style: "Keep me".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            merge_config(&base, &json!({ "style": "  " })).style,
+            "Keep me"
+        );
     }
 
     #[test]
     fn empty_description_fields_can_be_cleared() {
-        let base = CloneConfig { char_description: "old".into(), ..Default::default() };
-        assert_eq!(merge_config(&base, &json!({ "char_description": "" })).char_description, "");
+        let base = CloneConfig {
+            char_description: "old".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            merge_config(&base, &json!({ "char_description": "" })).char_description,
+            ""
+        );
     }
 
     #[test]

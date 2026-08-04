@@ -285,7 +285,10 @@ pub fn cast(scene_values: &[Value]) -> Vec<Value> {
         }
     }
 
-    order.into_iter().filter_map(|id| seen.remove(&id)).collect()
+    order
+        .into_iter()
+        .filter_map(|id| seen.remove(&id))
+        .collect()
 }
 
 /// The full export payload.
@@ -403,11 +406,7 @@ pub fn markdown(project: &Project, stored: &[Scene], exported_at: &str) -> Strin
         } else {
             row.scene_id.clone()
         };
-        out.push_str(&format!(
-            "### Đoạn {} ({:.0}s)\n\n",
-            id,
-            duration_of(sc)
-        ));
+        out.push_str(&format!("### Đoạn {} ({:.0}s)\n\n", id, duration_of(sc)));
 
         let img = image_prompt(sc);
         if !img.is_empty() {
@@ -627,7 +626,10 @@ mod tests {
         assert_eq!(b["summary"]["total_duration_sec"], 8.0);
         // Round-trip: the untouched Veo object survives.
         assert_eq!(b["scenes"][0]["veo"]["visual_style"], "Synthwave neon");
-        assert!(b["veo_jsonl"].as_str().unwrap().contains("\"scene_id\":\"1\""));
+        assert!(b["veo_jsonl"]
+            .as_str()
+            .unwrap()
+            .contains("\"scene_id\":\"1\""));
     }
 
     #[test]
@@ -665,7 +667,10 @@ mod tests {
         let mut rows = stored();
         rows[0].json["character_lock"]["CHAR_1"]["hair"] = json!("tóc | dài");
         let md = markdown(&project(), &rows, "t");
-        assert!(md.contains("tóc \\| dài"), "pipe must be escaped in a table cell");
+        assert!(
+            md.contains("tóc \\| dài"),
+            "pipe must be escaped in a table cell"
+        );
     }
 
     #[test]

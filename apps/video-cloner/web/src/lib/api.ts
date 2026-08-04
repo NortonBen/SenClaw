@@ -111,6 +111,27 @@ export const api = {
   createProject: (form: FormData) =>
     req<{ project: Project }>("/api/projects", { method: "POST", body: form }),
 
+  youtubeAvailable: () =>
+    req<{ available: boolean; version?: string; install_hint?: string }>(
+      "/api/youtube/available",
+    ),
+
+  youtubeImport: (body: { url: string; name?: string; style?: string }) =>
+    req<{ import_id: number; status: string }>("/api/youtube/import", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
+  youtubeImportStatus: (id: number) =>
+    req<{
+      id: number;
+      status: "probing" | "downloading" | "completed" | "failed";
+      message: string;
+      title: string;
+      project_id: number | null;
+    }>(`/api/youtube/import/${id}`),
+
   getProject: (id: number) =>
     req<{
       project: Project;
