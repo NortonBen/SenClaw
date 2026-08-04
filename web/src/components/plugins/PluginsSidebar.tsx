@@ -15,14 +15,16 @@ import {
   ExperimentOutlined,
   CloudServerOutlined,
   AppstoreOutlined,
-  ApartmentOutlined
+  AppstoreAddOutlined,
+  ApartmentOutlined,
+  TagsOutlined
 } from '@ant-design/icons';
 
 const { Text } = Typography;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'cowork' | 'code' | 'marketplace' | 'space-apps' | 'workflows';
+export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'alias' | 'cowork' | 'code' | 'marketplace' | 'space-apps' | 'workflows' | 'widgets';
 
 interface SkillSummary {
   name: string;
@@ -381,12 +383,28 @@ export function PluginsSidebar({ activeNav, onSelect }: Props) {
               onClick={() => onSelect('mcp')}
             />
 
+            {/* ─── Tool Alias (rename/override MCP tools) ─── */}
+            <StaticNavItem
+              icon={<TagsOutlined />}
+              label="Alias"
+              isSelected={activeNav === 'alias'}
+              onClick={() => onSelect('alias')}
+            />
+
             {/* ─── Space Apps ─── */}
             <StaticNavItem
               icon={<AppstoreOutlined />}
               label="Space Apps"
               isSelected={activeNav === 'space-apps'}
               onClick={() => onSelect('space-apps')}
+            />
+
+            {/* ─── Widgets (chat/dashboard widget catalog + default flows) ─── */}
+            <StaticNavItem
+              icon={<AppstoreAddOutlined />}
+              label="Widget"
+              isSelected={activeNav === 'widgets'}
+              onClick={() => onSelect('widgets')}
             />
 
 

@@ -5,6 +5,12 @@ import '../../theme/tokens.dart';
 import '../../widgets/refresh_on_mount.dart';
 import '../settings/entity_providers.dart' show toolRulesProvider, ToolRule;
 import 'cowork_panel.dart' show CoworkPanel;
+import 'widgets_panel.dart'
+    show
+        WidgetsManagePanel,
+        widgetCatalogProvider,
+        flowDefaultsProvider,
+        installedAppIdsProvider;
 import '../kanban/kanban_templates_panel.dart' show KanbanTemplatesPanel;
 import '../settings/settings_screen.dart' show SpaceAppsSection;
 import '../cognitive/cognitive_screen.dart' show CognitiveScreen;
@@ -135,6 +141,34 @@ class McpServer {
   }
 }
 
+/// One MCP tool alias (Plugins → Alias): `alias` is the name agents call,
+/// `target` the tool that actually executes. A brand-new alias renames the
+/// target in the roster; an alias equal to an existing tool name overrides
+/// that tool. `source == 'user'` rows are editable; `app:<id>` rows come from
+/// a Space App manifest (`mcp.toolAliases`), import disabled, and can only be
+/// toggled or deleted here.
+class ToolAlias {
+  final String alias;
+  final String target;
+  final String description;
+  final bool enabled;
+  final String source;
+
+  const ToolAlias(
+      this.alias, this.target, this.description, this.enabled, this.source);
+
+  bool get isUser => source == 'user';
+  String get appId => source.startsWith('app:') ? source.substring(4) : '';
+
+  factory ToolAlias.fromJson(Map<String, dynamic> j) => ToolAlias(
+        '${j['alias'] ?? ''}',
+        '${j['target'] ?? ''}',
+        '${j['description'] ?? ''}',
+        j['enabled'] == true,
+        '${j['source'] ?? 'user'}',
+      );
+}
+
 
 class MarketplaceSource {
   final String id;
@@ -178,6 +212,22 @@ final mcpServersProvider = FutureProvider<List<McpServer>>((ref) async =>
     _list(await ref.read(apiClientProvider).get('/api/mcp-servers'), 'servers')
         .map(McpServer.fromJson)
         .toList());
+
+final toolAliasesProvider = FutureProvider<List<ToolAlias>>((ref) async =>
+    _list(await ref.read(apiClientProvider).get('/api/tool-aliases'), 'aliases')
+        .map(ToolAlias.fromJson)
+        .toList());
+
+/// Full `mcp__<server>__<tool>` names of every known MCP tool — used to badge
+/// an alias as "override" (name collides with a real tool) vs "new name",
+/// mirroring the web AliasPanel. Piggybacks on the MCP tab's payload.
+final knownToolNamesProvider = FutureProvider<Set<String>>((ref) async {
+  final servers = await ref.watch(mcpServersProvider.future);
+  return {
+    for (final s in servers)
+      for (final t in s.tools) 'mcp__${s.name}__${t.name}',
+  };
+});
 
 final marketplaceSourcesProvider =
     FutureProvider<List<MarketplaceSource>>((ref) async => _list(
@@ -291,9 +341,11 @@ const _pluginsSections = [
   ('skills', 'Skills', Icons.bolt_outlined),
   ('subagents', 'Subagents', Icons.smart_toy_outlined),
   ('mcp', 'MCP servers', Icons.dns_outlined),
+  ('alias', 'Alias', Icons.sell_outlined),
   ('hooks', 'Hooks', Icons.webhook_outlined),
   ('code', 'Code', Icons.code),
   ('apps', 'Space Apps', Icons.apps_outlined),
+  ('widgets', 'Widget', Icons.widgets_outlined),
   ('kanban', 'Kanban', Icons.view_kanban_outlined),
   ('cowork', 'Cowork', Icons.groups_outlined),
   ('schedules', 'Schedules', Icons.schedule_outlined),
@@ -305,6 +357,56 @@ const _pluginsSections = [
 /// Public so other screens (e.g. the new-session Workflow tab) can deep-link
 /// straight to a Plugins section before navigating here.
 final pluginsSectionProvider = StateProvider<String>((ref) => 'skills');
+
+// Per-tab search queries (Skills / Subagents / MCP). Kept in providers, not
+// widget state, so the query survives tab switches within a session.
+final _skillsSearchProvider = StateProvider<String>((_) => '');
+final _subagentsSearchProvider = StateProvider<String>((_) => '');
+final _mcpSearchProvider = StateProvider<String>((_) => '');
+
+bool _matchesQuery(String query, List<String?> fields) {
+  final q = query.trim().toLowerCase();
+  if (q.isEmpty) return true;
+  return fields.any((f) => (f ?? '').toLowerCase().contains(q));
+}
+
+/// Compact search box used by the Skills / Subagents / MCP tab headers.
+class _TabSearchField extends ConsumerWidget {
+  const _TabSearchField({required this.provider, required this.hint});
+  final StateProvider<String> provider;
+  final String hint;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final value = ref.watch(provider);
+    return SizedBox(
+      width: 230,
+      height: 30,
+      child: TextFormField(
+        initialValue: value,
+        onChanged: (v) => ref.read(provider.notifier).state = v,
+        style: TextStyle(fontSize: 12, color: c.textPrimary),
+        decoration: InputDecoration(
+          isDense: true,
+          prefixIcon: Icon(Icons.search, size: 14, color: c.textMuted),
+          prefixIconConstraints:
+              const BoxConstraints(minWidth: 28, minHeight: 14),
+          hintText: hint,
+          hintStyle: TextStyle(fontSize: 12, color: c.textMuted),
+          contentPadding:
+              const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+          border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppTokens.rMd),
+              borderSide: BorderSide(color: c.border)),
+          enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(AppTokens.rMd),
+              borderSide: BorderSide(color: c.border)),
+        ),
+      ),
+    );
+  }
+}
 
 // ── Screen ──────────────────────────────────────────────────────────────────
 /// Plugins management, laid out like the web app: a left section rail + a
@@ -359,6 +461,10 @@ class PluginsScreen extends ConsumerWidget {
                 key: const ValueKey('mcp'),
                 providers: [mcpServersProvider],
                 child: const _McpTab()),
+            'alias' => RefreshOnMount(
+                key: const ValueKey('alias'),
+                providers: [toolAliasesProvider, mcpServersProvider],
+                child: const _AliasTab()),
             'hooks' => RefreshOnMount(
                 key: const ValueKey('hooks'),
                 providers: [hooksProvider],
@@ -368,6 +474,14 @@ class PluginsScreen extends ConsumerWidget {
                 providers: [codeArtifactsProvider],
                 child: const _CodeTab()),
             'apps' => const SpaceAppsSection(),
+            'widgets' => RefreshOnMount(
+                key: const ValueKey('widgets'),
+                providers: [
+                  widgetCatalogProvider,
+                  flowDefaultsProvider,
+                  installedAppIdsProvider,
+                ],
+                child: const WidgetsManagePanel()),
             'kanban' => const KanbanTemplatesPanel(),
             'cowork' => const CoworkPanel(),
             'schedules' => const SchedulesPanel(),
@@ -1165,11 +1279,16 @@ class _NavItem extends StatelessWidget {
             children: [
               Icon(icon, size: 16, color: active ? c.accent : c.textMuted),
               const SizedBox(width: AppTokens.s12),
-              Text(label,
-                  style: TextStyle(
-                      color: active ? c.accent : c.textPrimary,
-                      fontSize: 14,
-                      fontWeight: active ? FontWeight.w600 : FontWeight.w400)),
+              // Flexible + ellipsis: long labels ("Marketplace") overflow the
+              // 220px rail by a few px otherwise.
+              Flexible(
+                child: Text(label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: active ? c.accent : c.textPrimary,
+                        fontSize: 14,
+                        fontWeight: active ? FontWeight.w600 : FontWeight.w400)),
+              ),
             ],
           ),
         ),
@@ -1197,6 +1316,9 @@ class _SubagentsTab extends ConsumerWidget {
                       color: c.textPrimary,
                       fontSize: 16,
                       fontWeight: FontWeight.w700)),
+              const SizedBox(width: AppTokens.s12),
+              _TabSearchField(
+                  provider: _subagentsSearchProvider, hint: 'Tìm subagent…'),
               const Spacer(),
               IconButton(
                 tooltip: 'Reload',
@@ -1218,16 +1340,26 @@ class _SubagentsTab extends ConsumerWidget {
           child: subs.when(
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => Center(child: Text('$e')),
-            data: (list) => list.isEmpty
-                ? Center(
-                    child: Text('No subagents',
-                        style: TextStyle(color: c.textMuted)))
-                : ListView.builder(
-                    padding: const EdgeInsets.all(AppTokens.s16),
-                    itemCount: list.length,
-                    itemBuilder: (_, i) =>
-                        _SubagentRow(sub: list[i], c: c, ref: ref),
-                  ),
+            data: (all) {
+              final query = ref.watch(_subagentsSearchProvider);
+              final list = all
+                  .where((s) => _matchesQuery(
+                      query, [s.name, s.description, s.tools.join(' ')]))
+                  .toList();
+              return list.isEmpty
+                  ? Center(
+                      child: Text(
+                          query.trim().isEmpty
+                              ? 'No subagents'
+                              : 'No subagents match "$query"',
+                          style: TextStyle(color: c.textMuted)))
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(AppTokens.s16),
+                      itemCount: list.length,
+                      itemBuilder: (_, i) =>
+                          _SubagentRow(sub: list[i], c: c, ref: ref),
+                    );
+            },
           ),
         ),
       ],
@@ -1486,6 +1618,9 @@ class _SkillsTab extends ConsumerWidget {
                       color: c.textPrimary,
                       fontSize: 16,
                       fontWeight: FontWeight.w700)),
+              const SizedBox(width: AppTokens.s12),
+              _TabSearchField(
+                  provider: _skillsSearchProvider, hint: 'Tìm skill…'),
               const Spacer(),
               IconButton(
                 tooltip: 'Reload',
@@ -1516,13 +1651,19 @@ class _SkillsTab extends ConsumerWidget {
 
   Widget _skillsList(BuildContext context, WidgetRef ref, dynamic c,
       AsyncValue<List<SkillInfo>> skills) {
+    final query = ref.watch(_skillsSearchProvider);
     return skills.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('$e')),
-      data: (list) {
+      data: (all) {
+        final list = all
+            .where((s) => _matchesQuery(query, [s.name, s.description, s.source]))
+            .toList();
         if (list.isEmpty) {
           return Center(
-              child: Text('No skills', style: TextStyle(color: c.textMuted)));
+              child: Text(
+                  query.trim().isEmpty ? 'No skills' : 'No skills match "$query"',
+                  style: TextStyle(color: c.textMuted)));
         }
         // Classify by source, ordered like the web SkillsPanel.
         final bySource = <String, List<SkillInfo>>{};
@@ -1745,8 +1886,10 @@ class _McpTab extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(
               AppTokens.s16, AppTokens.s12, AppTokens.s16, 0),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
             children: [
+              _TabSearchField(
+                  provider: _mcpSearchProvider, hint: 'Tìm server/tool…'),
+              const Spacer(),
               IconButton(
                 tooltip: 'Reload',
                 icon: const Icon(Icons.refresh, size: 18),
@@ -1766,11 +1909,31 @@ class _McpTab extends ConsumerWidget {
           child: servers.when(
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => Center(child: Text('$e')),
-            data: (list) => ListView.builder(
-              padding: const EdgeInsets.all(AppTokens.s16),
-              itemCount: list.length,
-              itemBuilder: (_, i) => _McpRow(server: list[i]),
-            ),
+            data: (all) {
+              final query = ref.watch(_mcpSearchProvider);
+              // Match on server name OR any of its tool names, so typing a
+              // tool like "widget_list" surfaces the owning server.
+              final list = all
+                  .where((s) => _matchesQuery(query, [
+                        s.name,
+                        for (final t in s.tools) t.name,
+                      ]))
+                  .toList();
+              if (list.isEmpty) {
+                final c2 = context.colors;
+                return Center(
+                    child: Text(
+                        query.trim().isEmpty
+                            ? 'No MCP servers'
+                            : 'No servers match "$query"',
+                        style: TextStyle(color: c2.textMuted)));
+              }
+              return ListView.builder(
+                padding: const EdgeInsets.all(AppTokens.s16),
+                itemCount: list.length,
+                itemBuilder: (_, i) => _McpRow(server: list[i]),
+              );
+            },
           ),
         ),
       ],
@@ -2424,6 +2587,397 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
                   const SizedBox(width: AppTokens.s8),
                   FilledButton(
                     onPressed: _canSave ? _save : null,
+                    child: Text(_isEdit ? 'Save' : 'Add'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Tool aliases (Plugins → Alias) ───────────────────────────────────────────
+class _AliasTab extends ConsumerWidget {
+  const _AliasTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final aliases = ref.watch(toolAliasesProvider);
+    final known =
+        ref.watch(knownToolNamesProvider).value ?? const <String>{};
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+              AppTokens.s16, AppTokens.s12, AppTokens.s16, 0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              IconButton(
+                tooltip: 'Reload',
+                icon: const Icon(Icons.refresh, size: 18),
+                onPressed: () {
+                  ref.invalidate(toolAliasesProvider);
+                  ref.invalidate(mcpServersProvider);
+                },
+              ),
+              const SizedBox(width: AppTokens.s4),
+              FilledButton.icon(
+                onPressed: () => showDialog(
+                    context: context, builder: (_) => const _AliasEditor()),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Add alias'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: aliases.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Center(child: Text('$e')),
+            data: (list) => ListView(
+              padding: const EdgeInsets.all(AppTokens.s16),
+              children: [
+                _Card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.sell_outlined, size: 16, color: c.accent),
+                          const SizedBox(width: AppTokens.s8),
+                          Text('Rename or override MCP tools',
+                              style: TextStyle(
+                                  color: c.textPrimary,
+                                  fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                      const SizedBox(height: AppTokens.s6),
+                      Text(
+                        '• New name: an alias that doesn\'t exist yet — the target tool '
+                        'shows up under the new name (the original name still resolves).\n'
+                        '• Override: an alias equal to an existing tool name — every call '
+                        'to that name executes the target tool instead.\n'
+                        '• Space-App aliases (mcp.toolAliases in senclaw-manifest.json) are '
+                        'imported disabled — enable them here before they take effect.',
+                        style: TextStyle(
+                            color: c.textMuted, fontSize: 12, height: 1.5),
+                      ),
+                    ],
+                  ),
+                ),
+                if (list.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: AppTokens.s24),
+                    child: Center(
+                      child: Text('No aliases yet — add one to rename or override a tool',
+                          style: TextStyle(color: c.textMuted)),
+                    ),
+                  ),
+                for (final a in list) _AliasRow(alias: a, known: known),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AliasRow extends ConsumerWidget {
+  const _AliasRow({required this.alias, required this.known});
+  final ToolAlias alias;
+  final Set<String> known;
+
+  Future<void> _setEnabled(WidgetRef ref, BuildContext context, bool v) async {
+    try {
+      await ref.read(apiClientProvider).post(
+          '/api/tool-aliases/${Uri.encodeComponent(alias.alias)}/enabled',
+          body: {'enabled': v});
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+    ref.invalidate(toolAliasesProvider);
+  }
+
+  Future<void> _delete(WidgetRef ref, BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete alias "${alias.alias}"?'),
+        content: alias.isUser
+            ? null
+            : const Text(
+                'App-declared aliases are re-imported (disabled) the next time the app starts.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ref
+          .read(apiClientProvider)
+          .delete('/api/tool-aliases/${Uri.encodeComponent(alias.alias)}');
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+    ref.invalidate(toolAliasesProvider);
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.colors;
+    final isOverride = known.contains(alias.alias);
+    return _Card(
+      child: Row(
+        children: [
+          Icon(Icons.sell_outlined, size: 18, color: c.accent),
+          const SizedBox(width: AppTokens.s12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(alias.alias,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: c.textPrimary,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                              fontFamily: AppTokens.fontMono)),
+                    ),
+                    const SizedBox(width: AppTokens.s8),
+                    _MiniTag(isOverride ? 'override' : 'new name',
+                        isOverride ? AppTokens.warning : AppTokens.brand),
+                    const SizedBox(width: AppTokens.s6),
+                    _MiniTag(
+                        alias.isUser ? 'user' : 'app: ${alias.appId}',
+                        alias.isUser ? AppTokens.cyan : AppTokens.brandAlt),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text('→ ${alias.target}',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: c.textSecondary,
+                        fontSize: 12,
+                        fontFamily: AppTokens.fontMono)),
+                if (alias.description.isNotEmpty)
+                  Text(alias.description,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: c.textMuted, fontSize: 12)),
+              ],
+            ),
+          ),
+          // App-owned rows keep their target managed by the manifest — only
+          // the enable toggle (the approval gate) + delete are offered.
+          if (alias.isUser)
+            IconButton(
+              tooltip: 'Edit',
+              icon: const Icon(Icons.edit_outlined, size: 16),
+              onPressed: () => showDialog(
+                  context: context,
+                  builder: (_) => _AliasEditor(existing: alias)),
+            ),
+          IconButton(
+            tooltip: 'Delete',
+            icon: const Icon(Icons.delete_outline,
+                size: 16, color: AppTokens.danger),
+            onPressed: () => _delete(ref, context),
+          ),
+          const SizedBox(width: AppTokens.s4),
+          Tooltip(
+            message: alias.enabled ? 'Disable' : 'Enable',
+            child: Switch(
+              value: alias.enabled,
+              onChanged: (v) => _setEnabled(ref, context, v),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AliasEditor extends ConsumerStatefulWidget {
+  const _AliasEditor({this.existing});
+  final ToolAlias? existing;
+  @override
+  ConsumerState<_AliasEditor> createState() => _AliasEditorState();
+}
+
+class _AliasEditorState extends ConsumerState<_AliasEditor> {
+  final _alias = TextEditingController();
+  final _target = TextEditingController();
+  final _description = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  static final _ws = RegExp(r'\s');
+
+  bool get _isEdit => widget.existing != null;
+  bool get _canSave {
+    final a = _alias.text.trim(), t = _target.text.trim();
+    return a.isNotEmpty &&
+        t.isNotEmpty &&
+        a != t &&
+        !a.contains(_ws) &&
+        !t.contains(_ws);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final ex = widget.existing;
+    if (ex != null) {
+      _alias.text = ex.alias;
+      _target.text = ex.target;
+      _description.text = ex.description;
+    }
+  }
+
+  @override
+  void dispose() {
+    _alias.dispose();
+    _target.dispose();
+    _description.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_canSave || _saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final api = ref.read(apiClientProvider);
+      final desc = _description.text.trim();
+      if (_isEdit) {
+        await api.put(
+            '/api/tool-aliases/${Uri.encodeComponent(widget.existing!.alias)}',
+            body: {
+              'target': _target.text.trim(),
+              'description': desc.isEmpty ? null : desc,
+            });
+      } else {
+        await api.post('/api/tool-aliases', body: {
+          'alias': _alias.text.trim(),
+          'target': _target.text.trim(),
+          'description': desc.isEmpty ? null : desc,
+        });
+      }
+      ref.invalidate(toolAliasesProvider);
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      setState(() => _error = '$e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Dialog(
+      backgroundColor: c.surface,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTokens.rXl)),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(AppTokens.s24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.sell_outlined, color: c.accent, size: 20),
+                  const SizedBox(width: AppTokens.s8),
+                  Text(_isEdit ? 'Edit alias' : 'Add alias',
+                      style: TextStyle(
+                          color: c.textPrimary,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
+              const SizedBox(height: AppTokens.s8),
+              Text(
+                'Maps the name agents call to the tool that actually runs. '
+                'Use an existing tool name as the alias to override that tool.',
+                style: TextStyle(color: c.textMuted, fontSize: 12),
+              ),
+              const SizedBox(height: AppTokens.s16),
+              TextField(
+                controller: _alias,
+                enabled: !_isEdit, // alias is the key — fixed when editing
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Alias (name agents call)',
+                  hintText: 'e.g. mcp__browser__navigate',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                style: const TextStyle(fontFamily: AppTokens.fontMono),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              TextField(
+                controller: _target,
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Target tool (actually executes)',
+                  hintText: 'e.g. mcp__senclaw-browser__browser_navigate',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                style: const TextStyle(fontFamily: AppTokens.fontMono),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              TextField(
+                controller: _description,
+                decoration: const InputDecoration(
+                  labelText: 'Description',
+                  hintText: 'Optional — shown instead of the target\'s description on rename',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: AppTokens.s12),
+                Text(_error!,
+                    style:
+                        const TextStyle(color: AppTokens.danger, fontSize: 12)),
+              ],
+              const SizedBox(height: AppTokens.s24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('Cancel')),
+                  const SizedBox(width: AppTokens.s8),
+                  FilledButton(
+                    onPressed: _canSave && !_saving ? _save : null,
                     child: Text(_isEdit ? 'Save' : 'Add'),
                   ),
                 ],

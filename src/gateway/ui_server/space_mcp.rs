@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use rusqlite::params;
 use serde_json::Value;
 use tokio::process::{Child, Command};
@@ -225,7 +225,9 @@ impl SpaceMcpLauncher {
         let apps: Vec<(String, Value)> = match db.with_conn(|conn| {
             let mut stmt = conn.prepare("SELECT id, manifest FROM space_apps WHERE enabled = 1")?;
             let rows = stmt
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
                 .filter_map(|r| r.ok())
                 .filter_map(|(id, m)| serde_json::from_str::<Value>(&m).ok().map(|v| (id, v)))
                 .collect::<Vec<_>>();
@@ -241,7 +243,10 @@ impl SpaceMcpLauncher {
             }
             let runtime = manifest.get("runtime").cloned().unwrap_or(Value::Null);
             let port = runtime.get("port").and_then(Value::as_u64).unwrap_or(0) as u16;
-            let health_path = runtime.get("healthPath").and_then(Value::as_str).unwrap_or("/health");
+            let health_path = runtime
+                .get("healthPath")
+                .and_then(Value::as_str)
+                .unwrap_or("/health");
 
             // Healthy if the fixed port answers its health endpoint; for a
             // dynamic port, if the tracked child is still alive.
@@ -330,6 +335,10 @@ impl SpaceMcpLauncher {
             .add_or_update(config, McpScopeType::Project)
             .await
             .with_context(|| format!("register MCP '{name}'"))?;
+        // Import tool aliases declared in the manifest (`mcp.toolAliases`).
+        // They land DISABLED — the user must approve each one in
+        // Plugins → Alias before it takes effect.
+        sync_app_tool_aliases(db, app_id, &name, &mcp);
         Ok(Some(name))
     }
 
@@ -466,14 +475,15 @@ impl SpaceMcpLauncher {
         if let Some(proc) = self.children.lock().await.remove(app_id) {
             let log = proc.log_path.display().to_string();
             kill_child_group(proc).await;
-            tracing::info!("[space-mcp] stopped server process for '{app_id}' (uninstall, log={log})");
+            tracing::info!(
+                "[space-mcp] stopped server process for '{app_id}' (uninstall, log={log})"
+            );
         }
     }
 
     /// Kill every launched server process group. Call on graceful shutdown.
     pub async fn shutdown(&self) {
-        let procs: Vec<(String, ChildProc)> =
-            self.children.lock().await.drain().collect();
+        let procs: Vec<(String, ChildProc)> = self.children.lock().await.drain().collect();
         for (app_id, proc) in procs {
             let log = proc.log_path.display().to_string();
             kill_child_group(proc).await;
@@ -607,6 +617,37 @@ fn pick_free_port() -> Option<u16> {
         .ok()
         .and_then(|l| l.local_addr().ok())
         .map(|a| a.port())
+}
+
+/// Sync the app's declared tool aliases (`mcp.toolAliases`) into the
+/// `mcp_tool_aliases` table. Idempotent: re-imports refresh target/description
+/// but never touch `enabled` (the user's opt-in from Plugins → Alias), and
+/// aliases the manifest no longer declares are pruned. Runs on every path that
+/// registers the app's MCP — install, update, boot, supervisor respawn.
+fn sync_app_tool_aliases(db: &Db, app_id: &str, server_name: &str, mcp: &Value) {
+    let declared = crate::tools::tool_alias::parse_declared_aliases(server_name, mcp);
+    let keep: Vec<String> = declared.iter().map(|d| d.alias.clone()).collect();
+    for d in &declared {
+        if let Err(e) =
+            db.import_app_tool_alias(app_id, &d.alias, &d.target, d.description.as_deref())
+        {
+            tracing::warn!("[space-mcp] {app_id}: import tool alias '{}' failed: {e:#}", d.alias);
+        }
+    }
+    match db.prune_app_tool_aliases(app_id, &keep) {
+        Ok(n) if n > 0 => {
+            tracing::info!("[space-mcp] {app_id}: pruned {n} stale tool alias(es)");
+        }
+        Err(e) => tracing::warn!("[space-mcp] {app_id}: prune tool aliases failed: {e:#}"),
+        _ => {}
+    }
+    if !keep.is_empty() {
+        tracing::info!(
+            "[space-mcp] {app_id}: imported {} declared tool alias(es) (disabled until approved in Plugins → Alias)",
+            keep.len()
+        );
+    }
+    crate::tools::tool_alias::reload_from_db(db);
 }
 
 fn update_app_manifest(db: &Db, app_id: &str, manifest: &Value) {

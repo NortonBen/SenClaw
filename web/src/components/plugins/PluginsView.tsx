@@ -11,6 +11,8 @@ import CodePanel from './CodePanel';
 import MarketplacePanel from './MarketplacePanel';
 import { SpaceAppsSettings } from '../settings/SpaceAppsSettings';
 import WorkflowsPanel from './WorkflowsPanel';
+import AliasPanel from './AliasPanel';
+import WidgetsPanel from './WidgetsPanel';
 
 const { Text } = Typography;
 
@@ -23,11 +25,13 @@ const NAV_LABEL: Record<PluginsNavItem, string> = {
   subagents: 'Virtual Agents',
   hooks: 'System Hooks',
   mcp: 'MCP Servers',
+  alias: 'Alias',
   cowork: 'Cowork',
   code: 'Code Executor',
   marketplace: 'Marketplace',
   'space-apps': 'Space Apps',
   workflows: 'Workflow',
+  widgets: 'Widget',
 };
 
 export default function PluginsView({ activeNav }: Props) {
@@ -42,11 +46,13 @@ export default function PluginsView({ activeNav }: Props) {
         {activeNav === 'subagents' && <SubagentsPanel />}
         {activeNav === 'hooks' && <HooksPanel />}
         {activeNav === 'mcp' && <MCPSettings />}
+        {activeNav === 'alias' && <AliasPanel />}
         {activeNav === 'cowork' && <CoworkPanel />}
         {activeNav === 'code' && <CodePanel />}
         {activeNav === 'marketplace' && <MarketplacePanel />}
         {activeNav === 'space-apps' && <SpaceAppsSettings />}
         {activeNav === 'workflows' && <WorkflowsPanel />}
+        {activeNav === 'widgets' && <WidgetsPanel />}
       </Content>
     </Layout>
   );

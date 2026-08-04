@@ -51,7 +51,33 @@ fn canonical_tool_name(name: &str) -> String {
 }
 
 /// Resolve a tool by exact name, alias, or normalized MCP alias.
+///
+/// Stage 0 consults the configured alias map (Plugins → Alias) BEFORE exact
+/// matching, so an alias equal to a registered tool name overrides that tool:
+/// the call is rewritten to the alias target and the original implementation
+/// is shadowed. When the target can't be found (app off, bad name) resolution
+/// falls back to the original name so an alias never bricks a working tool.
 pub fn resolve_tool_by_name(name: &str, tools: &[Arc<dyn Tool>]) -> Option<Arc<dyn Tool>> {
+    if let Some(target) = crate::tools::tool_alias::resolve_alias(name) {
+        if target != name {
+            if let Some(t) = resolve_tool_ignoring_aliases(&target, tools) {
+                return Some(t);
+            }
+            tracing::warn!(
+                "tool alias '{name}' → '{target}': target not registered, falling back to the original name"
+            );
+        }
+    }
+    resolve_tool_ignoring_aliases(name, tools)
+}
+
+/// The pre-alias resolution cascade. Used directly by the alias layer itself
+/// (to locate a target without re-entering the alias map) — everything else
+/// should call [`resolve_tool_by_name`].
+pub(crate) fn resolve_tool_ignoring_aliases(
+    name: &str,
+    tools: &[Arc<dyn Tool>],
+) -> Option<Arc<dyn Tool>> {
     if let Some(t) = tools.iter().find(|t| t.name() == name) {
         return Some(Arc::clone(t));
     }
@@ -81,17 +107,27 @@ pub fn resolve_tool_by_name(name: &str, tools: &[Arc<dyn Tool>]) -> Option<Arc<d
             return Some(Arc::clone(t));
         }
     }
+    // A tool renamed by a configured alias (Plugins → Alias) still resolves
+    // by its original registered name — old transcripts, skill docs, and
+    // hardcoded tool lists keep working after a rename.
+    for t in tools {
+        if let Some(orig) = t.renamed_from() {
+            if orig == name || normalize_mcp_tool_name(orig) == normalized {
+                return Some(Arc::clone(t));
+            }
+        }
+    }
     // Hyphen/underscore-insensitive match: `mcp__ssh-manager_mcp__x` should
     // resolve to a tool registered as `mcp__ssh-manager-mcp__x`.
     let canon = canonical_tool_name(&normalized);
-    if let Some(t) = tools.iter().find(|t| canonical_tool_name(t.name()) == canon) {
+    if let Some(t) = tools
+        .iter()
+        .find(|t| canonical_tool_name(t.name()) == canon)
+    {
         return Some(Arc::clone(t));
     }
     for t in tools {
-        if t.aliases()
-            .iter()
-            .any(|a| canonical_tool_name(a) == canon)
-        {
+        if t.aliases().iter().any(|a| canonical_tool_name(a) == canon) {
             return Some(Arc::clone(t));
         }
     }
@@ -245,7 +281,10 @@ impl ToolSearchTool {
     /// description — mirrors [`rank_matches`] but for the skill registry.
     fn rank_skills(query: &str, skills: &[SkillSearchRow], limit: usize) -> Vec<SkillSearchRow> {
         let q_lower = query.to_lowercase();
-        let q_terms: Vec<&str> = q_lower.split_whitespace().filter(|t| !t.is_empty()).collect();
+        let q_terms: Vec<&str> = q_lower
+            .split_whitespace()
+            .filter(|t| !t.is_empty())
+            .collect();
         if q_terms.is_empty() {
             return Vec::new();
         }
@@ -550,7 +589,11 @@ impl Tool for ToolSearchTool {
         } else {
             let mut s = String::new();
             if !matches.is_empty() {
-                s.push_str(&format!("Found {} tool(s) matching '{}':\n", matches.len(), query));
+                s.push_str(&format!(
+                    "Found {} tool(s) matching '{}':\n",
+                    matches.len(),
+                    query
+                ));
                 for t in &matches {
                     s.push_str(&format!("  - {}: {}\n", t.name(), t.search_hint()));
                 }
@@ -565,7 +608,9 @@ impl Tool for ToolSearchTool {
                 for sk in &skill_matches {
                     s.push_str(&format!("  - {}: {}\n", sk.name, sk.description));
                 }
-                s.push_str("Load one with `Skill {\"skill\": \"<name>\"}` before doing the task.\n");
+                s.push_str(
+                    "Load one with `Skill {\"skill\": \"<name>\"}` before doing the task.\n",
+                );
             }
             s
         };
@@ -825,15 +870,12 @@ mod tests {
             }),
         ];
         for called in [
-            "mcp__browser__search",                  // skill-documented short form
-            "mcp__senclaw-browser__browser_search",  // registered full form
+            "mcp__browser__search",                 // skill-documented short form
+            "mcp__senclaw-browser__browser_search", // registered full form
         ] {
             let t = resolve_tool_by_name(called, &tools);
             assert!(t.is_some(), "should resolve {called}");
-            assert_eq!(
-                t.unwrap().name(),
-                "mcp__senclaw-browser__browser_search"
-            );
+            assert_eq!(t.unwrap().name(), "mcp__senclaw-browser__browser_search");
         }
         // The exact `select:` query from the skill must load the tool too.
         let hits = select_matches(
@@ -956,7 +998,10 @@ mod tests {
 
         // But server_verb is still unique even with ambiguous verb
         let t = resolve_tool_by_name("space_event_create", &ambig);
-        assert!(t.is_some(), "server_verb should resolve even when verb alone is ambiguous");
+        assert!(
+            t.is_some(),
+            "server_verb should resolve even when verb alone is ambiguous"
+        );
         assert_eq!(t.unwrap().name(), "mcp__space__event_create");
     }
 

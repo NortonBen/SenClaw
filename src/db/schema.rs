@@ -20,6 +20,7 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
           is_admin             INTEGER NOT NULL DEFAULT 0,
           requires_trigger     INTEGER NOT NULL DEFAULT 1,
           allowed_tools        TEXT,
+          approved_tools       TEXT,
           allowed_paths        TEXT,
           allowed_work_dirs    TEXT,
           bot_token            TEXT,
@@ -177,6 +178,25 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
           updated_at  TEXT NOT NULL
         );
 
+        -- MCP tool aliases (Plugins → Alias). `alias` is the name agents call:
+        -- a brand-new name re-identifies (renames) the target tool, while an
+        -- alias equal to an existing tool name overrides that tool with the
+        -- target. `source` is 'user' for rows created in the web UI (enabled by
+        -- default) or 'app:<app_id>' for rows imported from a Space App's
+        -- senclaw-manifest.json `mcp.toolAliases` (imported disabled — the user
+        -- must opt in from Plugins → Alias before they take effect).
+        CREATE TABLE IF NOT EXISTS mcp_tool_aliases (
+          alias        TEXT PRIMARY KEY,
+          target_tool  TEXT NOT NULL,
+          description  TEXT,
+          enabled      INTEGER NOT NULL DEFAULT 1,
+          source       TEXT NOT NULL DEFAULT 'user',
+          created_at   INTEGER NOT NULL,
+          updated_at   INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mcp_tool_aliases_source
+          ON mcp_tool_aliases(source);
+
         CREATE TABLE IF NOT EXISTS tool_executions (
           id            INTEGER PRIMARY KEY AUTOINCREMENT,
           chat_jid      TEXT NOT NULL,
@@ -191,9 +211,10 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_tool_exec_chat_ts
           ON tool_executions(chat_jid, timestamp);
 
-        -- One-way chat widgets (chart/image/clock/weather) pushed by
-        -- `emit_widget`. Persisted so a page reload replays them in
-        -- `history:load`. `widget_json` is the full WidgetSpec {kind,title,data}.
+        -- One-way chat widgets (chart/image/clock/weather/video/audio + Space
+        -- App widgets, kind "app") pushed by `emit_widget`. Persisted so a
+        -- page reload replays them in `history:load`. `widget_json` is the
+        -- full WidgetSpec {kind,title,data}. See WIDGET_CONTRACT.md.
         -- Mirrors tool_executions (FIFO-trimmed per chat on insert).
         CREATE TABLE IF NOT EXISTS chat_widgets (
           id            TEXT PRIMARY KEY,
@@ -427,6 +448,20 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     if !group_cols.iter().any(|c| c == "llm_config_id") {
         conn.execute("ALTER TABLE groups ADD COLUMN llm_config_id TEXT", [])?;
     }
+    if !group_cols.iter().any(|c| c == "approved_tools") {
+        conn.execute("ALTER TABLE groups ADD COLUMN approved_tools TEXT", [])?;
+        // One-time repair: before this column existed, the permission prompt's
+        // "always allow" handler appended tool names into `allowed_tools`,
+        // silently turning that column into a use_tools whitelist that stripped
+        // every other tool from the group's next session. Schedule groups are
+        // always created with no whitelist, so any value there is that
+        // pollution — move it to the new column.
+        conn.execute(
+            "UPDATE groups SET approved_tools = allowed_tools, allowed_tools = NULL \
+             WHERE jid LIKE 'schedule:%' AND allowed_tools IS NOT NULL",
+            [],
+        )?;
+    }
 
     // Drop the legacy UNIQUE constraint on `groups.folder`.
     // Old behaviour: only one chat per agent profile (folder), so a new chat
@@ -458,6 +493,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
               is_admin             INTEGER NOT NULL DEFAULT 0,
               requires_trigger     INTEGER NOT NULL DEFAULT 1,
               allowed_tools        TEXT,
+              approved_tools       TEXT,
               allowed_paths        TEXT,
               allowed_work_dirs    TEXT,
               bot_token            TEXT,
@@ -467,13 +503,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
               added_at             TEXT NOT NULL
             );
             INSERT INTO groups_new (jid, folder, name, channel, group_type, is_admin,
-              requires_trigger, allowed_tools, allowed_paths, allowed_work_dirs,
-              bot_token, max_messages, llm_config_id, last_active, added_at)
+              requires_trigger, allowed_tools, approved_tools, allowed_paths,
+              allowed_work_dirs, bot_token, max_messages, llm_config_id,
+              last_active, added_at)
             SELECT jid, folder, name, channel,
               COALESCE(group_type, 'chat'),
-              is_admin, requires_trigger, allowed_tools, allowed_paths,
-              allowed_work_dirs, bot_token, max_messages, llm_config_id,
-              last_active, added_at
+              is_admin, requires_trigger, allowed_tools, approved_tools,
+              allowed_paths, allowed_work_dirs, bot_token, max_messages,
+              llm_config_id, last_active, added_at
             FROM groups;
             DROP TABLE groups;
             ALTER TABLE groups_new RENAME TO groups;
@@ -524,6 +561,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         // start_sent_at: tracks the "event is starting now" notification so
         // EVERY event pings at its start time, even without a reminder_min.
         ("start_sent_at", "INTEGER"),
+        // link: where opening this event should take the user — an INTERNAL
+        // Space-App route such as `/space/app/study?session=<id>`. Without it
+        // an event can name a lesson but not open it. Deliberately not a free
+        // URL field: see `sanitize_event_link`.
+        ("link", "TEXT"),
+        // app_id: which Space App owns the link, so the UI can label the button
+        // and a reinstalled app can find its own events.
+        ("app_id", "TEXT"),
     ] {
         if !event_cols.iter().any(|c| c == col) {
             let _ = conn.execute(
@@ -600,6 +645,8 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
             recurrence      TEXT,
             reminder_min    INTEGER,
             task_id         TEXT,
+            link            TEXT,
+            app_id          TEXT,
             source          TEXT DEFAULT 'manual',
             status          TEXT NOT NULL DEFAULT 'upcoming',
             reminder_sent_at INTEGER,
@@ -718,6 +765,61 @@ pub(crate) fn apply_marketplace_tables(conn: &Connection) -> Result<()> {
             started_at  INTEGER,
             error_msg   TEXT,
             last_ping   INTEGER
+        );
+
+        -- Token accounting: one row per LLM call, batched in by UsageRecorder
+        -- (src/usage). Metadata only — never prompt/response content, never
+        -- api keys. Raw rows retained 90 days; llm_usage_daily keeps history.
+        CREATE TABLE IF NOT EXISTS llm_usage_log (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts          INTEGER NOT NULL,
+            source      TEXT NOT NULL,
+            jid         TEXT NOT NULL DEFAULT '',
+            agent_id    TEXT NOT NULL DEFAULT '',
+            session_id  TEXT NOT NULL DEFAULT '',
+            app_id      TEXT NOT NULL DEFAULT '',
+            profile     TEXT NOT NULL DEFAULT '',
+            provider    TEXT NOT NULL DEFAULT '',
+            model       TEXT NOT NULL DEFAULT '',
+            input_tokens          INTEGER NOT NULL DEFAULT 0,
+            output_tokens         INTEGER NOT NULL DEFAULT 0,
+            cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+            latency_ms  INTEGER NOT NULL DEFAULT 0,
+            ok          INTEGER NOT NULL DEFAULT 1,
+            estimated   INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_ulog_ts    ON llm_usage_log(ts);
+        CREATE INDEX IF NOT EXISTS idx_ulog_jid   ON llm_usage_log(jid, ts);
+        CREATE INDEX IF NOT EXISTS idx_ulog_model ON llm_usage_log(model, ts);
+        CREATE INDEX IF NOT EXISTS idx_ulog_src   ON llm_usage_log(source, ts);
+        CREATE INDEX IF NOT EXISTS idx_ulog_app   ON llm_usage_log(app_id, ts);
+
+        -- Daily rollup, upserted hourly by the usage aggregator. Kept forever.
+        -- est_cost_usd is NULL when the model has no pricing row (shown as
+        -- "n/a", never a fake $0).
+        CREATE TABLE IF NOT EXISTS llm_usage_daily (
+            date    TEXT NOT NULL,
+            source  TEXT NOT NULL,
+            jid     TEXT NOT NULL,
+            app_id  TEXT NOT NULL,
+            model   TEXT NOT NULL,
+            calls   INTEGER NOT NULL DEFAULT 0,
+            input_tokens          INTEGER NOT NULL DEFAULT 0,
+            output_tokens         INTEGER NOT NULL DEFAULT 0,
+            cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_read_tokens     INTEGER NOT NULL DEFAULT 0,
+            est_cost_usd REAL,
+            PRIMARY KEY (date, source, jid, app_id, model)
+        );
+
+        -- USD per 1M tokens. NULL cache prices fall back to input_per_1m.
+        CREATE TABLE IF NOT EXISTS model_pricing (
+            model              TEXT PRIMARY KEY,
+            input_per_1m       REAL NOT NULL,
+            output_per_1m      REAL NOT NULL,
+            cache_read_per_1m  REAL,
+            cache_write_per_1m REAL
         );
         "#,
     )?;

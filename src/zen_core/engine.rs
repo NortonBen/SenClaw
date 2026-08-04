@@ -352,7 +352,12 @@ impl ZenEngine {
         let use_tools = &opts.use_tools;
         let is_plan = opts.agent_mode == AgentMode::Plan;
         let is_dag = opts.agent_mode == AgentMode::Dag;
-        let tools = self.builtin_tools.read().unwrap();
+        // Rename aliases (Plugins → Alias) applied at the funnel so a toggle
+        // takes effect on the next turn without re-registering tools.
+        // Overrides don't touch the roster — they redirect at dispatch time.
+        let tools = crate::tools::tool_alias::apply_alias_names(
+            self.builtin_tools.read().unwrap().clone(),
+        );
 
         let mut filtered: Vec<Arc<dyn Tool>> = if use_tools.is_empty() {
             tools.clone()
@@ -474,7 +479,11 @@ impl ZenEngine {
         let use_tools = &opts.use_tools;
         let is_plan = opts.agent_mode == AgentMode::Plan;
         let is_dag = opts.agent_mode == AgentMode::Dag;
-        let tools = self.builtin_tools.read().unwrap();
+        // Same rename decoration as `tools_for_main_agent` so ToolSearch and
+        // the deferred-tools reminder show the aliased names.
+        let tools = crate::tools::tool_alias::apply_alias_names(
+            self.builtin_tools.read().unwrap().clone(),
+        );
 
         // Resolve the whitelist like `tools_for_main_agent` does — a naive
         // exact match on `use_tools` silently drops every MCP tool listed by
@@ -681,6 +690,9 @@ impl ZenEngine {
             | EngineEvent::AskQuestionResponse(_)
             | EngineEvent::FormRequest(_)
             | EngineEvent::FormResponse(_)
+            // LlmUsage — consumed by the AgentPool / virtual-pool event loops
+            // via bus subscription (accounting funnel, no handler dispatch).
+            | EngineEvent::LlmUsage(_)
             // WidgetEmit — consumed by the AgentPool event loop via bus
             // subscription (one-way, no handler dispatch), like FormRequest.
             | EngineEvent::WidgetEmit(_)
@@ -1462,6 +1474,7 @@ impl ZenEngine {
             deferred_reminder.as_deref(),
             plan_mode_reminder.as_deref(),
             always_skills_block.as_deref(),
+            opts.user_defaults.as_deref(),
         );
 
         // Resolve profile: per-group override → active UI config → env fallback.
@@ -1781,6 +1794,7 @@ impl ZenEngine {
         deferred_reminder: Option<&str>,
         plan_mode_reminder: Option<&str>,
         always_skills: Option<&str>,
+        user_defaults: Option<&str>,
     ) -> String {
         // Default to the full sema-core-compatible SYSTEM_PROMPT when caller
         // doesn't override. Matches `code-old/sema-code-core/prompt/system.ts`.
@@ -1806,6 +1820,10 @@ impl ZenEngine {
             out.push_str(reminder);
         }
         if let Some(block) = always_skills {
+            out.push_str("\n\n");
+            out.push_str(block);
+        }
+        if let Some(block) = user_defaults {
             out.push_str("\n\n");
             out.push_str(block);
         }
@@ -2119,6 +2137,13 @@ until you have carried out the skill's steps.\n\
     /// proactively compacted after each completed turn.
     pub fn set_after_process(&self, enabled: bool) {
         self.options.write().unwrap().after_process = enabled;
+    }
+
+    /// Hot-update the rendered `## User defaults` system-prompt block (set
+    /// from the global `defaults` config on each turn). `None` = nothing
+    /// configured → the system prompt stays untouched.
+    pub fn set_user_defaults(&self, block: Option<String>) {
+        self.options.write().unwrap().user_defaults = block;
     }
 
     /// Hot-update the per-group LLM override for this engine. `id` is an entry id
@@ -3078,6 +3103,31 @@ mod tests {
         assert!(!e.options.read().unwrap().pre_trigger_skill);
         e.set_pre_trigger_skill(true);
         assert!(e.options.read().unwrap().pre_trigger_skill);
+    }
+
+    #[test]
+    fn user_defaults_block_lands_in_system_prompt() {
+        let e = engine_with_skill_meta("m3b", "s", None, &[]);
+        assert!(e.options.read().unwrap().user_defaults.is_none());
+        e.set_user_defaults(Some("## User defaults\n- Search: use x".into()));
+        assert_eq!(
+            e.options.read().unwrap().user_defaults.as_deref(),
+            Some("## User defaults\n- Search: use x")
+        );
+        // And the assembled prompt actually carries it (None → untouched).
+        let with = ZenEngine::assemble_system_prompt(
+            "base",
+            "/tmp",
+            None,
+            None,
+            None,
+            None,
+            Some("## User defaults\n- Search: use x"),
+        );
+        assert!(with.contains("## User defaults"));
+        let without =
+            ZenEngine::assemble_system_prompt("base", "/tmp", None, None, None, None, None);
+        assert!(!without.contains("## User defaults"));
     }
 
     /// Build an engine from a fully-specified `SkillMetadata` + body.

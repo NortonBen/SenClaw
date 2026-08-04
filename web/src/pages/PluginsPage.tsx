@@ -4,7 +4,7 @@ import { AppLayout } from '../components/AppLayout';
 import { PluginsSidebar, type PluginsNavItem } from '../components/plugins/PluginsSidebar';
 import PluginsView from '../components/plugins/PluginsView';
 
-const NAV_ITEMS: PluginsNavItem[] = ['skills', 'subagents', 'hooks', 'mcp', 'cowork', 'code', 'marketplace', 'space-apps', 'workflows'];
+const NAV_ITEMS: PluginsNavItem[] = ['skills', 'subagents', 'hooks', 'mcp', 'alias', 'cowork', 'code', 'marketplace', 'space-apps', 'workflows', 'widgets'];
 
 export function PluginsPage() {
   // Deep-link support: /plugins?nav=workflows opens straight to a section.
