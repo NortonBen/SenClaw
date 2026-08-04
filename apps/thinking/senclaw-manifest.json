@@ -1,0 +1,70 @@
+{
+  "id": "thinking",
+  "name": "Tư Duy — 6 Mũ & 5W",
+  "description": "Phân tích, đánh giá vấn đề và ra quyết định 100% cục bộ theo hai phương pháp kinh điển: 5W (Who/What/When/Where/Why — làm rõ bản chất và nguyên nhân gốc) và 6 Mũ Tư Duy của de Bono (Trắng dữ kiện, Đỏ cảm xúc, Đen rủi ro, Vàng lợi ích, Xanh Lá sáng tạo, Xanh Dương tổng kết). Quản lý vòng đời vấn đề (mới → đang phân tích → đã quyết định → đóng), đề xuất giải pháp, chấm điểm 4 tiêu chí (lợi ích/rủi ro/khả thi/công sức) với điểm tổng hợp 0-100 do hệ thống tính, bảng so sánh xếp hạng, chốt quyết định kèm lý do và báo cáo markdown đầy đủ. AI (qua bridge SenClaw) điền nháp 5W, đội 6 mũ, đề xuất giải pháp, chấm điểm và tổng hợp khuyến nghị — nội dung người dùng viết không bao giờ bị AI ghi đè trừ khi ép force. App chỉ GHI SỔ phân tích — không tự thực thi quyết định nào.",
+  "icon": "🎩",
+  "runtime": {
+    "kind": "server",
+    "start": "./thinking",
+    "healthPath": "/api/status",
+    "port": 4650
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request"
+    ]
+  },
+  "mcp": {
+    "name": "thinking-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "SenClaw Thinking MCP: phân tích & ra quyết định theo 6 Mũ Tư Duy + 5W — vấn đề (think_problem_*), điền 5W tay/AI (think_5w_set, think_5w_generate), 6 mũ tay/AI (think_hat_set, think_hats_generate), giải pháp (think_solution_*, think_solutions_generate), chấm điểm 4 tiêu chí với điểm tổng do hệ thống tính (think_solution_evaluate), bảng so sánh (think_compare), chốt quyết định (think_decide), phân tích trọn gói (think_analyze), báo cáo markdown (think_report), dashboard (think_dashboard). Toàn bộ là ghi sổ phân tích cục bộ — không có tool nào thực thi quyết định trong thế giới thật.",
+    "autoRegister": true
+  },
+  "skills": [
+    {
+      "name": "thinking-coach",
+      "path": "skills/thinking-coach",
+      "triggers": [
+        "6 mũ tư duy",
+        "sáu chiếc mũ",
+        "6 chiếc mũ",
+        "six thinking hats",
+        "mũ trắng",
+        "mũ đỏ",
+        "mũ đen",
+        "mũ vàng",
+        "mũ xanh lá",
+        "mũ xanh dương",
+        "5w",
+        "phân tích vấn đề",
+        "đánh giá vấn đề",
+        "làm rõ vấn đề",
+        "nguyên nhân gốc",
+        "ra quyết định",
+        "nên chọn phương án nào",
+        "so sánh giải pháp",
+        "đề xuất giải pháp",
+        "brainstorm",
+        "động não",
+        "tư duy phản biện",
+        "de bono",
+        "root cause",
+        "decision making"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "decision-coach",
+      "path": "personas/decision-coach.md",
+      "description": "Huấn luyện viên tư duy — dẫn dắt phiên phân tích 5W + 6 Mũ Tư Duy bằng tool của app Tư Duy, so sánh giải pháp bằng bảng điểm hệ thống tính và chỉ chốt quyết định khi người dùng xác nhận."
+    }
+  ]
+}
