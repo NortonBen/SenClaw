@@ -1,0 +1,99 @@
+{
+  "id": "predict",
+  "name": "Siêu Dự Đoán",
+  "description": "App dự báo AI lấy CHỦ ĐỀ làm trung tâm, CÓ KIỂM CHỨNG. CÔNG CỤ BUILD CHỦ ĐỀ — TỰ DO, KHÔNG GÒ BÓ: chỉ cần mô tả mong muốn bằng lời thường, AI tự thiết kế tên + trường dữ liệu + câu hỏi mẫu và bạn sửa thoải mái trước khi tạo; hoặc dùng template có connector tự nạp dữ liệu (giá vàng/tỷ giá, thời tiết thành phố, XSMB, kết quả bóng đá theo giải); hoặc tự thiết lập form. Chủ đề sửa được bất cứ lúc nào (đổi tên/mô tả/thêm-bớt trường, đổi tên tự chuyển domain sổ điểm). Form: tự định nghĩa chủ đề + trường dữ liệu (chữ/số/ngày/có-không), nhập tay hoặc import CSV/JSON, tìm kiếm, AI đánh giá phân tích dữ liệu, AI rút QUY LUẬT siêu dự đoán từ lịch sử kèm độ tin cậy, rồi hỏi 'điều X có xảy ra không?' → xác suất + lý do. LĨNH VỰC DỰNG SẴN: dự đoán bóng đá bằng model Elo (ClubElo) + Poisson trên dữ liệu thật (xác suất 1X2, tỷ số khả dĩ, Tài/Xỉu, BTTS + bài nhận định kiểu 'siêu máy tính'), kết quả & thống kê xổ số miền Bắc (tần suất, lô gan, đầu-đuôi — trung thực: xổ số là ngẫu nhiên, chốt số chỉ là giải trí có disclaimer), dự báo thời tiết 7 ngày các thành phố VN (Open-Meteo) kèm lời khuyên AI, và giá vàng thế giới/tỷ giá + xu hướng SMA/momentum (không phải lời khuyên đầu tư). Điểm khác biệt: MỌI dự đoán được ghi vào Sổ dự đoán, tự đối chiếu kết quả thật (trận đấu, kỳ quay, mưa/nắng) và tự chấm điểm Brier + accuracy + biểu đồ calibration công khai — app chứng minh được độ chính xác thay vì chém gió. Nguồn bằng chứng cho dự báo là MCP ĐỘNG: app tự hỏi daemon xem có MCP server nào đang chạy, chấm điểm công cụ tìm kiếm (tin tức/web/nghiên cứu) và dùng nguồn tốt nhất — không phải khai địa chỉ. Toàn bộ nguồn dữ liệu miễn phí, không cần API key. Mỗi chủ đề gồm ba lớp: TĨNH (vị trí/thông số cố định + tài liệu hướng dẫn phân tích = prompt riêng), ĐỘNG (trường dữ liệu theo thời gian: ngày, giờ, nhiệt độ, gió, giá…), và TÀI LIỆU ngoài số liệu (tin tức/ghi chú gắn theo ngày hoặc theo giá trị — AI dùng làm bằng chứng khi phân tích & dự đoán). Mỗi chủ đề có DASHBOARD RIÊNG: thẻ thống kê, biểu đồ chuỗi thời gian, dữ liệu, quy luật & bài học, sổ điểm accuracy/Brier của riêng chủ đề, và ô hỏi siêu dự báo.",
+  "icon": "🔮",
+  "runtime": {
+    "kind": "server",
+    "start": "./predict",
+    "healthPath": "/api/status",
+    "port": 4600
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/"
+  },
+  "bridge": {
+    "postMessage": true,
+    "capabilities": [
+      "space.rest",
+      "llm.request"
+    ]
+  },
+  "mcp": {
+    "name": "predict-mcp",
+    "transport": "http",
+    "path": "/api/mcp/sse",
+    "description": "Siêu Dự Đoán MCP: CHỦ ĐỀ TÙY CHỈNH — tạo chủ đề với schema trường riêng (predict_topic_create/list), nhập & import dữ liệu CSV/JSON (predict_topic_data_add/import), tìm kiếm (predict_topic_search), lưu & tra TÀI LIỆU ngoài số liệu gắn theo ngày/giá trị (predict_topic_doc_add, predict_topic_docs), AI phân tích dữ liệu (predict_topic_analyze), AI rút quy luật siêu dự đoán từ lịch sử (predict_topic_rules derive), và hỏi 'điều X có xảy ra không?' → xác suất + lý do, tự ghi sổ (predict_ask). DỰNG SẴN: dự đoán bóng đá (predict_football_today/match — Elo+Poisson, AI viết nhận định không bịa số; predict_football_elo bảng sức mạnh), xổ số miền Bắc (predict_lottery_results/stats/suggest — chốt số GIẢI TRÍ kèm xác suất thật + disclaimer), thời tiết 7 ngày kèm lời khuyên (predict_weather), giá vàng & tỷ giá + xu hướng (predict_gold_price/trend), bản tin sáng (predict_brief). Sổ dự đoán tự chấm điểm: predict_make/list/resolve + báo cáo accuracy + Brier + calibration (predict_score).",
+    "autoRegister": true
+  },
+  "widgets": [
+    {
+      "id": "predict-brief",
+      "name": "Siêu Dự Đoán hôm nay",
+      "description": "Giá vàng, thời tiết và trận đấu đáng chú ý hôm nay",
+      "size": "medium",
+      "refreshMs": 1800000,
+      "render": "client",
+      "entryUrl": "/widget/brief.html"
+    }
+  ],
+  "skills": [
+    {
+      "name": "sieu-du-doan",
+      "path": "skills/sieu-du-doan",
+      "triggers": [
+        "tạo chủ đề dự đoán",
+        "chủ đề dự đoán",
+        "nhập dữ liệu dự đoán",
+        "import dữ liệu dự đoán",
+        "phân tích dữ liệu chủ đề",
+        "rút quy luật",
+        "quy luật dự đoán",
+        "có xảy ra không",
+        "khả năng xảy ra",
+        "xác suất xảy ra",
+        "siêu dự đoán",
+        "dự đoán bóng đá",
+        "kèo hôm nay",
+        "kèo tối nay",
+        "dự đoán tỷ số",
+        "siêu máy tính dự đoán",
+        "trận nào hôm nay",
+        "nhận định trận",
+        "kết quả xổ số",
+        "xổ số miền bắc",
+        "xsmb",
+        "thống kê xổ số",
+        "lô gan",
+        "chốt số",
+        "soi cầu",
+        "mai có mưa không",
+        "dự báo thời tiết",
+        "thời tiết hôm nay",
+        "thời tiết ngày mai",
+        "giá vàng hôm nay",
+        "giá vàng thế nào",
+        "vàng lên hay xuống",
+        "tỷ giá đô",
+        "tỷ giá usd",
+        "bản tin sáng",
+        "dự đoán của tôi",
+        "sổ dự đoán",
+        "độ chính xác dự đoán",
+        "ghi dự đoán",
+        "predict football",
+        "lottery statistics",
+        "gold price today",
+        "weather forecast"
+      ]
+    }
+  ],
+  "personas": [
+    {
+      "name": "sieu-du-doan-master",
+      "path": "personas/sieu-du-doan-master.md",
+      "description": "Chuyên gia dự đoán điềm đạm: luôn nêu xác suất kèm cơ sở dữ liệu thật, luôn kèm disclaimer đúng lĩnh vực, không bao giờ khẳng định chắc chắn, và tự hào về sổ điểm Brier công khai của mình."
+    }
+  ]
+}
