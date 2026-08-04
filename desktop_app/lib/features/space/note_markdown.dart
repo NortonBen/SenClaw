@@ -3,7 +3,7 @@ import 'package:appflowy_editor/appflowy_editor.dart';
 /// Encodes an AppFlowy [Document] back into the Markdown we persist on disk.
 ///
 /// AppFlowy's own Markdown round-trip is quirky, and its **decoder** must be
-/// able to re-read whatever we save (notes reload through [markdownToDocument]):
+/// able to re-read whatever we save (notes reload through [parseNoteMarkdown]):
 ///   * With `lineBreak: ''` a block image is dropped on reparse (it needs blank
 ///     lines around it to be treated as a block).
 ///   * With `lineBreak: '\n'` blocks/images are correct, but *loose* todo lists
@@ -17,13 +17,28 @@ import 'package:appflowy_editor/appflowy_editor.dart';
 String encodeNoteMarkdown(Document document) =>
     normalizeNoteMarkdown(documentToMarkdown(document, lineBreak: '\n'));
 
+/// Decodes persisted Markdown into a [Document] for the editor.
+///
+/// The same [normalizeNoteMarkdown] used on encode runs first, because note
+/// bodies are also written by the web UI and by AI agents, which routinely
+/// produce *loose* lists (a blank line between items). AppFlowy's decoder
+/// mangles those: a loose `- [ ] item` turns into an **empty** todo block
+/// (rendering only its placeholder) plus an orphan paragraph with the text.
+/// Tightening before parse feeds the decoder the only list shape it reads
+/// correctly.
+Document parseNoteMarkdown(String markdown) =>
+    markdownToDocument(normalizeNoteMarkdown(markdown));
+
 final RegExp _listItem = RegExp(r'^\s*([-*+]|\d+\.)\s');
 final RegExp _imageBlock = RegExp(r'\n*(!\[[^\]]*\]\([^)]*\))\n*');
 
-/// Normalise AppFlowy-encoded Markdown so it survives a re-parse unchanged.
+/// Normalise Markdown so AppFlowy's decoder can re-parse it unchanged.
 String normalizeNoteMarkdown(String md) {
+  // 0. Normalise line endings (bodies can come from any frontend/OS).
+  var s = md.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+
   // 1. Force a blank line before and after every (block-level) image.
-  var s = md.replaceAllMapped(_imageBlock, (m) => '\n\n${m[1]}\n\n');
+  s = s.replaceAllMapped(_imageBlock, (m) => '\n\n${m[1]}\n\n');
 
   // 2. Drop blank lines that sit *between two list items* (appflowy's decoder
   //    only reads tight todo/bullet lists correctly).

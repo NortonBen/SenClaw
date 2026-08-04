@@ -31,27 +31,38 @@ class SectionScaffold extends StatelessWidget {
           ),
           child: Row(
             children: [
-              Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      color: c.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  if (subtitle != null)
+              // Flexible, not a bare Column + Spacer: a long subtitle claimed
+              // its full intrinsic width and pushed `actions` past the right
+              // edge (RenderFlex overflow) on anything but a wide window.
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      subtitle!,
-                      style: TextStyle(color: c.textMuted, fontSize: 12),
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                ],
+                    if (subtitle != null)
+                      Text(
+                        subtitle!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: c.textMuted, fontSize: 12),
+                      ),
+                  ],
+                ),
               ),
-              const Spacer(),
-              ...?actions,
+              if (actions != null && actions!.isNotEmpty) ...[
+                const SizedBox(width: AppTokens.s16),
+                ...actions!,
+              ],
             ],
           ),
         ),

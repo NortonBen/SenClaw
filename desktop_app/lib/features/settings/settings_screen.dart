@@ -3015,34 +3015,87 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
         label: const Text('Download'),
       );
     }
+    void toast(String msg) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
+    }
+
+    /// `preferred_backend` from the inference settings — decides `/load` vs
+    /// `/load-mlx` and the `?backend=` hint on use-as-llm (web parity).
+    Future<String?> preferredBackend() async {
+      try {
+        final s = await ref.read(apiClientProvider).get(
+              '/api/local-models/settings',
+            );
+        if (s is Map) return s['preferred_backend'] as String?;
+      } catch (_) {}
+      return null;
+    }
+
+    Future<void> useAsLlm() async {
+      try {
+        final backend = await preferredBackend();
+        // Ids are HF repos with slashes: encode, or the path gains an extra
+        // segment, misses the `:id/use-as-llm` route and silently falls
+        // through to the SPA handler — the button appears to do nothing.
+        final res = await ref.read(apiClientProvider).post(
+              '/api/local-models/${Uri.encodeComponent(m.id)}/use-as-llm'
+              '${backend == null ? '' : '?backend=$backend'}',
+            );
+        final label = (res is Map && res['config'] is Map)
+            ? '${(res['config'] as Map)['label']}'
+            : m.label;
+        if (res is Map && res['existed'] == true) {
+          toast('Already in LLM Models: $label');
+        } else if (res is Map && res['active'] == true) {
+          toast('Added as LLM profile and set active: $label');
+        } else {
+          toast('Added as LLM profile: $label');
+        }
+      } catch (e) {
+        toast('Failed to add as LLM: $e');
+      }
+      ref.invalidate(localModelsProvider);
+      ref.invalidate(llmConfigsProvider);
+    }
+
+    Future<void> load() async {
+      // `/load` is Candle-only; MLX has its own endpoint.
+      final useMlx = await preferredBackend() == 'mlx';
+      await hit(useMlx ? 'load-mlx' : 'load');
+    }
+
+    Future<void> remove() async {
+      try {
+        await ref
+            .read(apiClientProvider)
+            .delete('/api/local-models/${Uri.encodeComponent(m.id)}');
+        toast('Removed ${m.label}');
+      } catch (e) {
+        toast('Delete failed: $e');
+      }
+      ref.invalidate(localModelsProvider);
+    }
+
     // Installed: load/unload + use-as-LLM + delete (web LocalModelsSettings).
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         TextButton(
-          onPressed: () async {
-            await ref
-                .read(apiClientProvider)
-                .post('/api/local-models/${m.id}/use-as-llm');
-            ref.invalidate(localModelsProvider);
-            ref.invalidate(llmConfigsProvider);
-          },
+          onPressed: useAsLlm,
           child: const Text('Use as LLM'),
         ),
         TextButton(
-          onPressed: () => hit(m.loaded ? 'unload' : 'load'),
+          onPressed: () => m.loaded ? hit('unload') : load(),
           child: Text(m.loaded ? 'Unload' : 'Load'),
         ),
         IconButton(
           tooltip: 'Delete',
           icon: const Icon(Icons.delete_outline, size: 16,
               color: AppTokens.danger),
-          onPressed: () async {
-            await ref
-                .read(apiClientProvider)
-                .delete('/api/local-models/${m.id}');
-            ref.invalidate(localModelsProvider);
-          },
+          onPressed: remove,
         ),
       ],
     );
@@ -4135,6 +4188,9 @@ class _SpaceAppDetailDialog extends ConsumerWidget {
     final integration = (m['integration'] as Map?)?.cast<String, dynamic>();
     final runtime = (m['runtime'] as Map?)?.cast<String, dynamic>();
     final skills = (m['skills'] as List?) ?? const [];
+    final widgets = (m['widgets'] as List?) ?? const [];
+    final toolAliases =
+        ((m['mcp'] as Map?)?['toolAliases'] as List?) ?? const [];
 
     Widget kv(String k, String v) => Padding(
           padding: const EdgeInsets.only(bottom: AppTokens.s6),
@@ -4214,6 +4270,79 @@ class _SpaceAppDetailDialog extends ConsumerWidget {
                                             ? '${s['name'] ?? s}'
                                             : '$s',
                                         c.accent),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    // Widgets the app declares (manifest widgets[]) — chat
+                    // widgets are emitted via emit_widget kind "app"; the
+                    // rest render on the Dashboard.
+                    if (widgets.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: AppTokens.s6),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                                width: 96,
+                                child: Text('Widgets',
+                                    style: TextStyle(
+                                        color: c.textMuted, fontSize: 12))),
+                            Expanded(
+                              child: Wrap(
+                                spacing: AppTokens.s6,
+                                runSpacing: AppTokens.s6,
+                                children: [
+                                  for (final w in widgets.whereType<Map>())
+                                    Tooltip(
+                                      message: '${w['description'] ?? ''}',
+                                      child: _MiniTag(
+                                          '${w['name'] ?? w['id']} · '
+                                          '${(w['surfaces'] as List?)?.join('/') ?? 'dashboard'}',
+                                          AppTokens.cyan),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    // MCP tool aliases the app requests (mcp.toolAliases) —
+                    // imported DISABLED; the user enables them in
+                    // Plugins → Alias.
+                    if (toolAliases.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: AppTokens.s6),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(
+                                width: 96,
+                                child: Text('Alias',
+                                    style: TextStyle(
+                                        color: c.textMuted, fontSize: 12))),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  for (final a in toolAliases.whereType<Map>())
+                                    Padding(
+                                      padding: const EdgeInsets.only(
+                                          bottom: AppTokens.s4),
+                                      child: Text(
+                                        '${a['alias'] ?? '?'} → '
+                                        '${a['tool'] ?? a['target'] ?? '?'}',
+                                        style: TextStyle(
+                                            color: c.textSecondary,
+                                            fontSize: 11,
+                                            fontFamily: AppTokens.fontMono),
+                                      ),
+                                    ),
+                                  Text('(nhập ở trạng thái tắt — bật trong Plugins → Alias)',
+                                      style: TextStyle(
+                                          color: c.textMuted, fontSize: 10)),
                                 ],
                               ),
                             ),
