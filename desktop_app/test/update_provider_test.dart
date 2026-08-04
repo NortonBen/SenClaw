@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -81,6 +83,24 @@ void main() {
     );
     await c.read(updateProvider.notifier).check();
     expect(c.read(updateProvider).phase, UpdatePhase.available);
+  });
+
+  // GitHub serves latest.json as application/octet-stream with no charset, and
+  // package:http then decodes `.body` as latin-1 — which mangled the Vietnamese
+  // release notes on the Updates page ("chuẩn hoá" → "chuá°©n hoÃ¡").
+  test('release notes survive UTF-8 served without a charset header', () async {
+    final json = manifestJson('9.9.9')
+        .replaceFirst('- something', '- chuẩn hoá bind host cho bài đăng');
+    final svc = UpdateService(
+      client: MockClient((_) async => http.Response.bytes(utf8.encode(json), 200)),
+      currentVersion: '0.2.0',
+      buildTarget: _target,
+    );
+    final m = await svc.fetchManifest();
+    expect(m, isNotNull);
+    expect(m!.notes, contains('chuẩn hoá bind host cho bài đăng'));
+    expect(m.notes, isNot(contains('Ã')),
+        reason: 'mojibake — the body was decoded as latin-1, not UTF-8');
   });
 
   test('a dev build never checks', () async {

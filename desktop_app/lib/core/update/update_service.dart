@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -100,7 +101,10 @@ class UpdateService {
           .get(Uri.parse(_manifestUrl))
           .timeout(const Duration(seconds: 15));
       if (resp.statusCode != 200) return null;
-      return UpdateManifest.tryParse(resp.body);
+      // NOT resp.body: GitHub serves release assets as application/octet-stream
+      // with no charset, and package:http then decodes as latin-1 — which turns
+      // the Vietnamese release notes into mojibake ("chuẩn hoá" → "chuá°©n hoÃ¡").
+      return UpdateManifest.tryParse(utf8.decode(resp.bodyBytes, allowMalformed: true));
     } catch (_) {
       return null;
     }

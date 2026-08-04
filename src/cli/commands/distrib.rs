@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use futures::StreamExt;
 
@@ -428,7 +428,8 @@ pub fn run_apply_update(
         println!("apply-update: checksum ok");
     }
 
-    swap_bundle(&staged, &target)?;
+    let attempts = if cfg!(windows) { SWAP_ATTEMPTS } else { 1 };
+    swap_bundle_with_retry(&staged, &target, attempts, SWAP_RETRY_DELAY)?;
     let _ = std::fs::remove_file(&staged);
     println!("apply-update: installed {}", target.display());
 
@@ -439,6 +440,43 @@ pub fn run_apply_update(
         relaunch_app(&target)?;
     }
     Ok(())
+}
+
+/// How long apply-update keeps retrying a failed swap. Windows-only in effect:
+/// the pid wait covers the app itself, but its children (the spawned daemon,
+/// WebView2 helper processes) can hold exe/dll locks for a few more seconds,
+/// and a locked file makes the directory rename fail with ACCESS_DENIED.
+const SWAP_ATTEMPTS: u32 = 5;
+const SWAP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// [`swap_bundle`], retried up to `attempts` times. Callers pass 1 on Unix —
+/// renames there succeed with the files still open, so the first failure is
+/// real and retrying would only delay the error message.
+fn swap_bundle_with_retry(
+    staged: &Path,
+    target: &Path,
+    attempts: u32,
+    delay: std::time::Duration,
+) -> Result<()> {
+    let attempts = attempts.max(1);
+    let mut last = None;
+    for attempt in 1..=attempts {
+        match swap_bundle(staged, target) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if attempt < attempts {
+                    println!(
+                        "apply-update: swap attempt {attempt}/{attempts} failed ({e:#}); \
+                         retrying in {}s…",
+                        delay.as_secs()
+                    );
+                    std::thread::sleep(delay);
+                }
+                last = Some(e);
+            }
+        }
+    }
+    Err(last.expect("at least one attempt ran"))
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
@@ -954,6 +992,54 @@ mod tests {
         assert_eq!(marker(&target), "v2");
         assert!(!with_suffix(&target, "new").exists());
         assert!(!with_suffix(&target, "old").exists());
+    }
+
+    // ===== swap_bundle_with_retry =====
+
+    /// A persistent failure must exhaust its attempts and still surface the
+    /// error — not spin forever, not panic on the bookkeeping.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn swap_retry_gives_up_after_its_attempts_and_reports_the_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = tmp.path().join("garbage.zip");
+        std::fs::write(&staged, b"not an archive").unwrap();
+        let target = install_dir(tmp.path());
+
+        let err = swap_bundle_with_retry(&staged, &target, 3, std::time::Duration::from_millis(1))
+            .unwrap_err();
+        assert!(!format!("{err:#}").is_empty());
+        assert!(!target.exists(), "a failed retry run must not half-install");
+    }
+
+    /// The happy path must not pay any retry delay.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn swap_retry_succeeds_first_time_without_waiting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = fake_archive(tmp.path(), "v2");
+        let target = install_dir(tmp.path());
+
+        let start = std::time::Instant::now();
+        swap_bundle_with_retry(&staged, &target, 5, std::time::Duration::from_secs(60)).unwrap();
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(30),
+            "a successful first attempt must not sleep"
+        );
+        assert_eq!(marker(&target), "v2");
+    }
+
+    /// `attempts == 0` is a caller bug; it must clamp to one real attempt
+    /// rather than silently doing nothing and reporting success.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn swap_retry_clamps_zero_attempts_to_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = fake_archive(tmp.path(), "v2");
+        let target = install_dir(tmp.path());
+
+        swap_bundle_with_retry(&staged, &target, 0, std::time::Duration::from_millis(1)).unwrap();
+        assert_eq!(marker(&target), "v2");
     }
 
     // ===== verify_sha256 =====

@@ -16,6 +16,7 @@ import '../chat/audio_service.dart' show audioServiceProvider;
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../core/transport/connection.dart';
 import '../../core/update/update_provider.dart';
+import '../../core/update/update_service.dart' show bundlePath;
 import '../../theme/theme_mode_provider.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_markdown.dart';
@@ -312,6 +313,23 @@ class UpdatesSection extends ConsumerWidget {
                             fontFamily: AppTokens.fontMono,
                           ),
                         ),
+                        // The folder this copy runs from — and the one an
+                        // in-app update will replace. `senclaw install desktop`
+                        // manages its own default location, so when a machine
+                        // has ended up with two copies, this line is how the
+                        // user tells them apart.
+                        if (!kIsWeb) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            'Installed at ${bundlePath()}',
+                            style: TextStyle(
+                              color: c.textMuted,
+                              fontSize: 11,
+                              fontFamily: AppTokens.fontMono,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ],
                     ),
                   ),
