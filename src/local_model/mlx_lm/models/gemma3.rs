@@ -564,19 +564,34 @@ where
             // Hybrid Gemma-3: sliding layers need a local window mask tied to
             // that layer's KV cap; full-attention layers must *not* reuse the
             // sliding mask (see mlx_lm `language.py` global vs sliding masks).
+            //
+            // Full-attention layers need a causal mask only during multi-token
+            // prefill — single-token decode (`seq <= 1`) attends the whole
+            // cache, which is correct for full attention, so `None`.
+            //
+            // Sliding-window layers need a windowed mask at EVERY step,
+            // *including* single-token decode: `create_causal_mask(1, offset,
+            // window)` yields a `[1, offset+1]` row that restricts the query to
+            // the last `sliding_window` keys. Returning `None` on decode (the
+            // old behaviour) let sliding layers attend the full KV cache —
+            // out-of-distribution for layers trained with a fixed 512 window,
+            // which degrades long generations (gibberish past the window). The
+            // KV buffer is still never shrunk (memory grows with the sequence,
+            // same trade-off as the rest of this crate); only attention is
+            // windowed. Mirrors `gemma4`.
             let layer_mask: Option<Array> = match mask {
                 Some(m) => Some(m.clone()),
                 None => {
                     let seq = h.shape()[1];
-                    if seq <= 1 {
+                    let window = if layer.self_attn.is_full {
+                        None
+                    } else {
+                        Some(self.sliding_window)
+                    };
+                    if window.is_none() && seq <= 1 {
                         None
                     } else {
                         let mut offset = rope_offset as i32;
-                        let window = if layer.self_attn.is_full {
-                            None
-                        } else {
-                            Some(self.sliding_window)
-                        };
                         if window.is_some() {
                             if let Some(cc) = c.as_ref() {
                                 if let Some(cap) = cc.max_size() {
@@ -867,5 +882,63 @@ impl crate::local_model::chat_template_openai::ChatTemplateModel for Model {
     ) -> Vec<u32> {
         // Gemma-3 lists its terminators in config (`<eos>`, `<end_of_turn>`).
         self.args.eos_token_ids.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// On single-token decode (`seq == 1`), a sliding-window layer must still
+    /// receive a windowed mask so the query attends only the last
+    /// `sliding_window` keys — not the full KV cache. This is the exact
+    /// `create_causal_mask(1, offset, window)` call the forward loop now makes
+    /// for sliding layers (previously it returned `None` on decode, letting
+    /// sliding layers attend everything — see the mask comment in
+    /// `Gemma3Model::forward`).
+    #[test]
+    fn sliding_layer_decode_mask_windows_to_last_keys() {
+        // Decode step: 1 query at absolute position `offset`, KV holds
+        // `offset + 1` keys (positions 0..=offset). window = 4.
+        let offset = 10;
+        let window = 4;
+        let mask = create_causal_mask(1, Some(offset), Some(window), None).unwrap();
+        // `[1, offset+1]` row over keys 0..=offset.
+        assert_eq!(mask.shape(), &[1, offset + 1]);
+        mlx_rs::transforms::eval([&mask]).unwrap();
+        let flat: Vec<bool> = mask.as_slice().to_vec();
+        // Visible keys: `offset - window < j <= offset` -> j in {7,8,9,10}.
+        let expected: Vec<bool> = (0..=offset).map(|j| j > offset - window).collect();
+        assert_eq!(flat, expected);
+        assert_eq!(flat.iter().filter(|&&v| v).count(), window as usize);
+    }
+
+    /// A full-attention layer's decode call (`window = None`) leaves every
+    /// cached key visible — that's why the forward loop keeps `None` for full
+    /// layers on `seq <= 1` rather than building a mask at all. Here we assert
+    /// the windowless mask itself imposes no upper restriction.
+    #[test]
+    fn full_layer_decode_mask_sees_all_keys() {
+        let offset = 10;
+        let mask = create_causal_mask(1, Some(offset), None, None).unwrap();
+        assert_eq!(mask.shape(), &[1, offset + 1]);
+        mlx_rs::transforms::eval([&mask]).unwrap();
+        let flat: Vec<bool> = mask.as_slice().to_vec();
+        assert!(
+            flat.iter().all(|&v| v),
+            "full attention sees all cached keys"
+        );
+    }
+
+    /// When fewer keys are cached than the window, the windowed decode mask
+    /// degenerates to plain causal (all keys visible) — no negative indices.
+    #[test]
+    fn sliding_layer_decode_mask_shorter_than_window() {
+        let offset = 2; // 3 cached keys
+        let window = 8;
+        let mask = create_causal_mask(1, Some(offset), Some(window), None).unwrap();
+        mlx_rs::transforms::eval([&mask]).unwrap();
+        let flat: Vec<bool> = mask.as_slice().to_vec();
+        assert_eq!(flat, vec![true; (offset + 1) as usize]);
     }
 }

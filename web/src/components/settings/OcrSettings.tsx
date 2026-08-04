@@ -407,7 +407,7 @@ export const OcrSettings: React.FC = () => {
           <Alert
             type="info"
             message="Chưa có model OCR nào được cài đặt."
-            description="Tải một model từ bảng phía trên (gợi ý: PP-OCRv5_mobile_latin cho tiếng Việt + Anh)."
+            description="Tải một model từ bảng phía trên (gợi ý: PP-OCRv5_mobile_latin cho tiếng Anh + Latin; tiếng Việt chỉ nhận một phần — thiếu nguyên âm dấu chồng)."
           />
         ) : (
           <Space direction="vertical" style={{ width: '100%' }}>

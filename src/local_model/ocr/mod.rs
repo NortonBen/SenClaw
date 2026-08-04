@@ -6,8 +6,11 @@
 //! - Cross-platform CPU inference (Linux/Windows/macOS).
 //! - macOS Metal/CoreML acceleration when built with the additive
 //!   `ocr-paddle-metal` feature.
-//! - ~10 supported languages including **Vietnamese** via the
-//!   `latin_PP-OCRv5_mobile_rec` recognition model.
+//! - ~10 supported languages via per-language recognition models. The default
+//!   `latin_PP-OCRv5_mobile_rec` model covers English + 40 Latin scripts and
+//!   recognises Vietnamese only **partially** — its charset omits precomposed
+//!   stacked-tone vowels (ế ộ ệ ạ ố …), so full Tiếng Việt is not supported by
+//!   any MNN model currently published upstream. See [`catalog`].
 //! - Lazy-loaded engine with explicit [`OcrEngine::unload`] to release RAM
 //!   between requests — same pattern as [`super::whisper_transcribe::WhisperEngine`].
 //!
