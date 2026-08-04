@@ -1,0 +1,74 @@
+/* Biến theo chủ đề. Các lớp tự viết (.finding, .fix…) đọc biến này thay vì
+   hardcode màu, để dark mode không phải viết lại từng luật CSS. */
+:root,
+:root[data-theme='light'] {
+  --sc-bg: #f5f5f5;
+  --sc-fg: #141414;
+  --sc-card: #ffffff;
+  --sc-border: #e8e8e8;
+  --sc-border-soft: #f0f0f0;
+  --sc-muted: #8c8c8c;
+  --sc-body: #595959;
+  --sc-code-bg: #fafafa;
+  --sc-code-fg: #262626;
+}
+
+:root[data-theme='dark'] {
+  --sc-bg: #141414;
+  --sc-fg: #e8e8e8;
+  --sc-card: #1d1d1d;
+  --sc-border: #303030;
+  --sc-border-soft: #262626;
+  --sc-muted: #8c8c8c;
+  --sc-body: #a6a6a6;
+  --sc-code-bg: #0f0f0f;
+  --sc-code-fg: #d9d9d9;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--sc-bg);
+  color: var(--sc-fg);
+}
+
+#root { min-height: 100vh; }
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 64px; }
+
+.finding {
+  border: 1px solid var(--sc-border);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: var(--sc-card);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+
+.finding h4 { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--sc-fg); }
+.finding p { margin: 0 0 6px; font-size: 13px; color: var(--sc-body); line-height: 1.55; }
+
+.grade {
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -1px;
+}
+
+.fix {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: var(--sc-code-bg);
+  border: 1px solid var(--sc-border-soft);
+  border-radius: 4px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--sc-code-fg);
+}
+
+.muted { color: var(--sc-muted); font-size: 12px; }
+
+.tag-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
