@@ -204,4 +204,21 @@ class SpaceApi {
     final obj = await _api.getObject('/api/space/apps/$id/logs');
     return (obj['content'] ?? '').toString();
   }
+
+  /// Ask the hub which installed apps have a newer version. Non-fatal at the
+  /// call sites: an unreachable hub just leaves the badges absent.
+  Future<List<AppUpdateStatus>> checkAppUpdates() async {
+    final r = await _api.get('/api/space/apps/updates');
+    return (r is List ? r : const [])
+        .whereType<Map>()
+        .map((e) => AppUpdateStatus.fromJson(e.cast<String, dynamic>()))
+        .toList();
+  }
+
+  /// Download and install the hub's latest version of an installed app, in
+  /// place. Returns `{updated, latest}`; no-op (updated=false) when current.
+  Future<Map<String, dynamic>> updateApp(String id) async {
+    final r = await _api.post('/api/space/apps/$id/update');
+    return (r as Map?)?.cast<String, dynamic>() ?? const {};
+  }
 }

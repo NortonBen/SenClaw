@@ -7,6 +7,7 @@ import '../services/sessions_provider.dart';
 import '../theme/theme_mode_provider.dart';
 import '../theme/tokens.dart';
 import '../screens/sessions_screen.dart';
+import '../screens/background/background_screen.dart';
 import '../screens/code/code_screen.dart';
 import '../screens/cognitive/cognitive_screen.dart';
 import '../screens/cowork/cowork_screen.dart';
@@ -149,6 +150,9 @@ class AppDrawer extends ConsumerWidget {
                   _navTile(c, Icons.account_tree_outlined,
                       tr('Workflow', 'Workflow'),
                       onTap: () => open(const WorkflowScreen())),
+                  _navTile(c, Icons.motion_photos_auto_outlined,
+                      tr('Tác vụ nền', 'Background'),
+                      onTap: () => open(const BackgroundScreen())),
                   _navTile(c, Icons.menu_book_outlined, tr('Wiki', 'Wiki'),
                       onTap: () => open(const WikiScreen())),
                   _navTile(c, Icons.hub_outlined, tr('Tri thức', 'Knowledge'),

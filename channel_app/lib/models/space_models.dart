@@ -205,3 +205,26 @@ class SpaceApp {
         installedAt: (j['installed_at'] as num?)?.toInt() ?? 0,
       );
 }
+
+/// Hub update status for one installed Space App
+/// (`GET /api/space/apps/updates`, camelCase).
+class AppUpdateStatus {
+  final String id;
+  final String? installed;
+  final String? latest;
+  final bool hasUpdate;
+
+  const AppUpdateStatus({
+    required this.id,
+    this.installed,
+    this.latest,
+    this.hasUpdate = false,
+  });
+
+  factory AppUpdateStatus.fromJson(Map<String, dynamic> j) => AppUpdateStatus(
+        id: (j['id'] ?? '').toString(),
+        installed: j['installed'] as String?,
+        latest: j['latest'] as String?,
+        hasUpdate: j['hasUpdate'] as bool? ?? false,
+      );
+}

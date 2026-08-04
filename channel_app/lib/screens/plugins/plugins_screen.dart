@@ -1560,7 +1560,7 @@ class _MarketplaceTabState extends State<_MarketplaceTab>
     final c = context.colors;
     final nameCtrl = TextEditingController();
     final urlCtrl = TextEditingController();
-    String type = 'git';
+    String type = 'hub';
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -1571,27 +1571,9 @@ class _MarketplaceTabState extends State<_MarketplaceTab>
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(
-                controller: nameCtrl,
-                style: TextStyle(color: c.textPrimary),
-                decoration: InputDecoration(
-                    labelText: tr('Tên', 'Name'),
-                    labelStyle: TextStyle(color: c.textSecondary)),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: urlCtrl,
-                style: TextStyle(color: c.textPrimary),
-                decoration: InputDecoration(
-                    labelText: type == 'git'
-                        ? 'Git URL'
-                        : tr('Đường dẫn cục bộ', 'Local path'),
-                    labelStyle: TextStyle(color: c.textSecondary)),
-              ),
-              const SizedBox(height: 8),
               Row(
                 children: [
-                  for (final t in const ['git', 'local'])
+                  for (final t in const ['hub', 'git', 'local'])
                     Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: ChoiceChip(
@@ -1601,6 +1583,32 @@ class _MarketplaceTabState extends State<_MarketplaceTab>
                       ),
                     ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: nameCtrl,
+                style: TextStyle(color: c.textPrimary),
+                decoration: InputDecoration(
+                    labelText: tr('Tên (tuỳ chọn)', 'Name (optional)'),
+                    labelStyle: TextStyle(color: c.textSecondary)),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: urlCtrl,
+                style: TextStyle(color: c.textPrimary),
+                decoration: InputDecoration(
+                    labelText: switch (type) {
+                      'hub' => 'Hub URL',
+                      'git' => 'Git URL',
+                      _ => tr('Đường dẫn cục bộ', 'Local path'),
+                    },
+                    helperText: type == 'hub'
+                        ? tr('URL gốc sẽ tự thêm /marketplace.json',
+                            'A site root gets /marketplace.json appended')
+                        : null,
+                    helperStyle:
+                        TextStyle(color: c.textMuted, fontSize: 11),
+                    labelStyle: TextStyle(color: c.textSecondary)),
               ),
             ],
           ),
@@ -1616,14 +1624,14 @@ class _MarketplaceTabState extends State<_MarketplaceTab>
         ),
       ),
     );
-    if (ok != true || nameCtrl.text.trim().isEmpty) return;
+    if (ok != true || urlCtrl.text.trim().isEmpty) return;
     await _act(
       () => widget.api.addMarketplace({
-        'name': nameCtrl.text.trim(),
+        // The daemon defaults the name from the host/repo when omitted.
+        if (nameCtrl.text.trim().isNotEmpty) 'name': nameCtrl.text.trim(),
         'type': type,
-        if (type == 'git') 'url': urlCtrl.text.trim(),
-        'local_path': type == 'local' ? urlCtrl.text.trim() : '',
-        'priority': 0,
+        if (type != 'local') 'url': urlCtrl.text.trim(),
+        if (type == 'local') 'localPath': urlCtrl.text.trim(),
         'enabled': true,
       }),
       tr('Đã thêm nguồn', 'Source added'),
@@ -1654,7 +1662,8 @@ class _MarketplaceTabState extends State<_MarketplaceTab>
       return EmptyState(
         icon: Icons.store_outlined,
         message: tr('Chưa có nguồn', 'No sources yet'),
-        hint: tr('Thêm nguồn git hoặc cục bộ', 'Add a git or local source'),
+        hint: tr('Thêm hub store, nguồn git hoặc cục bộ',
+            'Add a hub store, git or local source'),
       );
     }
     return RefreshIndicator(
@@ -1673,39 +1682,245 @@ class _MarketplaceTabState extends State<_MarketplaceTab>
               borderRadius: BorderRadius.circular(12),
               side: BorderSide(color: c.border),
             ),
-            child: ListTile(
-              leading: Icon(
-                  s.type == 'git' ? Icons.cloud_outlined : Icons.folder_outlined,
-                  color: AppTokens.cyan),
-              title: Text(s.name, style: TextStyle(color: c.textPrimary)),
-              subtitle: Text(s.url ?? s.localPath,
-                  style: TextStyle(color: c.textMuted, fontSize: 12),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (s.type == 'git')
-                    IconButton(
-                      icon: Icon(Icons.sync,
-                          color: c.textSecondary, size: 20),
-                      onPressed: () => _act(
-                          () => widget.api.syncMarketplace(s.id),
-                          tr('Đã đồng bộ', 'Synced')),
+            child: Theme(
+              // Kill the ExpansionTile divider so the card stays flat.
+              data: Theme.of(ctx).copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                leading: Icon(
+                    switch (s.type) {
+                      'hub' => Icons.storefront_outlined,
+                      'git' => Icons.cloud_outlined,
+                      _ => Icons.folder_outlined,
+                    },
+                    color: AppTokens.cyan),
+                title: Row(
+                  children: [
+                    Flexible(
+                      child: Text(s.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: c.textPrimary)),
                     ),
-                  IconButton(
-                    icon: Icon(Icons.delete_outline,
-                        color: c.textMuted, size: 20),
-                    onPressed: () => _act(
-                        () => widget.api.deleteMarketplace(s.id),
-                        tr('Đã xoá', 'Deleted')),
-                  ),
+                    if (s.syncError != null) ...[
+                      const SizedBox(width: 6),
+                      Tooltip(
+                        message: s.syncError!,
+                        child: const Icon(Icons.error_outline,
+                            size: 15, color: AppTokens.danger),
+                      ),
+                    ],
+                  ],
+                ),
+                subtitle: Text(
+                    (s.url?.isNotEmpty ?? false) ? s.url! : s.localPath,
+                    style: TextStyle(color: c.textMuted, fontSize: 12),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (s.type != 'local')
+                      IconButton(
+                        tooltip: s.type == 'hub'
+                            ? tr('Làm mới catalog', 'Refresh catalog')
+                            : tr('Kéo bản mới', 'Pull latest'),
+                        icon: Icon(Icons.sync,
+                            color: c.textSecondary, size: 20),
+                        onPressed: () => _act(
+                            () => widget.api.syncMarketplace(s.id),
+                            tr('Đã đồng bộ', 'Synced')),
+                      ),
+                    IconButton(
+                      icon: Icon(Icons.delete_outline,
+                          color: c.textMuted, size: 20),
+                      onPressed: () => _act(
+                          () => widget.api.deleteMarketplace(s.id),
+                          tr('Đã xoá', 'Deleted')),
+                    ),
+                  ],
+                ),
+                children: [
+                  _SourcePlugins(api: widget.api, source: s),
                 ],
               ),
             ),
           );
         },
       ),
+    );
+  }
+}
+
+/// Plugins of one marketplace source. For a hub these are catalog entries,
+/// installable one by one; git/local plugins are on disk and only toggle.
+class _SourcePlugins extends StatefulWidget {
+  final PluginsApi api;
+  final MarketplaceSource source;
+  const _SourcePlugins({required this.api, required this.source});
+
+  @override
+  State<_SourcePlugins> createState() => _SourcePluginsState();
+}
+
+class _SourcePluginsState extends State<_SourcePlugins> {
+  List<MarketplacePlugin>? _plugins;
+  String? _error;
+  String? _busy;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final p = await widget.api.marketplaceSourcePlugins(widget.source.id);
+      if (mounted) {
+        setState(() {
+          _plugins = p;
+          _error = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    }
+  }
+
+  Future<void> _call(String name, Future<void> Function() fn) async {
+    setState(() => _busy = name);
+    try {
+      await fn();
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    if (_error != null) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Text(_error!,
+            style: const TextStyle(color: AppTokens.danger, fontSize: 12)),
+      );
+    }
+    final plugins = _plugins;
+    if (plugins == null) {
+      return const Padding(
+        padding: EdgeInsets.all(12),
+        child: Center(
+            child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2))),
+      );
+    }
+    if (plugins.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Text(
+            widget.source.type == 'hub'
+                ? tr('Catalog trống — thử đồng bộ hub',
+                    'Catalog is empty — try syncing the hub')
+                : tr('Không có plugin trong nguồn này',
+                    'No plugins found in this source'),
+            style: TextStyle(color: c.textMuted, fontSize: 12)),
+      );
+    }
+    return Column(
+      children: [
+        for (final p in plugins)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 8, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(p.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    color: c.textPrimary,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600)),
+                          ),
+                          if (p.version != null) ...[
+                            const SizedBox(width: 6),
+                            Text(p.version!,
+                                style: TextStyle(
+                                    color: c.textMuted, fontSize: 11)),
+                          ],
+                        ],
+                      ),
+                      if (p.description.isNotEmpty)
+                        Text(p.description,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                color: c.textMuted, fontSize: 11.5)),
+                      if (p.installed)
+                        Text(
+                          '${p.skillCount} skills · ${p.subagentCount} subagents · ${p.mcpServerCount} MCP${p.hasHooks ? ' · hooks' : ''}',
+                          style:
+                              TextStyle(color: c.textMuted, fontSize: 10.5),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (_busy == p.name)
+                  const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                else if (!p.installed)
+                  // Hub catalog entry not yet on disk → install.
+                  IconButton(
+                    tooltip: tr('Cài đặt', 'Install'),
+                    icon: Icon(Icons.download_outlined,
+                        color: c.accent, size: 20),
+                    onPressed: () => _call(
+                        p.name,
+                        () => widget.api.installMarketplacePlugin(
+                            widget.source.id, p.name)),
+                  )
+                else ...[
+                  Switch(
+                    value: p.enabled,
+                    activeThumbColor: c.accent,
+                    onChanged: (_) => _call(
+                        p.name,
+                        () => widget.api.toggleMarketplacePlugin(
+                            widget.source.id, p.name)),
+                  ),
+                  if (widget.source.type == 'hub')
+                    IconButton(
+                      tooltip: tr('Gỡ cài đặt', 'Uninstall'),
+                      icon: Icon(Icons.delete_outline,
+                          color: c.textMuted, size: 18),
+                      onPressed: () => _call(
+                          p.name,
+                          () => widget.api.uninstallMarketplacePlugin(
+                              widget.source.id, p.name)),
+                    ),
+                ],
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

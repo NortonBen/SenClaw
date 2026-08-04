@@ -180,13 +180,14 @@ class Plugin {
 class MarketplaceSource {
   final String id;
   final String name;
-  final String type; // git|local
+  final String type; // hub|git|local
   final String? url;
   final String? branch;
   final String localPath;
   final int priority;
   final bool enabled;
   final String? lastSynced;
+  final String? syncError;
 
   MarketplaceSource({
     required this.id,
@@ -198,17 +199,65 @@ class MarketplaceSource {
     this.priority = 0,
     this.enabled = true,
     this.lastSynced,
+    this.syncError,
   });
 
+  // The Rust daemon serializes camelCase (`localPath`, `lastSynced`); the
+  // snake_case fallbacks keep older daemons readable.
   factory MarketplaceSource.fromJson(Map<String, dynamic> j) => MarketplaceSource(
         id: j['id'] as String? ?? '',
         name: j['name'] as String? ?? '',
         type: j['type'] as String? ?? 'git',
         url: j['url'] as String?,
         branch: j['branch'] as String?,
-        localPath: j['local_path'] as String? ?? '',
+        localPath:
+            (j['localPath'] ?? j['local_path']) as String? ?? '',
         priority: (j['priority'] as num?)?.toInt() ?? 0,
         enabled: j['enabled'] as bool? ?? true,
-        lastSynced: j['last_synced'] as String?,
+        lastSynced: (j['lastSynced'] ?? j['last_synced']) as String?,
+        syncError: j['syncError'] as String?,
+      );
+}
+
+/// One plugin inside a marketplace source. For a hub these are catalog
+/// entries, installable one by one; git/local plugins are always installed by
+/// virtue of being on disk.
+class MarketplacePlugin {
+  final String name;
+  final String description;
+  final String? version;
+  final String? category;
+  final bool enabled;
+  final bool installed;
+  final int skillCount;
+  final int subagentCount;
+  final int mcpServerCount;
+  final bool hasHooks;
+
+  MarketplacePlugin({
+    required this.name,
+    this.description = '',
+    this.version,
+    this.category,
+    this.enabled = false,
+    this.installed = true,
+    this.skillCount = 0,
+    this.subagentCount = 0,
+    this.mcpServerCount = 0,
+    this.hasHooks = false,
+  });
+
+  factory MarketplacePlugin.fromJson(Map<String, dynamic> j) =>
+      MarketplacePlugin(
+        name: j['name'] as String? ?? '',
+        description: j['description'] as String? ?? '',
+        version: j['version'] as String?,
+        category: j['category'] as String?,
+        enabled: j['enabled'] as bool? ?? false,
+        installed: j['installed'] as bool? ?? true,
+        skillCount: (j['skillCount'] as num?)?.toInt() ?? 0,
+        subagentCount: (j['subagentCount'] as num?)?.toInt() ?? 0,
+        mcpServerCount: (j['mcpServerCount'] as num?)?.toInt() ?? 0,
+        hasHooks: j['hasHooks'] as bool? ?? false,
       );
 }

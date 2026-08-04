@@ -132,6 +132,27 @@ class PluginsApi {
   Future<void> syncMarketplace(String id) =>
       _api.post('/api/marketplace/sources/$id/sync');
 
+  /// Plugins of one source (hub sources list catalog entries too).
+  Future<List<MarketplacePlugin>> marketplaceSourcePlugins(String id) async {
+    final obj = await _api.getObject('/api/marketplace/sources/$id');
+    return ((obj['plugins'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((e) => MarketplacePlugin.fromJson(e.cast<String, dynamic>()))
+        .toList();
+  }
+
+  Future<void> installMarketplacePlugin(String sourceId, String name) =>
+      _api.post(
+          '/api/marketplace/sources/$sourceId/plugins/${Uri.encodeComponent(name)}/install');
+
+  Future<void> uninstallMarketplacePlugin(String sourceId, String name) =>
+      _api.delete(
+          '/api/marketplace/sources/$sourceId/plugins/${Uri.encodeComponent(name)}');
+
+  Future<void> toggleMarketplacePlugin(String sourceId, String name) =>
+      _api.post(
+          '/api/marketplace/sources/$sourceId/plugins/${Uri.encodeComponent(name)}/toggle');
+
   // ── Hooks (raw JSON) ───────────────────────────────────────────────────
   Future<String> getHooksJson() async {
     final obj = await _api.getObject('/api/hooks');

@@ -28,6 +28,8 @@ class _AppsTabState extends State<_AppsTab>
     with AutomaticKeepAliveClientMixin {
   final _api = SpaceApi();
   List<SpaceApp> _apps = [];
+  Map<String, AppUpdateStatus> _updates = {};
+  String? _updatingId;
   bool _loading = true;
   String? _error;
 
@@ -66,6 +68,7 @@ class _AppsTabState extends State<_AppsTab>
         _apps = a;
         _loading = false;
       });
+      _checkUpdates();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -73,6 +76,36 @@ class _AppsTabState extends State<_AppsTab>
         _error = _apps.isEmpty ? '$e' : null;
         _loading = false;
       });
+    }
+  }
+
+  /// Non-fatal: an unreachable hub just leaves the badges absent.
+  Future<void> _checkUpdates() async {
+    try {
+      final u = await _api.checkAppUpdates();
+      if (!mounted) return;
+      setState(() => _updates = {for (final s in u) s.id: s});
+    } catch (_) {/* leave badges absent */}
+  }
+
+  Future<void> _update(SpaceApp a) async {
+    setState(() => _updatingId = a.id);
+    try {
+      final r = await _api.updateApp(a.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(r['updated'] == true
+              ? '${a.name} → ${r['latest']}'
+              : tr('${a.name} đã ở bản mới nhất',
+                  '${a.name} is already up to date'))));
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(tr('Lỗi: $e', 'Error: $e'))));
+      }
+    } finally {
+      if (mounted) setState(() => _updatingId = null);
     }
   }
 
@@ -260,6 +293,7 @@ class _AppsTabState extends State<_AppsTab>
         itemCount: _apps.length,
         itemBuilder: (ctx, i) {
           final a = _apps[i];
+          final upd = _updates[a.id];
           return Card(
             color: c.surfaceAlt,
             margin: const EdgeInsets.only(bottom: 8),
@@ -269,10 +303,43 @@ class _AppsTabState extends State<_AppsTab>
             ),
             child: ListTile(
               leading: Text(a.icon, style: const TextStyle(fontSize: 24)),
-              title: Text(a.name,
-                  style: TextStyle(
-                      color: a.enabled ? c.textPrimary : c.textMuted,
-                      fontWeight: FontWeight.w600)),
+              title: Row(
+                children: [
+                  Flexible(
+                    child: Text(a.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: a.enabled ? c.textPrimary : c.textMuted,
+                            fontWeight: FontWeight.w600)),
+                  ),
+                  if (_updatingId == a.id) ...[
+                    const SizedBox(width: 8),
+                    const SizedBox(
+                        width: 13,
+                        height: 13,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                  ] else if (upd?.hasUpdate ?? false) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: AppTokens.warning.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                            color:
+                                AppTokens.warning.withValues(alpha: 0.5)),
+                      ),
+                      child: Text(
+                        '${upd!.installed ?? '?'} → ${upd.latest}',
+                        style: const TextStyle(
+                            color: AppTokens.warning, fontSize: 10),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
               subtitle: a.description.isEmpty
                   ? null
                   : Text(a.description,
@@ -285,6 +352,7 @@ class _AppsTabState extends State<_AppsTab>
                 icon: Icon(Icons.more_vert, color: c.textSecondary),
                 onSelected: (v) {
                   if (v == 'open') _openApp(a);
+                  if (v == 'update') _update(a);
                   if (v == 'restart') _restart(a);
                   if (v == 'logs') _logs(a);
                   if (v == 'delete') _delete(a);
@@ -294,6 +362,13 @@ class _AppsTabState extends State<_AppsTab>
                       value: 'open',
                       child: Text(tr('Mở', 'Open'),
                           style: TextStyle(color: c.textPrimary))),
+                  if (upd?.hasUpdate ?? false)
+                    PopupMenuItem(
+                        value: 'update',
+                        child: Text(
+                            tr('Cập nhật lên ${upd!.latest}',
+                                'Update to ${upd.latest}'),
+                            style: TextStyle(color: c.accent))),
                   PopupMenuItem(
                       value: 'restart',
                       child: Text(tr('Khởi động lại', 'Restart'),
