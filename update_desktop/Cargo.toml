@@ -1,0 +1,46 @@
+[package]
+name = "update_desktop"
+version = "0.1.0"
+edition = "2021"
+description = "SenClaw Desktop self-update helper — swaps the installed bundle while the app is closed"
+license = "MIT"
+
+# Deliberately NOT a member of the repo workspace: this binary must stay tiny
+# (it ships inside every desktop bundle and is copied to ~/.senclaw/tmp before
+# each update), must build in seconds, and must never inherit the daemon's
+# dependency tree. Own lockfile, own target dir.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+sha2 = "0.10"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# The bundle archive is a plain Compress-Archive zip → deflate only.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.59"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+    "Wdk_System_Threading",
+]
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

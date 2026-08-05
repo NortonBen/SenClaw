@@ -66,8 +66,21 @@ jobs:
       # Tests run with default parallelism; the serial `--test-threads=1`
       # requirement only applies to MLX tests, which need the (Apple-only)
       # `local-mlx` feature and are not compiled here.
+      #
+      # --no-fail-fast + the ::error:: pass: failing TEST NAMES become check-run
+      # annotations, which are readable through the public API without auth —
+      # the raw step log is not. This job had been silently red for weeks
+      # because the failure list was invisible outside the web UI.
       - name: Cargo test
-        run: cargo test --all
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! cargo test --all --no-fail-fast 2>&1 | tee /tmp/cargo-test.log; then
+            grep -E "^test .* \.\.\. FAILED|^---- .* stdout ----|^error(\[E[0-9]+\])?:" /tmp/cargo-test.log \
+              | sort -u | head -50 \
+              | while IFS= read -r line; do echo "::error title=cargo test::${line}"; done
+            exit 1
+          fi
 
       - uses: subosito/flutter-action@v2
         with:
@@ -157,6 +170,14 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
 
+      # Standalone crate (own lockfile, own target dir) so it builds in
+      # seconds and never inherits the daemon's dependency tree. On Windows it
+      # is a windowed no-console binary with a small progress window — the
+      # thing the desktop app hands the bundle swap to.
+      - name: Build update_desktop helper
+        shell: bash
+        run: cargo build --release --manifest-path update_desktop/Cargo.toml --target ${{ matrix.target }}
+
       - name: Build senclaw daemon binary
         shell: bash
         run: |
@@ -204,10 +225,12 @@ jobs:
         run: |
           mkdir -p dist-artifacts
           BIN_DIR="target/${{ matrix.target }}/release"
+          UPD_DIR="update_desktop/target/${{ matrix.target }}/release"
           case "${{ matrix.platform }}" in
             macos)
               APP="desktop_app/build/macos/Build/Products/Release/SenClaw Desktop.app"
               cp "$BIN_DIR/senclaw" "$APP/Contents/Resources/senclaw"
+              cp "$UPD_DIR/update_desktop" "$APP/Contents/Resources/update_desktop"
               # MLX resolves mlx.metallib next to the executable; the compiled-in
               # METAL_PATH fallback points into the CI runner's target dir and
               # does not exist on user machines — without this copy every MLX
@@ -227,12 +250,14 @@ jobs:
             windows)
               REL="desktop_app/build/windows/x64/runner/Release"
               cp "$BIN_DIR/senclaw.exe" "$REL/senclaw.exe"
+              cp "$UPD_DIR/update_desktop.exe" "$REL/update_desktop.exe"
               powershell -Command "Compress-Archive -Path '$REL/*' -DestinationPath 'dist-artifacts/SenClaw-${{ matrix.target }}.zip'"
               cp "$BIN_DIR/senclaw.exe" "dist-artifacts/senclaw-${{ matrix.target }}.exe"
               ;;
             linux)
               REL="desktop_app/build/linux/x64/release/bundle"
               cp "$BIN_DIR/senclaw" "$REL/senclaw"
+              cp "$UPD_DIR/update_desktop" "$REL/update_desktop"
               tar -C "$REL" -czf "dist-artifacts/SenClaw-${{ matrix.target }}.tar.gz" .
               cp "$BIN_DIR/senclaw" "dist-artifacts/senclaw-${{ matrix.target }}"
               ;;

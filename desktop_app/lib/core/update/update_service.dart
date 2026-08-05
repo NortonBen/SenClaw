@@ -201,18 +201,18 @@ class UpdateService {
   }
 
   /// Hand off to the detached updater and return — the CALLER then shuts the
-  /// app down, which is the event `apply-update` is waiting on.
+  /// app down, which is the event the updater is waiting on.
   ///
   /// The updater must run from OUTSIDE the bundle it replaces: Windows locks a
   /// running .exe, and on macOS the app's own Resources would be pulled out
   /// from under it. Copying to ~/.senclaw/tmp first is what makes it safe on
   /// every platform.
   Future<void> spawnUpdater(File staged, UpdateAsset asset) async {
-    final updater = await _copyUpdaterOutsideBundle();
+    final (updater, argPrefix) = await _stageUpdaterOutsideBundle();
     await Process.start(
       updater.path,
       [
-        'apply-update',
+        ...argPrefix,
         '--staged', staged.path,
         '--target', bundlePath(),
         '--pid', '$pid',
@@ -223,8 +223,37 @@ class UpdateService {
     );
   }
 
-  Future<File> _copyUpdaterOutsideBundle() async {
-    final src = await (_resolveDaemonBinary?.call() ?? Future.value(null));
+  /// The `update_desktop` helper shipped in this bundle, or null on an install
+  /// that predates it. Note the updater that runs is always the one from the
+  /// version being REPLACED — the helper only exists once the user is ON a
+  /// build that bundles it, hence the legacy fallback below.
+  File? _bundledUpdateHelper() {
+    final name = Platform.isWindows ? 'update_desktop.exe' : 'update_desktop';
+    final fromEnv = Platform.environment['SENCLAW_UPDATER'];
+    if (fromEnv != null && File(fromEnv).existsSync()) return File(fromEnv);
+    final exeDir = p.dirname(Platform.resolvedExecutable);
+    final candidates = <String>[
+      p.join(exeDir, name), // Windows/Linux: alongside the app binary
+      // macOS .app bundle: Contents/MacOS/<app> → Contents/Resources/<name>
+      p.normalize(p.join(exeDir, '..', 'Resources', name)),
+    ];
+    for (final c in candidates) {
+      if (File(c).existsSync()) return File(c);
+    }
+    return null;
+  }
+
+  /// Copy the updater out of the bundle and return it plus the argument
+  /// prefix it expects: `update_desktop` takes the flags directly (a windowed
+  /// no-console binary on Windows, with a small progress window), while the
+  /// legacy fallback — the full `senclaw` daemon binary — needs its
+  /// `apply-update` subcommand and flashes a console on Windows. The fallback
+  /// keeps updates working for installs whose current bundle predates the
+  /// helper.
+  Future<(File, List<String>)> _stageUpdaterOutsideBundle() async {
+    final helper = _bundledUpdateHelper();
+    final src =
+        helper ?? await (_resolveDaemonBinary?.call() ?? Future.value(null));
     if (src == null) {
       throw UpdateUnavailable(
         'Cannot find the senclaw binary to run the update with.',
@@ -241,7 +270,7 @@ class UpdateService {
       // File.copy does not carry the executable bit across.
       await Process.run('chmod', ['+x', dest.path]);
     }
-    return dest;
+    return (dest, helper != null ? const <String>[] : const ['apply-update']);
   }
 }
 

@@ -96,21 +96,44 @@ Ba thứ này bị ghim với nhau: daemon nằm *trong* app, `mlx.metallib` ph�
 │                  │  2. tải asset + sha256  │                          │
 │                  │◀────────────────────────│                          │
 └────────┬─────────┘                         └──────────────────────────┘
-         │ 3. copy senclaw → ~/.senclaw/tmp/senclaw-updater
-         │ 4. spawn DETACHED: senclaw-updater apply-update
+         │ 3. copy update_desktop → ~/.senclaw/tmp/senclaw-updater
+         │    (bundle cũ chưa có helper → fallback copy senclaw,
+         │     thêm prefix `apply-update` vào args như flow cũ)
+         │ 4. spawn DETACHED: senclaw-updater
          │      --staged <zip> --target <path/tới/bundle> --pid <mypid> --relaunch
          │ 5. _quitApp()  (dừng daemon, exit 0)
          ▼
-┌────────────────────────────────────────────┐
-│  senclaw-updater (ngoài bundle, sống sót)  │
-│   a. đợi pid chết (poll, timeout 30s)      │
-│   b. verify sha256                         │
-│   c. giải nén → <bundle>.new               │
-│   d. rename <bundle> → <bundle>.old        │
-│      rename <bundle>.new → <bundle>        │   ← hỏng ở đây thì rollback .old
-│   e. xoá .old, relaunch app, tự thoát      │
-└────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  senclaw-updater (ngoài bundle, sống sót)           │
+│   a. đợi pid chết (native wait, timeout 60s)        │
+│   b. verify sha256                                  │
+│   c. (Windows) kill process còn giữ khoá bundle:    │
+│      image nằm trong bundle + msedgewebview2 có     │
+│      cmdline trỏ vào bundle — toolhelp/NtQuery,     │
+│      KHÔNG PowerShell                               │
+│   d. giải nén → <bundle>.new                        │
+│   e. rename <bundle> → <bundle>.old                 │
+│      rename <bundle>.new → <bundle>                 │  ← hỏng thì rollback .old
+│   f. xoá .old, relaunch app, tự thoát               │
+└─────────────────────────────────────────────────────┘
 ```
+
+Từ 0.4.4, updater là **`update_desktop(.exe)`** — crate standalone [`update_desktop/`](../update_desktop/)
+(lockfile riêng, ngoài workspace, binary ~400 KB) nằm sẵn trong bundle
+(Windows/Linux: cạnh `senclaw_desktop(.exe)`; macOS: `Contents/Resources/`).
+Trên Windows nó build `windows_subsystem = "windows"` + hiện **cửa sổ mini**
+("SenClaw Update", label trạng thái + progress marquee) — hết cảnh cửa sổ đen
+cmd nhấp nháy, và bước dọn process không còn phụ thuộc PowerShell (máy công ty
+chặn execution policy vẫn update được). Lỗi thì ghi
+`~/.senclaw/tmp/update-desktop.log` + `apply-update-error.log`, hiện MessageBox
+và tự khởi động lại bản cũ (swap atomic nên bản cũ còn nguyên).
+
+Chú ý transition: updater chạy trong một lần update là updater của **bản đang
+bị thay** (bản cũ). Máy đang ở ≤0.4.3 sẽ vẫn đi đường cũ (`senclaw
+apply-update`) đúng một lần cuối khi lên bản có helper; từ đó về sau mọi update
+đi qua `update_desktop`. Đường CLI `senclaw apply-update` giữ nguyên cho
+terminal — hai bản copy logic swap (crate helper và `distrib.rs`) phải được
+port tay cho nhau khi sửa bug.
 
 Mấu chốt: **updater phải nằm ngoài bundle mà nó sắp thay**. Trên macOS process vẫn chạy được sau khi file bị xoá (inode còn giữ), nhưng Windows **khoá** file exe đang chạy — copy ra `~/.senclaw/tmp/` trước là cách duy nhất chạy đúng trên cả ba OS.
 
@@ -258,6 +281,7 @@ Future<void> applyAndRestart(File staged, String sha256) async {
 | **2** ✅ | Rust: tách `swap_bundle()`, thêm `apply-update` ẩn, `wait_pid`, verify sha256, rollback | **Xong** 2026-07-17. 13 test; e2e qua CLI thật đã verify. |
 | **3** ✅ | Dart: `core/update/`, provider, Settings → Updates, badge nav rail, snackbar | **Xong** 2026-07-17. 40 test Dart (unit + widget). |
 | **4** ✅ | Menu macOS "Check for Updates…" + nối "Settings…" | **Xong** 2026-07-17. xib + MethodChannel (chiều native→Dart). |
+| **4.5** ✅ | Updater riêng `update_desktop(.exe)`: GUI subsystem + cửa sổ mini tiến trình, kill locker native (hết PowerShell/console flash), fallback legacy cho bundle cũ | **Xong** 2026-08-05. Crate standalone, 7 test + cross-check msvc; CI build + bundle cả 3 OS. |
 | **5** | *(sau)* auto-download ngầm, kênh beta, code signing + notarization | Xem §10. **Tiếp theo.** |
 
 Phase 0–1 có thể merge độc lập và tự nó đã có giá trị (nav rail hết nói dối version).
