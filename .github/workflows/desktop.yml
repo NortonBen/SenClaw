@@ -97,12 +97,11 @@ jobs:
         run: |
           set -o pipefail
           if ! cargo test --all --no-fail-fast 2>&1 | tee /tmp/cargo-test.log; then
-            # 10-annotation cap per step — most informative first: failing test
-            # names, then error summaries, then disk + the log tail.
-            { grep -aE "^test .* FAILED$" /tmp/cargo-test.log | sort -u | head -5
-              grep -aE "^error" /tmp/cargo-test.log | sort -u | head -2
+            # 10-annotation cap per step — panic blocks carry both the failing
+            # test's name (header line) and its actual assertion message.
+            { grep -aA2 "^---- .* stdout ----$" /tmp/cargo-test.log | grep -av "^--$" | head -8
+              grep -aE "^error" /tmp/cargo-test.log | sort -u | head -1
               df -h / | tail -1
-              tail -n 2 /tmp/cargo-test.log
             } | while IFS= read -r line; do echo "::error title=cargo test::${line}"; done
             exit 1
           fi

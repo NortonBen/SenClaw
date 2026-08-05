@@ -621,9 +621,24 @@ mod tests {
 
     #[test]
     fn test_download_http_image_404() {
-        // Test with a valid URL but 404 response
-        // Using httpbin.org for testing HTTP errors
-        let result = download_http_image("https://httpbin.org/status/404");
+        // Hermetic 404: a throwaway local listener answers instead of the old
+        // httpbin.org call — that service times out often enough to keep CI
+        // red, and a timeout error does not contain "HTTP error", so the
+        // second assert failed with no bug anywhere in our code.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                use std::io::{Read, Write};
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf);
+                let _ = sock.write_all(
+                    b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        let result = download_http_image(&format!("http://{addr}/missing.png"));
+        server.join().unwrap();
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("HTTP error"));
     }
