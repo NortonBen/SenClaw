@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Process;
 
 import 'package:appflowy_editor/appflowy_editor.dart'
     show AppFlowyEditorLocalizations;
@@ -125,7 +126,9 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
   Future<void> _initTray() async {
     await trayManager.setIcon(
       defaultTargetPlatform == TargetPlatform.windows
-          ? 'assets/tray_icon.ico'
+          ? (await _windowsTaskbarIsLight()
+              ? 'assets/tray_icon.ico' // black glyph for the light taskbar
+              : 'assets/tray_icon_white.ico')
           : 'assets/tray_icon.png',
       isTemplate: true, // macOS recolors a template image for the menu bar
     );
@@ -139,6 +142,26 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
       MenuItem.separator(),
       MenuItem(key: 'quit', label: 'Quit'),
     ]));
+  }
+
+  /// Windows shows tray icons as raw pixels — there is no template recolor
+  /// like the macOS menu bar — so the glyph color must match the taskbar
+  /// theme. SystemUsesLightTheme is the taskbar's own knob; AppsUseLightTheme
+  /// (what platformBrightness reflects) can be set independently of it.
+  /// Defaults to dark (white icon): dark is the Windows default, and a white
+  /// glyph on a light taskbar is merely faint, while black on dark vanishes.
+  Future<bool> _windowsTaskbarIsLight() async {
+    try {
+      final r = await Process.run('reg', [
+        'query',
+        r'HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize',
+        '/v',
+        'SystemUsesLightTheme',
+      ]);
+      return r.exitCode == 0 && (r.stdout as String).contains('0x1');
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Tray → capture a region → open the review sheet, where the shot becomes a

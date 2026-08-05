@@ -1,0 +1,10 @@
+<svg width="640" height="640" viewBox="192 192 640 640" xmlns="http://www.w3.org/2000/svg">
+  <!-- white variant of tray_icon.svg for the dark Windows taskbar. The shipped
+       tray_icon_white.ico is generated from these paths with per-size stroke
+       thickening (see scripts/gen_tray_ico.py) — regenerate it, don't hand-edit. -->
+  <g fill="#FFFFFF">
+    <path d="M341 232 C 293 430 305 612 403 792 C 359 612 363 430 403 250 Z"/>
+    <path d="M481 232 C 433 430 445 612 543 792 C 499 612 503 430 543 250 Z"/>
+    <path d="M621 232 C 573 430 585 612 683 792 C 639 612 643 430 683 250 Z"/>
+  </g>
+</svg>
