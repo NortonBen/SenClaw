@@ -242,6 +242,23 @@ pub fn ocr_mcp_config(ui_port: u16) -> McpServerConfig {
     cfg
 }
 
+// ===== OS sandbox (sbx_* tools) =====
+
+/// OS-sandbox executor (`senclaw-sandbox`). State is the shared engine DB
+/// under `~/.senclaw/sandbox` — the subprocess opens it itself, so the only
+/// thing to forward is a non-default data root.
+pub fn sandbox_mcp_config() -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-sandbox", "sandbox-server");
+    for key in ["SENCLAW_SANDBOX_DATA_DIR", "SANDBOX_DATA_DIR"] {
+        if let Ok(v) = std::env::var(key) {
+            if !v.trim().is_empty() {
+                cfg.env.insert(key.into(), v);
+            }
+        }
+    }
+    cfg
+}
+
 // ===== JS executor =====
 
 /// Sandboxed JavaScript executor (QuickJS). No state is shared with the daemon;

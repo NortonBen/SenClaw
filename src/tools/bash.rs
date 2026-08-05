@@ -121,6 +121,56 @@ impl Tool for BashTool {
             }]);
         }
 
+        // Plugins → Sandbox → "exec": run the command inside the OS sandbox,
+        // write-jailed to the working directory. When the switch is on but the
+        // engine cannot run, the command FAILS rather than silently dropping
+        // back to a raw shell — the user asked for the jail.
+        if crate::sandbox::policy::current().exec_shell {
+            let run =
+                crate::sandbox::policy::agent_shell(&command, ctx.working_dir, timeout_ms).await;
+            return Ok(vec![match run {
+                Ok(run) => {
+                    let mut output_text = String::new();
+                    if !run.stdout.is_empty() {
+                        output_text.push_str(&run.stdout);
+                    }
+                    if !run.stderr.is_empty() {
+                        if !output_text.is_empty() {
+                            output_text.push('\n');
+                        }
+                        output_text.push_str(&run.stderr);
+                    }
+                    if run.timed_out {
+                        if !output_text.is_empty() {
+                            output_text.push('\n');
+                        }
+                        output_text.push_str(&format!(
+                            "Command timed out after {timeout_ms}ms (killed)"
+                        ));
+                    }
+                    ToolOutput::Result {
+                        data: serde_json::json!({
+                            "stdout": run.stdout,
+                            "stderr": run.stderr,
+                            "exitCode": run.exit_code.unwrap_or(-1),
+                            "truncated": run.truncated,
+                            "timeout": run.timed_out,
+                            "title": get_title(&command),
+                            "sandbox": { "isolation": run.isolation, "network": run.network },
+                        }),
+                        result_for_assistant: output_text,
+                    }
+                }
+                Err(e) => ToolOutput::Result {
+                    data: serde_json::json!({"error": true}),
+                    result_for_assistant: format!(
+                        "Sandboxed execution failed: {e}. \
+                         (Bash runs inside the OS sandbox because `exec` enforcement is on in Plugins → Sandbox.)"
+                    ),
+                },
+            }]);
+        }
+
         let cmd = command.clone();
         let working_dir = ctx.working_dir.to_string();
 

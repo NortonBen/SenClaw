@@ -13,6 +13,7 @@ import { SpaceAppsSettings } from '../settings/SpaceAppsSettings';
 import WorkflowsPanel from './WorkflowsPanel';
 import AliasPanel from './AliasPanel';
 import WidgetsPanel from './WidgetsPanel';
+import { SandboxPanel } from './SandboxPanel';
 
 const { Text } = Typography;
 
@@ -32,6 +33,7 @@ const NAV_LABEL: Record<PluginsNavItem, string> = {
   'space-apps': 'Space Apps',
   workflows: 'Workflow',
   widgets: 'Widget',
+  sandbox: 'Sandbox',
 };
 
 export default function PluginsView({ activeNav }: Props) {
@@ -53,6 +55,7 @@ export default function PluginsView({ activeNav }: Props) {
         {activeNav === 'space-apps' && <SpaceAppsSettings />}
         {activeNav === 'workflows' && <WorkflowsPanel />}
         {activeNav === 'widgets' && <WidgetsPanel />}
+        {activeNav === 'sandbox' && <SandboxPanel />}
       </Content>
     </Layout>
   );

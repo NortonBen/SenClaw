@@ -121,6 +121,7 @@ mcp__senclaw-<domain>__<tool-prefix>_<verb>[_<modifier>]
 | litho | `senclaw-litho` | `litho_` | `mcp__senclaw-litho__litho_generate` |
 | js | `senclaw-js` | `js_` | `mcp__senclaw-js__js_eval` |
 | **cognitive** | `senclaw-cognitive` | **`cog_`** (not `cognitive_`) | `mcp__senclaw-cognitive__cog_search` |
+| **sandbox** | `senclaw-sandbox` | **`sbx_`** (not `sandbox_`) | `mcp__senclaw-sandbox__sbx_run` |
 | usage | `senclaw-usage` | `usage_` | `mcp__senclaw-usage__usage_overview` |
 | admin | `senclaw-admin` | (varies) | — |
 
@@ -151,7 +152,8 @@ Links in a Space App UI must open in the **system browser**, never navigate the 
 - **Never substitute another MCP server** (e.g. Playwright plugin, `Claude_in_Chrome`) when a SenClaw skill references a SenClaw server. SenClaw skills assume their own server semantics, return shapes, and side effects — substituting a different browser MCP silently breaks the skill's contract.
 - **Verify the server is registered before suggesting the user run it.** Check `.mcp.json` at project root and the Claude Code MCP list. If absent, the fix is to register the server in `.mcp.json` (stdio command pointing to the `senclaw` binary with the matching `<domain>-server` subcommand), not to rewrite the skill.
 - **Match the registry above when writing or updating a SKILL.md.** When in doubt, run `grep -n '#\[rmcp::tool' src/mcp/<domain>_server.rs -A 2` to confirm the exact `async fn <name>` and use that verbatim.
-- **Cognitive is the one exception** — server `senclaw-cognitive` but tool prefix `cog_*`. Do not "normalize" it to `cognitive_*`.
+- **Two prefix exceptions** — server `senclaw-cognitive` has tool prefix `cog_*`, and server `senclaw-sandbox` has tool prefix `sbx_*`. Do not "normalize" them to `cognitive_*` / `sandbox_*`.
+- **`senclaw-sandbox` is the built-in OS-sandbox engine** (`src/sandbox`, ported from `apps/sandbox` which still exists as a standalone Space App with server `sandbox-mcp`). The built-in engine's data lives in `~/.senclaw/sandbox/`; the Space App keeps its own under `~/.senclaw/space-app-data/sandbox/`. Enforcement switches (agent Bash exec / Python / Node.js / scheduler scripts through the sandbox) live at `/api/sandbox/exec-policy` and the Plugins → Sandbox Web UI page.
 
 ### Registering a SenClaw MCP server for Claude Code
 

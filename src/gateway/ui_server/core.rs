@@ -209,8 +209,24 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .precompressed_br()
         .fallback(spa_index);
 
+    // OS-sandbox engine (`src/sandbox`): the whole Space-App REST surface,
+    // nested under /api/sandbox. Carries its own state (the engine DB); when
+    // the engine cannot open, the subtree answers 503 instead of vanishing.
+    let sandbox_router = match crate::sandbox::shared_db() {
+        Some(db) => crate::sandbox::api::api_router(crate::sandbox::state::AppState { db }),
+        None => Router::new().fallback(|| async {
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({
+                    "error": "sandbox engine unavailable (data dir or DB failed to open — see daemon log)"
+                })),
+            )
+        }),
+    };
+
     Router::new()
         // API endpoints
+        .nest_service("/api/sandbox", sandbox_router)
         .route("/api/config", get(config_handler))
         // Open a URL in the host machine's default browser (see open_url.rs).
         .route("/api/ui/open-url", post(open_url_handler))

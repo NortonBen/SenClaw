@@ -1131,6 +1131,9 @@ impl AgentPool {
             mcp_servers.push(ocr_mcp_config(cfg.ui_server.port));
             // Sandboxed JS executor — no shared state, just default limits.
             mcp_servers.push(js_mcp_config(5_000, 128));
+            // OS-sandbox executor (sbx_* tools) — Seatbelt/bubblewrap/docker
+            // isolated shell + real python/node, shared engine DB.
+            mcp_servers.push(crate::mcp::helper::sandbox_mcp_config());
 
             // Load marketplace MCP servers from enabled plugins — mirrors TS AgentPool.ts:753-755
             if let Some(mm) = self.marketplace_manager.lock().unwrap().as_ref() {

@@ -31,6 +31,7 @@ pub mod mcp;
 pub mod memory;
 pub mod plugins;
 pub mod providers;
+pub mod sandbox;
 pub mod scheduler;
 pub mod security;
 pub mod setup;

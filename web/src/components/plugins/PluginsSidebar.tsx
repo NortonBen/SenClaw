@@ -24,7 +24,7 @@ const { Text } = Typography;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'alias' | 'cowork' | 'code' | 'marketplace' | 'space-apps' | 'workflows' | 'widgets';
+export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'alias' | 'cowork' | 'code' | 'marketplace' | 'space-apps' | 'workflows' | 'widgets' | 'sandbox';
 
 interface SkillSummary {
   name: string;
@@ -405,6 +405,14 @@ export function PluginsSidebar({ activeNav, onSelect }: Props) {
               label="Widget"
               isSelected={activeNav === 'widgets'}
               onClick={() => onSelect('widgets')}
+            />
+
+            {/* ─── Sandbox (OS-isolated exec: luồng, giám sát, cơ chế cưỡng chế) ─── */}
+            <StaticNavItem
+              icon={<ExperimentOutlined />}
+              label="Sandbox"
+              isSelected={activeNav === 'sandbox'}
+              onClick={() => onSelect('sandbox')}
             />
 
 

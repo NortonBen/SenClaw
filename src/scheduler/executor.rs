@@ -35,6 +35,49 @@ impl DefaultTaskExecutor {
     }
 }
 
+/// Run a scheduled shell command, honouring Settings → Sandbox → "script".
+///
+/// Enforcement ON: the command runs inside a throwaway OS sandbox (write-jail,
+/// kill-enforced 10-minute ceiling; network per the policy switch). When the
+/// switch is on but the engine cannot run, the task FAILS rather than silently
+/// dropping to a raw shell. Enforcement OFF: raw `bash -c`, the historical
+/// behaviour.
+///
+/// Returns `(stdout, stderr, exit_code, isolation)` — `isolation` is `"none"`
+/// on the legacy path so run logs always say what confined the script.
+async fn run_script_command(cmd: &str) -> anyhow::Result<(String, String, Option<i32>, String)> {
+    let policy = crate::sandbox::policy::current();
+    if policy.scheduler_script {
+        let run = crate::sandbox::policy::run_once_sandboxed(
+            "bash",
+            cmd,
+            policy.scheduler_network,
+            Some(crate::sandbox::backend::MAX_TIMEOUT_MS as i64),
+        )
+        .await?;
+        let mut stderr = run.stderr;
+        if run.timed_out {
+            if !stderr.is_empty() {
+                stderr.push('\n');
+            }
+            stderr.push_str("(killed: sandbox deadline reached)");
+        }
+        return Ok((
+            run.stdout,
+            stderr,
+            run.exit_code.map(|c| c as i32),
+            run.isolation,
+        ));
+    }
+    let output = Command::new("bash").arg("-c").arg(cmd).output()?;
+    Ok((
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.status.code(),
+        "none".to_string(),
+    ))
+}
+
 #[async_trait]
 impl TaskExecutor for DefaultTaskExecutor {
     async fn execute(&self, task: ScheduledTask) {
@@ -108,10 +151,7 @@ impl DefaultTaskExecutor {
             "[TaskScheduler] script"
         );
 
-        let output = Command::new("bash").arg("-c").arg(cmd).output()?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let (stdout, stderr, exit_code, _isolation) = run_script_command(cmd).await?;
 
         let mut result = String::new();
         if !stdout.is_empty() {
@@ -124,11 +164,8 @@ impl DefaultTaskExecutor {
             result.push_str(&stderr);
         }
 
-        if !output.status.success() {
-            result.push_str(&format!(
-                "\nExit code: {}",
-                output.status.code().unwrap_or(-1)
-            ));
+        if exit_code != Some(0) {
+            result.push_str(&format!("\nExit code: {}", exit_code.unwrap_or(-1)));
         }
 
         Ok(result)
@@ -143,20 +180,14 @@ impl DefaultTaskExecutor {
             "[TaskScheduler] script-agent"
         );
 
-        let output = Command::new("bash").arg("-c").arg(cmd).output()?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let (stdout, stderr, exit_code, _isolation) = run_script_command(cmd).await?;
 
         let mut result = format!("Script output:\n{stdout}");
         if !stderr.is_empty() {
             result.push_str(&format!("\n\nStderr:\n{stderr}"));
         }
-        if !output.status.success() {
-            result.push_str(&format!(
-                "\n\nExit code: {}",
-                output.status.code().unwrap_or(-1)
-            ));
+        if exit_code != Some(0) {
+            result.push_str(&format!("\n\nExit code: {}", exit_code.unwrap_or(-1)));
         }
 
         // In full implementation: feed this output to the agent for interpretation.

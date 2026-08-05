@@ -138,6 +138,8 @@ enum Command {
     OcrServer,
     /// Start the sandboxed JavaScript executor MCP server (stdio JSON-RPC)
     JsServer,
+    /// Start the OS-sandbox MCP server — sbx_* tools (stdio JSON-RPC)
+    SandboxServer,
     /// Start the token-usage accounting MCP server (stdio JSON-RPC)
     UsageServer,
     /// Internal: brush (rust-bash) sandbox child — reads a script from stdin,
@@ -270,6 +272,7 @@ async fn main() -> Result<()> {
         Command::CognitiveServer => senclaw::mcp::cognitive_server::run_stdio_server().await,
         Command::OcrServer => senclaw::mcp::ocr_server::run_stdio_server().await,
         Command::JsServer => senclaw::mcp::js_server::run_stdio_server().await,
+        Command::SandboxServer => senclaw::mcp::sandbox_server::run_stdio_server().await,
         Command::UsageServer => senclaw::mcp::usage_server::run_stdio_server().await,
         Command::BrushSandbox { dir } => {
             senclaw::gateway::ui_server::bash_sandbox::child_main(&dir).await

@@ -3,7 +3,9 @@
     "senclaw-browser": {
       "type": "stdio",
       "command": "/Users/benji/Projects/SemaClaw/target/release/senclaw",
-      "args": ["browser-server"],
+      "args": [
+        "browser-server"
+      ],
       "env": {
         "SENCLAW_WS_PORT": "18789"
       }
@@ -11,11 +13,20 @@
     "senclaw-js": {
       "type": "stdio",
       "command": "/Users/benji/Projects/SemaClaw/target/release/senclaw",
-      "args": ["js-server"],
+      "args": [
+        "js-server"
+      ],
       "env": {
         "SENCLAW_JS_TIMEOUT_MS": "5000",
         "SENCLAW_JS_MEMORY_MB": "128"
       }
+    },
+    "senclaw-sandbox": {
+      "type": "stdio",
+      "command": "/Users/benji/Projects/SemaClaw/target/release/senclaw",
+      "args": [
+        "sandbox-server"
+      ]
     }
   }
 }
