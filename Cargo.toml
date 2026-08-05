@@ -320,7 +320,12 @@ ocr-paddle-metal = ["ocr-paddle", "ocr-rs/metal", "ocr-rs/coreml"]
 
 [profile.release]
 lto = "thin"
-codegen-units = 1
+# 16 (the cargo default), NOT 1: the senclaw crate is enormous and cu=1 makes
+# its codegen serial — measured ~37 min for the macOS release daemon in CI.
+# Thin-LTO recovers most cross-unit optimisation, so the runtime cost is a few
+# percent at worst; benchmark with `codegen-units = 1` restored if a hot MLX
+# path ever needs squeezing.
+codegen-units = 16
 strip = true
 
 # Optimize ALL dependencies even in the dev (debug) profile.

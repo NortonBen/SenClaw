@@ -135,9 +135,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # Restore ONLY: this job runs on tag refs, and a cache saved on a tag is
+      # unreadable by every other ref — pure quota waste that evicts the useful
+      # default-branch caches. The seed lives on main, written by the
+      # warm-release-cache workflow with the SAME shared-key.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+          shared-key: release-${{ matrix.target }}
+          save-if: ${{ github.ref_type != 'tag' }}
 
       - uses: subosito/flutter-action@v2
         with:

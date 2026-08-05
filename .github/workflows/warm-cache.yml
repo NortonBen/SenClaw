@@ -1,0 +1,80 @@
+# Seed the release-profile cargo caches that tag builds restore.
+#
+# Why this exists: the desktop.yml `build` matrix runs ONLY on tags, and a
+# GitHub Actions cache saved on a tag ref is readable by no other ref — so
+# every release compiled the daemon from scratch (~37 min on macOS, restore
+# steps completing in 1-3s = guaranteed miss). Caches saved on the DEFAULT
+# branch are readable from every ref, so this workflow builds the same
+# targets, with the same features and the same rust-cache `shared-key`, on
+# main — and tag builds inherit a warm dependency cache.
+#
+# Triggered when the dependency graph or the build recipe changes (that is
+# when the old cache stops matching), plus manually. NOT on every main push:
+# the workspace-crate rebuild a source change causes is cheap next to the
+# dependency compile this cache exists to avoid.
+
+name: Warm release cache
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - ".github/workflows/warm-cache.yml"
+      - ".github/workflows/desktop.yml"
+
+concurrency:
+  group: warm-release-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    name: Warm ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Targets + daemon features MUST mirror desktop.yml's build matrix —
+          # a feature mismatch compiles (and caches) different dependency sets.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            daemon_features: "local-mlx,local-embed-metal,local-embed,local-mlx-whisper,local-mlx-tts,ocr-paddle-metal,tts-vieneu"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            daemon_features: ""
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            daemon_features: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The daemon binary needs only OpenSSL on Linux — the GTK/gstreamer pile
+      # in desktop.yml belongs to the Flutter app, which this workflow never
+      # builds.
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: release-${{ matrix.target }}
+
+      - name: Build senclaw daemon binary (release)
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.daemon_features }}" ]; then
+            cargo build --release --bin senclaw --target ${{ matrix.target }} \
+              --features "${{ matrix.daemon_features }}"
+          else
+            cargo build --release --bin senclaw --target ${{ matrix.target }}
+          fi
