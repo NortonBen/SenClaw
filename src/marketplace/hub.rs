@@ -22,7 +22,13 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// The hub SenClaw ships with. Override per-install with `SENCLAW_HUB_URL`.
-pub const DEFAULT_HUB_URL: &str = "https://hub-store.bacnd.com";
+pub const DEFAULT_HUB_URL: &str = "https://senclaw.bacnd.com";
+
+/// The hub's pre-rename hostname — same server as [`DEFAULT_HUB_URL`], kept
+/// serving so old links don't 404. Sources seeded before the rename still
+/// point here; [`super::MarketplaceManager::migrate_legacy_hub_url`] rewrites
+/// them on load.
+pub const LEGACY_HUB_URL: &str = "https://hub-store.bacnd.com";
 
 /// Filename a hub URL is assumed to serve when it points at a directory.
 const CATALOG_FILE: &str = "marketplace.json";
@@ -199,7 +205,7 @@ impl HubCatalog {
 // ── Catalog fetch ────────────────────────────────────────────────────────────
 
 /// Turn whatever the user typed into the URL of the catalog document.
-/// `https://hub-store.bacnd.com` → `https://hub-store.bacnd.com/marketplace.json`.
+/// `https://senclaw.bacnd.com` → `https://senclaw.bacnd.com/marketplace.json`.
 pub fn normalize_catalog_url(url: &str) -> String {
     let url = url.trim().trim_end_matches('/');
     if url.ends_with(".json") {

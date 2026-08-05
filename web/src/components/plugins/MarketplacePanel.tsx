@@ -309,7 +309,7 @@ export default function MarketplacePanel() {
                   rules={[{ required: true, message: 'Please enter a hub URL' }]}
                   extra="A site root gets /marketplace.json appended automatically"
                 >
-                  <Input placeholder="https://hub-store.bacnd.com" />
+                  <Input placeholder="https://senclaw.bacnd.com" />
                 </Form.Item>
               );
             }}

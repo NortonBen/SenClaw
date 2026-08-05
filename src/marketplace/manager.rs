@@ -88,6 +88,9 @@ impl MarketplaceManager {
         let clones_dir = senclaw_home.join("marketplace");
 
         let mut manager = Self::with_paths_and_hub(config_path, state_path, clones_dir, hub_url)?;
+        if let Err(e) = manager.migrate_legacy_hub_url() {
+            tracing::warn!("[Marketplace] Failed to migrate legacy hub source: {e}");
+        }
         if let Err(e) = manager.ensure_default_hub() {
             tracing::warn!("[Marketplace] Failed to seed default hub source: {e}");
         }
@@ -117,6 +120,9 @@ impl MarketplaceManager {
             .unwrap_or_else(|e2| panic!("Failed to create marketplace manager: {e2}"))
         });
 
+        if let Err(e) = manager.migrate_legacy_hub_url() {
+            tracing::warn!("[Marketplace] Failed to migrate legacy hub source: {e}");
+        }
         if let Err(e) = manager.ensure_default_hub() {
             tracing::warn!("[Marketplace] Failed to seed default hub source: {e}");
         }
@@ -188,10 +194,7 @@ impl MarketplaceManager {
         let created = if already {
             false
         } else {
-            let name = hub::catalog_home(&catalog_url)
-                .trim_start_matches("https://")
-                .trim_start_matches("http://")
-                .to_string();
+            let name = Self::hub_source_name(&catalog_url);
             self.add_source(
                 if name.is_empty() {
                     "SenClaw Hub".to_string()
@@ -213,6 +216,53 @@ impl MarketplaceManager {
         }
         fs::write(&marker, "").ok();
         Ok(created)
+    }
+
+    /// The auto-derived display name for a hub source: its home host.
+    fn hub_source_name(catalog_url: &str) -> String {
+        hub::catalog_home(catalog_url)
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .to_string()
+    }
+
+    /// One-time rename of the shipped hub: sources seeded while the default
+    /// was `hub-store.bacnd.com` are rewritten to `senclaw.bacnd.com` — the
+    /// same server under its official name. User-added hubs are left alone;
+    /// so is everything when a source for the new URL already exists (the
+    /// user got there on their own). Returns whether anything changed.
+    pub fn migrate_legacy_hub_url(&mut self) -> Result<bool> {
+        let old_catalog = hub::normalize_catalog_url(hub::LEGACY_HUB_URL);
+        let new_catalog = hub::normalize_catalog_url(hub::DEFAULT_HUB_URL);
+        let points_at = |s: &MarketplaceSource, catalog: &str| {
+            s.source_type == SourceType::Hub
+                && s.url
+                    .as_deref()
+                    .map(|u| hub::normalize_catalog_url(u) == catalog)
+                    .unwrap_or(false)
+        };
+
+        if self.config.sources.iter().any(|s| points_at(s, &new_catalog)) {
+            return Ok(false);
+        }
+
+        let old_name = Self::hub_source_name(&old_catalog);
+        let new_name = Self::hub_source_name(&new_catalog);
+        let mut changed = false;
+        for s in &mut self.config.sources {
+            if points_at(s, &old_catalog) {
+                s.url = Some(new_catalog.clone());
+                // Only rename if the user kept the auto-derived name.
+                if s.name == old_name {
+                    s.name = new_name.clone();
+                }
+                changed = true;
+            }
+        }
+        if changed {
+            self.save_config()?;
+        }
+        Ok(changed)
     }
 
     // ── Config/State persistence ─────────────────────────────────────────────────────
@@ -1105,6 +1155,78 @@ mod tests {
 
         let manager = MarketplaceManager::with_paths(config_path, state_path, clones_dir).unwrap();
         assert!(manager.get_sources().is_empty());
+    }
+
+    #[test]
+    fn test_migrate_legacy_hub_url() {
+        let temp = TempDir::new().unwrap();
+        let mut manager = MarketplaceManager::with_paths(
+            temp.path().join("config.json"),
+            temp.path().join("state.json"),
+            temp.path().join("clones"),
+        )
+        .unwrap();
+
+        // Seeded under the old default: URL and auto-derived name both move.
+        manager
+            .add_source(
+                "hub-store.bacnd.com".to_string(),
+                SourceType::Hub,
+                Some(format!("{}/marketplace.json", hub::LEGACY_HUB_URL)),
+                None,
+                None,
+                Some(0),
+                Some(true),
+            )
+            .unwrap();
+        assert!(manager.migrate_legacy_hub_url().unwrap());
+        let s = &manager.get_sources()[0];
+        assert_eq!(s.url.as_deref(), Some("https://senclaw.bacnd.com/marketplace.json"));
+        assert_eq!(s.name, "senclaw.bacnd.com");
+
+        // Second run is a no-op: the new URL already exists.
+        assert!(!manager.migrate_legacy_hub_url().unwrap());
+    }
+
+    #[test]
+    fn test_migrate_legacy_hub_keeps_custom_name_and_other_hubs() {
+        let temp = TempDir::new().unwrap();
+        let mut manager = MarketplaceManager::with_paths(
+            temp.path().join("config.json"),
+            temp.path().join("state.json"),
+            temp.path().join("clones"),
+        )
+        .unwrap();
+
+        manager
+            .add_source(
+                "My Store".to_string(), // user-renamed → name survives
+                SourceType::Hub,
+                Some(hub::LEGACY_HUB_URL.to_string()),
+                None,
+                None,
+                Some(0),
+                Some(true),
+            )
+            .unwrap();
+        manager
+            .add_source(
+                "other".to_string(),
+                SourceType::Hub,
+                Some("https://example.com/marketplace.json".to_string()),
+                None,
+                None,
+                Some(1),
+                Some(true),
+            )
+            .unwrap();
+
+        assert!(manager.migrate_legacy_hub_url().unwrap());
+        let sources = manager.get_sources();
+        let mine = sources.iter().find(|s| s.name == "My Store").unwrap();
+        assert_eq!(mine.url.as_deref(), Some("https://senclaw.bacnd.com/marketplace.json"));
+        let other = sources.iter().find(|s| s.name == "other").unwrap();
+        assert_eq!(other.url.as_deref(), Some("https://example.com/marketplace.json"));
     }
 
     #[test]

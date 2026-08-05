@@ -3355,7 +3355,7 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
                   hintText: switch (type) {
                     'local' => '/path/to/plugins',
                     'git' => 'https://github.com/user/repo',
-                    _ => 'https://hub-store.bacnd.com',
+                    _ => 'https://senclaw.bacnd.com',
                   },
                 ),
               ),
