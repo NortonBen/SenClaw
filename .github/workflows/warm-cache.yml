@@ -64,10 +64,20 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      # Plain actions/cache with a prefix fallback, NOT Swatinem/rust-cache:
+      # rust-cache only restores an EXACT key match, and every version bump
+      # rewrites Cargo.lock — which made each seed build start cold and each
+      # tag build miss the seed. With restore-keys this job is incremental
+      # (restores its own previous seed) and desktop.yml's restore-only step
+      # picks up the newest seed regardless of lockfile drift.
+      - uses: actions/cache@v4
         with:
-          workspaces: ". -> target"
-          shared-key: release-${{ matrix.target }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: relcache-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: relcache-v1-${{ matrix.target }}-
 
       - name: Build senclaw daemon binary (release)
         shell: bash

@@ -98,10 +98,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # save-if: caches saved on tag refs are unreadable by every other ref —
+      # they only burn the 10GB quota and evict the main-branch caches that
+      # tag builds actually restore from.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
           key: space-apps
+          save-if: ${{ github.ref_type != 'tag' }}
 
       - uses: actions/setup-node@v4
         with:

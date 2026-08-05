@@ -135,15 +135,22 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Restore ONLY: this job runs on tag refs, and a cache saved on a tag is
-      # unreadable by every other ref — pure quota waste that evicts the useful
-      # default-branch caches. The seed lives on main, written by the
-      # warm-release-cache workflow with the SAME shared-key.
-      - uses: Swatinem/rust-cache@v2
+      # Restore ONLY (plain actions/cache, not Swatinem/rust-cache): the seed
+      # is written on main by warm-cache.yml, and the version-bump commit that
+      # precedes every tag changes Cargo.lock — rust-cache matches keys
+      # EXACTLY (no restore-keys by design), so a tag build would miss the
+      # seed every single time. The prefix fallback below restores the newest
+      # main seed instead; cargo then rebuilds only what actually changed.
+      # No save step: a cache saved on a tag ref is unreadable by every other
+      # ref — pure quota waste that evicts the useful main caches.
+      - uses: actions/cache/restore@v4
         with:
-          workspaces: ". -> target"
-          shared-key: release-${{ matrix.target }}
-          save-if: ${{ github.ref_type != 'tag' }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: relcache-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: relcache-v1-${{ matrix.target }}-
 
       - uses: subosito/flutter-action@v2
         with:
