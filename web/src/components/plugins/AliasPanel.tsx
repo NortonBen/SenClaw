@@ -72,6 +72,42 @@ function fullToolNames(servers: McpServerEntry[]): string[] {
   return Array.from(new Set(out)).sort();
 }
 
+// The daemon's stripped "bridge" spelling of an MCP tool name:
+// `mcp__senclaw-<srv>__<srv>_<tool>` → `mcp__<srv>__<tool>`.
+function normalizeMcpToolName(name: string): string {
+  const prefix = 'mcp__senclaw-';
+  if (!name.startsWith(prefix)) return name;
+  const rest = name.slice(prefix.length);
+  const split = rest.indexOf('__');
+  if (split <= 0) return name;
+  const server = rest.slice(0, split);
+  let tool = rest.slice(split + 2);
+  if (tool.startsWith(`${server}_`)) tool = tool.slice(server.length + 1);
+  return `mcp__${server}__${tool}`;
+}
+
+// Every spelling the daemon's resolver accepts for `name`: as written, the
+// stripped bridge form, and their hyphen/underscore-folded variants.
+function toolNameVariants(name: string): string[] {
+  const normalized = normalizeMcpToolName(name);
+  return Array.from(
+    new Set([
+      name,
+      name.replace(/-/g, '_'),
+      normalized,
+      normalized.replace(/-/g, '_'),
+    ]),
+  );
+}
+
+// Whether `name` matches a known MCP tool under any accepted spelling. Kept
+// as lenient as the daemon's resolution so the panel never warns about a
+// name that would in fact resolve.
+function mcpToolExists(known: string[], name: string): boolean {
+  const variants = new Set(toolNameVariants(name));
+  return known.some(k => toolNameVariants(k).some(v => variants.has(v)));
+}
+
 // ─── Panel ────────────────────────────────────────────────────────────────────
 
 export default function AliasPanel() {
@@ -402,6 +438,27 @@ export default function AliasPanel() {
                     return Promise.reject(new Error('Tool đích phải khác alias'));
                   }
                   return Promise.resolve();
+                },
+              },
+              {
+                // Advisory only: the server may simply be off right now, and
+                // the daemon falls back to the original name when an alias
+                // target is missing — so a miss must never block saving.
+                warningOnly: true,
+                validator: (_, v: string) => {
+                  const t = (v ?? '').trim();
+                  if (
+                    !t.startsWith('mcp__') ||
+                    knownTools.length === 0 ||
+                    mcpToolExists(knownTools, t)
+                  ) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(
+                    new Error(
+                      'Chưa thấy tool này trên MCP server nào đang kết nối — kiểm tra tên hoặc bật server (vẫn lưu được).',
+                    ),
+                  );
                 },
               },
             ]}

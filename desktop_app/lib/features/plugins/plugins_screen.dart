@@ -219,8 +219,9 @@ final toolAliasesProvider = FutureProvider<List<ToolAlias>>((ref) async =>
         .toList());
 
 /// Full `mcp__<server>__<tool>` names of every known MCP tool — used to badge
-/// an alias as "override" (name collides with a real tool) vs "new name",
-/// mirroring the web AliasPanel. Piggybacks on the MCP tab's payload.
+/// an alias as "override" (name collides with a real tool) vs "new name" and
+/// to live-check the editor's fields against the connected roster, mirroring
+/// the web AliasPanel. Piggybacks on the MCP tab's payload.
 final knownToolNamesProvider = FutureProvider<Set<String>>((ref) async {
   final servers = await ref.watch(mcpServersProvider.future);
   return {
@@ -228,6 +229,40 @@ final knownToolNamesProvider = FutureProvider<Set<String>>((ref) async {
       for (final t in s.tools) 'mcp__${s.name}__${t.name}',
   };
 });
+
+/// The daemon's stripped "bridge" spelling of an MCP tool name:
+/// `mcp__senclaw-<srv>__<srv>_<tool>` → `mcp__<srv>__<tool>`.
+String _normalizeMcpToolName(String name) {
+  const prefix = 'mcp__senclaw-';
+  if (!name.startsWith(prefix)) return name;
+  final rest = name.substring(prefix.length);
+  final split = rest.indexOf('__');
+  if (split <= 0) return name;
+  final server = rest.substring(0, split);
+  var tool = rest.substring(split + 2);
+  if (tool.startsWith('${server}_')) tool = tool.substring(server.length + 1);
+  return 'mcp__${server}__$tool';
+}
+
+/// Every spelling the daemon's resolver accepts for `name`: as written, the
+/// stripped bridge form, and their hyphen/underscore-folded variants.
+Set<String> _toolNameVariants(String name) {
+  final normalized = _normalizeMcpToolName(name);
+  return {
+    name,
+    name.replaceAll('-', '_'),
+    normalized,
+    normalized.replaceAll('-', '_'),
+  };
+}
+
+/// Whether `name` matches a known MCP tool under any accepted spelling. Kept
+/// as lenient as the daemon's resolution so the editor never warns about a
+/// name that would in fact resolve.
+bool _mcpToolExists(Set<String> known, String name) {
+  final variants = _toolNameVariants(name);
+  return known.any((k) => _toolNameVariants(k).any(variants.contains));
+}
 
 final marketplaceSourcesProvider =
     FutureProvider<List<MarketplaceSource>>((ref) async => _list(
@@ -2829,6 +2864,8 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
   final _alias = TextEditingController();
   final _target = TextEditingController();
   final _description = TextEditingController();
+  final _aliasFocus = FocusNode();
+  final _targetFocus = FocusNode();
   bool _saving = false;
   String? _error;
 
@@ -2853,6 +2890,13 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
       _target.text = ex.target;
       _description.text = ex.description;
     }
+    // Tool suggestions only show under the focused field.
+    _aliasFocus.addListener(_onFocusChange);
+    _targetFocus.addListener(_onFocusChange);
+  }
+
+  void _onFocusChange() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -2860,7 +2904,59 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
     _alias.dispose();
     _target.dispose();
     _description.dispose();
+    _aliasFocus.dispose();
+    _targetFocus.dispose();
     super.dispose();
+  }
+
+  /// Up to 6 known tools matching the focused field's text — tap to fill.
+  /// Gone once the text is an exact known name (or tools aren't loaded).
+  Widget? _suggestions(
+      Set<String>? known, TextEditingController field, FocusNode focus) {
+    if (known == null || !focus.hasFocus) return null;
+    final q = field.text.trim();
+    if (q.isEmpty) return null;
+    final lower = q.toLowerCase();
+    final matches =
+        known.where((t) => t.toLowerCase().contains(lower)).toList()..sort();
+    if (matches.isEmpty || (matches.length == 1 && matches.first == q)) {
+      return null;
+    }
+    final c = context.colors;
+    return Container(
+      margin: const EdgeInsets.only(top: AppTokens.s4),
+      decoration: BoxDecoration(
+        color: c.surfaceAlt,
+        border: Border.all(color: c.border),
+        borderRadius: BorderRadius.circular(AppTokens.rMd),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final t in matches.take(6))
+            InkWell(
+              onTap: () {
+                field.value = TextEditingValue(
+                  text: t,
+                  selection: TextSelection.collapsed(offset: t.length),
+                );
+                setState(() {});
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppTokens.s12, vertical: AppTokens.s6),
+                child: Text(t,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: c.textSecondary,
+                        fontSize: 12,
+                        fontFamily: AppTokens.fontMono)),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   Future<void> _save() async {
@@ -2898,6 +2994,45 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    // Live check against the connected MCP tool roster. Only `mcp__…` names
+    // are verifiable (native tool targets stay neutral) and a miss never
+    // blocks saving — the server may simply be off right now, and the daemon
+    // falls back to the original name when an alias target is missing.
+    final known = ref.watch(knownToolNamesProvider).value;
+    final aliasText = _alias.text.trim();
+    final targetText = _target.text.trim();
+
+    String? aliasHelper;
+    Color aliasHelperColor = c.textMuted;
+    if (!_isEdit && known != null && aliasText.isNotEmpty) {
+      final overrides = _mcpToolExists(known, aliasText);
+      aliasHelper = overrides
+          ? 'Overrides an existing tool — every call to this name will run the target instead.'
+          : 'New name — the target tool will show up under this name.';
+      if (overrides) aliasHelperColor = AppTokens.warning;
+    }
+
+    String? targetHelper;
+    Color targetHelperColor = c.textMuted;
+    Widget? targetSuffix;
+    if (known != null && targetText.startsWith('mcp__')) {
+      if (_mcpToolExists(known, targetText)) {
+        targetHelper = 'Tool exists on a connected MCP server.';
+        targetHelperColor = AppTokens.success;
+        targetSuffix = const Icon(Icons.check_circle_outline,
+            size: 18, color: AppTokens.success);
+      } else {
+        targetHelper =
+            'Not found on any connected MCP server — check the name or start '
+            'its server. You can still save.';
+        targetHelperColor = AppTokens.warning;
+        targetSuffix = const Icon(Icons.warning_amber_rounded,
+            size: 18, color: AppTokens.warning);
+      }
+    }
+
+    final aliasSuggestions = _suggestions(known, _alias, _aliasFocus);
+    final targetSuggestions = _suggestions(known, _target, _targetFocus);
     return Dialog(
       backgroundColor: c.surface,
       shape: RoundedRectangleBorder(
@@ -2930,28 +3065,41 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
               const SizedBox(height: AppTokens.s16),
               TextField(
                 controller: _alias,
+                focusNode: _aliasFocus,
                 enabled: !_isEdit, // alias is the key — fixed when editing
                 onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Alias (name agents call)',
                   hintText: 'e.g. mcp__browser__navigate',
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
                   isDense: true,
+                  helperText: aliasHelper,
+                  helperMaxLines: 2,
+                  helperStyle:
+                      TextStyle(color: aliasHelperColor, fontSize: 11),
                 ),
                 style: const TextStyle(fontFamily: AppTokens.fontMono),
               ),
+              ?aliasSuggestions,
               const SizedBox(height: AppTokens.s12),
               TextField(
                 controller: _target,
+                focusNode: _targetFocus,
                 onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Target tool (actually executes)',
                   hintText: 'e.g. mcp__senclaw-browser__browser_navigate',
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
                   isDense: true,
+                  suffixIcon: targetSuffix,
+                  helperText: targetHelper,
+                  helperMaxLines: 2,
+                  helperStyle:
+                      TextStyle(color: targetHelperColor, fontSize: 11),
                 ),
                 style: const TextStyle(fontFamily: AppTokens.fontMono),
               ),
+              ?targetSuggestions,
               const SizedBox(height: AppTokens.s12),
               TextField(
                 controller: _description,

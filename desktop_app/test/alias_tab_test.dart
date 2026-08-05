@@ -155,4 +155,92 @@ void main() {
     await tester.pumpAndSettle();
     expect(api.calls, isEmpty);
   });
+
+  // Editor fields, in order: 0 = alias, 1 = target, 2 = description.
+  Finder editorField(int index) => find
+      .descendant(of: find.byType(Dialog), matching: find.byType(TextField))
+      .at(index);
+
+  Future<void> openEditor(WidgetTester tester) async {
+    await tester.tap(find.text('Add alias'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('editor warns on unknown MCP targets without blocking save',
+      (tester) async {
+    final api = await _pump(tester);
+    await openEditor(tester);
+
+    await tester.enterText(editorField(0), 'my__alias');
+    await tester.enterText(editorField(1), 'mcp__nope__missing');
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Not found on any connected MCP server'),
+        findsOneWidget);
+    // The check is advisory — the alias still saves.
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+    await tester.pumpAndSettle();
+    expect(
+      api.calls.single,
+      'POST /api/tool-aliases '
+      '{"alias":"my__alias","target":"mcp__nope__missing","description":null}',
+    );
+  });
+
+  testWidgets('editor accepts any spelling the daemon would resolve',
+      (tester) async {
+    await _pump(tester);
+    await openEditor(tester);
+
+    // Hyphen/underscore-folded full form of a known tool.
+    await tester.enterText(
+        editorField(1), 'mcp__senclaw_browser__browser_navigate');
+    await tester.pumpAndSettle();
+    expect(find.text('Tool exists on a connected MCP server.'), findsOneWidget);
+
+    // Non-MCP names can't be verified against the roster — stay neutral.
+    await tester.enterText(editorField(1), 'some_native_tool');
+    await tester.pumpAndSettle();
+    expect(find.text('Tool exists on a connected MCP server.'), findsNothing);
+    expect(find.textContaining('Not found on any connected MCP server'),
+        findsNothing);
+  });
+
+  testWidgets('editor classifies the alias as override vs new name',
+      (tester) async {
+    await _pump(tester);
+    await openEditor(tester);
+
+    // Scoped to the dialog — the tab's info banner mentions these terms too.
+    Finder helper(String text) => find.descendant(
+        of: find.byType(Dialog), matching: find.textContaining(text));
+
+    await tester.enterText(editorField(0), 'mcp__browser__navigate');
+    await tester.pumpAndSettle();
+    expect(helper('Overrides an existing tool'), findsOneWidget);
+
+    await tester.enterText(editorField(0), 'my__shortcut');
+    await tester.pumpAndSettle();
+    expect(helper('New name'), findsOneWidget);
+  });
+
+  testWidgets('tapping a target suggestion fills the field', (tester) async {
+    await _pump(tester);
+    await openEditor(tester);
+
+    await tester.enterText(editorField(1), 'navigate');
+    await tester.pumpAndSettle();
+
+    final suggestion = find.descendant(
+        of: find.byType(Dialog),
+        matching: find.text('mcp__senclaw-browser__browser_navigate'));
+    expect(suggestion, findsOneWidget);
+
+    await tester.tap(suggestion);
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<TextField>(editorField(1)).controller!.text,
+        'mcp__senclaw-browser__browser_navigate');
+    expect(find.text('Tool exists on a connected MCP server.'), findsOneWidget);
+  });
 }
