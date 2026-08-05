@@ -57,6 +57,12 @@ pub struct RunSummary {
 impl Db {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // Wait for a competing connection instead of failing with SQLITE_BUSY
+        // ("database is locked"). The default timeout is ZERO, so two
+        // connections opening the same file — parallel test threads booting
+        // Core, or a second process probing the app — collide on the very
+        // first schema write. This is what kept the CI check job red.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
