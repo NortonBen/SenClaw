@@ -90,12 +90,20 @@ jobs:
         shell: bash
         env:
           CARGO_PROFILE_DEV_DEBUG: "0"
+          # No ANSI in the log: the ::error:: extraction below matches on line
+          # prefixes, and color escapes silently break those anchors (that is
+          # how one iteration of this hunt reported nothing at all).
+          CARGO_TERM_COLOR: never
         run: |
           set -o pipefail
           if ! cargo test --all --no-fail-fast 2>&1 | tee /tmp/cargo-test.log; then
-            df -h / | tail -1 | while IFS= read -r line; do echo "::error title=disk::${line}"; done
-            tail -n 9 /tmp/cargo-test.log \
-              | while IFS= read -r line; do echo "::error title=cargo tail::${line}"; done
+            # 10-annotation cap per step — most informative first: failing test
+            # names, then error summaries, then disk + the log tail.
+            { grep -aE "^test .* FAILED$" /tmp/cargo-test.log | sort -u | head -5
+              grep -aE "^error" /tmp/cargo-test.log | sort -u | head -2
+              df -h / | tail -1
+              tail -n 2 /tmp/cargo-test.log
+            } | while IFS= read -r line; do echo "::error title=cargo test::${line}"; done
             exit 1
           fi
 
