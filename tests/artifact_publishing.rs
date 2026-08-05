@@ -94,8 +94,13 @@ async fn artifact_lifecycle_over_http() {
     assert_eq!(got["code"], "echo $((2 + 3))");
 
     // ── Run (brush sandbox via child process) ──
+    // Generous timeout on purpose: the child here is the freshly-built DEBUG
+    // senclaw binary, whose cold start alone can blow the 5s default on a
+    // loaded machine or a 2-core CI runner (this exact test was red in CI
+    // for weeks because of it).
     let run: serde_json::Value = http
         .post(format!("{base}/api/code/artifacts/{id}/run"))
+        .json(&serde_json::json!({ "timeout_ms": 60_000 }))
         .send()
         .await
         .unwrap()

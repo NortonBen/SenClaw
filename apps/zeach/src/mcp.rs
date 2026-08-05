@@ -879,14 +879,21 @@ mod tests {
     /// Boot against a throwaway data dir so tests never touch `~/.senclaw`.
     /// The tempdir is leaked deliberately — it must outlive every test in the
     /// process, and the OS reclaims it.
+    ///
+    /// One shared Core for the whole process: tests run in parallel, and a
+    /// `Core::boot()` per test means concurrent schema writes on the same
+    /// SQLite file — which intermittently fails with "database is locked".
     fn test_state() -> AppState {
-        static DIR: OnceLock<()> = OnceLock::new();
-        DIR.get_or_init(|| {
-            let dir = tempfile::tempdir().expect("tempdir").keep();
-            std::env::set_var("ZEACH_DATA_DIR", dir);
-        });
+        static CORE: OnceLock<std::sync::Arc<crate::state::Core>> = OnceLock::new();
+        let core = CORE
+            .get_or_init(|| {
+                let dir = tempfile::tempdir().expect("tempdir").keep();
+                std::env::set_var("ZEACH_DATA_DIR", dir);
+                crate::state::Core::boot().expect("boot")
+            })
+            .clone();
         AppState {
-            core: crate::state::Core::boot().expect("boot"),
+            core,
             mcp_tx: tokio::sync::broadcast::channel(8).0,
         }
     }

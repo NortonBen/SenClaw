@@ -57,6 +57,9 @@ pub struct RunSummary {
 impl Db {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
+        // Wait out a concurrent writer instead of failing with "database is
+        // locked" — another process (or a parallel test) may be mid-schema.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(SCHEMA)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

@@ -26,6 +26,10 @@ use crate::util::local_time::local_iso_string_now;
 use super::core::{AppError, UiState};
 
 const RUN_TIMEOUT_MS: u64 = 5_000;
+/// Ceiling for a caller-supplied `timeout_ms` — generous enough for slow
+/// scripts (or a debug-build sandbox child on a loaded machine), bounded so a
+/// stuck run cannot pin the executor indefinitely.
+const RUN_TIMEOUT_MAX_MS: u64 = 120_000;
 const RUN_MEMORY_MB: u64 = 128;
 
 fn db(s: &UiState) -> Result<Arc<Db>, AppError> {
@@ -156,9 +160,18 @@ pub(crate) async fn delete_artifact(
     Ok(Json(json!({ "ok": true })))
 }
 
+#[derive(Deserialize, Default)]
+pub(crate) struct RunArtifactReq {
+    /// Wall-clock budget for this run. Defaults to [`RUN_TIMEOUT_MS`], capped
+    /// at [`RUN_TIMEOUT_MAX_MS`]. The body itself is optional — a bare POST
+    /// keeps the old behavior.
+    timeout_ms: Option<u64>,
+}
+
 pub(crate) async fn run_artifact(
     State(s): State<Arc<UiState>>,
     AxumPath(id): AxumPath<String>,
+    body: Option<Json<RunArtifactReq>>,
 ) -> Result<impl IntoResponse, AppError> {
     let db = db(&s)?;
     let artifact = db
@@ -166,10 +179,14 @@ pub(crate) async fn run_artifact(
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?
         .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "artifact not found".into()))?;
 
+    let timeout_ms = body
+        .and_then(|Json(r)| r.timeout_ms)
+        .unwrap_or(RUN_TIMEOUT_MS)
+        .clamp(1_000, RUN_TIMEOUT_MAX_MS);
     let value = super::code::run_code(
         Some(&artifact.language),
         artifact.code,
-        RUN_TIMEOUT_MS,
+        timeout_ms,
         RUN_MEMORY_MB,
     )
     .await
