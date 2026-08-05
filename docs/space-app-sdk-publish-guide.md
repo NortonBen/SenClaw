@@ -397,7 +397,7 @@ host  → iframe: { type: 'senclaw:response', requestId, ok, payload | error }
 
 ### 3.5 Widgets — đưa UI của app vào thẳng ô chat
 
-Widget là card hiển thị **inline trong ô chat** (Web + Desktop) và trên dashboard. Hợp đồng đầy đủ: [`WIDGET_CONTRACT.md`](../WIDGET_CONTRACT.md). App có 2 đường tham gia:
+Widget là card hiển thị **inline trong ô chat** (Web + Desktop) và trên dashboard. Hợp đồng đầy đủ: [`WIDGET_CONTRACT.md`](../WIDGET_CONTRACT.md); **hướng dẫn tạo widget chi tiết từng bước** (manifest → trang HTML → skill → test/debug): [widget-authoring-guide.md](widget-authoring-guide.md). App có 2 đường tham gia:
 
 **Đường 1 — kind built-in** (`chart`, `image`, `clock`, `weather`, `video`, `audio`): agent tự emit, app chỉ cần **cấp dữ liệu hoặc URL same-origin**. Pattern drawio: tool MCP của app trả `svg_path` (URL qua `/api/space/apps/{id}/proxy/...`) kèm mô tả dặn agent đưa URL đó vào `emit_widget` kind `image` — sơ đồ hiện thẳng trong chat mà app không phải làm gì thêm.
 
