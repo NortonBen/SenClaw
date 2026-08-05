@@ -1162,11 +1162,11 @@ mod tests {
         let staged = fake_archive(tmp.path(), "v2");
         let root = tmp.path().join("apps");
         std::fs::create_dir_all(&root).unwrap();
-        let target = if cfg!(target_os = "macos") {
-            root.join(APP_BUNDLE_NAME)
-        } else {
-            root.join("desktop")
-        };
+        // install_dir, NOT `if cfg!(macos) { APP_BUNDLE_NAME }`: cfg! is a
+        // runtime macro, so that branch would still have to COMPILE on Linux,
+        // where APP_BUNDLE_NAME does not exist (E0425 — this exact line kept
+        // the CI check job red from 2026-07-18 to 08-05).
+        let target = install_dir(&root);
         std::fs::create_dir_all(&target).unwrap();
         std::fs::write(target.join("marker"), "v1").unwrap();
 
