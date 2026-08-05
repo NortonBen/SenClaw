@@ -191,11 +191,17 @@ async fn install_desktop(version: Option<String>) -> Result<()> {
     download(&asset_url(&asset, version.as_deref()), &staged).await?;
 
     let target = default_install_target();
-    swap_bundle(&staged, &target)?;
+    // Reinstalling over a copy that is still running would fail the folder
+    // rename on Windows — close it first (no-op elsewhere).
+    kill_target_lockers(&target);
+    let attempts = if cfg!(windows) { SWAP_ATTEMPTS } else { 1 };
+    swap_bundle_with_retry(&staged, &target, attempts, SWAP_RETRY_DELAY)?;
     let _ = std::fs::remove_file(&staged);
 
     #[cfg(target_os = "linux")]
     write_linux_desktop_entry(&target)?;
+
+    create_windows_shortcuts(&target);
 
     println!("Installed {}", target.display());
     println!("{}", launch_hint(&target));
@@ -315,12 +321,18 @@ pub(crate) fn swap_bundle(staged: &Path, target: &Path) -> Result<()> {
     // Past this point the live bundle is in motion — keep the window tight.
     let had_old = target.exists();
     if had_old {
-        std::fs::rename(target, &old).with_context(|| {
-            format!(
-                "cannot move {} aside — is the directory writable?",
+        if let Err(e) = std::fs::rename(target, &old) {
+            // Don't strand a fully-extracted `.new` next to the install — on
+            // Windows this rename fails whenever something inside the bundle
+            // is still running, and the leftover reads as "the update went to
+            // a different folder".
+            let _ = remove_path(&new);
+            return Err(anyhow::Error::new(e).context(format!(
+                "cannot move {} aside — a file inside it is locked by a running \
+                 process, or the directory is not writable",
                 target.display()
-            )
-        })?;
+            )));
+        }
     }
 
     if let Err(e) = std::fs::rename(&new, target) {
@@ -428,13 +440,35 @@ pub fn run_apply_update(
         println!("apply-update: checksum ok");
     }
 
+    // The app and its spawned daemon are gone (pid wait above), but orphaned
+    // MCP-server children and WebView2 helpers keep the bundle locked on
+    // Windows — no amount of retrying beats a process that never exits.
+    kill_target_lockers(&target);
+
     let attempts = if cfg!(windows) { SWAP_ATTEMPTS } else { 1 };
-    swap_bundle_with_retry(&staged, &target, attempts, SWAP_RETRY_DELAY)?;
+    if let Err(e) = swap_bundle_with_retry(&staged, &target, attempts, SWAP_RETRY_DELAY) {
+        // The updater runs detached with no visible console, so a silent exit
+        // here reads as "the update did nothing". Leave a note where support
+        // can find it, and start the OLD app back up — the swap is atomic, so
+        // the previous install is still intact.
+        if let Ok(tmp) = tmp_dir() {
+            let _ = std::fs::write(
+                tmp.join("apply-update-error.log"),
+                format!("apply-update failed for {}:\n{e:#}\n", target.display()),
+            );
+        }
+        if relaunch {
+            let _ = relaunch_app(&target);
+        }
+        return Err(e);
+    }
     let _ = std::fs::remove_file(&staged);
     println!("apply-update: installed {}", target.display());
 
     #[cfg(target_os = "linux")]
     write_linux_desktop_entry(&target)?;
+
+    create_windows_shortcuts(&target);
 
     if relaunch {
         relaunch_app(&target)?;
@@ -448,6 +482,95 @@ pub fn run_apply_update(
 /// and a locked file makes the directory rename fail with ACCESS_DENIED.
 const SWAP_ATTEMPTS: u32 = 5;
 const SWAP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+// ===== Windows: release bundle locks + shortcuts =====
+
+/// PowerShell that force-stops everything holding `dir` open. Two sweeps:
+///
+/// 1. Any process whose IMAGE lives inside the bundle. Quitting the app kills
+///    the daemon it spawned, but TerminateProcess does not cascade — the
+///    daemon's MCP-server children (more `senclaw.exe` from the same file)
+///    survive as orphans with the exe mapped, which blocks renaming the
+///    folder forever. This was why updates stalled at `<target>.new`.
+/// 2. WebView2 helpers. They run from Program Files (so sweep 1 misses them)
+///    but keep their user-data folder — which lives INSIDE the bundle by
+///    default — locked; match them by command line instead.
+///
+/// A pure function over the path so the quoting is testable on every OS.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn locker_kill_script(dir: &str) -> String {
+    let dir = dir.replace('\'', "''");
+    format!(
+        "$t='{dir}'; \
+         Get-Process | Where-Object {{ $_.Path -like ($t + '\\*') }} | \
+           Stop-Process -Force -ErrorAction SilentlyContinue; \
+         Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | \
+           Where-Object {{ $_.CommandLine -like ('*' + $t + '*') }} | \
+           ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+    )
+}
+
+/// PowerShell that (re)creates "SenClaw Desktop.lnk" on the Desktop and in the
+/// Start Menu, pointing at `exe`. Overwrites in place, so an update refreshes
+/// a shortcut that already exists.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn shortcut_script(exe: &str, dir: &str) -> String {
+    let exe = exe.replace('\'', "''");
+    let dir = dir.replace('\'', "''");
+    format!(
+        "$ws = New-Object -ComObject WScript.Shell; \
+         foreach ($p in @([Environment]::GetFolderPath('Desktop'), \
+                          (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'))) {{ \
+           $s = $ws.CreateShortcut((Join-Path $p 'SenClaw Desktop.lnk')); \
+           $s.TargetPath = '{exe}'; $s.WorkingDirectory = '{dir}'; \
+           $s.IconLocation = '{exe},0'; $s.Save() \
+         }}"
+    )
+}
+
+#[cfg(windows)]
+fn run_powershell(script: &str) -> bool {
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Best-effort: stop every process still holding the bundle at `target`.
+#[cfg(windows)]
+fn kill_target_lockers(target: &Path) {
+    if !target.exists() {
+        return;
+    }
+    println!(
+        "Closing processes still running from {}…",
+        target.display()
+    );
+    let _ = run_powershell(&locker_kill_script(&target.to_string_lossy()));
+    // Handles release asynchronously after TerminateProcess.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+}
+
+#[cfg(not(windows))]
+fn kill_target_lockers(_target: &Path) {}
+
+/// Best-effort Desktop + Start Menu shortcuts (Windows only).
+#[cfg(windows)]
+fn create_windows_shortcuts(target: &Path) {
+    let exe = target.join("senclaw_desktop.exe");
+    if run_powershell(&shortcut_script(
+        &exe.to_string_lossy(),
+        &target.to_string_lossy(),
+    )) {
+        println!("Shortcuts created: Desktop + Start Menu → SenClaw Desktop");
+    } else {
+        println!("Note: could not create the Desktop/Start Menu shortcuts.");
+    }
+}
+
+#[cfg(not(windows))]
+fn create_windows_shortcuts(_target: &Path) {}
 
 /// [`swap_bundle`], retried up to `attempts` times. Callers pass 1 on Unix —
 /// renames there succeed with the files still open, so the first failure is
@@ -992,6 +1115,75 @@ mod tests {
         assert_eq!(marker(&target), "v2");
         assert!(!with_suffix(&target, "new").exists());
         assert!(!with_suffix(&target, "old").exists());
+    }
+
+    // ===== Windows helper scripts (pure string builders) =====
+
+    /// A path with an apostrophe must not break out of the single-quoted
+    /// PowerShell string — quotes are doubled, the PS escape for `'`.
+    #[test]
+    fn powershell_scripts_escape_single_quotes_in_paths() {
+        let kill = locker_kill_script(r"C:\Users\O'Brien\AppData\Local\SenClaw");
+        assert!(kill.contains(r"$t='C:\Users\O''Brien\AppData\Local\SenClaw'"));
+
+        let sc = shortcut_script(
+            r"C:\Apps\O'Neil\senclaw_desktop.exe",
+            r"C:\Apps\O'Neil",
+        );
+        assert!(sc.contains(r"'C:\Apps\O''Neil\senclaw_desktop.exe'"));
+    }
+
+    #[test]
+    fn locker_script_sweeps_both_image_paths_and_webview2_helpers() {
+        let s = locker_kill_script(r"C:\x\SenClaw");
+        assert!(s.contains("Get-Process"), "image-path sweep missing");
+        assert!(s.contains("msedgewebview2.exe"), "WebView2 sweep missing");
+        assert!(s.contains("Stop-Process"), "must actually stop processes");
+    }
+
+    #[test]
+    fn shortcut_script_targets_desktop_and_start_menu() {
+        let s = shortcut_script(r"C:\x\senclaw_desktop.exe", r"C:\x");
+        assert!(s.contains("GetFolderPath('Desktop')"));
+        assert!(s.contains("GetFolderPath('StartMenu')"));
+        assert!(s.contains("SenClaw Desktop.lnk"));
+        assert!(s.contains(r"$s.TargetPath = 'C:\x\senclaw_desktop.exe'"));
+    }
+
+    /// A parent directory the user cannot write (the closest unix stand-in
+    /// for Windows' locked-bundle rename failure) must fail the swap cleanly:
+    /// no `.new` debris, original install untouched.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn swap_bundle_fails_cleanly_in_an_unwritable_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = fake_archive(tmp.path(), "v2");
+        let root = tmp.path().join("apps");
+        std::fs::create_dir_all(&root).unwrap();
+        let target = if cfg!(target_os = "macos") {
+            root.join(APP_BUNDLE_NAME)
+        } else {
+            root.join("desktop")
+        };
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("marker"), "v1").unwrap();
+
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = swap_bundle(&staged, &target);
+        // Restore before asserting so the tempdir can be cleaned up.
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(result.is_err(), "swap must fail in a read-only parent");
+        assert!(
+            !with_suffix(&target, "new").exists(),
+            ".new debris left behind"
+        );
+        assert!(
+            target.join("marker").exists(),
+            "the original install must survive"
+        );
     }
 
     // ===== swap_bundle_with_retry =====
