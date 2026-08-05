@@ -97,8 +97,6 @@ const Map<String, Color> _kindColors = {
 };
 Color _kindColor(String k) => _kindColors[k] ?? const Color(0xFF9CA3AF);
 
-const _tierColors = [Color(0xFF6B7280), Color(0xFF3B82F6), Color(0xFF10B981)];
-
 // ── CogGraphView — seed-based subgraph (used in data tab) ────────────────
 class CogGraphView extends ConsumerWidget {
   const CogGraphView(
@@ -619,7 +617,7 @@ class _GraphCanvas extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
         ),
         child: Text(
-          '${e.edgeName}',
+          e.edgeName,
           style: const TextStyle(color: Colors.white, fontSize: 11),
         ),
       );

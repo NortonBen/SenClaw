@@ -111,12 +111,18 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
 
+      # Same public-annotation contract as Cargo test above: on failure the
+      # log tail is readable without auth.
       - name: Flutter analyze + test
         working-directory: desktop_app
+        shell: bash
         run: |
-          flutter pub get
-          flutter analyze
-          flutter test
+          set -o pipefail
+          if ! { flutter pub get && flutter analyze && flutter test; } 2>&1 | tee /tmp/flutter.log; then
+            tail -n 9 /tmp/flutter.log \
+              | while IFS= read -r line; do echo "::error title=flutter::${line}"; done
+            exit 1
+          fi
 
   # ── Full desktop bundle — only on tags or workflow_dispatch ─────────────────
   # Daemon (cargo, release) builds FIRST inside each matrix job, then the

@@ -36,7 +36,7 @@ class _RecordApi extends ApiClient {
 
 /// Seeds the agents list without touching the WebSocket.
 class _SeededAgents extends AgentsNotifier {
-  _SeededAgents(Ref ref, List<AgentInfo> seed) : super(ref) {
+  _SeededAgents(super.ref, List<AgentInfo> seed) {
     state = seed;
   }
 }
