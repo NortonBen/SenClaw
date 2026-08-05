@@ -61,24 +61,41 @@ jobs:
         with:
           workspaces: ". -> target"
 
+      # The full-workspace dev build needs ~17 GB of target dir; the stock
+      # ubuntu runner has ~14 GB free. Purging the preinstalled toolchains we
+      # never use (.NET, Android, GHC, CodeQL) reclaims ~25-30 GB — without
+      # this the job dies mid-build on a full disk with no readable error.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
       # NOTE: no separate `cargo check` — `cargo test` compiles the whole
       # workspace anyway, so a prior check step just paid ~7 min twice.
       # Tests run with default parallelism; the serial `--test-threads=1`
       # requirement only applies to MLX tests, which need the (Apple-only)
       # `local-mlx` feature and are not compiled here.
       #
-      # --no-fail-fast + the ::error:: pass: failing TEST NAMES become check-run
-      # annotations, which are readable through the public API without auth —
-      # the raw step log is not. This job had been silently red for weeks
-      # because the failure list was invisible outside the web UI.
+      # Debuginfo off: tests don't need it, and it halves the target size —
+      # the other half of the disk-exhaustion fix above.
+      #
+      # On failure the LOG TAIL becomes ::error:: check-run annotations —
+      # readable through the public API without auth, unlike the raw step log.
+      # The tail is pattern-independent, so it also surfaces non-test deaths
+      # (linker OOM, "No space left on device") that a FAILED-line grep misses.
+      # This job had been silently red for weeks because the failure was
+      # invisible outside the web UI.
       - name: Cargo test
         shell: bash
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
         run: |
           set -o pipefail
           if ! cargo test --all --no-fail-fast 2>&1 | tee /tmp/cargo-test.log; then
-            grep -E "^test .* \.\.\. FAILED|^---- .* stdout ----|^error(\[E[0-9]+\])?:" /tmp/cargo-test.log \
-              | sort -u | head -50 \
-              | while IFS= read -r line; do echo "::error title=cargo test::${line}"; done
+            df -h / | tail -1 | while IFS= read -r line; do echo "::error title=disk::${line}"; done
+            tail -n 9 /tmp/cargo-test.log \
+              | while IFS= read -r line; do echo "::error title=cargo tail::${line}"; done
             exit 1
           fi
 
