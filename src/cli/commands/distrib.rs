@@ -999,6 +999,24 @@ mod tests {
         std::fs::read_to_string(p).unwrap()
     }
 
+    /// Create a fake existing install at `target` with a `senclaw` marker file
+    /// holding `version`. Two definitions (see install_dir below for why), and
+    /// NO `target.join(".")` tricks: `create_dir_all` on a `/.`-suffixed path
+    /// errors on Linux — which is exactly what kept both swap tests red in CI
+    /// while macOS, which takes the Contents/Resources branch, never noticed.
+    #[cfg(target_os = "macos")]
+    fn seed_install(target: &Path, version: &str) {
+        let dir = target.join("Contents/Resources");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("senclaw"), version).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    fn seed_install(target: &Path, version: &str) {
+        std::fs::create_dir_all(target).unwrap();
+        std::fs::write(target.join("senclaw"), version).unwrap();
+    }
+
     // Two definitions rather than one `if cfg!(...)`: cfg! is a RUNTIME macro,
     // so both of its branches must compile — and APP_BUNDLE_NAME only exists on
     // macOS, which would break the Linux test build.
@@ -1020,18 +1038,7 @@ mod tests {
 
         // Pre-existing install to be replaced.
         let target = install_dir(tmp.path());
-        std::fs::create_dir_all(target.join(if cfg!(target_os = "macos") {
-            "Contents/Resources"
-        } else {
-            "."
-        }))
-        .unwrap();
-        let old_marker = if cfg!(target_os = "macos") {
-            target.join("Contents/Resources/senclaw")
-        } else {
-            target.join("senclaw")
-        };
-        std::fs::write(&old_marker, "v1").unwrap();
+        seed_install(&target, "v1");
 
         swap_bundle(&staged, &target).unwrap();
 
@@ -1066,18 +1073,7 @@ mod tests {
         std::fs::write(&staged, b"not an archive at all").unwrap();
 
         let target = install_dir(tmp.path());
-        std::fs::create_dir_all(target.join(if cfg!(target_os = "macos") {
-            "Contents/Resources"
-        } else {
-            "."
-        }))
-        .unwrap();
-        let m = if cfg!(target_os = "macos") {
-            target.join("Contents/Resources/senclaw")
-        } else {
-            target.join("senclaw")
-        };
-        std::fs::write(&m, "v1").unwrap();
+        seed_install(&target, "v1");
 
         assert!(
             swap_bundle(&staged, &target).is_err(),
