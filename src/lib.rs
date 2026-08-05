@@ -15,6 +15,7 @@ pub mod safe_log;
 
 pub mod agent;
 pub mod apps;
+pub mod build_info;
 pub mod background;
 pub mod browser;
 pub mod channels;

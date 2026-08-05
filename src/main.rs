@@ -2,7 +2,11 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "senclaw", version, about = "SenClaw — multi-group AI gateway")]
+#[command(
+    name = "senclaw",
+    version = senclaw::build_info::CLAP_VERSION,
+    about = "SenClaw — multi-group AI gateway"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -12,6 +16,8 @@ struct Cli {
 enum Command {
     /// Start the SenClaw daemon (default when no subcommand is given)
     Start,
+    /// Show version and build information (release, commit, build time, target)
+    Version,
     /// Manage local skills
     Skills {
         #[command(subcommand)]
@@ -211,6 +217,10 @@ async fn main() -> Result<()> {
     }
 
     match cli.command.unwrap_or(Command::Start) {
+        Command::Version => {
+            println!("{}", senclaw::build_info::pretty());
+            Ok(())
+        }
         Command::Start => {
             let mut cfg = senclaw::config::Config::from_env();
             // Settings UI persists embedding choices to global_config.json.
