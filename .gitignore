@@ -87,6 +87,8 @@ code-old/cognee
 code-old/sema-code-core
 code-old/SemaClaw
 third_party/
+# Reference clone of the external 9router project — not part of this repo
+9router/
 test_tts
 apps/*/web/node_modules/
 
