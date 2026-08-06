@@ -8,6 +8,12 @@ Câu hỏi đặt ra: đưa vài **app thật** vào sandbox và kiểm chứng 
 app vẫn chạy đúng. Mọi dòng dưới đây là số đo, kịch bản nằm ở
 `scripts/sandbox-experiment/` (chạy lại được).
 
+> **Cập nhật 2026-08-06** — những gì đo ở đây đã thành tính năng: công thức
+> "chỉ tới một web" nay là proxy allowlist đi kèm cho Space App
+> ([docs/space-app-sandbox.md](space-app-sandbox.md)), và hai lỗ loopback/DNS
+> trong báo cáo này đã vá trong engine. Bài này giữ nguyên như một bản ghi đo
+> đạc — đọc để biết *vì sao* cơ chế có hình dạng như vậy.
+
 ## Tóm tắt
 
 | # | Kết luận | Trạng thái |

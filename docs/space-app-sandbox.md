@@ -189,6 +189,10 @@ sandbox: seatbelt — network via allowlist proxy on 127.0.0.1:59876, 6 folder(s
 | Web UI | [web/src/components/settings/SpaceAppSandboxModal.tsx](../web/src/components/settings/SpaceAppSandboxModal.tsx) |
 | Desktop UI | [desktop_app/lib/features/plugins/space_app_sandbox_dialog.dart](../desktop_app/lib/features/plugins/space_app_sandbox_dialog.dart) |
 
-Nền tảng bên dưới (engine sandbox, công tắc cưỡng chế exec/python/node/script,
-và vì sao loopback bị đóng kể cả khi bật mạng):
-[docs/sandbox-security-experiment.md](sandbox-security-experiment.md).
+Đọc thêm:
+
+- Hướng dẫn dùng chung cả engine lẫn per-app: [docs/sandbox-guide.md](sandbox-guide.md)
+- Theo dõi tiến trình một app: [docs/space-app-monitor.md](space-app-monitor.md)
+- Thiết kế + vòng đời tiến trình: [docs/sandbox-app-design.md](sandbox-app-design.md)
+- Vì sao loopback bị đóng kể cả khi bật mạng, và các phép đo gốc:
+  [docs/sandbox-security-experiment.md](sandbox-security-experiment.md)

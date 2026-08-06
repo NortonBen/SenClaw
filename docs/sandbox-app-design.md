@@ -532,6 +532,74 @@ vọng, và chính đợt này tìm ra lỗ loopback cùng bẫy DNS ở trên. 
 [`docs/sandbox-security-experiment.md`](sandbox-security-experiment.md), script
 tái lập: `scripts/sandbox-experiment/`.
 
+## Tầng thứ hai: sandbox cho Space App
+
+Engine ở trên phục vụ **mã do agent chạy** — phiên dùng-một-lần, workspace riêng,
+đường dẫn được ánh xạ lại. Space App là chuyện khác: một **tiến trình sống lâu**
+do daemon khởi chạy, phục vụ một cổng, và tự tính thư mục dữ liệu của nó từ
+`$HOME` lúc khởi động. Vì vậy nó có một tầng riêng, dùng chung bộ dựng profile
+nhưng khác ba điểm nền tảng:
+
+| | Engine (`sbx_*`) | Space App |
+|---|---|---|
+| Vòng đời | một lần chạy | tiến trình sống lâu, có supervisor |
+| Đường dẫn | ánh xạ vào workspace (`/work/...`) | **giữ nguyên đường thật** |
+| Cấu hình | tham số mỗi lần chạy | lưu theo app, cố định **lúc khởi chạy** |
+| Mạng "chỉ vài trang" | công thức tự dựng | **proxy allowlist đi kèm** |
+
+Đường dẫn **không** được ánh xạ lại vì app đã tính sẵn thư mục dữ liệu từ `$HOME`;
+đưa nó sang `/work/data` thì app không tìm thấy gì cả. Nên mọi thư mục được cấp
+đều giữ đúng đường thật (macOS: rule theo path; Linux: bind `source == destination`).
+
+Mã: [`src/sandbox/app_policy.rs`](../src/sandbox/app_policy.rs) (cấu hình + kiểm
+tra hợp lệ), [`src/sandbox/app_launch.rs`](../src/sandbox/app_launch.rs) (dựng
+lệnh khởi chạy), [`src/sandbox/proxy.rs`](../src/sandbox/proxy.rs) (proxy
+allowlist). Hướng dẫn dùng: [`docs/space-app-sandbox.md`](space-app-sandbox.md).
+
+### Hai bẫy chỉ lộ ra khi chạy app thật
+
+**Cấp thư mục con chưa đủ — phải qua được thư mục cha.** Chế độ đọc `open` cấm cả
+cây `~/.senclaw` rồi allow lại thư mục dữ liệu của app. Mở một file thì kernel
+phân giải *mọi* thành phần đường dẫn, nên SQLite chết `SQLITE_CANTOPEN` dù đúng
+thư mục đó đã được cấp — trong khi `ls` và `sqlite3` CLI trên cùng profile lại
+chạy được, đủ để đổ nhầm cho app. Vá: mỗi đường dẫn được cấp mà có tổ tiên nằm
+trong cây bị cấm thì tổ tiên đó được trả lại **đúng quyền metadata**
+(`file-read-metadata`), không phải nội dung. Nhánh đọc `strict` không dính vì nó
+vốn đã `(allow file-read-metadata)` toàn cục.
+
+**`strict` cắt luôn runtime của app.** Node cài bằng nvm nằm dưới `$HOME`, đúng
+chỗ `strict` bỏ đi → `EPERM .../npm-cli.js`. Vá: ở chế độ đọc bị nhốt, mọi mục
+`PATH` **ngoài** `SYSTEM_READ_ROOTS` được cấp chỉ-đọc ở mức *thư mục cài* (không
+chỉ `bin`, vì `npm-cli.js` nằm ở `../lib/node_modules`). Suy từ `PATH` chứ không
+phải danh sách tên nvm/volta/pyenv — danh sách đó sẽ mục.
+
+## Vòng đời tiến trình Space App
+
+Ba luật, mỗi luật là lời giải cho một trạng thái đo được trên máy thật (47 app
+chạy mồ côi, có tiến trình 299 giờ, và **không** app nào thực sự bị sandbox nhốt
+dù cấu hình bảo có):
+
+1. **Daemon phải bắt SIGTERM.** Trước đây `run_daemon` chỉ chờ `ctrl_c()`, trong
+   khi app desktop tắt daemon bằng `kill -TERM` rồi SIGKILL sau 800 ms — khối
+   shutdown chưa từng chạy theo cách người ta thật sự thoát app.
+2. **Shutdown phải song song.** Giết tuần tự với 2 giây ân hạn mỗi app thì vài
+   chục app cần cả phút, không thể lọt cửa sổ 800 ms. Nay: SIGTERM cho tất cả →
+   chờ **một lần** 300 ms → SIGKILL phần còn lại (đo được ~300 ms tổng).
+3. **Cổng của app phải đòi lại, không nhận nuôi.** Thấy cổng cố định còn khoẻ mà
+   dùng luôn nghĩa là app chạy mã cũ, thư mục cũ, ngoài mọi sandbox, vô thời hạn.
+   Nay daemon giết tiến trình đó rồi khởi chạy lại — **chỉ khi** thư mục làm việc
+   của nó (`lsof -d cwd`) nằm trong thư mục cài app. Không xác minh được thì để
+   yên và ghi log: dev server của người dùng trùng cổng không được phép trở thành
+   thứ bị giết mỗi lần khởi động.
+
+Supervisor học cùng bài học: "cổng có trả lời" **không** đồng nghĩa khoẻ. Cổng
+trả lời mà không có bản ghi con là tiến trình lạ → đòi lại **một lần cho mỗi lần
+daemon chạy** (đòi không được thì ghi nhận, không thử lại mỗi nhịp).
+
+Trạng thái này hiển thị ở màn theo dõi
+([`docs/space-app-monitor.md`](space-app-monitor.md)): `ngoài daemon` +
+`không rõ` + `cần khởi động lại`, chứ không giả vờ là `seatbelt`.
+
 ## Đóng gói
 
 Bản core không đóng gói riêng — nó biên dịch cùng binary `senclaw`, phục vụ MCP

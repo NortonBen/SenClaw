@@ -7,6 +7,13 @@ và không ra internet trừ khi bạn cho phép.
 Quản lý tại **Plugins → Sandbox**. Agent trong chat dùng qua bộ tool
 `mcp__senclaw-sandbox__sbx_*`.
 
+Có **hai thứ** dùng chung cơ chế này, đừng lẫn:
+
+| | Dùng cho | Đặt ở đâu |
+|---|---|---|
+| **Sandbox engine** (§1–§10) | mã do agent chạy: lệnh Bash, Python/Node, script hẹn giờ | Plugins → Sandbox |
+| **Sandbox từng Space App** (§7) | tiến trình app cài sẵn, sống lâu, phục vụ một cổng | Plugins → Space Apps → nút **Sandbox** |
+
 ## 1. Máy của bạn cách ly bằng gì
 
 Card **Available isolation** trên đầu trang cho biết:
@@ -95,9 +102,15 @@ Không cần bật `network` — luật cổng chính là toàn bộ quyền: ap
   đó không lọc được chiều ra. Câu trả lời của tool nói rõ điều này ở trường
   `note`; đừng bỏ qua.
 
-## 5. Giới hạn sandbox chỉ vào MỘT website
+## 5. Giới hạn chỉ vào MỘT website
 
-Luật cổng không làm được (xem trên). Cách làm được, đã kiểm chứng:
+Luật cổng không làm được (xem trên).
+
+**Với Space App: đã có sẵn.** Chọn *Chỉ các trang này* trong hộp thoại Sandbox
+của app rồi khai tên miền — SenClaw tự dựng proxy allowlist, xem §7.
+
+**Với sandbox của agent (`sbx_*`)**: tự dựng theo công thức đã kiểm chứng dưới
+đây.
 
 1. Chạy một **HTTP proxy có allowlist** bên ngoài sandbox — nó quyết định tên
    miền nào được đi.
@@ -109,7 +122,10 @@ App nào lờ proxy thì đâm tường — hỏng theo chiều đóng. Và vì 
 nên sandbox cũng không có bộ phân giải tên miền, khoá luôn đường tuồn dữ liệu
 qua DNS.
 
-## 6. Chạy một app thật trong sandbox
+## 6. Chạy một app thật trong sandbox (thủ công)
+
+> Nếu là **Space App đã cài**, đừng làm thủ công — dùng §7, nó lo hết vòng đời.
+> Phần này dành cho khi bạn muốn nhét một app *bất kỳ* vào một phiên sandbox.
 
 Hai điều sẽ làm mất thời gian nếu không biết trước (cả hai đều đo được):
 
@@ -120,7 +136,28 @@ Hai điều sẽ làm mất thời gian nếu không biết trước (cả hai �
   mã của nó (SQLite, lock, cache) sẽ chết. Copy app vào workspace ghi được của
   sandbox, chỉ mount *dữ liệu* ở chế độ chỉ-đọc.
 
-## 7. Theo dõi hoạt động (trace) — và giới hạn của nó
+## 7. Sandbox cho từng Space App
+
+Space App là tiến trình cài sẵn, chạy lâu dài, phục vụ một cổng — nên nó có hộp
+thoại riêng: **Plugins → Space Apps → nút Sandbox** (hoặc bấm *Cấu hình* ở card
+Space Apps ngay trong trang Sandbox). Ba câu hỏi:
+
+1. **Có chạy trong sandbox không** — bật lên là app chỉ còn *ghi* được vào thư
+   mục của chính nó và thư mục dữ liệu của nó. Bước rẻ nhất, gần như không app
+   nào hỏng vì nó.
+2. **Thư mục** — `open` (mọi thứ trừ kho khoá và trừ `~/.senclaw`) hoặc `strict`
+   (chỉ thư mục của nó + thư mục bạn cấp), cộng danh sách thư mục cấp thêm.
+3. **Mạng** — toàn bộ / chỉ vài trang / không có gì, cộng ô cho phép gọi API
+   SenClaw (cần cho AI bridge) và các cổng local khác.
+
+Khác với sandbox của agent ở ba điểm đáng nhớ: **đường dẫn giữ nguyên** (app tự
+tính thư mục dữ liệu từ `$HOME`), **cấu hình chỉ áp dụng lúc khởi chạy** (đổi
+xong phải khởi động lại app), và **"chỉ vài trang" đi kèm proxy** chứ không phải
+tự dựng.
+
+Chi tiết + bảng đo trước/sau: [docs/space-app-sandbox.md](space-app-sandbox.md).
+
+## 8. Theo dõi hoạt động (trace) — và giới hạn của nó
 
 Bật bằng `sbx_trace`, xem bằng `sbx_events`: ghi lại mã đã đọc/ghi file nào,
 chạy tiến trình gì, kết nối tới đâu. Rất hợp để kiểm thử "đoạn mã này thực sự
@@ -132,7 +169,7 @@ chạy tiến trình gì, kết nối tới đâu. Rất hợp để kiểm th�
 > sạch **không** có nghĩa là an toàn. Ranh giới thật sự chống được mã độc là bản
 > thân sandbox, do nhân hệ điều hành cưỡng chế.
 
-## 8. Quản lý sandbox trên UI
+## 9. Quản lý sandbox trên UI
 
 Card **Managed sandboxes** liệt kê sandbox đang có: backend, mức đọc, mạng, giới
 hạn, trạng thái, lần dùng cuối. Thao tác được: **Stop all** (dừng mọi tiến
@@ -143,10 +180,20 @@ Card **Recent runs** hiển thị 30 lần chạy gần nhất kèm cột **Isol
 ly *thực sự* đã áp cho lần chạy đó. Đây là chỗ kiểm tra xem công tắc cưỡng chế
 có đang hoạt động thật không.
 
+Card **Space Apps — sandbox từng app** liệt kê mọi app có tiến trình server: cơ
+chế mà **tiến trình đang chạy thật sự nhận được** (không phải cấu hình đã lưu),
+chế độ đọc, chế độ mạng kèm số lượt proxy chặn, pid/thời gian chạy/số lần khởi
+chạy, và CPU/RAM. 10 app một trang, sắp xếp được, ba nút mỗi dòng: theo dõi chi
+tiết, cấu hình sandbox, khởi động lại.
+
+Cột đầu là chỗ bắt được thứ không màn hình nào khác thấy: app **cấu hình có
+sandbox nhưng đang chạy không sandbox** (profile chỉ cố định lúc khởi chạy) —
+hàng đó hiện `cần khởi động lại`.
+
 Trang này **không** làm: tạo sandbox, gắn thư mục, chạy lệnh, đổi cổng, terminal,
 duyệt file. Những việc đó đi qua agent (MCP tool) hoặc REST.
 
-## 9. Nhờ agent làm — 22 tool
+## 10. Nhờ agent làm — 22 tool
 
 Nói với agent bằng tiếng Việt là đủ ("chạy đoạn Python này cách ly", "chạy app
 này trong sandbox và mở cổng 8000"). Skill `sandbox-runner` sẽ dẫn nó dùng đúng
@@ -161,7 +208,7 @@ tool:
   `sbx_fs_mode`, `sbx_settings`, `sbx_ports`, `sbx_trace`, `sbx_events`,
   `sbx_runs`.
 
-## 10. Xử lý sự cố
+## 11. Xử lý sự cố
 
 | Triệu chứng | Nguyên nhân / cách xử lý |
 |---|---|
@@ -173,8 +220,23 @@ tool:
 | Docker báo không dùng được dù `docker --version` chạy | Engine hỏi **daemon**, không hỏi CLI. Mở Docker Desktop rồi bấm kiểm tra lại. |
 | Chạy đoạn mã nhỏ mà mất mấy giây | Bình thường là ~0,03 s. Nếu chậm hàng giây, kiểm tra Docker Desktop có đang treo không. |
 
-## 11. Đọc thêm
+Riêng cho **Space App chạy trong sandbox** (§7):
 
+| Triệu chứng | Nguyên nhân / cách xử lý |
+|---|---|
+| App hiện `ngoài daemon` · `không rõ` · `cần khởi động lại` | Tiến trình đang chạy không do daemon hiện tại khởi chạy (thường là còn sót sau lần khởi động lại trước), nên **không biết** nó có bị nhốt hay không. Bấm khởi động lại. Từ v0.4.5 daemon tự thu hồi cổng lúc khởi động nên trạng thái này thành hiếm. |
+| Thoát SenClaw mà app vẫn chạy | Lỗi cũ: daemon chỉ bắt SIGINT nên khối shutdown không chạy. Đã vá ở v0.4.5 — cần daemon mới. Dọn tồn đọng: `pgrep -f "$HOME/senclaw/workspace/space-apps/" \| xargs -r kill -TERM`. |
+| App có SQLite chết `unable to open database file` dù thư mục dữ liệu đã được cấp | Thư mục **cha** (`~/.senclaw`) bị cấm đọc nên không phân giải được đường dẫn. Đã vá ở v0.4.5. Dấu hiệu nhận biết: `ls` và `sqlite3` CLI trên cùng profile vẫn chạy được. |
+| Bật `strict` là app không khởi động, log có `EPERM .../npm-cli.js` | Runtime cài bằng nvm nằm trong `$HOME`, đúng chỗ `strict` cắt. Đã vá (cấp chỉ-đọc cho mục `PATH` ngoài system root). Nếu vẫn dính: `PATH` có quá 16 mục ngoài system root, log ghi cảnh báo. |
+| Chọn "chỉ vài trang" xong app hỏng lúc khởi động | Nhiều app gọi mạng khi start (`npm start` hỏi `registry.npmjs.org`). Xem danh sách bị chặn ngay trong hộp thoại Sandbox hoặc màn theo dõi rồi khai thêm. |
+| Đã bật sandbox mà cột vẫn hiện `tắt`/`none` | Cấu hình chỉ áp dụng **lúc khởi chạy**. Bấm *Lưu & khởi động lại app*. |
+
+## 12. Đọc thêm
+
+- Sandbox từng Space App (thư mục, mạng, bảng đo trước/sau):
+  [docs/space-app-sandbox.md](space-app-sandbox.md)
+- Theo dõi & debug một Space App (pid, CPU/RAM, socket, log):
+  [docs/space-app-monitor.md](space-app-monitor.md)
 - Thiết kế và lý do kỹ thuật: [docs/sandbox-app-design.md](sandbox-app-design.md)
 - Đo thực nghiệm chạy app thật + các lỗ đã vá:
   [docs/sandbox-security-experiment.md](sandbox-security-experiment.md)

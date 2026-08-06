@@ -202,3 +202,10 @@ màn hình theo dõi mà trả 500 đúng lúc thứ nó theo dõi hỏng là l�
 | Web UI (một app) | [web/src/components/space/AppRuntimePanel.tsx](../web/src/components/space/AppRuntimePanel.tsx) |
 | Desktop UI (một app) | [desktop_app/lib/features/plugins/space_app_runtime_panel.dart](../desktop_app/lib/features/plugins/space_app_runtime_panel.dart) |
 | Card cả đàn ở màn Sandbox | [web/src/components/plugins/SandboxAppsCard.tsx](../web/src/components/plugins/SandboxAppsCard.tsx) · [desktop_app/lib/features/plugins/sandbox_panel.dart](../desktop_app/lib/features/plugins/sandbox_panel.dart) (`_appsCard`) |
+
+## Đọc thêm
+
+- Cấu hình sandbox cho app: [docs/space-app-sandbox.md](space-app-sandbox.md)
+- Hướng dẫn sandbox nói chung: [docs/sandbox-guide.md](sandbox-guide.md)
+- Vòng đời tiến trình (SIGTERM, thu hồi cổng, supervisor):
+  [docs/sandbox-app-design.md](sandbox-app-design.md)

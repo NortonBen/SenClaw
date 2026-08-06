@@ -188,9 +188,13 @@ reaches nothing rather than everything. Config in
 [`src/sandbox/proxy.rs`](src/sandbox/proxy.rs), REST at
 `/api/space/apps/:id/sandbox`. Enforcement differs by platform (macOS full, Linux
 folders only, Windows none) and the UI says so up front. Traps — `strict` breaks
-apps whose runtime lives under `$HOME` (nvm), `npm start` wants
+apps whose runtime lives under `$HOME` (nvm), granting a folder is not enough when
+its *parent* is denied (SQLite dies with `SQLITE_CANTOPEN`), `npm start` wants
 `registry.npmjs.org`, paths are never remapped — plus the measured before/after
-table: [docs/space-app-sandbox.md](docs/space-app-sandbox.md).
+table: [docs/space-app-sandbox.md](docs/space-app-sandbox.md). Process lifecycle
+(daemon must catch SIGTERM, shutdown signals all apps at once, a healthy port is
+*reclaimed* rather than adopted — only when the process's cwd proves it is that
+app's): [docs/sandbox-app-design.md](docs/sandbox-app-design.md).
 
 ## Space App runtime monitor
 
