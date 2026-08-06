@@ -54,6 +54,11 @@ triggers:
   - serve trên cổng
   - open a port
   - run a server in the sandbox
+  - chỉ cho gọi 1 web
+  - giới hạn app chỉ vào một trang
+  - chặn app gọi ra ngoài
+  - only allow one website
+  - restrict outbound to one site
 mcp_servers:
   - senclaw-sandbox
 allowed-tools:
@@ -148,7 +153,7 @@ do not look for another way to run the code.
 | `mcp__senclaw-sandbox__sbx_settings` | Read/change the sandbox defaults |
 | `mcp__senclaw-sandbox__sbx_trace` | Turn activity tracing on/off (testing) |
 | `mcp__senclaw-sandbox__sbx_events` | Read the file/process/network events |
-| `mcp__senclaw-sandbox__sbx_ports` | Open specific ports while the rest stays shut |
+| `mcp__senclaw-sandbox__sbx_ports` | Open specific ports (serve / dial out / one local service) while the rest stays shut |
 
 ## Opening ports (running an app in a sandbox)
 
@@ -158,15 +163,60 @@ except what you name.
 - `listen: [8000]` — the sandbox may serve on 8000, and **you reach it at
   `http://127.0.0.1:8000`**. This is how you run someone's app in a sandbox and
   look at it in a browser.
-- `connect: [443]` — the only remote port it may dial out to. HTTPS and nothing
-  else.
+- `connect: [443]` — the only remote **port** it may dial out to. HTTPS and
+  nothing else.
+- `loopback: [8899]` — the only service **on this machine** it may call. Empty
+  (the default) means none at all.
 
-Both lists **replace** the current ones; send them complete. Empty lists close
-everything again. Listening ports must be 1024 or above.
+All three lists **replace** the current ones; send them complete. Empty lists
+close everything again. Listening ports must be 1024 or above.
 
 You do not need `network: true` for this — the port rules are the whole
 permission, which is the point: an app that serves on 8000 does not also get to
 phone home.
+
+**`connect` is per port, never per host.** `connect: [443]` means *every* site
+on 443, not one site — macOS's sandbox language cannot express a host at all
+(measured: it refuses anything but `*` and `localhost`). To restrict a sandbox
+to one website, see the pattern below.
+
+**This machine's own services are closed even when `network: true`.** That is
+deliberate: SenClaw's REST API on loopback needs no credentials, so a sandbox
+that could reach it would simply ask the daemon for the files it is forbidden to
+read — and could create itself a second, unrestricted sandbox. Name a port in
+`loopback` when the sandbox genuinely needs a local service.
+
+## Running an app inside a sandbox
+
+Two things that will otherwise waste your time, both measured:
+
+- **Start long-lived servers as `( cmd < /dev/null > log 2>&1 & )`.** A plain
+  `&` keeps `sbx_exec` blocked until its deadline, and the deadline kills the
+  whole process group — server included. The subshell form returns immediately
+  and the server survives.
+- **Do not mount the app read-only and expect it to run.** Anything that writes
+  next to its own code (a SQLite file, a lock, a cache) fails. Copy the app into
+  the sandbox workspace, which is writable, and mount only its *data* read-only.
+
+## Restricting a sandbox to ONE website
+
+The port rules cannot do it, so put an allowlisting HTTP proxy on this machine
+and make it the sandbox's only door:
+
+1. `sbx_ports` with `connect: []` (no direct egress) and
+   `loopback: [<proxy port>]`.
+2. Run the proxy outside the sandbox; it decides which hostnames are allowed.
+3. Give the sandbox `HTTPS_PROXY=http://127.0.0.1:<proxy port>`.
+
+Anything that ignores the proxy hits the sandbox wall, so the failure mode is
+closed. With no `connect` ports the sandbox also gets no resolver, which closes
+the DNS-tunnel channel too. Verified end to end in
+`docs/sandbox-security-experiment.md`.
+
+**Name resolution**: a sandbox gets a resolver only when it may dial out
+(`network: true` or a non-empty `connect`). Opening `connect: [53]` is not how
+DNS works on macOS — resolution goes through a local socket, which the engine
+grants along with outbound permission.
 
 **Enforcement differs by backend, and the reply tells you.** On macOS both
 directions are exact. On docker and Linux, opening a listening port gives the

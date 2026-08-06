@@ -102,9 +102,13 @@ struct CreateParams {
     /// Ports the sandbox may serve on, reachable at 127.0.0.1:<port>.
     #[serde(default)]
     listen_ports: Option<Vec<u16>>,
-    /// The only remote ports it may dial out to, e.g. [443].
+    /// The only remote ports it may dial out to, e.g. [443]. Per PORT, not per
+    /// host — it cannot express "only this website".
     #[serde(default)]
     connect_ports: Option<Vec<u16>>,
+    /// Services on THIS machine the sandbox may call. Empty (default) = none.
+    #[serde(default)]
+    loopback_ports: Option<Vec<u16>>,
     /// Disk READ isolation: strict (default) | allowlist | open.
     #[serde(default)]
     fs_mode: Option<String>,
@@ -271,6 +275,10 @@ struct PortsParams {
     /// Remote ports it may connect out to, e.g. [443]. REPLACES the current list.
     #[serde(default)]
     connect: Option<Vec<u16>>,
+    /// Ports of services on THIS machine it may dial (e.g. an egress proxy you
+    /// run for it). Empty = no local service at all. REPLACES the current list.
+    #[serde(default)]
+    loopback: Option<Vec<u16>>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -367,6 +375,7 @@ impl McpSandboxServer {
         let ports = match ports::validate(
             &p.listen_ports.unwrap_or_default(),
             &p.connect_ports.unwrap_or_default(),
+            &p.loopback_ports.unwrap_or_default(),
         ) {
             Ok(v) => v,
             Err(e) => return err_json(e),
@@ -722,7 +731,7 @@ impl McpSandboxServer {
     }
 
     #[rmcp::tool(
-        description = "Open specific ports for a sandbox while the rest of the network stays closed. `listen` = ports the sandbox may serve on, reachable from this machine at 127.0.0.1:<port> — this is how you run an app inside a sandbox. `connect` = the only remote ports it may dial out to, so `connect:[443]` means HTTPS and nothing else. Sending empty lists closes everything again. On macOS both directions are enforced exactly; on docker and Linux opening a port grants the sandbox a network, and the reply says so."
+        description = "Open specific ports for a sandbox while the rest of the network stays closed. `listen` = ports the sandbox may serve on, reachable from this machine at 127.0.0.1:<port> — this is how you run an app inside a sandbox. `connect` = the only remote ports it may dial out to, so `connect:[443]` means HTTPS and nothing else — note it is per PORT, not per host: it cannot mean 'only this website'. `loopback` = services on THIS machine the sandbox may call; empty (the default) means none, which is what stops sandboxed code from reaching SenClaw's own unauthenticated API. Sending empty lists closes everything again. On macOS all three are enforced exactly; on docker and Linux opening a port grants the sandbox a network, and the reply says so."
     )]
     async fn sbx_ports(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<PortsParams>) -> String {
         let before = match self.sandbox(&p.sandbox_id) {
@@ -732,6 +741,7 @@ impl McpSandboxServer {
         let policy = match ports::validate(
             &p.listen.unwrap_or_default(),
             &p.connect.unwrap_or_default(),
+            &p.loopback.unwrap_or_default(),
         ) {
             Ok(p) => p,
             Err(e) => return err_json(e),
@@ -746,6 +756,7 @@ impl McpSandboxServer {
                 ok_json(json!({
                     "listen": sb.ports.listen,
                     "connect": sb.ports.connect,
+                    "loopback": sb.ports.loopback,
                     "reachableAt": sb.ports.listen.iter().map(|p| format!("127.0.0.1:{p}")).collect::<Vec<_>>(),
                     "note": ports::note_for(&sb.backend, &isolation, &sb.ports),
                 }))

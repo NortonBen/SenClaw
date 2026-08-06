@@ -14,6 +14,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 import '../chat/audio_service.dart' show audioServiceProvider;
 import 'package:qr_flutter/qr_flutter.dart';
+import '../../core/prefs.dart';
+import '../../core/i18n/l10n.dart';
+import '../../core/i18n/locale_provider.dart';
 import '../../core/transport/connection.dart';
 import '../../core/update/update_provider.dart';
 import '../../core/update/update_service.dart' show bundlePath;
@@ -24,6 +27,8 @@ import '../capture/capture_hotkey.dart';
 import '../capture/screen_capture.dart' show isCaptureSupported;
 import '../chat/agents_provider.dart';
 import '../chat/new_chat_dialog.dart' show llmConfigsProvider, LlmConfig;
+import '../plugins/space_app_runtime_panel.dart';
+import '../plugins/space_app_sandbox_dialog.dart';
 import 'entity_providers.dart';
 import 'provider_signin_section.dart';
 import 'settings_providers.dart';
@@ -69,7 +74,7 @@ class SettingsScreen extends ConsumerWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(AppTokens.s16,
                       AppTokens.s8, AppTokens.s16, AppTokens.s12),
-                  child: Text('Settings',
+                  child: Text(context.tr('Settings'),
                       style: TextStyle(
                           color: c.textPrimary,
                           fontSize: 16,
@@ -78,7 +83,7 @@ class SettingsScreen extends ConsumerWidget {
                 for (final (key, label, icon) in _sections)
                   _SectionItem(
                     icon: icon,
-                    label: label,
+                    label: context.tr(label),
                     active: section == key,
                     onTap: () =>
                         ref.read(settingsSectionProvider.notifier).state = key,
@@ -99,10 +104,11 @@ class SettingsScreen extends ConsumerWidget {
             'local' => const _LocalModelsSection(),
             'embedding' => const _EmbeddingSection(),
             'memory' => const _MemorySection(),
-            'whisper' =>
-              const _MediaModelsSection(domain: 'whisper', title: 'Speech-to-Text (Whisper)'),
-            'tts' =>
-              const _MediaModelsSection(domain: 'tts', title: 'Text-to-Speech'),
+            'whisper' => _MediaModelsSection(
+                domain: 'whisper',
+                title: context.tr('Speech-to-Text (Whisper)')),
+            'tts' => _MediaModelsSection(
+                domain: 'tts', title: context.tr('Text-to-Speech')),
             'ocr' => const _MediaModelsSection(domain: 'ocr', title: 'OCR'),
             'updates' => const UpdatesSection(),
             _ => const _GeneralSection(),
@@ -205,7 +211,7 @@ class _SettingsBodyState extends State<SettingsBody> {
             const Spacer(),
             if (widget.onRefresh != null)
               IconButton(
-                tooltip: 'Reload',
+                tooltip: context.tr('Reload'),
                 icon: Icon(Icons.refresh, size: 18, color: c.textSecondary),
                 onPressed: widget.onRefresh,
               ),
@@ -280,7 +286,7 @@ class UpdatesSection extends ConsumerWidget {
     final canUpdate = !kIsWeb && !svc.isDevBuild;
 
     return SettingsBody(
-      title: 'Updates',
+      title: context.tr('Updates'),
       children: [
         Container(
           padding: const EdgeInsets.all(AppTokens.s16),
@@ -304,9 +310,12 @@ class UpdatesSection extends ConsumerWidget {
                         const SizedBox(height: 2),
                         Text(
                           svc.isDevBuild
-                              ? 'Development build'
-                              : 'Version ${svc.currentVersion}'
-                                  '${svc.buildTarget.isEmpty ? '' : ' · ${svc.buildTarget}'}',
+                              ? context.tr('Development build')
+                              : context.trArgs('Version {v}',
+                                      {'v': svc.currentVersion}) +
+                                  (svc.buildTarget.isEmpty
+                                      ? ''
+                                      : ' · ${svc.buildTarget}'),
                           style: TextStyle(
                             color: c.textMuted,
                             fontSize: 12,
@@ -321,7 +330,8 @@ class UpdatesSection extends ConsumerWidget {
                         if (!kIsWeb) ...[
                           const SizedBox(height: 2),
                           Text(
-                            'Installed at ${bundlePath()}',
+                            context.trArgs(
+                                'Installed at {path}', {'path': bundlePath()}),
                             style: TextStyle(
                               color: c.textMuted,
                               fontSize: 11,
@@ -349,7 +359,7 @@ class UpdatesSection extends ConsumerWidget {
                     const Spacer(),
                     TextButton(
                       onPressed: n.cancelDownload,
-                      child: const Text('Cancel'),
+                      child: Text(context.tr('Cancel')),
                     ),
                   ],
                 ),
@@ -366,22 +376,27 @@ class UpdatesSection extends ConsumerWidget {
         if (!canUpdate)
           Text(
             kIsWeb
-                ? 'The web console is served by the daemon and updates with it. '
-                  'Update the daemon on the host machine: senclaw update'
-                : 'This build has no release version, so it cannot be updated in place. '
-                  'Rebuild from source, or install a release with: senclaw install desktop',
+                ? context.tr(
+                    'The web console is served by the daemon and updates with it. '
+                    'Update the daemon on the host machine: senclaw update')
+                : context.tr(
+                    'This build has no release version, so it cannot be updated in place. '
+                    'Rebuild from source, or install a release with: senclaw install desktop'),
             style: TextStyle(color: c.textMuted, fontSize: 12),
           )
         else ...[
           _ToggleRow(
-            label: 'Check for updates automatically',
-            desc: 'Once a day, in the background. Nothing installs without your say-so.',
+            label: context.tr('Check for updates automatically'),
+            desc: context.tr(
+                'Once a day, in the background. Nothing installs without your say-so.'),
             value: s.autoCheck,
             onChanged: (v) => n.setAutoCheck(v),
           ),
           if (s.manifest != null && s.hasUpdate && (s.manifest!.notes?.isNotEmpty ?? false)) ...[
             const SizedBox(height: AppTokens.s8),
-            Text("What's new in ${s.manifest!.version}",
+            Text(
+                context.trArgs(
+                    "What's new in {v}", {'v': s.manifest!.version}),
                 style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.w600)),
             const SizedBox(height: AppTokens.s8),
             Container(
@@ -410,26 +425,29 @@ class _UpdateStatusLine extends StatelessWidget {
     final c = context.colors;
     final v = state.manifest?.version;
     final text = switch (state.phase) {
-      UpdatePhase.checking => 'Checking…',
-      UpdatePhase.upToDate => 'You are on the latest version.',
-      UpdatePhase.available => 'Version $v is available.',
-      UpdatePhase.downloading => 'Downloading $v…',
-      UpdatePhase.ready => 'Version $v is ready to install.',
-      UpdatePhase.applying => 'Installing — SenClaw will restart…',
-      UpdatePhase.error => state.error ?? 'Something went wrong.',
+      UpdatePhase.checking => context.tr('Checking…'),
+      UpdatePhase.upToDate => context.tr('You are on the latest version.'),
+      UpdatePhase.available =>
+        context.trArgs('Version {v} is available.', {'v': v}),
+      UpdatePhase.downloading => context.trArgs('Downloading {v}…', {'v': v}),
+      UpdatePhase.ready =>
+        context.trArgs('Version {v} is ready to install.', {'v': v}),
+      UpdatePhase.applying => context.tr('Installing — SenClaw will restart…'),
+      UpdatePhase.error => state.error ?? context.tr('Something went wrong.'),
       UpdatePhase.idle => state.lastCheck == null
-          ? 'Not checked yet.'
-          : 'Last checked ${_ago(state.lastCheck!)}.',
+          ? context.tr('Not checked yet.')
+          : context.trArgs(
+              'Last checked {ago}.', {'ago': _ago(context, state.lastCheck!)}),
     };
     return Text(text, style: TextStyle(color: c.textSecondary, fontSize: 13));
   }
 
-  static String _ago(DateTime t) {
+  static String _ago(BuildContext context, DateTime t) {
     final d = DateTime.now().difference(t);
-    if (d.inMinutes < 1) return 'just now';
-    if (d.inHours < 1) return '${d.inMinutes}m ago';
-    if (d.inDays < 1) return '${d.inHours}h ago';
-    return '${d.inDays}d ago';
+    if (d.inMinutes < 1) return context.tr('just now');
+    if (d.inHours < 1) return context.trArgs('{n}m ago', {'n': d.inMinutes});
+    if (d.inDays < 1) return context.trArgs('{n}h ago', {'n': d.inHours});
+    return context.trArgs('{n}d ago', {'n': d.inDays});
   }
 }
 
@@ -450,16 +468,16 @@ class _UpdateActionButton extends ConsumerWidget {
       UpdatePhase.available => FilledButton.icon(
           onPressed: n.download,
           icon: const Icon(Icons.download, size: 16),
-          label: const Text('Download'),
+          label: Text(context.tr('Download')),
         ),
       UpdatePhase.ready => FilledButton.icon(
           onPressed: () => _confirmAndApply(context, ref),
           icon: const Icon(Icons.restart_alt, size: 16),
-          label: const Text('Install & Restart'),
+          label: Text(context.tr('Install & Restart')),
         ),
       _ => OutlinedButton(
           onPressed: () => n.check(),
-          child: const Text('Check now'),
+          child: Text(context.tr('Check now')),
         ),
     };
   }
@@ -470,18 +488,18 @@ class _UpdateActionButton extends ConsumerWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Install update?'),
-        content: const Text(
-          'SenClaw will quit, install the update, and reopen. '
-          'Running agents and background tasks will be stopped.',
+        title: Text(ctx.tr('Install update?')),
+        content: Text(
+          ctx.tr('SenClaw will quit, install the update, and reopen. '
+              'Running agents and background tasks will be stopped.'),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Not now')),
+              child: Text(ctx.tr('Not now'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Install & Restart')),
+              child: Text(ctx.tr('Install & Restart'))),
         ],
       ),
     );
@@ -489,22 +507,30 @@ class _UpdateActionButton extends ConsumerWidget {
   }
 }
 
-// ── Appearance (theme mode) ───────────────────────────────────────────────
+// ── Appearance (theme mode + language) ────────────────────────────────────
 class _AppearanceSection extends ConsumerWidget {
   const _AppearanceSection();
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
     final mode = ref.watch(themeModeProvider);
+    final lang = ref.watch(appLanguageProvider);
     const opts = [
       (ThemeMode.system, 'System', Icons.brightness_auto_outlined),
       (ThemeMode.light, 'Light', Icons.light_mode_outlined),
       (ThemeMode.dark, 'Dark', Icons.dark_mode_outlined),
     ];
+    // Language endonyms stay untranslated on purpose: "Tiếng Việt" must be
+    // findable by a Vietnamese speaker while the app is still in English.
+    const langOpts = [
+      (AppLanguage.system, 'System', Icons.language),
+      (AppLanguage.en, 'English', Icons.abc),
+      (AppLanguage.vi, 'Tiếng Việt', Icons.translate),
+    ];
     return SettingsBody(
-      title: 'Appearance',
+      title: context.tr('Appearance'),
       children: [
-        Text('Theme',
+        Text(context.tr('Theme'),
             style: TextStyle(
                 color: c.textSecondary, fontWeight: FontWeight.w700)),
         const SizedBox(height: AppTokens.s12),
@@ -515,7 +541,7 @@ class _AppearanceSection extends ConsumerWidget {
                 padding: const EdgeInsets.only(right: AppTokens.s12),
                 child: _ThemeCard(
                   icon: icon,
-                  label: label,
+                  label: context.tr(label),
                   selected: mode == m,
                   onTap: () => ref.read(themeModeProvider.notifier).set(m),
                 ),
@@ -524,7 +550,33 @@ class _AppearanceSection extends ConsumerWidget {
         ),
         const SizedBox(height: AppTokens.s12),
         Text(
-          'System follows your OS appearance setting and switches automatically.',
+          context.tr(
+              'System follows your OS appearance setting and switches automatically.'),
+          style: TextStyle(color: c.textMuted, fontSize: 12),
+        ),
+        const SizedBox(height: AppTokens.s24),
+        Text(context.tr('Language'),
+            style: TextStyle(
+                color: c.textSecondary, fontWeight: FontWeight.w700)),
+        const SizedBox(height: AppTokens.s12),
+        Row(
+          children: [
+            for (final (l, label, icon) in langOpts)
+              Padding(
+                padding: const EdgeInsets.only(right: AppTokens.s12),
+                child: _ThemeCard(
+                  icon: icon,
+                  label: l == AppLanguage.system ? context.tr(label) : label,
+                  selected: lang == l,
+                  onTap: () => ref.read(appLanguageProvider.notifier).set(l),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: AppTokens.s12),
+        Text(
+          context.tr(
+              'Applies everywhere immediately. System follows your OS language (Vietnamese → Tiếng Việt, otherwise English).'),
           style: TextStyle(color: c.textMuted, fontSize: 12),
         ),
       ],
@@ -577,6 +629,85 @@ class _ThemeCard extends StatelessWidget {
 }
 
 // ── General (permissions + behavior) ──────────────────────────────────────
+/// API access token for daemons exposed beyond loopback
+/// (`SENCLAW_UI_BIND_HOST=0.0.0.0` gates every /api route for non-loopback
+/// peers). Leave empty for the default local daemon — loopback peers are
+/// exempt. Persisted in prefs and applied to the live connection on save.
+class _ApiTokenField extends ConsumerStatefulWidget {
+  const _ApiTokenField();
+  @override
+  ConsumerState<_ApiTokenField> createState() => _ApiTokenFieldState();
+}
+
+class _ApiTokenFieldState extends ConsumerState<_ApiTokenField> {
+  late final TextEditingController _token;
+
+  @override
+  void initState() {
+    super.initState();
+    String initial = '';
+    try {
+      initial = ref.read(prefsProvider).getString(kApiTokenKey) ?? '';
+    } catch (_) {}
+    if (initial.isEmpty) {
+      initial = ref.read(appConfigProvider).apiToken ?? '';
+    }
+    _token = TextEditingController(text: initial);
+  }
+
+  @override
+  void dispose() {
+    _token.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final value = _token.text.trim();
+    try {
+      await ref.read(prefsProvider).setString(kApiTokenKey, value);
+    } catch (_) {}
+    final updated =
+        ref.read(appConfigProvider).copyWith(apiToken: value);
+    ref.read(appConfigProvider.notifier).state = updated;
+    ref.read(wsClientProvider).updateConfig(updated);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(context.tr('API token saved — applies to new requests.'))));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(
+        context.tr(
+            'API access token — only needed when the daemon is exposed beyond '
+            'localhost (SENCLAW_UI_BIND_HOST=0.0.0.0). The daemon machine keeps '
+            'it in ~/.senclaw/api_token.'),
+        style: TextStyle(color: c.textSecondary, fontSize: 12),
+      ),
+      const SizedBox(height: AppTokens.s8),
+      Row(children: [
+        Expanded(
+          child: TextField(
+            controller: _token,
+            obscureText: true,
+            decoration: InputDecoration(
+              isDense: true,
+              border: const OutlineInputBorder(),
+              hintText: context.tr('Empty for the local daemon'),
+            ),
+          ),
+        ),
+        const SizedBox(width: AppTokens.s8),
+        FilledButton(onPressed: _save, child: Text(context.tr('Save'))),
+      ]),
+    ]);
+  }
+}
+
 class _GeneralSection extends ConsumerWidget {
   const _GeneralSection();
   @override
@@ -586,9 +717,16 @@ class _GeneralSection extends ConsumerWidget {
     final api = ref.read(settingsApiProvider);
 
     return SettingsBody(
-      title: 'General',
+      title: context.tr('General'),
       children: [
-        Text('Permissions',
+        Text(context.tr('Connection'),
+            style: TextStyle(
+                color: context.colors.textSecondary,
+                fontWeight: FontWeight.w700)),
+        const SizedBox(height: AppTokens.s8),
+        const _ApiTokenField(),
+        const SizedBox(height: AppTokens.s16),
+        Text(context.tr('Permissions'),
             style: TextStyle(
                 color: context.colors.textSecondary,
                 fontWeight: FontWeight.w700)),
@@ -598,8 +736,8 @@ class _GeneralSection extends ConsumerWidget {
           error: (e, _) => Text('$e'),
           data: (p) => Column(children: [
             _ToggleRow(
-              label: 'Skip all-agent permissions',
-              desc: 'Auto-accept tool calls for every agent.',
+              label: context.tr('Skip all-agent permissions'),
+              desc: context.tr('Auto-accept tool calls for every agent.'),
               value: p['skipAllAgentsPermissions'] == true,
               onChanged: (v) => api.post(
                   '/api/admin-permissions',
@@ -607,8 +745,9 @@ class _GeneralSection extends ConsumerWidget {
                   adminPermsProvider),
             ),
             _ToggleRow(
-              label: 'Skip main-agent permissions',
-              desc: 'Auto-accept tool calls for the main agent only.',
+              label: context.tr('Skip main-agent permissions'),
+              desc:
+                  context.tr('Auto-accept tool calls for the main agent only.'),
               value: p['skipMainAgentPermissions'] == true,
               onChanged: (v) => api.post(
                   '/api/admin-permissions',
@@ -618,7 +757,7 @@ class _GeneralSection extends ConsumerWidget {
           ]),
         ),
         const SizedBox(height: AppTokens.s16),
-        Text('Agent behavior',
+        Text(context.tr('Agent behavior'),
             style: TextStyle(
                 color: context.colors.textSecondary,
                 fontWeight: FontWeight.w700)),
@@ -628,30 +767,31 @@ class _GeneralSection extends ConsumerWidget {
           error: (e, _) => Text('$e'),
           data: (b) => Column(children: [
             _ToggleRow(
-              label: 'After-process hook',
-              desc: 'Run the post-processing step after each turn.',
+              label: context.tr('After-process hook'),
+              desc: context.tr('Run the post-processing step after each turn.'),
               value: b['afterProcess'] == true,
               onChanged: (v) => api.post('/api/agent-behavior',
                   {...b, 'afterProcess': v}, agentBehaviorProvider),
             ),
             _ToggleRow(
-              label: 'Pre-cognitive recall',
-              desc: 'Inject relevant memories before processing.',
+              label: context.tr('Pre-cognitive recall'),
+              desc: context.tr('Inject relevant memories before processing.'),
               value: b['preCognitive'] == true,
               onChanged: (v) => api.post('/api/agent-behavior',
                   {...b, 'preCognitive': v}, agentBehaviorProvider),
             ),
             _ToggleRow(
-              label: 'Memory recall',
-              desc: 'Consolidate dropped history into memory files and '
-                  'inject relevant saved memories into each request.',
+              label: context.tr('Memory recall'),
+              desc: context.tr(
+                  'Consolidate dropped history into memory files and '
+                  'inject relevant saved memories into each request.'),
               value: b['memoryRecall'] == true,
               onChanged: (v) => api.post('/api/agent-behavior',
                   {...b, 'memoryRecall': v}, agentBehaviorProvider),
             ),
             _ToggleRow(
-              label: 'Pre-trigger skill',
-              desc: 'Evaluate trigger skills before the main turn.',
+              label: context.tr('Pre-trigger skill'),
+              desc: context.tr('Evaluate trigger skills before the main turn.'),
               value: b['preTriggerSkill'] == true,
               onChanged: (v) => api.post('/api/agent-behavior',
                   {...b, 'preTriggerSkill': v}, agentBehaviorProvider),
@@ -659,7 +799,7 @@ class _GeneralSection extends ConsumerWidget {
           ]),
         ),
         const SizedBox(height: AppTokens.s16),
-        Text('Autonomous tasks',
+        Text(context.tr('Autonomous tasks'),
             style: TextStyle(
                 color: context.colors.textSecondary,
                 fontWeight: FontWeight.w700)),
@@ -668,10 +808,11 @@ class _GeneralSection extends ConsumerWidget {
               loading: () => const LinearProgressIndicator(),
               error: (e, _) => Text('$e'),
               data: (d) => _ToggleRow(
-                label: 'Auto-run Kanban tasks (dispatcher)',
-                desc: 'Automatically assign a worker agent to each task in a '
+                label: context.tr('Auto-run Kanban tasks (dispatcher)'),
+                desc: context.tr(
+                    'Automatically assign a worker agent to each task in a '
                     'Kanban board\'s Ready column, run it, and complete or block '
-                    'it. Agents act unattended — leave OFF unless you want that.',
+                    'it. Agents act unattended — leave OFF unless you want that.'),
                 value: d['enabled'] == true,
                 onChanged: (v) => api.post(
                     '/api/dispatch-config', {'enabled': v}, dispatchConfigProvider),
@@ -679,7 +820,7 @@ class _GeneralSection extends ConsumerWidget {
             ),
         if (isCaptureSupported) ...[
           const SizedBox(height: AppTokens.s16),
-          Text('Screen capture',
+          Text(context.tr('Screen capture'),
               style: TextStyle(
                   color: context.colors.textSecondary,
                   fontWeight: FontWeight.w700)),
@@ -743,13 +884,14 @@ class _CaptureHotkeyRowState extends ConsumerState<_CaptureHotkeyRow> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Capture shortcut',
+                  Text(context.tr('Capture shortcut'),
                       style: TextStyle(
                           color: c.textPrimary, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 2),
                   Text(
-                    'Press this anywhere to grab a region — the same selector as '
-                    'macOS Cmd+Shift+4. Needs at least one modifier.',
+                    context.tr(
+                        'Press this anywhere to grab a region — the same selector as '
+                        'macOS Cmd+Shift+4. Needs at least one modifier.'),
                     style: TextStyle(color: c.textMuted, fontSize: 12),
                   ),
                 ],
@@ -757,7 +899,7 @@ class _CaptureHotkeyRowState extends ConsumerState<_CaptureHotkeyRow> {
             ),
             const SizedBox(width: AppTokens.s12),
             if (_recording) ...[
-              Text('Bấm tổ hợp…',
+              Text(context.tr('Press the shortcut…'),
                   style: TextStyle(color: c.accent, fontSize: 12)),
               const SizedBox(width: AppTokens.s8),
               // The recorder swallows keystrokes while mounted, so it replaces
@@ -767,7 +909,8 @@ class _CaptureHotkeyRowState extends ConsumerState<_CaptureHotkeyRow> {
                 onHotKeyRecorded: _onRecorded,
               ),
               const SizedBox(width: AppTokens.s4),
-              TextButton(onPressed: _cancel, child: const Text('Huỷ')),
+              TextButton(
+                  onPressed: _cancel, child: Text(context.tr('Cancel'))),
             ] else ...[
               OutlinedButton(
                 onPressed: _start,
@@ -777,7 +920,7 @@ class _CaptureHotkeyRowState extends ConsumerState<_CaptureHotkeyRow> {
               ),
               const SizedBox(width: AppTokens.s4),
               IconButton(
-                tooltip: 'Về mặc định (⌃ ⇧ 4)',
+                tooltip: context.tr('Reset to default (⌃ ⇧ 4)'),
                 icon: const Icon(Icons.restart_alt, size: 18),
                 onPressed: n.resetToDefault,
               ),
@@ -803,7 +946,7 @@ class _ChannelsSection extends ConsumerWidget {
     final c = context.colors;
     final channels = ref.watch(channelsProvider);
     return SettingsBody(
-      title: 'Channels',
+      title: context.tr('Channels'),
       onRefresh: () {
         ref.read(channelsProvider.notifier).refresh();
         ref.read(bindingsProvider.notifier).refresh();
@@ -817,12 +960,12 @@ class _ChannelsSection extends ConsumerWidget {
               onPressed: () => showDialog(
                   context: context, builder: (_) => const _ChannelEditor()),
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add channel'),
+              label: Text(context.tr('Add channel')),
             ),
           ),
         ),
         if (channels.isEmpty)
-          Text('No channels connected.',
+          Text(context.tr('No channels connected.'),
               style: TextStyle(color: c.textMuted)),
         for (final ch in channels)
           Container(
@@ -866,7 +1009,7 @@ class _ChannelsSection extends ConsumerWidget {
                       ref.read(channelsProvider.notifier).setEnabled(ch.id, v),
                 ),
                 IconButton(
-                  tooltip: 'Edit',
+                  tooltip: context.tr('Edit'),
                   icon: Icon(Icons.edit_outlined,
                       size: 16, color: context.colors.textSecondary),
                   onPressed: () => showDialog(
@@ -874,7 +1017,7 @@ class _ChannelsSection extends ConsumerWidget {
                       builder: (_) => _ChannelEditor(existing: ch)),
                 ),
                 IconButton(
-                  tooltip: 'Remove',
+                  tooltip: context.tr('Remove'),
                   icon: const Icon(Icons.delete_outline,
                       size: 16, color: AppTokens.danger),
                   onPressed: () =>
@@ -1037,7 +1180,7 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
             Icon(_platformIcons[key],
                 size: 22, color: selected ? c.accent : c.textSecondary),
             const SizedBox(height: AppTokens.s6),
-            Text(_platformLabels[key]!,
+            Text(context.tr(_platformLabels[key]!),
                 style: TextStyle(
                   fontSize: 12,
                   color: selected ? c.accent : c.textSecondary,
@@ -1090,7 +1233,7 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
       child: Row(
         children: [
           for (final o in options)
-            _segment(context, o[0], group, o[1], onTap),
+            _segment(context, o[0], group, context.tr(o[1]), onTap),
         ],
       ),
     );
@@ -1158,13 +1301,15 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_editing ? 'Edit channel' : 'Add channel',
+              Text(
+                  context
+                      .tr(_editing ? 'Edit channel' : 'Add channel'),
                   style: const TextStyle(
                       fontSize: 17, fontWeight: FontWeight.w600)),
               Text(
-                  _editing
+                  context.tr(_editing
                       ? 'Rename or reconfigure this channel'
-                      : 'Connect a messaging platform to your agent',
+                      : 'Connect a messaging platform to your agent'),
                   style: TextStyle(color: c.textMuted, fontSize: 12)),
             ],
           ),
@@ -1179,7 +1324,7 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
             children: [
               _labeled(
                 context,
-                'PLATFORM',
+                context.tr('PLATFORM'),
                 GridView.count(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
@@ -1195,30 +1340,30 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
               const SizedBox(height: AppTokens.s16),
               _labeled(
                 context,
-                'NAME',
+                context.tr('NAME'),
                 TextField(
                   controller: _name,
-                  decoration:
-                      const InputDecoration(hintText: 'My Telegram bot'),
+                  decoration: InputDecoration(
+                      hintText: context.tr('My Telegram bot')),
                 ),
               ),
               const SizedBox(height: AppTokens.s16),
               if (isTelegram) ...[
                 _labeled(
                   context,
-                  'BOT TOKEN',
+                  context.tr('BOT TOKEN'),
                   TextField(
                     controller: _botToken,
                     obscureText: true,
                     decoration:
                         const InputDecoration(hintText: '123456:ABC-DEF…'),
                   ),
-                  hint: 'Leave empty to use the .env default bot',
+                  hint: context.tr('Leave empty to use the .env default bot'),
                 ),
                 const SizedBox(height: AppTokens.s16),
                 _labeled(
                   context,
-                  'CHAT TYPE',
+                  context.tr('CHAT TYPE'),
                   _segmented(
                     context,
                     const [
@@ -1233,14 +1378,15 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
               ] else if (_platform == 'senclaw') ...[
                 _labeled(
                   context,
-                  'HUB URL',
+                  context.tr('HUB URL'),
                   TextField(
                     controller: _hubUrl,
                     decoration: const InputDecoration(
                         hintText: 'https://hub.senclaw.ai'),
                   ),
-                  hint: 'Registers with the hub, then shows a QR code for the '
-                      'Senclaw mobile app to scan.',
+                  hint: context.tr(
+                      'Registers with the hub, then shows a QR code for the '
+                      'Senclaw mobile app to scan.'),
                 ),
                 const SizedBox(height: AppTokens.s12),
                 // Already-registered connector → re-show its pairing QR (built
@@ -1263,14 +1409,14 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
                                 _SenclawQrDialog(payload: payload));
                       },
                       icon: const Icon(Icons.qr_code_2, size: 16),
-                      label: const Text('Show pairing QR'),
+                      label: Text(context.tr('Show pairing QR')),
                     ),
                   ),
                 if (_editing) const SizedBox(height: AppTokens.s16),
               ] else ...[
                 _labeled(
                   context,
-                  'APP ID',
+                  context.tr('APP ID'),
                   TextField(
                       controller: _appId,
                       decoration:
@@ -1279,7 +1425,7 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
                 const SizedBox(height: AppTokens.s16),
                 _labeled(
                   context,
-                  'APP SECRET',
+                  context.tr('APP SECRET'),
                   TextField(
                       controller: _appSecret,
                       obscureText: true,
@@ -1290,8 +1436,8 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
                 if (_platform == 'qq')
                   _toggleCard(
                     context,
-                    'Sandbox',
-                    'Use the QQ sandbox environment',
+                    context.tr('Sandbox'),
+                    context.tr('Use the QQ sandbox environment'),
                     _sandbox,
                     (v) => setState(() => _sandbox = v),
                   ),
@@ -1300,8 +1446,8 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
               if (isTelegram || _platform == 'feishu')
                 _toggleCard(
                   context,
-                  'Require @mention to trigger',
-                  'Only reply when the bot is explicitly mentioned',
+                  context.tr('Require @mention to trigger'),
+                  context.tr('Only reply when the bot is explicitly mentioned'),
                   _requiresTrigger,
                   (v) => setState(() => _requiresTrigger = v),
                 ),
@@ -1312,7 +1458,7 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
       actions: [
         TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
+            child: Text(context.tr('Cancel'))),
         FilledButton(
           onPressed: _registering
               ? null
@@ -1346,13 +1492,13 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
                       );
                   Navigator.of(context).pop();
                 },
-          child: Text(_registering
+          child: Text(context.tr(_registering
               ? 'Registering…'
               : _editing
                   ? 'Save'
                   : _platform == 'senclaw'
                       ? 'Register & Get QR'
-                      : 'Add channel'),
+                      : 'Add channel')),
         ),
       ],
     );
@@ -1401,8 +1547,9 @@ class _ChannelEditorState extends ConsumerState<_ChannelEditor> {
     } catch (e) {
       if (mounted) {
         setState(() => _registering = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Pairing failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text(context.trArgs('Pairing failed: {e}', {'e': e}))));
       }
     }
   }
@@ -1418,10 +1565,10 @@ class _SenclawQrDialog extends StatelessWidget {
     final c = context.colors;
     return AlertDialog(
       backgroundColor: c.surface,
-      title: Row(children: const [
-        Icon(Icons.qr_code_2, size: 20),
-        SizedBox(width: AppTokens.s8),
-        Text('Scan to connect'),
+      title: Row(children: [
+        const Icon(Icons.qr_code_2, size: 20),
+        const SizedBox(width: AppTokens.s8),
+        Text(context.tr('Scan to connect')),
       ]),
       content: SizedBox(
         width: 320,
@@ -1441,18 +1588,20 @@ class _SenclawQrDialog extends StatelessWidget {
               ),
             ),
             const SizedBox(height: AppTokens.s12),
-            Text('Open the Senclaw mobile app and scan this code to pair.',
+            Text(
+                context.tr(
+                    'Open the Senclaw mobile app and scan this code to pair.'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: c.textMuted, fontSize: 12)),
             const SizedBox(height: AppTokens.s8),
             OutlinedButton.icon(
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: payload));
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Pairing link copied')));
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(context.tr('Pairing link copied'))));
               },
               icon: const Icon(Icons.copy, size: 14),
-              label: const Text('Copy pairing link'),
+              label: Text(context.tr('Copy pairing link')),
             ),
           ],
         ),
@@ -1460,7 +1609,7 @@ class _SenclawQrDialog extends StatelessWidget {
       actions: [
         FilledButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done')),
+            child: Text(context.tr('Done'))),
       ],
     );
   }
@@ -1477,7 +1626,7 @@ class _AgentsSection extends ConsumerWidget {
     // pre-selects bound channels in initState) and to show per-profile counts.
     final bindings = ref.watch(bindingsProvider);
     return SettingsBody(
-      title: 'Profiles',
+      title: context.tr('Profiles'),
       onRefresh: () {
         ref.read(agentsProvider.notifier).refresh();
         ref.read(bindingsProvider.notifier).refresh();
@@ -1491,12 +1640,13 @@ class _AgentsSection extends ConsumerWidget {
               onPressed: () => showDialog(
                   context: context, builder: (_) => const _AgentEditor()),
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('New profile'),
+              label: Text(context.tr('New profile')),
             ),
           ),
         ),
         if (agents.isEmpty)
-          Text('No agent profiles.', style: TextStyle(color: c.textMuted)),
+          Text(context.tr('No agent profiles.'),
+              style: TextStyle(color: c.textMuted)),
         for (final a in agents)
           Container(
             margin: const EdgeInsets.only(bottom: AppTokens.s8),
@@ -1521,9 +1671,13 @@ class _AgentsSection extends ConsumerWidget {
                       Builder(builder: (_) {
                         final n =
                             bindings.where((b) => b.agentId == a.id).length;
-                        final suffix =
-                            n > 0 ? ' · $n channel${n == 1 ? '' : 's'}' : '';
-                        return Text('folder: ${a.folder}$suffix',
+                        final suffix = n > 0
+                            ? ' · ${context.trPlural(n, '{n} channel', '{n} channels')}'
+                            : '';
+                        return Text(
+                            context.trArgs(
+                                    'folder: {folder}', {'folder': a.folder}) +
+                                suffix,
                             style:
                                 TextStyle(color: c.textMuted, fontSize: 12));
                       }),
@@ -1534,7 +1688,7 @@ class _AgentsSection extends ConsumerWidget {
                   onPressed: () => showDialog(
                       context: context, builder: (_) => _AgentEditor(agent: a)),
                   icon: const Icon(Icons.edit_outlined, size: 16),
-                  label: const Text('Edit'),
+                  label: Text(context.tr('Edit')),
                 ),
               ],
             ),
@@ -1683,8 +1837,9 @@ class _AgentEditorState extends ConsumerState<_AgentEditor> {
     final channels = ref.watch(channelsProvider);
     final bindingsNotifier = ref.watch(bindingsProvider.notifier);
     final title = _isCreate
-        ? 'New profile'
-        : 'Edit agent · ${widget.agent!.folder}';
+        ? context.tr('New profile')
+        : context.trArgs(
+            'Edit agent · {folder}', {'folder': widget.agent!.folder});
 
     return Dialog(
       backgroundColor: c.surface,
@@ -1708,8 +1863,9 @@ class _AgentEditorState extends ConsumerState<_AgentEditor> {
                     child: TextField(
                       controller: _name,
                       onChanged: _onNameChanged,
-                      decoration: const InputDecoration(
-                          labelText: 'Name', hintText: 'My assistant'),
+                      decoration: InputDecoration(
+                          labelText: context.tr('Name'),
+                          hintText: context.tr('My assistant')),
                     ),
                   ),
                   if (_isCreate) ...[
@@ -1718,8 +1874,9 @@ class _AgentEditorState extends ConsumerState<_AgentEditor> {
                       child: TextField(
                         controller: _folder,
                         onChanged: (_) => _folderEdited = true,
-                        decoration: const InputDecoration(
-                            labelText: 'Folder', hintText: 'my-assistant'),
+                        decoration: InputDecoration(
+                            labelText: context.tr('Folder'),
+                            hintText: 'my-assistant'),
                       ),
                     ),
                   ],
@@ -1737,14 +1894,18 @@ class _AgentEditorState extends ConsumerState<_AgentEditor> {
                       return DropdownButtonFormField<String>(
                         initialValue: _modelId,
                         isExpanded: true,
-                        decoration: const InputDecoration(labelText: 'Model'),
+                        decoration:
+                            InputDecoration(labelText: context.tr('Model')),
                         items: [
-                          const DropdownMenuItem(
-                              value: '', child: Text('Global default')),
+                          DropdownMenuItem(
+                              value: '',
+                              child: Text(context.tr('Global default'))),
                           if (extra != null)
                             DropdownMenuItem(
                                 value: extra,
-                                child: Text('$extra (current)',
+                                child: Text(
+                                    context.trArgs(
+                                        '{id} (current)', {'id': extra}),
                                     overflow: TextOverflow.ellipsis)),
                           for (final m in d.configs)
                             DropdownMenuItem(
@@ -1759,14 +1920,14 @@ class _AgentEditorState extends ConsumerState<_AgentEditor> {
                   ),
               const SizedBox(height: AppTokens.s16),
               // ── Bound channels ──────────────────────────────────────────
-              Text('BOUND CHANNELS',
+              Text(context.tr('BOUND CHANNELS'),
                   style: TextStyle(
                       color: c.textSecondary,
                       fontSize: 12,
                       fontWeight: FontWeight.w600)),
               const SizedBox(height: AppTokens.s6),
               if (channels.isEmpty)
-                Text('No channels — add one in the Channels tab.',
+                Text(context.tr('No channels — add one in the Channels tab.'),
                     style: TextStyle(color: c.textMuted, fontSize: 12))
               else
                 Wrap(
@@ -1802,9 +1963,9 @@ class _AgentEditorState extends ConsumerState<_AgentEditor> {
                   style: const TextStyle(
                       fontFamily: AppTokens.fontMono, fontSize: 13),
                   decoration: InputDecoration(
-                      hintText: _editMemory
+                      hintText: context.tr(_editMemory
                           ? 'MEMORY.md (agent long-term memory)…'
-                          : 'Core prompt (SOUL.md)…'),
+                          : 'Core prompt (SOUL.md)…')),
                 ),
               ),
               const SizedBox(height: AppTokens.s16),
@@ -1815,7 +1976,7 @@ class _AgentEditorState extends ConsumerState<_AgentEditor> {
                       onPressed: _saving
                           ? null
                           : () => Navigator.of(context).pop(),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton(
                     onPressed: _saving ? null : _save,
@@ -1825,7 +1986,7 @@ class _AgentEditorState extends ConsumerState<_AgentEditor> {
                             height: 16,
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.white))
-                        : Text(_isCreate ? 'Create' : 'Save'),
+                        : Text(context.tr(_isCreate ? 'Create' : 'Save')),
                   ),
                 ],
               ),
@@ -1856,7 +2017,9 @@ class _AgentEditorState extends ConsumerState<_AgentEditor> {
       backgroundColor: c.surfaceAlt,
       selectedColor: c.accentSoft,
       side: BorderSide(color: selected ? c.accent : c.border),
-      tooltip: takenByOther ? 'Already bound to another profile' : null,
+      tooltip: takenByOther
+          ? context.tr('Already bound to another profile')
+          : null,
       onSelected: takenByOther
           ? null
           : (v) => setState(() =>
@@ -1874,7 +2037,7 @@ class _ToolRulesSection extends ConsumerWidget {
     final rules = ref.watch(toolRulesProvider);
     final acceptAll = ref.watch(acceptAllProvider);
     return SettingsBody(
-      title: 'Tool Rules',
+      title: context.tr('Tool Rules'),
       children: [
         Container(
           margin: const EdgeInsets.only(bottom: AppTokens.s16),
@@ -1894,11 +2057,13 @@ class _ToolRulesSection extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Dangerously accept all',
+                    Text(context.tr('Dangerously accept all'),
                         style: TextStyle(
                             color: c.textPrimary,
                             fontWeight: FontWeight.w600)),
-                    Text('Auto-accept every tool call without prompting.',
+                    Text(
+                        context.tr(
+                            'Auto-accept every tool call without prompting.'),
                         style: TextStyle(color: c.textMuted, fontSize: 12)),
                   ],
                 ),
@@ -1913,7 +2078,7 @@ class _ToolRulesSection extends ConsumerWidget {
         Row(
           children: [
             Expanded(
-              child: Text('Auto-accept rules',
+              child: Text(context.tr('Auto-accept rules'),
                   style: TextStyle(
                       color: c.textSecondary, fontWeight: FontWeight.w700)),
             ),
@@ -1921,13 +2086,13 @@ class _ToolRulesSection extends ConsumerWidget {
               onPressed: () => showDialog(
                   context: context, builder: (_) => const _RuleEditor()),
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add rule'),
+              label: Text(context.tr('Add rule')),
             ),
           ],
         ),
         const SizedBox(height: AppTokens.s8),
         if (rules.isEmpty)
-          Text('No rules. Tool calls follow per-agent defaults.',
+          Text(context.tr('No rules. Tool calls follow per-agent defaults.'),
               style: TextStyle(color: c.textMuted)),
         for (final r in rules)
           Container(
@@ -1967,7 +2132,7 @@ class _ToolRulesSection extends ConsumerWidget {
                       ref.read(toolRulesProvider.notifier).setEnabled(r, v),
                 ),
                 IconButton(
-                  tooltip: 'Delete',
+                  tooltip: context.tr('Delete'),
                   icon: const Icon(Icons.delete_outline,
                       size: 16, color: AppTokens.danger),
                   onPressed: () =>
@@ -2105,8 +2270,8 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
       contentPadding: const EdgeInsets.fromLTRB(
           AppTokens.s24, AppTokens.s16, AppTokens.s24, 0),
       actionsPadding: const EdgeInsets.all(AppTokens.s16),
-      title: const Text('Add tool rule',
-          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+      title: Text(context.tr('Add tool rule'),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
       content: SizedBox(
         width: 440,
         child: SingleChildScrollView(
@@ -2116,26 +2281,26 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
             children: [
               _labeled(
                 context,
-                'ACTION',
+                context.tr('ACTION'),
                 DropdownButtonFormField<String>(
                   initialValue: _action,
                   isExpanded: true,
                   items: [
                     for (final (v, l) in _actions)
-                      DropdownMenuItem(value: v, child: Text(l)),
+                      DropdownMenuItem(value: v, child: Text(context.tr(l))),
                   ],
                   onChanged: (v) => setState(() => _action = v ?? 'auto_accept'),
                 ),
               ),
               _labeled(
                 context,
-                'MATCH',
+                context.tr('MATCH'),
                 DropdownButtonFormField<String>(
                   initialValue: _type,
                   isExpanded: true,
                   items: [
                     for (final (v, l, _) in _matcherTypes)
-                      DropdownMenuItem(value: v, child: Text(l)),
+                      DropdownMenuItem(value: v, child: Text(context.tr(l))),
                   ],
                   onChanged: (v) => setState(() => _type = v ?? 'bash_glob'),
                 ),
@@ -2143,7 +2308,7 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
               if (key == 'pattern')
                 _labeled(
                   context,
-                  'PATTERN',
+                  context.tr('PATTERN'),
                   TextField(
                     controller: _pattern,
                     autofocus: true,
@@ -2154,7 +2319,7 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
               if (key == 'tool_name')
                 _labeled(
                   context,
-                  'TOOL NAME',
+                  context.tr('TOOL NAME'),
                   TextField(
                     controller: _toolName,
                     autofocus: true,
@@ -2165,7 +2330,7 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
               if (key == 'skill_name')
                 _labeled(
                   context,
-                  'SKILL NAME',
+                  context.tr('SKILL NAME'),
                   TextField(
                     controller: _skillName,
                     autofocus: true,
@@ -2176,7 +2341,7 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
               if (key == 'mcp') ...[
                 _labeled(
                   context,
-                  'MCP SERVER',
+                  context.tr('MCP SERVER'),
                   TextField(
                     controller: _server,
                     autofocus: true,
@@ -2186,7 +2351,7 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
                 ),
                 _labeled(
                   context,
-                  'TOOL (optional — blank = all)',
+                  context.tr('TOOL (optional — blank = all)'),
                   TextField(
                     controller: _mcpTool,
                     decoration: const InputDecoration(hintText: 'e.g. search'),
@@ -2196,7 +2361,7 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
               if (key == 'category')
                 _labeled(
                   context,
-                  'CATEGORY',
+                  context.tr('CATEGORY'),
                   DropdownButtonFormField<String>(
                     initialValue: _category,
                     isExpanded: true,
@@ -2209,11 +2374,11 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
                 ),
               _labeled(
                 context,
-                'DESCRIPTION (optional)',
+                context.tr('DESCRIPTION (optional)'),
                 TextField(
                   controller: _desc,
-                  decoration:
-                      const InputDecoration(hintText: 'Why this rule exists'),
+                  decoration: InputDecoration(
+                      hintText: context.tr('Why this rule exists')),
                 ),
               ),
             ],
@@ -2223,10 +2388,10 @@ class _RuleEditorState extends ConsumerState<_RuleEditor> {
       actions: [
         TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
+            child: Text(context.tr('Cancel'))),
         FilledButton(
           onPressed: valid ? _submit : null,
-          child: const Text('Add rule'),
+          child: Text(context.tr('Add rule')),
         ),
       ],
     );
@@ -2294,7 +2459,7 @@ class _LlmSection extends ConsumerWidget {
     final llm = ref.watch(llmConfigsProvider);
     final thinking = ref.watch(thinkingEnabledProvider).valueOrNull ?? true;
     return SettingsBody(
-      title: 'LLM Models',
+      title: context.tr('LLM Models'),
       onRefresh: () => ref.invalidate(llmConfigsProvider),
       children: [
         Container(
@@ -2314,11 +2479,11 @@ class _LlmSection extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Extended thinking',
+                    Text(context.tr('Extended thinking'),
                         style: TextStyle(
                             color: c.textPrimary,
                             fontWeight: FontWeight.w600)),
-                    Text('Let the model reason before replying',
+                    Text(context.tr('Let the model reason before replying'),
                         style:
                             TextStyle(color: c.textMuted, fontSize: 12)),
                   ],
@@ -2344,7 +2509,7 @@ class _LlmSection extends ConsumerWidget {
               onPressed: () => showDialog(
                   context: context, builder: (_) => const _LlmEditor()),
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add endpoint'),
+              label: Text(context.tr('Add endpoint')),
             ),
           ),
         ),
@@ -2388,35 +2553,39 @@ class _LlmSection extends ConsumerWidget {
                               Text(m.label,
                                   style: TextStyle(color: c.textPrimary)),
                               if (m.id == d.activeId)
-                                _MiniTag('Main', AppTokens.brand),
+                                _MiniTag(context.tr('Main'), AppTokens.brand),
                               if (m.id == d.activeCognitiveId)
-                                _MiniTag('Cognitive', AppTokens.success),
+                                _MiniTag(context.tr('Cognitive'),
+                                    AppTokens.success),
                               if (m.id == d.activeQuickId)
-                                _MiniTag('Quick', AppTokens.warning),
+                                _MiniTag(
+                                    context.tr('Quick'), AppTokens.warning),
                             ],
                           ),
                         ),
                         PopupMenuButton<String>(
-                          tooltip: 'Set role',
+                          tooltip: context.tr('Set role'),
                           position: PopupMenuPosition.under,
                           onSelected: (t) => setRole(m.id, t),
                           itemBuilder: (_) => [
                             if (m.id != d.activeId)
-                              const PopupMenuItem(
-                                  value: 'main', child: Text('Set as Main')),
+                              PopupMenuItem(
+                                  value: 'main',
+                                  child: Text(context.tr('Set as Main'))),
                             if (m.id != d.activeCognitiveId)
-                              const PopupMenuItem(
+                              PopupMenuItem(
                                   value: 'cognitive',
-                                  child: Text('Set as Cognitive')),
+                                  child: Text(context.tr('Set as Cognitive'))),
                             if (m.id != d.activeQuickId)
-                              const PopupMenuItem(
-                                  value: 'quick', child: Text('Set as Quick')),
+                              PopupMenuItem(
+                                  value: 'quick',
+                                  child: Text(context.tr('Set as Quick'))),
                           ],
                           child: Padding(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: AppTokens.s8, vertical: AppTokens.s4),
                             child: Row(mainAxisSize: MainAxisSize.min, children: [
-                              Text('Set as…',
+                              Text(context.tr('Set as…'),
                                   style: TextStyle(
                                       color: c.accent, fontSize: 13)),
                               Icon(Icons.expand_more, size: 16, color: c.accent),
@@ -2424,7 +2593,7 @@ class _LlmSection extends ConsumerWidget {
                           ),
                         ),
                         IconButton(
-                          tooltip: 'Edit',
+                          tooltip: context.tr('Edit'),
                           icon: Icon(Icons.edit_outlined,
                               size: 16, color: c.textSecondary),
                           onPressed: () => showDialog(
@@ -2432,29 +2601,30 @@ class _LlmSection extends ConsumerWidget {
                               builder: (_) => _LlmEditor(existing: m)),
                         ),
                         IconButton(
-                          tooltip: 'Delete',
+                          tooltip: context.tr('Delete'),
                           icon: const Icon(Icons.delete_outline,
                               size: 16, color: AppTokens.danger),
                           onPressed: () async {
                             final ok = await showDialog<bool>(
                               context: context,
                               builder: (dctx) => AlertDialog(
-                                title: const Text('Delete endpoint?'),
-                                content: Text(
-                                    '"${m.label}" will be removed. Chats '
+                                title: Text(dctx.tr('Delete endpoint?')),
+                                content: Text(dctx.trArgs(
+                                    '"{label}" will be removed. Chats '
                                     'using it fall back to the active '
-                                    'default model.'),
+                                    'default model.',
+                                    {'label': m.label})),
                                 actions: [
                                   TextButton(
                                       onPressed: () =>
                                           Navigator.of(dctx).pop(false),
-                                      child: const Text('Cancel')),
+                                      child: Text(dctx.tr('Cancel'))),
                                   FilledButton(
                                       style: FilledButton.styleFrom(
                                           backgroundColor: AppTokens.danger),
                                       onPressed: () =>
                                           Navigator.of(dctx).pop(true),
-                                      child: const Text('Delete')),
+                                      child: Text(dctx.tr('Delete'))),
                                 ],
                               ),
                             );
@@ -2588,9 +2758,10 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
         if (ok && models.isNotEmpty) {
           _availableModels = models;
           if (_model.text.isEmpty) _model.text = models.first;
-          _testResult = '✓ Loaded ${models.length} model(s)';
+          _testResult = context
+              .trArgs('✓ Loaded {n} model(s)', {'n': models.length});
         } else {
-          _testResult = '✗ ${(r is Map ? r['message'] : null) ?? 'No models'}';
+          _testResult = '✗ ${(r is Map ? r['message'] : null) ?? context.tr('No models')}';
         }
       });
     } catch (e) {
@@ -2637,7 +2808,7 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
         'apiKey': _apiKey.text.trim(),
         'adapt': _adapt,
       });
-      setState(() => _testResult = '✓ Connection OK');
+      setState(() => _testResult = context.tr('✓ Connection OK'));
     } catch (e) {
       setState(() => _testResult = '✗ $e');
     } finally {
@@ -2647,7 +2818,7 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
 
   Future<void> _save() async {
     if (_model.text.trim().isEmpty) {
-      setState(() => _testResult = '✗ Model name is required');
+      setState(() => _testResult = context.tr('✗ Model name is required'));
       return;
     }
     setState(() => _busy = true);
@@ -2692,7 +2863,8 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
     final def = _llmProviders[_provider];
     return AlertDialog(
       backgroundColor: c.surface,
-      title: Text(_isEdit ? 'Edit LLM endpoint' : 'Add LLM endpoint'),
+      title: Text(context
+          .tr(_isEdit ? 'Edit LLM endpoint' : 'Add LLM endpoint')),
       content: SizedBox(
         width: 460,
         child: SingleChildScrollView(
@@ -2702,13 +2874,15 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
           children: [
             DropdownButtonFormField<String>(
               initialValue: _provider,
-              decoration: const InputDecoration(labelText: 'Provider'),
+              decoration:
+                  InputDecoration(labelText: context.tr('Provider')),
               items: [
                 if (!providerKeys.contains(_provider))
                   DropdownMenuItem(value: _provider, child: Text(_provider)),
                 for (final k in providerKeys)
                   DropdownMenuItem(
-                      value: k, child: Text(_llmProviders[k]!.name)),
+                      value: k,
+                      child: Text(context.tr(_llmProviders[k]!.name))),
               ],
               onChanged: (v) {
                 if (v == null) return;
@@ -2726,29 +2900,33 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
             TextField(
                 controller: _baseUrl,
                 decoration: InputDecoration(
-                    labelText: 'Base URL',
+                    labelText: context.tr('Base URL'),
                     hintText: def?.urlHint)),
             const SizedBox(height: AppTokens.s8),
             TextField(
                 controller: _apiKey,
                 obscureText: true,
                 decoration: InputDecoration(
-                    labelText: 'API key',
+                    labelText: context.tr('API key'),
                     hintText: _isEdit
-                        ? 'Stored key — edit to replace'
-                        : def?.keyHint)),
+                        ? context.tr('Stored key — edit to replace')
+                        : (def?.keyHint == null
+                            ? null
+                            : context.tr(def!.keyHint!)))),
             const SizedBox(height: AppTokens.s8),
             // Protocol the endpoint speaks — pre-set by the provider preset,
             // editable for custom/self-hosted gateways.
             DropdownButtonFormField<String>(
               initialValue: _adapt == 'anthropic' ? 'anthropic' : 'openai',
-              decoration: const InputDecoration(
-                  labelText: 'API type (compatibility)'),
-              items: const [
+              decoration: InputDecoration(
+                  labelText: context.tr('API type (compatibility)')),
+              items: [
                 DropdownMenuItem(
-                    value: 'openai', child: Text('OpenAI-compatible')),
+                    value: 'openai',
+                    child: Text(context.tr('OpenAI-compatible'))),
                 DropdownMenuItem(
-                    value: 'anthropic', child: Text('Anthropic-compatible')),
+                    value: 'anthropic',
+                    child: Text(context.tr('Anthropic-compatible'))),
               ],
               onChanged: (v) => setState(() => _adapt = v ?? 'openai'),
             ),
@@ -2760,13 +2938,13 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
                   child: TextField(
                       controller: _model,
                       onChanged: (_) => setState(() {}),
-                      decoration:
-                          const InputDecoration(labelText: 'Model name')),
+                      decoration: InputDecoration(
+                          labelText: context.tr('Model name'))),
                 ),
                 const SizedBox(width: AppTokens.s8),
                 OutlinedButton(
                   onPressed: _busy ? null : _fetchModels,
-                  child: const Text('Fetch'),
+                  child: Text(context.tr('Fetch')),
                 ),
               ],
             ),
@@ -2776,8 +2954,8 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
                 initialValue:
                     _availableModels.contains(_model.text) ? _model.text : null,
                 isExpanded: true,
-                decoration:
-                    const InputDecoration(labelText: 'Available models'),
+                decoration: InputDecoration(
+                    labelText: context.tr('Available models')),
                 items: [
                   for (final m in _availableModels)
                     DropdownMenuItem(
@@ -2802,13 +2980,16 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
             // inference; the explicit options override it (web parity).
             DropdownButtonFormField<String>(
               initialValue: _vision == null ? 'auto' : (_vision! ? 'on' : 'off'),
-              decoration:
-                  const InputDecoration(labelText: 'Vision (image input)'),
-              items: const [
+              decoration: InputDecoration(
+                  labelText: context.tr('Vision (image input)')),
+              items: [
                 DropdownMenuItem(
-                    value: 'auto', child: Text('Auto (infer from model name)')),
-                DropdownMenuItem(value: 'on', child: Text('Supported')),
-                DropdownMenuItem(value: 'off', child: Text('Not supported')),
+                    value: 'auto',
+                    child: Text(context.tr('Auto (infer from model name)'))),
+                DropdownMenuItem(
+                    value: 'on', child: Text(context.tr('Supported'))),
+                DropdownMenuItem(
+                    value: 'off', child: Text(context.tr('Not supported'))),
               ],
               onChanged: (v) => setState(
                   () => _vision = v == 'auto' ? null : v == 'on'),
@@ -2820,11 +3001,11 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
       actions: [
         TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
+            child: Text(context.tr('Cancel'))),
         OutlinedButton(
-            onPressed: _busy ? null : _test, child: const Text('Test')),
+            onPressed: _busy ? null : _test, child: Text(context.tr('Test'))),
         FilledButton(
-            onPressed: _busy ? null : _save, child: const Text('Save')),
+            onPressed: _busy ? null : _save, child: Text(context.tr('Save'))),
       ],
     );
   }
@@ -2867,7 +3048,7 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
     _syncPoll(list.any((m) => m.downloading));
     final runtime = ref.watch(localModelsRuntimeProvider);
     return SettingsBody(
-      title: 'Local Models',
+      title: context.tr('Local Models'),
       children: [
         const _LocalInferenceSettings(),
         const SizedBox(height: AppTokens.s16),
@@ -2896,8 +3077,10 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
                       const SizedBox(width: AppTokens.s8),
                       Expanded(
                         child: Text(
-                          'Platform: $platform — local MLX inference only runs '
-                          'on macOS (Apple Silicon).',
+                          context.trArgs(
+                              'Platform: {platform} — local MLX inference only runs '
+                              'on macOS (Apple Silicon).',
+                              {'platform': platform}),
                           style: TextStyle(
                               color: c.textSecondary, fontSize: 12),
                         ),
@@ -2984,8 +3167,11 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
                               const SizedBox(height: 2),
                               Text(
                                   m.downloadProgress == null
-                                      ? 'Downloading…'
-                                      : 'Downloading ${(m.downloadProgress! * 100).toStringAsFixed(0)}%',
+                                      ? context.tr('Downloading…')
+                                      : context.trArgs('Downloading {pct}%', {
+                                          'pct': (m.downloadProgress! * 100)
+                                              .toStringAsFixed(0)
+                                        }),
                                   style: TextStyle(
                                       color: c.accent, fontSize: 11)),
                             ] else
@@ -3008,6 +3194,9 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
   }
 
   Widget _modelAction(WidgetRef ref, LocalModel m) {
+    // Resolved up front: the toasts below fire after an await, and reaching
+    // through `context` there would be a use across an async gap.
+    final l10n = L10n.of(context);
     Future<void> hit(String action) async {
       // Model ids are HF repos with slashes — encode so they don't break the
       // URL path (matches the web `encodeURIComponent`).
@@ -3030,15 +3219,15 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
       return TextButton.icon(
         onPressed: () => hit('cancel'),
         icon: const Icon(Icons.close, size: 16, color: AppTokens.danger),
-        label: const Text('Cancel',
-            style: TextStyle(color: AppTokens.danger)),
+        label: Text(context.tr('Cancel'),
+            style: const TextStyle(color: AppTokens.danger)),
       );
     }
     if (!m.installed) {
       return TextButton.icon(
         onPressed: () => hit('download'),
         icon: const Icon(Icons.download, size: 16),
-        label: const Text('Download'),
+        label: Text(context.tr('Download')),
       );
     }
     void toast(String msg) {
@@ -3074,14 +3263,16 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
             ? '${(res['config'] as Map)['label']}'
             : m.label;
         if (res is Map && res['existed'] == true) {
-          toast('Already in LLM Models: $label');
+          toast(
+              l10n.tArgs('Already in LLM Models: {label}', {'label': label}));
         } else if (res is Map && res['active'] == true) {
-          toast('Added as LLM profile and set active: $label');
+          toast(l10n.tArgs('Added as LLM profile and set active: {label}',
+              {'label': label}));
         } else {
-          toast('Added as LLM profile: $label');
+          toast(l10n.tArgs('Added as LLM profile: {label}', {'label': label}));
         }
       } catch (e) {
-        toast('Failed to add as LLM: $e');
+        toast(l10n.tArgs('Failed to add as LLM: {e}', {'e': e}));
       }
       ref.invalidate(localModelsProvider);
       ref.invalidate(llmConfigsProvider);
@@ -3098,9 +3289,9 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
         await ref
             .read(apiClientProvider)
             .delete('/api/local-models/${Uri.encodeComponent(m.id)}');
-        toast('Removed ${m.label}');
+        toast(l10n.tArgs('Removed {label}', {'label': m.label}));
       } catch (e) {
-        toast('Delete failed: $e');
+        toast(l10n.tArgs('Delete failed: {e}', {'e': e}));
       }
       ref.invalidate(localModelsProvider);
     }
@@ -3111,14 +3302,14 @@ class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
       children: [
         TextButton(
           onPressed: useAsLlm,
-          child: const Text('Use as LLM'),
+          child: Text(context.tr('Use as LLM')),
         ),
         TextButton(
           onPressed: () => m.loaded ? hit('unload') : load(),
-          child: Text(m.loaded ? 'Unload' : 'Load'),
+          child: Text(context.tr(m.loaded ? 'Unload' : 'Load')),
         ),
         IconButton(
-          tooltip: 'Delete',
+          tooltip: context.tr('Delete'),
           icon: const Icon(Icons.delete_outline, size: 16,
               color: AppTokens.danger),
           onPressed: remove,
@@ -3233,7 +3424,7 @@ class _MediaModelsSectionState extends ConsumerState<_MediaModelsSection> {
                       const SizedBox(width: AppTokens.s8),
                       m.installed
                           ? IconButton(
-                              tooltip: 'Delete',
+                              tooltip: context.tr('Delete'),
                               icon: const Icon(Icons.delete_outline,
                                   size: 16, color: AppTokens.danger),
                               onPressed: () async {
@@ -3267,7 +3458,7 @@ class _MediaModelsSectionState extends ConsumerState<_MediaModelsSection> {
                                         mediaModelsProvider(domain));
                                   },
                                   icon: const Icon(Icons.download, size: 16),
-                                  label: const Text('Download'),
+                                  label: Text(context.tr('Download')),
                                 ),
                     ],
                   ),
@@ -3283,9 +3474,10 @@ class _MediaModelsSectionState extends ConsumerState<_MediaModelsSection> {
   /// Inline "Downloading NN%" indicator shown in place of the Download button
   /// while a fetch is in flight (disabled — the daemon rejects re-requests).
   Widget _downloadingChip(dynamic c, MediaModel m) {
-    final pct = m.downloadProgress != null
-        ? ' ${(m.downloadProgress! * 100).round()}%'
-        : '';
+    final label = m.downloadProgress != null
+        ? context.trArgs('Downloading {pct}%',
+            {'pct': (m.downloadProgress! * 100).round()})
+        : context.tr('Downloading');
     return Row(mainAxisSize: MainAxisSize.min, children: [
       SizedBox(
         width: 14,
@@ -3296,8 +3488,7 @@ class _MediaModelsSectionState extends ConsumerState<_MediaModelsSection> {
         ),
       ),
       const SizedBox(width: AppTokens.s8),
-      Text('Downloading$pct',
-          style: TextStyle(color: c.textMuted, fontSize: 12)),
+      Text(label, style: TextStyle(color: c.textMuted, fontSize: 12)),
     ]);
   }
 }
@@ -3362,13 +3553,13 @@ class _EmbeddingSectionState extends ConsumerState<_EmbeddingSection> {
       });
       ref.invalidate(embeddingConfigProvider);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Embedding config saved')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.tr('Embedding config saved'))));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Save failed: {e}', {'e': e}))));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -3380,7 +3571,8 @@ class _EmbeddingSectionState extends ConsumerState<_EmbeddingSection> {
     final cfg = ref.watch(embeddingConfigProvider);
     return cfg.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => SettingsBody(title: 'Embedding', children: [Text('$e')]),
+      error: (e, _) => SettingsBody(
+          title: context.tr('Embedding'), children: [Text('$e')]),
       data: (d) {
         if (!_seeded) {
           _seeded = true;
@@ -3395,19 +3587,25 @@ class _EmbeddingSectionState extends ConsumerState<_EmbeddingSection> {
         final needsUrl = needsKey || _provider == 'ollama';
         final isLocal = _provider == 'local';
         return SettingsBody(
-          title: 'Embedding',
+          title: context.tr('Embedding'),
           children: [
             DropdownButtonFormField<String>(
               initialValue: _provider,
-              decoration: const InputDecoration(labelText: 'Provider'),
-              items: const [
-                DropdownMenuItem(value: 'none', child: Text('None (disabled)')),
-                DropdownMenuItem(value: 'openai', child: Text('OpenAI')),
+              decoration:
+                  InputDecoration(labelText: context.tr('Provider')),
+              items: [
                 DropdownMenuItem(
+                    value: 'none',
+                    child: Text(context.tr('None (disabled)'))),
+                const DropdownMenuItem(
+                    value: 'openai', child: Text('OpenAI')),
+                const DropdownMenuItem(
                     value: 'openrouter', child: Text('OpenRouter')),
-                DropdownMenuItem(value: 'ollama', child: Text('Ollama')),
+                const DropdownMenuItem(
+                    value: 'ollama', child: Text('Ollama')),
                 DropdownMenuItem(
-                    value: 'local', child: Text('Local (on-device)')),
+                    value: 'local',
+                    child: Text(context.tr('Local (on-device)'))),
               ],
               onChanged: (v) => _applyPreset(v ?? 'none'),
             ),
@@ -3417,34 +3615,37 @@ class _EmbeddingSectionState extends ConsumerState<_EmbeddingSection> {
                 TextField(
                   controller: _apiKey,
                   obscureText: true,
-                  decoration: const InputDecoration(labelText: 'API key'),
+                  decoration:
+                      InputDecoration(labelText: context.tr('API key')),
                 ),
               if (needsUrl) ...[
                 const SizedBox(height: AppTokens.s8),
                 TextField(
                   controller: _baseUrl,
-                  decoration: const InputDecoration(labelText: 'Base URL'),
+                  decoration:
+                      InputDecoration(labelText: context.tr('Base URL')),
                 ),
               ],
               const SizedBox(height: AppTokens.s8),
               TextField(
                 controller: _modelName,
-                decoration: const InputDecoration(labelText: 'Model name'),
+                decoration:
+                    InputDecoration(labelText: context.tr('Model name')),
               ),
               if (isLocal) ...[
                 const SizedBox(height: AppTokens.s8),
                 TextField(
                   controller: _modelPath,
-                  decoration: const InputDecoration(
-                      labelText: 'Model path (optional)'),
+                  decoration: InputDecoration(
+                      labelText: context.tr('Model path (optional)')),
                 ),
               ],
               const SizedBox(height: AppTokens.s8),
               TextField(
                 controller: _dimensions,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                    labelText: 'Dimensions (optional)'),
+                decoration: InputDecoration(
+                    labelText: context.tr('Dimensions (optional)')),
               ),
             ],
             const SizedBox(height: AppTokens.s16),
@@ -3458,7 +3659,7 @@ class _EmbeddingSectionState extends ConsumerState<_EmbeddingSection> {
                         height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.save_outlined, size: 16),
-                label: const Text('Save'),
+                label: Text(context.tr('Save')),
               ),
             ),
             const SizedBox(height: AppTokens.s24),
@@ -3487,7 +3688,7 @@ class _EmbeddingLocalModels extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Local models',
+        Text(context.tr('Local models'),
             style:
                 TextStyle(color: c.textPrimary, fontWeight: FontWeight.w700)),
         const SizedBox(height: AppTokens.s8),
@@ -3527,7 +3728,7 @@ class _EmbeddingLocalModels extends ConsumerWidget {
                           const Icon(Icons.download_done,
                               size: 16, color: AppTokens.success),
                           const SizedBox(width: 4),
-                          Text('Installed',
+                          Text(context.tr('Installed'),
                               style: TextStyle(
                                   color: AppTokens.success, fontSize: 12)),
                         ])
@@ -3540,12 +3741,13 @@ class _EmbeddingLocalModels extends ConsumerWidget {
                             ref.invalidate(embeddingModelsProvider);
                             if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                      content: Text('Downloading model…')));
+                                  SnackBar(
+                                      content: Text(
+                                          context.tr('Downloading model…'))));
                             }
                           },
                           icon: const Icon(Icons.download, size: 16),
-                          label: const Text('Download'),
+                          label: Text(context.tr('Download')),
                         ),
                     ],
                   ),
@@ -3639,13 +3841,13 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
       });
       ref.invalidate(cognitiveConfigProvider);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cognitive config saved')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.tr('Cognitive config saved'))));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Save failed: {e}', {'e': e}))));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -3657,69 +3859,78 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
     final cfg = ref.watch(cognitiveConfigProvider);
     return cfg.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => SettingsBody(title: 'Knowledge (Cognitive)', children: [Text('$e')]),
+      error: (e, _) => SettingsBody(
+          title: context.tr('Knowledge (Cognitive)'), children: [Text('$e')]),
       data: (d) {
         if (!_seeded) {
           _seeded = true;
           _seed(d);
         }
         return SettingsBody(
-          title: 'Knowledge (Cognitive)',
+          title: context.tr('Knowledge (Cognitive)'),
           children: [
             _ToggleRow(
-              label: 'Enable cognitive layer',
-              desc: 'Graph + Hebbian recall across sessions.',
+              label: context.tr('Enable cognitive layer'),
+              desc: context.tr('Graph + Hebbian recall across sessions.'),
               value: _enabled,
               onChanged: (v) => setState(() => _enabled = v),
             ),
             _ToggleRow(
-              label: 'Auto-reflect on every user message',
-              desc: 'Cognify each incoming message automatically.',
+              label: context.tr('Auto-reflect on every user message'),
+              desc:
+                  context.tr('Cognify each incoming message automatically.'),
               value: _autoReflection,
               onChanged: (v) => setState(() => _autoReflection = v),
             ),
             const SizedBox(height: AppTokens.s20),
-            _SettingsGroupLabel('Extraction'),
+            _SettingsGroupLabel(context.tr('Extraction')),
             _NumberRow(
-              label: 'Max concurrent extractions',
-              desc: 'Semaphore size for in-flight cognify calls. Keep low on '
-                  'local models.',
+              label: context.tr('Max concurrent extractions'),
+              desc: context.tr(
+                  'Semaphore size for in-flight cognify calls. Keep low on '
+                  'local models.'),
               controller: _maxConcurrent,
             ),
             _NumberRow(
-              label: 'Max LLM output chars',
-              desc: 'Hard cap on cognify-LLM output; streams abort past this.',
+              label: context.tr('Max LLM output chars'),
+              desc: context.tr(
+                  'Hard cap on cognify-LLM output; streams abort past this.'),
               controller: _maxOutputChars,
             ),
             const SizedBox(height: AppTokens.s16),
-            _SettingsGroupLabel('Reflection'),
+            _SettingsGroupLabel(context.tr('Reflection')),
             _NumberRow(
-              label: 'Min chars',
-              desc: 'Skip reflection for messages shorter than this.',
+              label: context.tr('Min chars'),
+              desc: context
+                  .tr('Skip reflection for messages shorter than this.'),
               controller: _reflectMinChars,
             ),
             _NumberRow(
-              label: 'Max chars',
-              desc: 'Window size: buffered turns flush to one extraction '
-                  'call when they reach this length.',
+              label: context.tr('Max chars'),
+              desc: context.tr(
+                  'Window size: buffered turns flush to one extraction '
+                  'call when they reach this length.'),
               controller: _reflectMaxChars,
             ),
             _NumberRow(
-              label: 'Cooldown (ms)',
-              desc: 'Minimum gap between window flushes per agent.',
+              label: context.tr('Cooldown (ms)'),
+              desc:
+                  context.tr('Minimum gap between window flushes per agent.'),
               controller: _reflectCooldownMs,
             ),
             _NumberRow(
-              label: 'Window idle (ms)',
-              desc: 'Flush the conversation window after this much chat '
-                  'silence. 0 = flush per message.',
+              label: context.tr('Window idle (ms)'),
+              desc: context.tr(
+                  'Flush the conversation window after this much chat '
+                  'silence. 0 = flush per message.'),
               controller: _reflectWindowIdleMs,
             ),
             const SizedBox(height: AppTokens.s16),
-            _SettingsGroupLabel('Maintenance'),
+            _SettingsGroupLabel(context.tr('Maintenance')),
             _NumberRow(
-              label: 'Sweep interval (hours)',
-              desc: 'How often the background decay/prune sweep runs.',
+              label: context.tr('Sweep interval (hours)'),
+              desc: context
+                  .tr('How often the background decay/prune sweep runs.'),
               controller: _maintenanceHours,
             ),
             const SizedBox(height: AppTokens.s16),
@@ -3732,7 +3943,7 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
                         height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.save_outlined, size: 16),
-                label: const Text('Save'),
+                label: Text(context.tr('Save')),
               ),
               const SizedBox(width: AppTokens.s8),
               OutlinedButton.icon(
@@ -3741,12 +3952,12 @@ class _MemorySectionState extends ConsumerState<_MemorySection> {
                       .read(apiClientProvider)
                       .post('/api/cognitive/maintenance');
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Maintenance started')));
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(context.tr('Maintenance started'))));
                   }
                 },
                 icon: const Icon(Icons.cleaning_services_outlined, size: 16),
-                label: const Text('Run maintenance'),
+                label: Text(context.tr('Run maintenance')),
               ),
             ]),
           ],
@@ -3904,21 +4115,21 @@ class SpaceAppsSection extends ConsumerWidget {
       context: context,
       builder: (dctx) => AlertDialog(
         backgroundColor: dctx.colors.surface,
-        title: const Text('Register Space App'),
+        title: Text(dctx.tr('Register Space App')),
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(
-              labelText: 'Manifest URL',
+          decoration: InputDecoration(
+              labelText: dctx.tr('Manifest URL'),
               hintText: 'https://…/senclaw-manifest.json'),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(dctx, false),
-              child: const Text('Cancel')),
+              child: Text(dctx.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(dctx, true),
-              child: const Text('Register')),
+              child: Text(dctx.tr('Register'))),
         ],
       ),
     );
@@ -3929,12 +4140,13 @@ class SpaceAppsSection extends ConsumerWidget {
       ref.invalidate(spaceAppsProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Space App registered')));
+            SnackBar(content: Text(context.tr('Space App registered'))));
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Register failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text(context.trArgs('Register failed: {e}', {'e': e}))));
       }
     }
   }
@@ -3948,8 +4160,9 @@ class SpaceAppsSection extends ConsumerWidget {
       // file_picker errors before showing the panel (e.g. macOS entitlement
       // check) — surface it instead of failing silently.
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('File picker error: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text(context.trArgs('File picker error: {e}', {'e': e}))));
       }
       return;
     }
@@ -3958,6 +4171,7 @@ class SpaceAppsSection extends ConsumerWidget {
     final cfg = ref.read(appConfigProvider);
     final uri = Uri.parse('http://${cfg.host}:${cfg.uiPort}/api/space/apps/install-zip');
     final req = http.MultipartRequest('POST', uri);
+    req.headers.addAll(cfg.authHeaders);
     if (kIsWeb && f.bytes != null) {
       req.files.add(http.MultipartFile.fromBytes('file', f.bytes!,
           filename: f.name));
@@ -3976,12 +4190,12 @@ class SpaceAppsSection extends ConsumerWidget {
       ref.invalidate(spaceAppsProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Space App installed')));
+            SnackBar(content: Text(context.tr('Space App installed'))));
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Install failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Install failed: {e}', {'e': e}))));
       }
     }
   }
@@ -3994,8 +4208,9 @@ class SpaceAppsSection extends ConsumerWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text(n > 0
-                ? '$n app có bản mới'
-                : 'Mọi app đã ở phiên bản mới nhất')));
+                ? context.trPlural(
+                    n, '{n} app has an update', '{n} apps have updates')
+                : context.tr('All apps are up to date'))));
       }
     } catch (_) {/* non-fatal */}
   }
@@ -4003,24 +4218,28 @@ class SpaceAppsSection extends ConsumerWidget {
   Future<void> _updateApp(
       BuildContext context, WidgetRef ref, String id) async {
     final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(const SnackBar(
-        content: Text('Đang cập nhật…'), duration: Duration(seconds: 60)));
+    messenger.showSnackBar(SnackBar(
+        content: Text(context.tr('Updating…')),
+        duration: const Duration(seconds: 60)));
     try {
       final r = await ref
           .read(apiClientProvider)
           .post('/api/space/apps/$id/update');
       messenger.hideCurrentSnackBar();
       final updated = (r is Map && r['updated'] == true);
+      if (!context.mounted) return;
       messenger.showSnackBar(SnackBar(
           content: Text(updated
-              ? 'Đã cập nhật $id → ${r['latest']}'
-              : '$id đã ở bản mới nhất')));
+              ? context.trArgs(
+                  'Updated {id} → {v}', {'id': id, 'v': r['latest']})
+              : context.trArgs('{id} is already up to date', {'id': id}))));
       ref.invalidate(spaceAppsProvider);
       ref.invalidate(spaceAppUpdatesProvider);
     } catch (e) {
       messenger.hideCurrentSnackBar();
-      messenger
-          .showSnackBar(SnackBar(content: Text('Cập nhật thất bại: $e')));
+      if (!context.mounted) return;
+      messenger.showSnackBar(SnackBar(
+          content: Text(context.trArgs('Update failed: {e}', {'e': e}))));
     }
   }
 
@@ -4037,7 +4256,7 @@ class SpaceAppsSection extends ConsumerWidget {
         ref.invalidate(spaceAppUpdatesProvider);
       },
       children: [
-        Text('Install, register, and remove embedded Space Apps.',
+        Text(context.tr('Install, register, and remove embedded Space Apps.'),
             style: TextStyle(color: c.textMuted, fontSize: 12)),
         const SizedBox(height: AppTokens.s12),
         Row(
@@ -4045,23 +4264,23 @@ class SpaceAppsSection extends ConsumerWidget {
             FilledButton.icon(
               onPressed: () => _installZip(context, ref),
               icon: const Icon(Icons.upload_file, size: 16),
-              label: const Text('Install ZIP'),
+              label: Text(context.tr('Install ZIP')),
             ),
             const SizedBox(width: AppTokens.s8),
             OutlinedButton.icon(
               onPressed: () => _registerUrl(context, ref),
               icon: const Icon(Icons.link, size: 16),
-              label: const Text('Register URL'),
+              label: Text(context.tr('Register URL')),
             ),
             const SizedBox(width: AppTokens.s8),
             OutlinedButton.icon(
               onPressed: () => _checkUpdates(context, ref),
               icon: const Icon(Icons.cloud_download_outlined, size: 16),
-              label: const Text('Check updates'),
+              label: Text(context.tr('Check updates')),
             ),
             const Spacer(),
             IconButton(
-              tooltip: 'Refresh',
+              tooltip: context.tr('Refresh'),
               icon: const Icon(Icons.refresh, size: 18),
               onPressed: () {
                 ref.invalidate(spaceAppsProvider);
@@ -4077,7 +4296,7 @@ class SpaceAppsSection extends ConsumerWidget {
               child: CircularProgressIndicator())),
           error: (e, _) => Text('$e', style: const TextStyle(color: AppTokens.danger)),
           data: (list) => list.isEmpty
-              ? Text('No Space Apps installed',
+              ? Text(context.tr('No Space Apps installed'),
                   style: TextStyle(color: c.textMuted))
               : Column(
                   children: [
@@ -4143,44 +4362,55 @@ class SpaceAppsSection extends ConsumerWidget {
                               ),
                             ),
                             IconButton(
-                              tooltip: 'Details',
+                              tooltip: context.tr('Details'),
                               icon: const Icon(Icons.info_outline, size: 16),
                               onPressed: () => showDialog(
                                   context: context,
                                   builder: (_) => _SpaceAppDetailDialog(app: a)),
                             ),
+                            IconButton(
+                              tooltip: context.tr('Sandbox settings'),
+                              icon: const Icon(Icons.science_outlined, size: 16),
+                              onPressed: () => showDialog(
+                                  context: context,
+                                  builder: (_) => SpaceAppSandboxDialog(
+                                      appId: a.id, appName: a.name)),
+                            ),
                             if (updates[a.id]?.hasUpdate == true)
                               FilledButton(
                                 onPressed: () =>
                                     _updateApp(context, ref, a.id),
-                                child: const Text('Update'),
+                                child: Text(context.tr('Update')),
                               ),
                             TextButton(
                               onPressed: () async {
                                 final messenger =
                                     ScaffoldMessenger.of(context);
-                                messenger.showSnackBar(const SnackBar(
-                                  content: Text('Đang khởi động lại…'),
-                                  duration: Duration(seconds: 40),
+                                messenger.showSnackBar(SnackBar(
+                                  content: Text(context.tr('Restarting…')),
+                                  duration: const Duration(seconds: 40),
                                 ));
                                 try {
                                   await ref.read(apiClientProvider).post(
                                       '/api/space/apps/${a.id}/restart');
                                   messenger.hideCurrentSnackBar();
-                                  messenger.showSnackBar(const SnackBar(
-                                      content: Text('Đã khởi động lại')));
+                                  if (!context.mounted) return;
+                                  messenger.showSnackBar(SnackBar(
+                                      content:
+                                          Text(context.tr('Restarted'))));
                                   ref.invalidate(spaceAppsProvider);
                                 } catch (e) {
                                   messenger.hideCurrentSnackBar();
+                                  if (!context.mounted) return;
                                   messenger.showSnackBar(SnackBar(
-                                      content: Text(
-                                          'Khởi động lại thất bại: $e')));
+                                      content: Text(context.trArgs(
+                                          'Restart failed: {e}', {'e': e}))));
                                 }
                               },
-                              child: const Text('Restart'),
+                              child: Text(context.tr('Restart')),
                             ),
                             IconButton(
-                              tooltip: 'Uninstall',
+                              tooltip: context.tr('Uninstall'),
                               icon: const Icon(Icons.delete_outline,
                                   size: 16, color: AppTokens.danger),
                               onPressed: () async {
@@ -4268,9 +4498,29 @@ class _SpaceAppDetailDialog extends ConsumerWidget {
                             style: TextStyle(color: c.textSecondary)),
                       ),
                     kv('ID', app.id),
-                    if (m['version'] != null) kv('Version', '${m['version']}'),
+                    if (m['version'] != null)
+                      kv(context.tr('Version'), '${m['version']}'),
+                    // A served app has a process worth watching; a static one
+                    // has nothing to report, so the panel only appears for the
+                    // apps it can say something true about.
+                    if (runtime?['kind'] == 'server') ...[
+                      const SizedBox(height: AppTokens.s12),
+                      Row(children: [
+                        Icon(Icons.monitor_heart_outlined,
+                            size: 14, color: c.accent),
+                        const SizedBox(width: 4),
+                        Text(context.tr('Process monitor'),
+                            style: TextStyle(
+                                color: c.textPrimary,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700)),
+                      ]),
+                      const SizedBox(height: AppTokens.s6),
+                      SpaceAppRuntimePanel(appId: app.id),
+                      const Divider(height: AppTokens.s20),
+                    ],
                     if (integration != null)
-                      kv('Integration',
+                      kv(context.tr('Integration'),
                           '${integration['type'] ?? '?'} · ${integration['url'] ?? ''}'),
                     if (runtime?['kind'] != null)
                       kv('Runtime', '${runtime!['kind']}'),
@@ -4366,7 +4616,9 @@ class _SpaceAppDetailDialog extends ConsumerWidget {
                                             fontFamily: AppTokens.fontMono),
                                       ),
                                     ),
-                                  Text('(nhập ở trạng thái tắt — bật trong Plugins → Alias)',
+                                  Text(
+                                      context.tr(
+                                          '(imported disabled — enable in Plugins → Alias)'),
                                       style: TextStyle(
                                           color: c.textMuted, fontSize: 10)),
                                 ],
@@ -4383,7 +4635,7 @@ class _SpaceAppDetailDialog extends ConsumerWidget {
                       render: (data) {
                         final declared = (data is Map ? data['declared'] : null);
                         if (declared == null) {
-                          return Text('No MCP declared',
+                          return Text(context.tr('No MCP declared'),
                               style: TextStyle(
                                   color: c.textMuted, fontSize: 12));
                         }
@@ -4407,26 +4659,29 @@ class _SpaceAppDetailDialog extends ConsumerWidget {
                   FilledButton.icon(
                     onPressed: () async {
                       final messenger = ScaffoldMessenger.of(context);
-                      messenger.showSnackBar(const SnackBar(
-                        content: Text('Đang khởi động lại…'),
-                        duration: Duration(seconds: 40),
+                      messenger.showSnackBar(SnackBar(
+                        content: Text(context.tr('Restarting…')),
+                        duration: const Duration(seconds: 40),
                       ));
                       try {
                         await ref
                             .read(apiClientProvider)
                             .post('/api/space/apps/${app.id}/restart');
                         messenger.hideCurrentSnackBar();
-                        messenger.showSnackBar(const SnackBar(
-                            content: Text('Đã khởi động lại')));
+                        if (!context.mounted) return;
+                        messenger.showSnackBar(SnackBar(
+                            content: Text(context.tr('Restarted'))));
                         ref.invalidate(spaceAppsProvider);
                       } catch (e) {
                         messenger.hideCurrentSnackBar();
+                        if (!context.mounted) return;
                         messenger.showSnackBar(SnackBar(
-                            content: Text('Khởi động lại thất bại: $e')));
+                            content: Text(context.trArgs(
+                                'Restart failed: {e}', {'e': e}))));
                       }
                     },
                     icon: const Icon(Icons.restart_alt, size: 16),
-                    label: const Text('Restart'),
+                    label: Text(context.tr('Restart')),
                   ),
                 ],
               ),
@@ -4559,8 +4814,8 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
     if (_content.isEmpty) return;
     Clipboard.setData(ClipboardData(text: _content));
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Đã copy log')));
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.tr('Log copied'))));
   }
 
   @override
@@ -4572,7 +4827,7 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
       children: [
         Row(
           children: [
-            Text('Logs',
+            Text(context.tr('Logs'),
                 style: TextStyle(
                     color: c.textSecondary,
                     fontSize: 12,
@@ -4585,7 +4840,7 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
                 color: c.accent.withValues(alpha: 0.14),
                 borderRadius: BorderRadius.circular(AppTokens.rSm),
               ),
-              child: Text('auto',
+              child: Text(context.tr('auto'),
                   style: TextStyle(
                       color: c.accent,
                       fontSize: 10,
@@ -4593,7 +4848,7 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
             ),
             const Spacer(),
             IconButton(
-              tooltip: 'Copy all logs',
+              tooltip: context.tr('Copy all logs'),
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
@@ -4603,7 +4858,7 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
             ),
             const SizedBox(width: AppTokens.s8),
             IconButton(
-              tooltip: 'Refresh logs',
+              tooltip: context.tr('Refresh logs'),
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
@@ -4634,7 +4889,7 @@ class _LogsBlockState extends ConsumerState<_LogsBlock> {
                   : SingleChildScrollView(
                       reverse: true,
                       child: SelectableText(
-                          _content.isEmpty ? '(no logs)' : _content,
+                          _content.isEmpty ? context.tr('(no logs)') : _content,
                           style: TextStyle(
                               color: c.textMuted,
                               fontSize: 11,
@@ -4753,13 +5008,13 @@ class _LocalInferenceSettingsState
         'release_cache_after_session': _releaseCache,
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Inference settings saved')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.tr('Inference settings saved'))));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Save failed: {e}', {'e': e}))));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -4780,13 +5035,14 @@ class _LocalInferenceSettingsState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Inference settings',
+          Text(context.tr('Inference settings'),
               style: TextStyle(
                   color: c.textPrimary, fontWeight: FontWeight.w700)),
           const SizedBox(height: AppTokens.s12),
           _choiceRow<String>(
-            'Inference backend',
-            'Engine for Load / Use as LLM. MLX is Apple-Silicon-only & fastest.',
+            context.tr('Inference backend'),
+            context.tr(
+                'Engine for Load / Use as LLM. MLX is Apple-Silicon-only & fastest.'),
             _backend,
             const [
               ('auto', 'Auto'),
@@ -4796,12 +5052,13 @@ class _LocalInferenceSettingsState
             (v) => setState(() => _backend = v),
           ),
           _NumberRow(
-              label: 'Idle unload (secs)',
-              desc: '0 = never; ≥60 to free RAM after inactivity. Default 60.',
+              label: context.tr('Idle unload (secs)'),
+              desc: context.tr(
+                  '0 = never; ≥60 to free RAM after inactivity. Default 60.'),
               controller: _idleUnload),
           _choiceRow<int>(
-            'KV TurboQuant bits',
-            'Quantize KV cache to save RAM on long generation.',
+            context.tr('KV TurboQuant bits'),
+            context.tr('Quantize KV cache to save RAM on long generation.'),
             _kvBits,
             const [
               (-1, 'Auto (4-bit for 4-bit models)'),
@@ -4812,8 +5069,9 @@ class _LocalInferenceSettingsState
             (v) => setState(() => _kvBits = v),
           ),
           _choiceRow<int>(
-            'MLX packed KV (Metal)',
-            'MLX-native GPU KV quantization. Reload the model after changing.',
+            context.tr('MLX packed KV (Metal)'),
+            context.tr(
+                'MLX-native GPU KV quantization. Reload the model after changing.'),
             _mlxKvBits,
             const [
               (-1, 'Off — FP16'),
@@ -4823,38 +5081,45 @@ class _LocalInferenceSettingsState
             (v) => setState(() => _mlxKvBits = v),
           ),
           _NumberRow(
-              label: 'TQ activate after (tokens)',
-              desc: 'Cached tokens before TurboQuant kicks in. Default 16384.',
+              label: context.tr('TQ activate after (tokens)'),
+              desc: context.tr(
+                  'Cached tokens before TurboQuant kicks in. Default 16384.'),
               controller: _tqActivate),
           _NumberRow(
-              label: 'Max prompt tokens',
-              desc: 'Hard cap on prompt length (512–262144). Default 128000.',
+              label: context.tr('Max prompt tokens'),
+              desc: context.tr(
+                  'Hard cap on prompt length (512–262144). Default 128000.'),
               controller: _maxPrompt),
           _NumberRow(
-              label: 'Max new tokens',
-              desc: 'Max tokens generated per request (1–8192). Default 8192.',
+              label: context.tr('Max new tokens'),
+              desc: context.tr(
+                  'Max tokens generated per request (1–8192). Default 8192.'),
               controller: _maxNew),
           _NumberRow(
-              label: 'Max KV tokens',
-              desc: 'KV-cache sliding window (128–262144). Default 16384.',
+              label: context.tr('Max KV tokens'),
+              desc: context
+                  .tr('KV-cache sliding window (128–262144). Default 16384.'),
               controller: _maxKvTokens),
           _NumberRow(
-              label: 'Temperature (MLX)',
-              desc: '0 = greedy. Empty = server default (Gemma ≈0.65).',
+              label: context.tr('Temperature (MLX)'),
+              desc: context
+                  .tr('0 = greedy. Empty = server default (Gemma ≈0.65).'),
               controller: _temperature),
           _NumberRow(
-              label: 'Repetition penalty (MLX)',
-              desc: '1 = off. Empty = server default (Gemma ≈1.15).',
+              label: context.tr('Repetition penalty (MLX)'),
+              desc: context
+                  .tr('1 = off. Empty = server default (Gemma ≈1.15).'),
               controller: _repPenalty),
           _switchRow(
-            'Thinking mode (Qwen3)',
-            'Chain-of-thought before answering. Off is faster.',
+            context.tr('Thinking mode (Qwen3)'),
+            context.tr('Chain-of-thought before answering. Off is faster.'),
             _enableThinking,
             (v) => setState(() => _enableThinking = v),
           ),
           _switchRow(
-            'Release cache after session (MLX)',
-            'Drop per-session KV/prefix cache when a chat ends. Weights stay.',
+            context.tr('Release cache after session (MLX)'),
+            context.tr(
+                'Drop per-session KV/prefix cache when a chat ends. Weights stay.'),
             _releaseCache,
             (v) => setState(() => _releaseCache = v),
           ),
@@ -4868,7 +5133,7 @@ class _LocalInferenceSettingsState
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.save_outlined, size: 16),
-              label: const Text('Save'),
+              label: Text(context.tr('Save')),
             ),
             const SizedBox(width: AppTokens.s8),
             OutlinedButton.icon(
@@ -4878,12 +5143,12 @@ class _LocalInferenceSettingsState
                     .post('/api/local-models/unload-all');
                 ref.invalidate(localModelsProvider);
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Unloaded all models')));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text(context.tr('Unloaded all models'))));
                 }
               },
               icon: const Icon(Icons.memory_outlined, size: 16),
-              label: const Text('Unload all now'),
+              label: Text(context.tr('Unload all now')),
             ),
           ]),
         ],
@@ -4933,7 +5198,7 @@ class _LocalInferenceSettingsState
                 for (final (v, l) in options)
                   DropdownMenuItem(
                       value: v,
-                      child: Text(l,
+                      child: Text(context.tr(l),
                           maxLines: 1, overflow: TextOverflow.ellipsis)),
               ],
               onChanged: (v) {
@@ -5028,7 +5293,10 @@ class _HfAddModelCardState extends ConsumerState<_HfAddModelCard> {
         setState(() => _report = r.cast<String, dynamic>());
       }
     } catch (e) {
-      if (mounted) setState(() => _error = 'Check failed: $e');
+      if (mounted) {
+        setState(
+            () => _error = context.trArgs('Check failed: {e}', {'e': e}));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -5046,11 +5314,15 @@ class _HfAddModelCardState extends ConsumerState<_HfAddModelCard> {
           _report = null;
           _input.clear();
         });
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Download started — progress shows in the list below')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.tr(
+                'Download started — progress shows in the list below'))));
       }
     } catch (e) {
-      if (mounted) setState(() => _error = 'Download failed: $e');
+      if (mounted) {
+        setState(
+            () => _error = context.trArgs('Download failed: {e}', {'e': e}));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -5073,7 +5345,7 @@ class _HfAddModelCardState extends ConsumerState<_HfAddModelCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Add model from Hugging Face',
+          Text(context.tr('Add model from Hugging Face'),
               style:
                   TextStyle(color: c.textPrimary, fontWeight: FontWeight.w700)),
           const SizedBox(height: AppTokens.s8),
@@ -5091,9 +5363,10 @@ class _HfAddModelCardState extends ConsumerState<_HfAddModelCard> {
                     });
                   }
                 },
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                     isDense: true,
-                    hintText: 'org/repo hoặc URL (vd: facebook/mms-tts-vie)'),
+                    hintText: context.tr(
+                        'org/repo or URL (e.g. facebook/mms-tts-vie)')),
               ),
             ),
             const SizedBox(width: AppTokens.s8),
@@ -5105,7 +5378,7 @@ class _HfAddModelCardState extends ConsumerState<_HfAddModelCard> {
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.rule, size: 16),
-              label: const Text('Check'),
+              label: Text(context.tr('Check')),
             ),
           ]),
           if (_error != null) ...[
@@ -5159,7 +5432,8 @@ class _HfAddModelCardState extends ConsumerState<_HfAddModelCard> {
                   FilledButton.icon(
                     onPressed: _busy ? null : _download,
                     icon: const Icon(Icons.download, size: 16),
-                    label: Text(supported ? 'Download' : 'Try anyway'),
+                    label: Text(
+                        context.tr(supported ? 'Download' : 'Try anyway')),
                   ),
                 ],
               ]),
@@ -5236,23 +5510,25 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
           context: context,
           builder: (dctx) => AlertDialog(
             backgroundColor: dctx.colors.surface,
-            title: const Text('Transcription'),
+            title: Text(dctx.tr('Transcription')),
             content: SizedBox(
               width: 480,
-              child: SelectableText(
-                  text.trim().isEmpty ? '(no speech recognized)' : text),
+              child: SelectableText(text.trim().isEmpty
+                  ? dctx.tr('(no speech recognized)')
+                  : text),
             ),
             actions: [
               TextButton(
                   onPressed: () => Navigator.of(dctx).pop(),
-                  child: const Text('Close')),
+                  child: Text(dctx.tr('Close'))),
             ],
           ),
         );
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text('Transcribe failed: $e')));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content:
+                  Text(context.trArgs('Transcribe failed: {e}', {'e': e}))));
         }
       } finally {
         if (mounted) setState(() => _testing = false);
@@ -5261,8 +5537,8 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
     }
     if (!await _recorder.hasPermission()) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Microphone permission denied')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.tr('Microphone permission denied'))));
       }
       return;
     }
@@ -5306,6 +5582,7 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
       final cfg = ref.read(appConfigProvider);
       final req = http.MultipartRequest('POST',
           Uri.parse('http://${cfg.host}:${cfg.uiPort}/api/ocr/recognize'));
+      req.headers.addAll(cfg.authHeaders);
       if (_language.text.trim().isNotEmpty) {
         req.fields['language'] = _language.text.trim();
       }
@@ -5326,31 +5603,33 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
       final ok = resp.statusCode >= 200 && resp.statusCode < 300;
       final text = ok
           ? '${(jsonDecode(body) as Map?)?['text'] ?? ''}'
-          : 'OCR failed: $body';
+          : context.trArgs('OCR failed: {e}', {'e': body});
       showDialog(
         context: context,
         builder: (dctx) => AlertDialog(
           backgroundColor: dctx.colors.surface,
-          title: Text('OCR result — ${f.name}'),
+          title: Text(dctx.trArgs('OCR result — {name}', {'name': f.name})),
           content: SizedBox(
             width: 520,
             child: SingleChildScrollView(
               child: SelectableText(
-                  text.trim().isEmpty ? '(no text recognized)' : text,
+                  text.trim().isEmpty
+                      ? dctx.tr('(no text recognized)')
+                      : text,
                   style: const TextStyle(fontSize: 13, height: 1.4)),
             ),
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.of(dctx).pop(),
-                child: const Text('Close')),
+                child: Text(dctx.tr('Close'))),
           ],
         ),
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('OCR failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('OCR failed: {e}', {'e': e}))));
       }
     } finally {
       if (mounted) setState(() => _testing = false);
@@ -5369,7 +5648,7 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
       final cfg = ref.read(appConfigProvider);
       final resp = await http.post(
         Uri.parse('http://${cfg.host}:${cfg.uiPort}/api/tts/synthesize'),
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', ...cfg.authHeaders},
         body: jsonEncode({
           'text': sample,
           if (lang.isNotEmpty) 'language': _language.text.trim(),
@@ -5388,20 +5667,24 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
           if (fallback != null && fallback.isNotEmpty) {
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                 duration: const Duration(seconds: 6),
-                content: Text('Fallback voice used: $fallback')));
+                content: Text(context.trArgs(
+                    'Fallback voice used: {voice}', {'voice': fallback}))));
           } else if (backend != null && backend.isNotEmpty) {
-            setState(() => _flash = 'Spoke via $backend');
+            setState(() => _flash = context
+                .trArgs('Spoke via {backend}', {'backend': backend}));
           }
         }
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                'Test failed: ${resp.statusCode} ${utf8.decode(resp.bodyBytes, allowMalformed: true)}')));
+            content: Text(context.trArgs('Test failed: {e}', {
+          'e':
+              '${resp.statusCode} ${utf8.decode(resp.bodyBytes, allowMalformed: true)}'
+        }))));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Test failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Test failed: {e}', {'e': e}))));
       }
     } finally {
       if (mounted) setState(() => _testing = false);
@@ -5434,7 +5717,7 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
       final speedRaw = _speed.text.trim();
       final speed = speedRaw.isEmpty ? 1.0 : double.tryParse(speedRaw);
       if (speed == null || speed < 0.25 || speed > 4.0) {
-        setState(() => _flash = 'Speed must be 0.25–4.0');
+        setState(() => _flash = context.tr('Speed must be 0.25–4.0'));
         return;
       }
       body['voice'] = _voice.text.trim();
@@ -5444,9 +5727,9 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
       await ref
           .read(apiClientProvider)
           .put('/api/${widget.domain}/settings', body: body);
-      setState(() => _flash = 'Saved');
+      setState(() => _flash = context.tr('Saved'));
     } catch (e) {
-      setState(() => _flash = 'Failed');
+      setState(() => _flash = context.tr('Failed'));
     }
   }
 
@@ -5476,7 +5759,7 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Settings',
+          Text(context.tr('Settings'),
               style: TextStyle(
                   color: c.textPrimary, fontWeight: FontWeight.w700)),
           const SizedBox(height: AppTokens.s8),
@@ -5497,14 +5780,16 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
               key: ValueKey('${widget.domain}-model-$_modelId'),
               initialValue: _modelId,
               isExpanded: true,
-              decoration: const InputDecoration(
-                  labelText: 'Active model', isDense: true),
+              decoration: InputDecoration(
+                  labelText: context.tr('Active model'), isDense: true),
               items: [
-                const DropdownMenuItem(value: null, child: Text('(default)')),
+                DropdownMenuItem(
+                    value: null, child: Text(context.tr('(default)'))),
                 if (extra != null)
                   DropdownMenuItem(
                       value: extra,
-                      child: Text('$extra (current)',
+                      child: Text(
+                          context.trArgs('{id} (current)', {'id': extra}),
                           maxLines: 1, overflow: TextOverflow.ellipsis)),
                 for (final m in models)
                   DropdownMenuItem(
@@ -5564,8 +5849,8 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
                   child: langs.isEmpty
                       ? TextField(
                           controller: _language,
-                          decoration: const InputDecoration(
-                              labelText: 'Language',
+                          decoration: InputDecoration(
+                              labelText: context.tr('Language'),
                               isDense: true,
                               hintText: 'vi'),
                         )
@@ -5574,8 +5859,9 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
                               '${widget.domain}-lang-$curLang-${langs.join(',')}'),
                           initialValue: curLang.isEmpty ? null : curLang,
                           isExpanded: true,
-                          decoration: const InputDecoration(
-                              labelText: 'Language', isDense: true),
+                          decoration: InputDecoration(
+                              labelText: context.tr('Language'),
+                              isDense: true),
                           items: [
                             for (final l in langs)
                               DropdownMenuItem(
@@ -5591,8 +5877,8 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
                     child: voiceOptions.isEmpty
                         ? TextField(
                             controller: _voice,
-                            decoration: const InputDecoration(
-                                labelText: 'Voice',
+                            decoration: InputDecoration(
+                                labelText: context.tr('Voice'),
                                 isDense: true,
                                 hintText: 'Linh / Samantha…'),
                           )
@@ -5610,8 +5896,9 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
                                   '${widget.domain}-voice-$cur-${names.length}'),
                               initialValue: cur,
                               isExpanded: true,
-                              decoration: const InputDecoration(
-                                  labelText: 'Voice', isDense: true),
+                              decoration: InputDecoration(
+                                  labelText: context.tr('Voice'),
+                                  isDense: true),
                               items: [
                                 for (final v in voiceOptions)
                                   DropdownMenuItem(
@@ -5638,8 +5925,8 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
                     child: TextField(
                       controller: _speed,
                       keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                          labelText: 'Speed',
+                      decoration: InputDecoration(
+                          labelText: context.tr('Speed'),
                           isDense: true,
                           hintText: '1.0'),
                     ),
@@ -5651,7 +5938,8 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
           const SizedBox(height: AppTokens.s8),
           Row(
             children: [
-              FilledButton(onPressed: _save, child: const Text('Save')),
+              FilledButton(
+                  onPressed: _save, child: Text(context.tr('Save'))),
               if (_isTts) ...[
                 const SizedBox(width: AppTokens.s8),
                 OutlinedButton.icon(
@@ -5662,7 +5950,7 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
                           height: 14,
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.play_arrow_rounded, size: 18),
-                  label: const Text('Test voice'),
+                  label: Text(context.tr('Test voice')),
                 ),
               ],
               if (_isOcr) ...[
@@ -5675,7 +5963,7 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
                           height: 14,
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.image_outlined, size: 16),
-                  label: const Text('Test (pick image)'),
+                  label: Text(context.tr('Test (pick image)')),
                 ),
               ],
               if (_isWhisper) ...[
@@ -5690,9 +5978,9 @@ class _MediaSettingsCardState extends ConsumerState<_MediaSettingsCard> {
                       : Icon(_recording ? Icons.stop : Icons.mic_none,
                           size: 18,
                           color: _recording ? AppTokens.danger : null),
-                  label: Text(_recording
+                  label: Text(context.tr(_recording
                       ? 'Stop & transcribe'
-                      : 'Record & transcribe'),
+                      : 'Record & transcribe')),
                 ),
               ],
               if (_flash != null) ...[

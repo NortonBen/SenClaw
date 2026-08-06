@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { getApiToken } from '../lib/auth';
 import type { GroupInfo, ChatMessage, TextMessage, ToolMessage, WidgetMessage, WidgetSpec, AgentState, WsStatus, PermissionMessage, QuestionMessage, FormMessage, RegisterGroupPayload, UpdateGroupPayload, DispatchParent, SubAgentActivityEntry, AgentTodosEntry, UsageData, ChannelInfo, AgentInfo, BindingInfo, BindingWithRelationsInfo, RegisterChannelPayload, RegisterAgentPayload, RegisterBindingPayload, UpdateChannelPayload, UpdateAgentPayload, UpdateBindingPayload, ToolAutoAcceptRule, TaskResultEvent, ImageAttachment, EventNotification, WorkbenchState, WorkbenchArtifact } from '../types';
 
 const TOOL_RULES_KEY = 'senclaw:tool-rules';
@@ -1312,9 +1313,18 @@ export function useWebSocket(): WsHook {
       }
       setStatus('connecting');
       const { wsPort, token } = configRef.current;
-      const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
+      // Use the page's own hostname, not a hardcoded 127.0.0.1 — when the UI
+      // is served over the LAN the gateway lives on that same host. The
+      // stored API token rides along as a query param for the upgrade-time
+      // auth check (the session cookie also covers it on same-host setups).
+      const wsHost = window.location.hostname || '127.0.0.1';
+      const apiToken = getApiToken();
+      const qs = apiToken ? `/?token=${encodeURIComponent(apiToken)}` : '';
+      const ws = new WebSocket(`ws://${wsHost}:${wsPort}${qs}`);
       wsRef.current = ws;
-      ws.onopen = () => { if (token) rawSend({ type: 'connect', token }); };
+      // Always identify: with no gateway token configured any value passes,
+      // with one configured this is what authenticates the socket.
+      ws.onopen = () => { rawSend({ type: 'connect', token: token || apiToken }); };
       ws.onmessage = handleMsg;
       ws.onclose = () => {
         if (destroyed) return;

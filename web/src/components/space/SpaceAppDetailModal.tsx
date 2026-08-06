@@ -5,6 +5,7 @@ import {
 } from 'antd';
 import {
   ApiOutlined, ToolOutlined, ReloadOutlined, ClearOutlined, FileTextOutlined, PoweroffOutlined, RobotOutlined,
+  MonitorOutlined,
 } from '@ant-design/icons';
 
 const { Paragraph, Text } = Typography;
@@ -63,6 +64,8 @@ const STATUS_COLOR: Record<string, string> = {
   disconnected: 'default',
   error: 'red',
 };
+
+import AppRuntimePanel from './AppRuntimePanel';
 
 interface Props {
   app: DetailApp | null;
@@ -225,8 +228,20 @@ export function SpaceAppDetailModal({ app, open, onClose }: Props) {
           </Descriptions>
 
           <Collapse
-            defaultActiveKey={['mcp', 'logs', 'skills']}
+            defaultActiveKey={['runtime', 'mcp', 'logs', 'skills']}
             items={[
+              ...(app.manifest?.runtime?.kind === 'server' ? [{
+                key: 'runtime',
+                label: (
+                  <div className="flex items-center gap-2">
+                    <MonitorOutlined style={{ color: token.colorPrimary }} />
+                    <span className="font-semibold" style={{ color: token.colorText }}>
+                      Theo dõi tiến trình
+                    </span>
+                  </div>
+                ),
+                children: <AppRuntimePanel appId={app.id} onRestart={restartApp} />,
+              }] : []),
               ...(app.manifest?.skills && Array.isArray(app.manifest.skills) && app.manifest.skills.length > 0 ? [{
                 key: 'skills',
                 label: (

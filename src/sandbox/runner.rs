@@ -783,7 +783,7 @@ mod tests {
         // A high port unlikely to collide with anything on the machine.
         const PORT: u16 = 18771;
         let mut r = req(Some("direct".into()));
-        r.ports = crate::sandbox::ports::validate(&[PORT], &[]).unwrap();
+        r.ports = crate::sandbox::ports::validate(&[PORT], &[], &[]).unwrap();
         let sb = create(&db, r).await.unwrap();
 
         // Serve one request, then exit. The sandbox has no general network —
@@ -835,7 +835,7 @@ mod tests {
         }
         let mut r = req(Some("direct".into()));
         // 18772 is open; 18773 is not.
-        r.ports = crate::sandbox::ports::validate(&[18772], &[]).unwrap();
+        r.ports = crate::sandbox::ports::validate(&[18772], &[], &[]).unwrap();
         let sb = create(&db, r).await.unwrap();
 
         let probe = |port: u16| {
@@ -861,6 +861,78 @@ mod tests {
         );
     }
 
+    /// The escape this guards against was demonstrated against a live daemon:
+    /// with `network: true`, code inside a sandbox reached SenClaw's own REST
+    /// API on 127.0.0.1 — which needs no credentials, because its trust
+    /// boundary is the loopback interface — read configuration it could not
+    /// read off the disk, and created itself a second sandbox with the whole
+    /// disk mounted. A file-read deny means nothing if the daemon will fetch
+    /// the file for you.
+    ///
+    /// This runs a real listener on this machine and checks the sandbox cannot
+    /// reach it, network switch on and all — then that naming the port in
+    /// `loopback` hands exactly that one service back.
+    #[tokio::test]
+    async fn this_machines_services_are_unreachable_even_with_the_network_on() {
+        let _d = tmp_data();
+        let db = Db::open_memory().unwrap();
+        if caps::direct_caps(true).await.kind != DirectKind::Seatbelt {
+            eprintln!("SKIP: loopback egress rules are only enforced by Seatbelt here");
+            return;
+        }
+        // Stand-in for the daemon: a listener owned by this test, so nothing
+        // outside it is touched.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepting = std::thread::spawn(move || {
+            listener.set_nonblocking(false).ok();
+            // Accept for a bounded time so the thread can never outlive the test.
+            let _ = listener
+                .incoming()
+                .take(2)
+                .for_each(|c| drop(c));
+        });
+
+        let probe = format!(
+            "import socket\n\
+             s = socket.socket(); s.settimeout(4)\n\
+             try:\n\x20   s.connect(('127.0.0.1', {port})); print('REACHED')\n\
+             except Exception:\n\x20   print('BLOCKED')\n"
+        );
+
+        let mut r = req(Some("direct".into()));
+        r.network = true;
+        let open = create(&db, r).await.unwrap();
+        let out = run_code(&db, &open, "python", &probe, None, BTreeMap::new())
+            .await
+            .unwrap();
+        assert!(
+            out.stdout.contains("BLOCKED"),
+            "network:true must not include this machine's own services — that is a \
+             sandbox escape, not a network. stdout: {} stderr: {}",
+            out.stdout,
+            out.stderr
+        );
+
+        let mut r2 = req(Some("direct".into()));
+        r2.network = true;
+        r2.ports = crate::sandbox::ports::validate(&[], &[], &[port]).unwrap();
+        let named = create(&db, r2).await.unwrap();
+        let out2 = run_code(&db, &named, "python", &probe, None, BTreeMap::new())
+            .await
+            .unwrap();
+        assert!(
+            out2.stdout.contains("REACHED"),
+            "a port named in `loopback` must be reachable, or an egress proxy — the \
+             only way to restrict a sandbox to one website — cannot work. stdout: {} stderr: {}",
+            out2.stdout,
+            out2.stderr
+        );
+        // Unblock the accept loop if nothing connected.
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+        let _ = accepting.join();
+    }
+
     #[tokio::test]
     async fn connect_rules_open_one_remote_port_and_no_other() {
         let _d = tmp_data();
@@ -871,7 +943,7 @@ mod tests {
         let mut r = req(Some("direct".into()));
         // DNS out, nothing else. Note the sandbox's `network` flag stays false:
         // the port rule is the entire permission.
-        r.ports = crate::sandbox::ports::validate(&[], &[53]).unwrap();
+        r.ports = crate::sandbox::ports::validate(&[], &[53], &[]).unwrap();
         let sb = create(&db, r).await.unwrap();
 
         let probe = |port: u16| {

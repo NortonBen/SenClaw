@@ -38,7 +38,7 @@ fn internal(e: impl std::fmt::Display) -> AppError {
     AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
-fn valid_space_app_id(id: &str) -> bool {
+pub(super) fn valid_space_app_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 80
         && id
@@ -2131,6 +2131,104 @@ pub(crate) async fn space_app_env(
     })))
 }
 
+/// One app's sandbox settings, plus what this machine will actually enforce.
+///
+/// The `effective` half exists because the honest answer differs by platform:
+/// macOS enforces all of it, Linux enforces the folders but not the network
+/// mode, Windows enforces nothing for a long-lived server. A dialog that showed
+/// only the stored settings would be claiming isolation the machine may not be
+/// providing.
+pub(crate) async fn space_app_sandbox_get(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Validates the id and 400s on a bad one, same as every other app route.
+    let app_dir = space_app_dir(&s, &id)?;
+    let db = crate::sandbox::shared_db().ok_or_else(|| {
+        AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Sandbox engine not available".into(),
+        )
+    })?;
+    let cfg = crate::sandbox::app_policy::load(&db, &id);
+    let caps = crate::sandbox::caps::direct_caps(false).await;
+
+    // What the app gets without asking: its own folder and its own data dirs —
+    // plus, in a jailed read mode, the language runtime if the user installed it
+    // under their home (nvm, volta, pyenv…), read-only. That last part is listed
+    // rather than silent: it is a real widening of the jail, and an app that
+    // cannot read its own interpreter does not start.
+    let mut always: Vec<String> = std::iter::once(app_dir.to_string_lossy().to_string())
+        .chain(
+            crate::sandbox::app_policy::own_data_dirs(&id)
+                .iter()
+                .map(|p| p.to_string_lossy().to_string()),
+        )
+        .collect();
+    if cfg.read_mode.jails_reads() {
+        always.extend(
+            crate::sandbox::app_launch::toolchain_read_mounts()
+                .into_iter()
+                .map(|m| format!("{} (read-only, runtime)", m.source)),
+        );
+    }
+
+    // Live proxy facts, when the app is running with per-site egress.
+    let proxy = match s.space_mcp_launcher.as_ref() {
+        Some(l) => l.proxy_status(&id).await,
+        None => None,
+    };
+
+    Ok(Json(serde_json::json!({
+        "appId": id,
+        "config": cfg,
+        "effective": {
+            "isolation": caps.kind.as_str(),
+            "enforceable": caps.kind.is_enforced() && !cfg!(windows),
+            // Windows' AppContainer backend drives a child through pipes; it
+            // cannot wrap a server process, so it is reported as unenforceable
+            // here even though the engine uses it for `sbx_exec`.
+            "networkEnforceable": matches!(caps.kind, crate::sandbox::caps::DirectKind::Seatbelt),
+            "note": crate::sandbox::app_launch::note_for(caps.kind, &cfg),
+            "alwaysGranted": always,
+            "daemonPort": s.config.ui_server.port,
+        },
+        "proxy": proxy.map(|(port, stats)| serde_json::json!({
+            "port": port,
+            "stats": stats,
+        })),
+    })))
+}
+
+pub(crate) async fn space_app_sandbox_put(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(body): Json<crate::sandbox::app_policy::AppSandbox>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    space_app_dir(&s, &id)?;
+    let db = crate::sandbox::shared_db().ok_or_else(|| {
+        AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Sandbox engine not available".into(),
+        )
+    })?;
+    let saved = crate::sandbox::app_policy::save(&db, &id, &body)
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("{e}")))?;
+
+    // An edited allowlist reaches a running app's proxy immediately; everything
+    // else (the profile itself) is fixed at launch, so the app must restart.
+    let hosts_live = match s.space_mcp_launcher.as_ref() {
+        Some(l) => l.set_proxy_hosts(&id, saved.hosts.clone()).await,
+        None => false,
+    };
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "config": saved,
+        "hostsAppliedLive": hosts_live,
+        "restartRequired": true,
+    })))
+}
+
 #[derive(Deserialize)]
 pub(crate) struct AppConfigSetBody {
     value: serde_json::Value,
@@ -2426,7 +2524,25 @@ pub(crate) struct SpaceAppLogsQuery {
     max_bytes: Option<usize>,
 }
 
-fn installed_app_dir_from_manifest(
+/// The stored manifest for one app, or `None` when it is not installed.
+///
+/// Every per-app route needs this and each one was re-writing the same query;
+/// the monitor made it four.
+pub(super) fn space_app_manifest(s: &UiState, id: &str) -> Option<serde_json::Value> {
+    let db = s.db.as_deref()?;
+    db.with_conn(|conn| {
+        let raw: Result<String, rusqlite::Error> = conn.query_row(
+            "SELECT manifest FROM space_apps WHERE id=?1",
+            params![id],
+            |row| row.get(0),
+        );
+        Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
+    })
+    .ok()
+    .flatten()
+}
+
+pub(super) fn installed_app_dir_from_manifest(
     s: &UiState,
     id: &str,
     manifest: Option<&serde_json::Value>,
@@ -2438,7 +2554,7 @@ fn installed_app_dir_from_manifest(
         .unwrap_or_else(|| space_app_dir(s, id))
 }
 
-fn space_app_runtime_log_path(
+pub(super) fn space_app_runtime_log_path(
     s: &UiState,
     id: &str,
     manifest: Option<&serde_json::Value>,

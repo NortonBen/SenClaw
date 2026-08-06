@@ -64,6 +64,9 @@ pub fn groups(sandbox_id: &str) -> Vec<u32> {
 pub struct Proc {
     pub pid: u32,
     pub ppid: u32,
+    /// Process-group leader. Parsed all along and previously dropped; a fleet
+    /// view needs it to tell one app's tree from another's in a single listing.
+    pub pgid: u32,
     /// CPU percent, as the OS reports it (can exceed 100 on multiple cores).
     pub cpu: f64,
     /// Percent of physical memory.
@@ -100,6 +103,16 @@ pub struct Stats {
 ///
 /// Columns, in order: pid ppid pgid pcpu pmem rss etime comm
 pub fn parse_ps(out: &str, wanted_groups: &[u32]) -> Vec<Proc> {
+    parse_ps_any(out)
+        .into_iter()
+        .filter(|p| wanted_groups.contains(&p.pgid))
+        .collect()
+}
+
+/// The same parse without the group filter, for callers that do not know the
+/// group yet — a Space App this daemon adopted rather than launched is found by
+/// pid, and its group has to be read off the listing.
+pub fn parse_ps_any(out: &str) -> Vec<Proc> {
     let mut v = Vec::new();
     for line in out.lines() {
         let f: Vec<&str> = line.split_whitespace().collect();
@@ -113,12 +126,10 @@ pub fn parse_ps(out: &str, wanted_groups: &[u32]) -> Vec<Proc> {
         ) else {
             continue; // the header row, or a line ps mangled
         };
-        if !wanted_groups.contains(&pgid) {
-            continue;
-        }
         v.push(Proc {
             pid,
             ppid,
+            pgid,
             cpu: f[3].parse().unwrap_or(0.0),
             mem_percent: f[4].parse().unwrap_or(0.0),
             // ps reports RSS in KB on both macOS and Linux.
@@ -195,6 +206,81 @@ pub async fn stats(sb: &Sandbox) -> Stats {
     match sample_host(&g).await {
         // `direct` has no enforced RAM ceiling — reporting the configured
         // number here would imply one exists.
+        Ok(procs) => finish(procs, "host", None, None),
+        Err(e) => Stats {
+            source: "host".into(),
+            processes: Vec::new(),
+            cpu: 0.0,
+            rss_mb: 0.0,
+            memory_limit_mb: None,
+            running: false,
+            note: Some(format!("cannot read the process table: {e}")),
+        },
+    }
+}
+
+/// Sample several groups at once and keep them apart, for a fleet view.
+///
+/// One `ps` for the whole list rather than one per group: the Space Apps screen
+/// refreshes every few seconds with a dozen apps on it, and a dozen process
+/// listings per tick is a measurable cost for a panel that is only watching.
+pub async fn stats_by_group(groups: &[u32]) -> std::collections::HashMap<u32, Stats> {
+    let mut out = std::collections::HashMap::new();
+    if groups.is_empty() {
+        return out;
+    }
+    let procs = sample_host(groups).await.unwrap_or_default();
+    for g in groups {
+        // `ps` reports each process's own group, so attribution is exact — no
+        // guessing from parent chains.
+        let mine: Vec<Proc> = procs.iter().filter(|p| p.pgid == *g).cloned().collect();
+        out.insert(*g, finish(mine, "host", None, None));
+    }
+    out
+}
+
+/// Sample by pid, reporting the whole process group each pid belongs to.
+///
+/// For processes this daemon did not start, where the group is not known up
+/// front: one listing, the pid's own row gives the group, the group gives the
+/// tree.
+pub async fn stats_by_pid(pids: &[u32]) -> std::collections::HashMap<u32, Stats> {
+    let mut out = std::collections::HashMap::new();
+    if pids.is_empty() {
+        return out;
+    }
+    let listing = match run(
+        "ps",
+        &["-axo", "pid=,ppid=,pgid=,pcpu=,pmem=,rss=,etime=,comm="],
+        PS_TIMEOUT,
+    )
+    .await
+    {
+        Ok(o) => parse_ps_any(&o),
+        Err(_) => return out,
+    };
+    for pid in pids {
+        let Some(group) = listing.iter().find(|p| p.pid == *pid).map(|p| p.pgid) else {
+            continue; // it exited between the socket listing and this sample
+        };
+        let mine: Vec<Proc> = listing.iter().filter(|p| p.pgid == group).cloned().collect();
+        out.insert(*pid, finish(mine, "host", None, None));
+    }
+    out
+}
+
+/// Sample any process group, for callers outside the sandbox registry — a Space
+/// App's server tree is launched by the daemon with its own group, so this is
+/// the same measurement without inventing a `Sandbox` for it.
+///
+/// `npm → node` and `sh → app` are the reason this is by *group* and not by pid:
+/// the process the daemon holds is usually a shell, and the memory that matters
+/// belongs to its children.
+pub async fn stats_for_groups(groups: &[u32]) -> Stats {
+    if groups.is_empty() {
+        return finish(Vec::new(), "host", None, None);
+    }
+    match sample_host(groups).await {
         Ok(procs) => finish(procs, "host", None, None),
         Err(e) => Stats {
             source: "host".into(),
@@ -352,6 +438,25 @@ mod tests {
     fn a_header_row_is_skipped_rather_than_parsed_as_a_process() {
         let with_header = format!("  PID  PPID  PGID %CPU %MEM   RSS ELAPSED COMMAND\n{SAMPLE}");
         assert_eq!(parse_ps(&with_header, &[501]).len(), 2);
+    }
+
+    #[test]
+    fn a_fleet_listing_keeps_each_app_apart() {
+        // One `ps` listing carrying two apps' trees: partitioning by group is
+        // what stops app A's memory being reported as app B's.
+        let out = "\
+100 1 100 5.0 0.5 51200 01:00 sh
+101 100 100 7.0 1.0 102400 00:59 node
+200 1 200 1.0 0.2 20480 10:00 ba
+300 1 300 9.9 9.9 999999 10:00 something-else";
+        let procs = parse_ps(out, &[100, 200]);
+        assert_eq!(procs.len(), 3, "the unwanted group must not be parsed in");
+        let a: Vec<_> = procs.iter().filter(|p| p.pgid == 100).collect();
+        let b: Vec<_> = procs.iter().filter(|p| p.pgid == 200).collect();
+        assert_eq!(a.len(), 2, "sh + node belong to the same app");
+        assert_eq!(b.len(), 1);
+        assert!((a.iter().map(|p| p.cpu).sum::<f64>() - 12.0).abs() < 0.01);
+        assert!((b[0].rss_mb - 20.0).abs() < 0.01);
     }
 
     #[test]

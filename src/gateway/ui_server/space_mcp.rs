@@ -36,14 +36,46 @@ struct ChildProc {
     pgid: i32,
     port: u16,
     log_path: PathBuf,
+    /// The app's allowlisting egress proxy, when it runs sandboxed with
+    /// `network: hosts`. Held here so it lives exactly as long as the process it
+    /// was opened for: dropping this record stops the proxy.
+    proxy: Option<std::sync::Arc<crate::sandbox::proxy::HostProxy>>,
+    /// Wall-clock start, so the monitor can say "up 4m" — and, more usefully,
+    /// "up 6s" for an app that is crash-looping while the row still reads
+    /// "running".
+    started_at: std::time::SystemTime,
+    /// Whether this launch was confined, and how. Recorded at spawn because the
+    /// stored settings can be edited afterwards, and what is *running* is what
+    /// the monitor must report.
+    isolation: String,
+}
+
+/// What the monitor knows about one app's process, taken under the lock and
+/// handed back as a plain value so nothing borrows the launcher's map.
+pub struct RuntimeInfo {
+    pub pid: u32,
+    pub pgid: i32,
+    pub port: u16,
+    pub log_path: PathBuf,
+    pub started_at: std::time::SystemTime,
+    pub isolation: String,
+    pub proxy: Option<(u16, crate::sandbox::proxy::ProxyStats)>,
 }
 
 /// Tracks server-app processes launched on behalf of Space Apps, keyed by app id.
 pub struct SpaceMcpLauncher {
     children: Mutex<HashMap<String, ChildProc>>,
+    /// How many times each app has been (re)launched this daemon run. A number
+    /// that keeps climbing on its own is the signature of a crash loop, which
+    /// otherwise looks exactly like a healthy app in every other view.
+    launches: Mutex<HashMap<String, u32>>,
     /// Per-app spawn lock so concurrent callers (proxy lazy-spawn + supervisor +
     /// user restart) never double-launch the same app.
     start_locks: Mutex<HashMap<String, std::sync::Arc<Mutex<()>>>>,
+    /// Apps served by a process this daemon did not start and could not take
+    /// back. Remembered so the supervisor attempts the reclaim once per daemon
+    /// run instead of once every tick — the answer will not change by itself.
+    adopted: Mutex<std::collections::HashSet<String>>,
     http: reqwest::Client,
 }
 
@@ -61,7 +93,9 @@ impl SpaceMcpLauncher {
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             children: Mutex::new(HashMap::new()),
+            launches: Mutex::new(HashMap::new()),
             start_locks: Mutex::new(HashMap::new()),
+            adopted: Mutex::new(std::collections::HashSet::new()),
             http,
         }
     }
@@ -248,22 +282,41 @@ impl SpaceMcpLauncher {
                 .and_then(Value::as_str)
                 .unwrap_or("/health");
 
-            // Healthy if the fixed port answers its health endpoint; for a
-            // dynamic port, if the tracked child is still alive.
-            let healthy = if port > 0 {
-                self.is_healthy(&health_url(port, health_path)).await
-            } else {
+            let tracked = {
                 let mut children = self.children.lock().await;
                 children
                     .get_mut(&app_id)
                     .map(|p| matches!(p.child.try_wait(), Ok(None)))
                     .unwrap_or(false)
             };
-            if healthy {
+            // Healthy if the fixed port answers its health endpoint; for a
+            // dynamic port, if the tracked child is still alive.
+            let healthy = if port > 0 {
+                self.is_healthy(&health_url(port, health_path)).await
+            } else {
+                tracked
+            };
+            // A port that answers with nothing tracked behind it is a process
+            // from a previous daemon. It serves fine, which is exactly why it
+            // used to go unnoticed for weeks — running old code, from an old
+            // directory, outside whatever sandbox the settings now ask for. So
+            // it is treated as work to do, once: `ensure_server_running` takes
+            // the port back when the process is verifiably this app's, and
+            // `adopted` stops us retrying every tick when it is not.
+            let untracked_stranger =
+                healthy && !tracked && !self.adopted.lock().await.contains(&app_id);
+            if healthy && !untracked_stranger {
                 continue;
             }
 
-            tracing::warn!("[space-mcp] supervisor: app '{app_id}' is DOWN → respawning");
+            if untracked_stranger {
+                tracing::warn!(
+                    "[space-mcp] supervisor: '{app_id}' is served by a process this daemon did \
+                     not start → reclaiming"
+                );
+            } else {
+                tracing::warn!("[space-mcp] supervisor: app '{app_id}' is DOWN → respawning");
+            }
             // Serialize with proxy lazy-spawns / user restarts for this app.
             let lock = self.start_lock(&app_id).await;
             let _guard = lock.lock().await;
@@ -377,10 +430,37 @@ impl SpaceMcpLauncher {
             }
         }
 
-        // Fixed port already healthy (orphan or manual run)? Reuse it.
+        // Fixed port already healthy, but nothing tracked is behind it — so it is
+        // a process from a previous daemon (or a manual run). Adopting it used to
+        // be the answer and it was the wrong one: the app then runs whatever code
+        // it was started with, from wherever it was started, with none of the
+        // sandbox settings applied, for as long as the machine stays up.
+        //
+        // Take the port back when the process is verifiably this app's, and start
+        // it again properly. When it is not ours, adopt as before — that port
+        // belongs to someone else's server and killing it would be hostile.
         if fixed_port > 0 && self.is_healthy(&health_url(fixed_port, health_path)).await {
-            tracing::info!("[space-mcp] '{app_id}' already serving on :{fixed_port}");
-            return Ok(fixed_port);
+            match reclaim_app_port(app_id, app_dir, fixed_port).await {
+                Reclaim::Freed => {
+                    tracing::info!(
+                        "[space-mcp] '{app_id}': took :{fixed_port} back from an untracked \
+                         process, launching a fresh one"
+                    );
+                }
+                Reclaim::NotOurs => {
+                    tracing::info!("[space-mcp] '{app_id}' already serving on :{fixed_port}");
+                    self.adopted.lock().await.insert(app_id.to_string());
+                    return Ok(fixed_port);
+                }
+                Reclaim::Failed => {
+                    tracing::warn!(
+                        "[space-mcp] '{app_id}': could not free :{fixed_port}; using the process \
+                         that is there (its sandbox state is unknown)"
+                    );
+                    self.adopted.lock().await.insert(app_id.to_string());
+                    return Ok(fixed_port);
+                }
+            }
         }
 
         let port = if fixed_port > 0 {
@@ -411,21 +491,33 @@ impl SpaceMcpLauncher {
             .try_clone()
             .with_context(|| format!("clone stderr log for app '{app_id}'"))?;
 
-        // Spawn the start command via the platform shell. On unix it gets its
-        // own process group so we can kill the whole tree (npm -> next-server)
-        // on shutdown; on Windows we fall back to killing the direct child.
-        #[cfg(unix)]
-        let mut cmd = {
-            let mut c = Command::new("sh");
-            c.arg("-c").arg(start);
-            c
-        };
-        #[cfg(not(unix))]
-        let mut cmd = {
-            let mut c = Command::new("cmd");
-            c.arg("/C").arg(start);
-            c
-        };
+        // How this app is confined, if the user asked for it in Plugins → Space
+        // Apps. `plan` returns the plain `sh -c <start>` when the app is not
+        // sandboxed, so there is one spawn path either way. A failure here is
+        // deliberately fatal: the user asked for a sandbox, and launching the app
+        // unconfined instead would be the one outcome nobody wants.
+        let sb_cfg = crate::sandbox::app_policy::current(app_id);
+        let launch = crate::sandbox::app_launch::plan(
+            app_id,
+            app_dir,
+            start,
+            port,
+            daemon_port(base_url),
+            &sb_cfg,
+        )
+        .await
+        .with_context(|| format!("prepare the sandbox for app '{app_id}'"))?;
+        let _ = writeln!(log_file, "{}", launch.summary());
+        if let Some(note) = &launch.note {
+            tracing::warn!("[space-mcp] '{app_id}' sandbox: {note}");
+        }
+
+        // Spawn through the platform shell (wrapped by `sandbox-exec` / `bwrap`
+        // when confined). On unix it gets its own process group so we can kill
+        // the whole tree (npm -> next-server) on shutdown; on Windows we fall
+        // back to killing the direct child.
+        let mut cmd = Command::new(&launch.argv[0]);
+        cmd.args(&launch.argv[1..]);
         cmd.current_dir(app_dir)
             .env("PORT", port.to_string())
             .env("SENCLAW_BASE_URL", base_url)
@@ -435,12 +527,23 @@ impl SpaceMcpLauncher {
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
             .kill_on_drop(true);
+        for (k, v) in &launch.env {
+            cmd.env(k, v);
+        }
         #[cfg(unix)]
         cmd.process_group(0);
         let child = cmd
             .spawn()
             .with_context(|| format!("spawn '{start}' for app '{app_id}'"))?;
         let pgid = child.id().map(|i| i as i32).unwrap_or(0);
+        // Ours again.
+        self.adopted.lock().await.remove(app_id);
+        *self
+            .launches
+            .lock()
+            .await
+            .entry(app_id.to_string())
+            .or_insert(0) += 1;
         self.children.lock().await.insert(
             app_id.to_string(),
             ChildProc {
@@ -448,6 +551,13 @@ impl SpaceMcpLauncher {
                 pgid,
                 port,
                 log_path: log_path.clone(),
+                proxy: launch.proxy.clone(),
+                started_at: std::time::SystemTime::now(),
+                isolation: if launch.enforced {
+                    launch.isolation.clone()
+                } else {
+                    "none".to_string()
+                },
             },
         );
         tracing::info!(
@@ -481,14 +591,96 @@ impl SpaceMcpLauncher {
         }
     }
 
+    /// Everything the monitor needs about the process this daemon launched for
+    /// `app_id`. `None` when nothing is tracked — which for a server app means
+    /// it is not running, whatever the manifest says.
+    pub async fn runtime_info(&self, app_id: &str) -> Option<RuntimeInfo> {
+        let children = self.children.lock().await;
+        let proc = children.get(app_id)?;
+        Some(RuntimeInfo {
+            pid: proc.child.id().unwrap_or(0),
+            pgid: proc.pgid,
+            port: proc.port,
+            log_path: proc.log_path.clone(),
+            started_at: proc.started_at,
+            isolation: proc.isolation.clone(),
+            proxy: proc.proxy.as_ref().map(|p| (p.port, p.stats())),
+        })
+    }
+
+    /// How many times this app has been launched since the daemon started.
+    pub async fn launch_count(&self, app_id: &str) -> u32 {
+        self.launches.lock().await.get(app_id).copied().unwrap_or(0)
+    }
+
+    /// Live sandbox facts for one app: the port of its allowlist proxy and what
+    /// that proxy has refused so far. `None` when the app is not running, or is
+    /// running without per-site egress.
+    ///
+    /// The refusal list is the reason this is exposed at all: "the app is broken"
+    /// and "the app wanted `x.com` and did not have it" look identical from the
+    /// outside otherwise.
+    pub async fn proxy_status(&self, app_id: &str) -> Option<(u16, crate::sandbox::proxy::ProxyStats)> {
+        let children = self.children.lock().await;
+        let proxy = children.get(app_id)?.proxy.as_ref()?;
+        Some((proxy.port, proxy.stats()))
+    }
+
+    /// Push an edited allowlist into a *running* app's proxy, so adding a site
+    /// takes effect without restarting the app.
+    pub async fn set_proxy_hosts(&self, app_id: &str, hosts: Vec<String>) -> bool {
+        let children = self.children.lock().await;
+        match children.get(app_id).and_then(|c| c.proxy.as_ref()) {
+            Some(p) => {
+                p.set_hosts(hosts);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Kill every launched server process group. Call on graceful shutdown.
+    ///
+    /// Signals all of them first, then waits **once** — not app by app. The
+    /// desktop app allows ~800 ms between SIGTERM and SIGKILL, and a machine
+    /// with a few dozen apps would never finish a per-app grace period inside
+    /// that window; every app that did not get its turn survived the daemon.
     pub async fn shutdown(&self) {
         let procs: Vec<(String, ChildProc)> = self.children.lock().await.drain().collect();
-        for (app_id, proc) in procs {
-            let log = proc.log_path.display().to_string();
-            kill_child_group(proc).await;
-            tracing::info!("[space-mcp] stopped server process for '{app_id}' (log={log})");
+        if procs.is_empty() {
+            return;
         }
+        let n = procs.len();
+        #[cfg(unix)]
+        for (_, proc) in &procs {
+            if proc.pgid > 0 {
+                // Negative pid → the whole group (sh + npm + node, …).
+                unsafe {
+                    libc::kill(-proc.pgid, libc::SIGTERM);
+                }
+            }
+        }
+        // One grace period for everyone, well inside the window we are given.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let mut left = 0usize;
+        for (app_id, mut proc) in procs {
+            let log = proc.log_path.display().to_string();
+            if matches!(proc.child.try_wait(), Ok(Some(_))) {
+                tracing::info!("[space-mcp] stopped server process for '{app_id}' (log={log})");
+                continue;
+            }
+            #[cfg(unix)]
+            if proc.pgid > 0 {
+                unsafe {
+                    libc::kill(-proc.pgid, libc::SIGKILL);
+                }
+            }
+            let _ = proc.child.start_kill();
+            let _ = proc.child.try_wait();
+            left += 1;
+            tracing::info!("[space-mcp] killed server process for '{app_id}' (log={log})");
+        }
+        tracing::info!("[space-mcp] shutdown: {n} app(s) stopped ({left} needed SIGKILL)");
     }
 }
 
@@ -529,6 +721,134 @@ fn port_is_free(port: u16) -> bool {
 /// Best-effort SIGKILL of any process still LISTENing on `port`. Reclaims a
 /// port held by an orphaned grandchild (npm/next-server) that survived an
 /// earlier kill of only the `sh` group leader. Unix-only; no-op elsewhere.
+/// What happened when we tried to take back a port an untracked process holds.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Reclaim {
+    /// It was this app's process, it is gone, the port is free.
+    Freed,
+    /// Something else is on that port. Not ours to kill.
+    NotOurs,
+    /// It is ours but would not die, or the port stayed busy.
+    Failed,
+}
+
+/// A process's working directory, read with `lsof`. `None` when it cannot be
+/// determined — which the caller must treat as "cannot verify", never as "yes".
+pub(crate) async fn process_cwd(pid: i32) -> Option<PathBuf> {
+    if cfg!(windows) || pid <= 0 {
+        return None;
+    }
+    let out = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::process::Command::new("lsof")
+            .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    // `-Fn` prints one field per line; the cwd path is the line starting with n.
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|l| l.strip_prefix('n').map(PathBuf::from))
+}
+
+/// pids listening on `port`.
+pub(crate) async fn pids_on_port(port: u16) -> Vec<i32> {
+    if cfg!(windows) || port == 0 {
+        return Vec::new();
+    }
+    let Ok(Ok(out)) = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::process::Command::new("lsof")
+            .args(["-ti", &format!("tcp:{port}"), "-sTCP:LISTEN"])
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse::<i32>().ok())
+        .collect()
+}
+
+/// Take back an app's port from a process this daemon does not track — but
+/// **only if that process is demonstrably the app's**.
+///
+/// This is the fix for a real state: the daemon used to die without stopping its
+/// children (SIGTERM was not handled), so every restart left the previous
+/// generation running. The next daemon found the ports healthy and adopted them,
+/// which meant apps ran for weeks as orphans, from stale install directories,
+/// with none of the sandbox settings applied.
+///
+/// The check is the process's working directory, because that is what the
+/// launcher sets and what every runtime inherits (`sh -c "npm start"` → node in
+/// the app dir). A process we cannot place inside the app's own directory is
+/// left alone: a port collision with the user's own dev server must not turn the
+/// daemon into something that kills it on every boot.
+pub(crate) async fn reclaim_app_port(app_id: &str, app_dir: &Path, port: u16) -> Reclaim {
+    let pids = pids_on_port(port).await;
+    if pids.is_empty() {
+        return Reclaim::Freed;
+    }
+    let want = app_dir.canonicalize().unwrap_or_else(|_| app_dir.to_path_buf());
+    let mut killed = false;
+    for pid in pids {
+        let cwd = process_cwd(pid).await;
+        let ours = cwd
+            .as_ref()
+            .map(|c| {
+                let c = c.canonicalize().unwrap_or_else(|_| c.clone());
+                c.starts_with(&want)
+            })
+            .unwrap_or(false);
+        if !ours {
+            tracing::warn!(
+                "[space-mcp] port {port} for '{app_id}' is held by pid {pid} (cwd={:?}), which is \
+                 not this app — leaving it alone and adopting instead",
+                cwd
+            );
+            return Reclaim::NotOurs;
+        }
+        #[cfg(unix)]
+        unsafe {
+            // The whole group: the listener is often a grandchild (npm → node).
+            let pgid = libc::getpgid(pid);
+            if pgid > 0 {
+                libc::kill(-pgid, libc::SIGTERM);
+            } else {
+                libc::kill(pid, libc::SIGTERM);
+            }
+        }
+        killed = true;
+        tracing::info!("[space-mcp] '{app_id}': reclaiming :{port} from orphan pid {pid}");
+    }
+    if !killed {
+        return Reclaim::NotOurs;
+    }
+    // Give it a moment, then insist.
+    for i in 0..20 {
+        if port_is_free(port) {
+            return Reclaim::Freed;
+        }
+        if i == 5 {
+            #[cfg(unix)]
+            for pid in pids_on_port(port).await {
+                unsafe {
+                    let pgid = libc::getpgid(pid);
+                    libc::kill(if pgid > 0 { -pgid } else { pid }, libc::SIGKILL);
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Reclaim::Failed
+}
+
 async fn kill_port_listeners(port: u16) {
     if port == 0 {
         return;
@@ -558,8 +878,17 @@ async fn kill_port_listeners(port: u16) {
 mod tests {
     use super::*;
 
+    /// Every test here that takes an ephemeral port shares this.
+    ///
+    /// `pick_free_port` binds, reads the number and releases — so two tests
+    /// running in parallel can be handed the *same* port, and then one of them
+    /// sees a socket it did not open. That is a genuine flake (caught in one run
+    /// out of ten), not a code bug, and serialising is what fixes it.
+    static PORT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[test]
     fn port_is_free_reflects_binding() {
+        let _guard = PORT_LOCK.blocking_lock();
         // A port we hold a listener on is not free; once released it is.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -577,6 +906,134 @@ mod tests {
         let static_app = serde_json::json!({"runtime": {"kind": "static"}});
         assert!(!is_server_runtime(&static_app));
         assert!(!is_server_runtime(&serde_json::json!({})));
+    }
+
+    /// A real listener holding a real port, with a working directory we choose —
+    /// the two facts `reclaim_app_port` decides on.
+    async fn spawn_listener(cwd: &Path, port: u16) -> tokio::process::Child {
+        let script = format!(
+            "import socket,time
+s=socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1',{port}))
+s.listen()
+time.sleep(60)"
+        );
+        let mut cmd = tokio::process::Command::new("python3");
+        cmd.arg("-c")
+            .arg(script)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        // Its own process group, exactly like a launched app — without this the
+        // group kill under test takes the test runner down with it, which is
+        // also the reason the daemon must never signal a group it did not create.
+        #[cfg(unix)]
+        cmd.process_group(0);
+        let child = cmd.spawn().expect("spawn a listener");
+        for _ in 0..40 {
+            if !port_is_free(port) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        child
+    }
+
+    fn a_free_port() -> u16 {
+        pick_free_port().expect("a free port")
+    }
+
+    #[tokio::test]
+    async fn a_process_is_only_killed_when_it_is_demonstrably_the_app() {
+        let _guard = PORT_LOCK.lock().await;
+        // The safety property: a port collision with something that is not this
+        // app — the user's own dev server — must not turn the daemon into
+        // something that kills it on every boot.
+        let app_dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let port = a_free_port();
+        let mut foreign = spawn_listener(elsewhere.path(), port).await;
+        if port_is_free(port) {
+            return; // python3 unavailable on this machine; nothing to assert
+        }
+
+        let outcome = reclaim_app_port("demo", app_dir.path(), port).await;
+        assert_eq!(outcome, Reclaim::NotOurs);
+        assert!(
+            matches!(foreign.try_wait(), Ok(None)),
+            "a process outside the app directory must survive"
+        );
+        let _ = foreign.kill().await;
+    }
+
+    #[tokio::test]
+    async fn an_orphan_of_this_app_is_killed_and_its_port_freed() {
+        let _guard = PORT_LOCK.lock().await;
+        // The state this exists to clean up: a previous daemon's child still
+        // holding the app's port days later.
+        let app_dir = tempfile::tempdir().unwrap();
+        let port = a_free_port();
+        let mut orphan = spawn_listener(app_dir.path(), port).await;
+        if port_is_free(port) {
+            return; // no python3 here
+        }
+
+        let outcome = reclaim_app_port("demo", app_dir.path(), port).await;
+        assert_eq!(outcome, Reclaim::Freed);
+        assert!(port_is_free(port), "the port must be usable again");
+        assert!(
+            !matches!(orphan.try_wait(), Ok(None)),
+            "the orphan must be gone, not merely signalled"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_free_port_needs_no_reclaiming() {
+        let _guard = PORT_LOCK.lock().await;
+        let app_dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            reclaim_app_port("demo", app_dir.path(), a_free_port()).await,
+            Reclaim::Freed
+        );
+    }
+
+    #[tokio::test]
+    async fn the_working_directory_of_a_live_process_is_readable() {
+        // `process_cwd` returning None must mean "cannot verify", so this pins
+        // the happy path it is judged against.
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 5")
+            .current_dir(dir.path())
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap() as i32;
+        let cwd = process_cwd(pid).await;
+        let _ = child.kill().await;
+        if let Some(cwd) = cwd {
+            let want = dir.path().canonicalize().unwrap();
+            assert_eq!(cwd.canonicalize().unwrap(), want);
+        }
+    }
+
+    #[test]
+    fn the_daemon_port_is_taken_from_the_url_the_app_is_given() {
+        // A sandboxed app gets exactly this one loopback port for the AI bridge,
+        // so reading the wrong number means either a broken bridge or an open
+        // door to some other local service.
+        assert_eq!(daemon_port("http://127.0.0.1:18788"), 18788);
+        assert_eq!(daemon_port("http://127.0.0.1:18788/"), 18788);
+        assert_eq!(daemon_port("http://localhost:9000/api"), 9000);
+        // No port in the URL: fall back to the documented default rather than
+        // guessing something reachable.
+        assert_eq!(daemon_port("http://127.0.0.1"), 18788);
+        assert_eq!(daemon_port(""), 18788);
     }
 }
 
@@ -610,6 +1067,22 @@ pub fn app_runtime_log_path(app_dir: &Path) -> PathBuf {
 
 fn health_url(port: u16, path: &str) -> String {
     format!("http://127.0.0.1:{port}{path}")
+}
+
+/// SenClaw's own UI port, read off the base URL the app is given. A sandboxed
+/// app that may use the AI bridge needs exactly this port on loopback and
+/// nothing else, so it is derived from the same string the app dials rather than
+/// re-read from the environment (where it could disagree).
+fn daemon_port(base_url: &str) -> u16 {
+    base_url
+        .rsplit_once(':')
+        .and_then(|(_, p)| {
+            p.trim_end_matches('/')
+                .split('/')
+                .next()
+                .and_then(|n| n.parse::<u16>().ok())
+        })
+        .unwrap_or(18788)
 }
 
 fn pick_free_port() -> Option<u16> {

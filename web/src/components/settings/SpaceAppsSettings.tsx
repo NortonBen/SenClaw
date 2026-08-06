@@ -15,10 +15,11 @@ import {
 } from 'antd';
 import {
   AppstoreOutlined, CloudDownloadOutlined, DeleteOutlined, InfoCircleOutlined,
-  LinkOutlined, SyncOutlined, UploadOutlined,
+  LinkOutlined, SafetyCertificateOutlined, SyncOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import { SpaceAppDetailModal, type DetailApp } from '../space/SpaceAppDetailModal';
 import ScanReportDialog, { readScanError, type ScanReport } from '../security/ScanReportDialog';
+import SpaceAppSandboxModal from './SpaceAppSandboxModal';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -55,6 +56,7 @@ export const SpaceAppsSettings: React.FC = () => {
   const [updates, setUpdates] = useState<Record<string, UpdateStatus>>({});
   const [checking, setChecking] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [sandboxApp, setSandboxApp] = useState<{ id: string; name: string } | null>(null);
   const [form] = Form.useForm();
 
   const loadApps = async () => {
@@ -301,6 +303,13 @@ export const SpaceAppsSettings: React.FC = () => {
                 >
                   Details & logs
                 </Button>
+                <Button
+                  size="small"
+                  icon={<SafetyCertificateOutlined />}
+                  onClick={() => setSandboxApp({ id: app.id, name: detail.name })}
+                >
+                  Sandbox
+                </Button>
               </Space>
             </Card>
           );
@@ -316,6 +325,13 @@ export const SpaceAppsSettings: React.FC = () => {
         app={detailApp}
         open={!!detailApp}
         onClose={() => setDetailApp(null)}
+      />
+
+      <SpaceAppSandboxModal
+        appId={sandboxApp?.id ?? null}
+        appName={sandboxApp?.name}
+        open={!!sandboxApp}
+        onClose={() => setSandboxApp(null)}
       />
 
       <ScanReportDialog

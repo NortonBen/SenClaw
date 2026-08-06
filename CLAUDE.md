@@ -174,6 +174,42 @@ Project-level [`.mcp.json`](.mcp.json) template (one entry per server needed):
 
 The `<domain>-server` subcommand list is in `src/main.rs` (e.g. `browser-server`, `memory-server`, `schedule-server`, ...). After editing `.mcp.json`, the user must restart Claude Code and approve the server in the prompt.
 
+## Per-app Space App sandbox
+
+Each Space App can be run inside the OS sandbox from Plugins → Space Apps → the
+**Sandbox** button (web + desktop): write-jail to its own folders, a read mode
+(`open` / `strict`), extra folders, and a network mode — everything / nothing /
+**only these sites**. Per-site egress cannot be an OS rule (Seatbelt accepts only
+`*` or `localhost` as a remote host), so it is an allowlisting proxy on loopback
+with the sandbox given no direct egress: a client that ignores `HTTP_PROXY`
+reaches nothing rather than everything. Config in
+[`src/sandbox/app_policy.rs`](src/sandbox/app_policy.rs), launch wrapping in
+[`src/sandbox/app_launch.rs`](src/sandbox/app_launch.rs), proxy in
+[`src/sandbox/proxy.rs`](src/sandbox/proxy.rs), REST at
+`/api/space/apps/:id/sandbox`. Enforcement differs by platform (macOS full, Linux
+folders only, Windows none) and the UI says so up front. Traps — `strict` breaks
+apps whose runtime lives under `$HOME` (nvm), `npm start` wants
+`registry.npmjs.org`, paths are never remapped — plus the measured before/after
+table: [docs/space-app-sandbox.md](docs/space-app-sandbox.md).
+
+## Space App runtime monitor
+
+Plugins → Space Apps → **Details & logs** carries a live panel for any
+`runtime.kind == "server"` app: running/answering state (a health check, not just
+"tracked"), pid, port, uptime, **launch count** (a number climbing on its own is
+the only visible signature of a crash loop), CPU/RAM by *process group* (`npm →
+node`), open sockets via `lsof`, the allowlist proxy's allowed/denied counters,
+and the cwd + start command + env needed to rerun the app by hand. One endpoint,
+`GET /api/space/apps/:id/runtime`
+([src/gateway/ui_server/space_runtime.rs](src/gateway/ui_server/space_runtime.rs)),
+best-effort everywhere — a missing `lsof` or a timed-out health check becomes a
+note in the payload, never a failed request. Plugins → Sandbox additionally
+carries the fleet view (`GET /api/space/apps/sandbox-overview`, one `ps` for the
+whole list), whose first column is *what the running process actually got* — the
+only place the "configured confined, running unconfined" gap is visible, since a
+profile is fixed at launch. Guide:
+[docs/space-app-monitor.md](docs/space-app-monitor.md).
+
 ## Space App network binding
 
 Space Apps under `apps/*` have **no authentication of their own**. Their REST API
@@ -211,3 +247,18 @@ Rules:
 
 [`tests/space_app_bind_loopback.rs`](tests/space_app_bind_loopback.rs) enforces all
 of the above on every `cargo test`.
+
+## Daemon network binding & API token
+
+The daemon's own surface (UI HTTP 18788 + WS gateway 18789) binds `127.0.0.1`
+by default via `SENCLAW_UI_BIND_HOST` — a knob deliberately **separate** from
+the Space-App `SENCLAW_BIND_HOST` (apps have no auth; the env would propagate
+to them). Binding the daemon to a non-loopback host auto-enables token auth
+(`src/gateway/ui_server/auth.rs`): every non-loopback peer must present the
+API token (`SENCLAW_API_TOKEN` env, else auto-generated `~/.senclaw/api_token`,
+0600) via `Authorization: Bearer`, `X-SenClaw-Token`, `?token=`, or the
+`senclaw_token` cookie minted by `POST /api/auth/login`. Loopback peers are
+always exempt — local desktop/apps need zero config. `/api/auth/status` and
+`/api/auth/login` are the only open API paths; CORS is loopback-origin-only
+(never reintroduce `CorsLayer::permissive()` — it leaked `/api/llm-config`
+keys to any website). Full guide: [docs/remote-access-security.md](docs/remote-access-security.md).

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/refresh_on_mount.dart';
@@ -11,6 +12,7 @@ import 'widgets_panel.dart'
         widgetCatalogProvider,
         flowDefaultsProvider,
         installedAppIdsProvider;
+import 'sandbox_panel.dart' show SandboxPanel;
 import '../kanban/kanban_templates_panel.dart' show KanbanTemplatesPanel;
 import '../settings/settings_screen.dart' show SpaceAppsSection;
 import '../cognitive/cognitive_screen.dart' show CognitiveScreen;
@@ -381,6 +383,7 @@ const _pluginsSections = [
   ('code', 'Code', Icons.code),
   ('apps', 'Space Apps', Icons.apps_outlined),
   ('widgets', 'Widget', Icons.widgets_outlined),
+  ('sandbox', 'Sandbox', Icons.science_outlined),
   ('kanban', 'Kanban', Icons.view_kanban_outlined),
   ('cowork', 'Cowork', Icons.groups_outlined),
   ('schedules', 'Schedules', Icons.schedule_outlined),
@@ -465,7 +468,7 @@ class PluginsScreen extends ConsumerWidget {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(AppTokens.s16,
                       AppTokens.s8, AppTokens.s16, AppTokens.s12),
-                  child: Text('Plugins',
+                  child: Text(context.tr('Plugins'),
                       style: TextStyle(
                           color: c.textPrimary,
                           fontSize: 16,
@@ -474,7 +477,7 @@ class PluginsScreen extends ConsumerWidget {
                 for (final (key, label, icon) in _pluginsSections)
                   _NavItem(
                     icon: icon,
-                    label: label,
+                    label: context.tr(label),
                     active: section == key,
                     onTap: () =>
                         ref.read(pluginsSectionProvider.notifier).state = key,
@@ -517,6 +520,7 @@ class PluginsScreen extends ConsumerWidget {
                   installedAppIdsProvider,
                 ],
                 child: const WidgetsManagePanel()),
+            'sandbox' => const SandboxPanel(key: ValueKey('sandbox')),
             'kanban' => const KanbanTemplatesPanel(),
             'cowork' => const CoworkPanel(),
             'schedules' => const SchedulesPanel(),
@@ -647,7 +651,7 @@ class _CodeTab extends StatelessWidget {
         Row(children: [
           Icon(Icons.code, color: c.accent, size: 22),
           const SizedBox(width: AppTokens.s8),
-          Text('Code executor',
+          Text(context.tr('Code executor'),
               style: TextStyle(
                   color: c.textPrimary,
                   fontSize: 18,
@@ -656,10 +660,10 @@ class _CodeTab extends StatelessWidget {
           _statusPill('JS · TS · BASH', _live),
         ]),
         const SizedBox(height: AppTokens.s4),
-        Text('Sandboxed JS/TS via senclaw-js, plus host-shell Bash',
+        Text(context.tr('Sandboxed JS/TS via senclaw-js, plus host-shell Bash'),
             style: TextStyle(color: c.textMuted, fontSize: 13)),
         const SizedBox(height: AppTokens.s20),
-        Text('LANGUAGES',
+        Text(context.tr('LANGUAGES'),
             style: TextStyle(
                 color: c.textMuted,
                 fontSize: 11,
@@ -693,7 +697,7 @@ class _CodeTab extends StatelessWidget {
                           fontSize: 12)),
                   if (on) ...[
                     const SizedBox(width: AppTokens.s6),
-                    Text(label,
+                    Text(context.tr(label),
                         style: TextStyle(
                             color: accent,
                             fontSize: 9,
@@ -705,14 +709,16 @@ class _CodeTab extends StatelessWidget {
             }),
         ]),
         const SizedBox(height: AppTokens.s4),
-        Text('JS & TS run sandboxed; Bash runs on the host (not isolated); the rest are planned.',
+        Text(
+            context.tr(
+                'JS & TS run sandboxed; Bash runs on the host (not isolated); the rest are planned.'),
             style: TextStyle(color: c.textMuted, fontSize: 11)),
         const SizedBox(height: AppTokens.s20),
         // MCP tools exposed by senclaw-js.
         Row(children: [
           Icon(Icons.dns_outlined, size: 14, color: c.accent),
           const SizedBox(width: AppTokens.s6),
-          Text('MCP TOOLS · senclaw-js',
+          Text(context.tr('MCP TOOLS · senclaw-js'),
               style: TextStyle(
                   color: c.textMuted,
                   fontSize: 11,
@@ -748,7 +754,7 @@ class _CodeTab extends StatelessWidget {
                                       fontSize: 12,
                                       fontFamily: AppTokens.fontMono)),
                               TextSpan(
-                                  text: ' — $desc',
+                                  text: ' — ${context.tr(desc)}',
                                   style: TextStyle(
                                       color: c.textMuted, fontSize: 12)),
                             ]),
@@ -760,7 +766,7 @@ class _CodeTab extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppTokens.s24),
-        Text('TRY IT',
+        Text(context.tr('TRY IT'),
             style: TextStyle(
                 color: c.textMuted,
                 fontSize: 11,
@@ -770,7 +776,7 @@ class _CodeTab extends StatelessWidget {
         const _JsRepl(),
         const SizedBox(height: AppTokens.s20),
         Row(children: [
-          Text('ARTIFACTS',
+          Text(context.tr('ARTIFACTS'),
               style: TextStyle(
                   color: c.textMuted,
                   fontSize: 11,
@@ -779,7 +785,7 @@ class _CodeTab extends StatelessWidget {
           const Spacer(),
           Consumer(builder: (context, ref, _) {
             return IconButton(
-              tooltip: 'Reload',
+              tooltip: context.tr('Reload'),
               icon: const Icon(Icons.refresh, size: 16),
               onPressed: () => ref.invalidate(codeArtifactsProvider),
             );
@@ -813,16 +819,16 @@ class _CodeTab extends StatelessWidget {
                     children: [
                       Row(children: [
                         Expanded(
-                          child: Text(title,
+                          child: Text(context.tr(title),
                               style: TextStyle(
                                   color: c.textPrimary,
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600)),
                         ),
-                        _statusPill(label, pillColor),
+                        _statusPill(context.tr(label), pillColor),
                       ]),
                       const SizedBox(height: AppTokens.s4),
-                      Text(desc,
+                      Text(context.tr(desc),
                           style: TextStyle(
                               color: c.textMuted, fontSize: 12, height: 1.4)),
                     ],
@@ -925,13 +931,14 @@ class _JsReplState extends ConsumerState<_JsRepl> {
       });
       ref.invalidate(codeArtifactsProvider);
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Saved "${name.trim()}"')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                context.trArgs('Saved "{name}"', {'name': name.trim()}))));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Save failed: {e}', {'e': e}))));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -943,19 +950,20 @@ class _JsReplState extends ConsumerState<_JsRepl> {
     return showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Save as artifact'),
+        title: Text(context.tr('Save as artifact')),
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(labelText: 'Name'),
+          decoration: InputDecoration(labelText: context.tr('Name')),
           onSubmitted: (v) => Navigator.pop(ctx, v),
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(context.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, ctrl.text),
-              child: const Text('Save')),
+              child: Text(context.tr('Save'))),
         ],
       ),
     );
@@ -983,7 +991,7 @@ class _JsReplState extends ConsumerState<_JsRepl> {
         Row(children: [
           Icon(Icons.play_circle_outline, size: 16, color: _CodeTab._live),
           const SizedBox(width: AppTokens.s6),
-          Text('Interactive REPL',
+          Text(context.tr('Interactive REPL'),
               style: TextStyle(
                   color: c.textPrimary,
                   fontSize: 14,
@@ -1017,9 +1025,10 @@ class _JsReplState extends ConsumerState<_JsRepl> {
               const SizedBox(width: AppTokens.s6),
               Expanded(
                 child: Text(
-                    'Bash runs in the brush sandbox (pure-Rust): no env, empty PATH '
-                    '(external programs blocked), temp dir, kill-enforced timeout. '
-                    'In-process isolation, not an OS jail.',
+                    context.tr(
+                        'Bash runs in the brush sandbox (pure-Rust): no env, empty PATH '
+                        '(external programs blocked), temp dir, kill-enforced timeout. '
+                        'In-process isolation, not an OS jail.'),
                     style: TextStyle(color: c.textSecondary, fontSize: 11)),
               ),
             ]),
@@ -1042,7 +1051,8 @@ class _JsReplState extends ConsumerState<_JsRepl> {
         Row(children: [
           Expanded(
             child: Text(
-                'Runs in the senclaw-js sandbox · 5s / 128 MiB limits',
+                context
+                    .tr('Runs in the senclaw-js sandbox · 5s / 128 MiB limits'),
                 style: TextStyle(color: c.textMuted, fontSize: 11)),
           ),
           OutlinedButton.icon(
@@ -1053,7 +1063,7 @@ class _JsReplState extends ConsumerState<_JsRepl> {
                     height: 14,
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.bookmark_add_outlined, size: 16),
-            label: const Text('Save'),
+            label: Text(context.tr('Save')),
           ),
           const SizedBox(width: AppTokens.s8),
           FilledButton.icon(
@@ -1064,7 +1074,7 @@ class _JsReplState extends ConsumerState<_JsRepl> {
                     height: 14,
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.play_arrow, size: 16),
-            label: const Text('Run'),
+            label: Text(context.tr('Run')),
           ),
         ]),
         if (_err != null) ...[
@@ -1110,14 +1120,14 @@ class _ReplOutput extends StatelessWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (logs.isNotEmpty) ...[
-          _label('CONSOLE', c),
+          _label(context.tr('CONSOLE'), c),
           for (final l in logs)
             SelectableText(l, style: mono.copyWith(color: c.textSecondary)),
           const SizedBox(height: AppTokens.s8),
         ],
         if (ok) ...[
           Row(children: [
-            _label('RESULT', c),
+            _label(context.tr('RESULT'), c),
             if (out['result_type'] != null) ...[
               const SizedBox(width: AppTokens.s6),
               Text('${out['result_type']}',
@@ -1127,8 +1137,8 @@ class _ReplOutput extends StatelessWidget {
           SelectableText('${out['result'] ?? 'undefined'}',
               style: mono.copyWith(color: const Color(0xFF10B981))),
         ] else ...[
-          _label(timedOut ? 'TIMED OUT' : 'ERROR', c),
-          SelectableText('${out['error'] ?? 'unknown error'}',
+          _label(context.tr(timedOut ? 'TIMED OUT' : 'ERROR'), c),
+          SelectableText('${out['error'] ?? context.tr('unknown error')}',
               style: mono.copyWith(color: AppTokens.danger)),
         ],
         if (out['duration_ms'] != null) ...[
@@ -1193,7 +1203,8 @@ class _ArtifactsSectionState extends ConsumerState<_ArtifactsSection> {
               border: Border.all(color: c.border),
             ),
             child: Text(
-                'No artifacts yet — write code above and tap “Save”.',
+                context
+                    .tr('No artifacts yet — write code above and tap “Save”.'),
                 style: TextStyle(color: c.textMuted, fontSize: 12)),
           );
         }
@@ -1223,14 +1234,14 @@ class _ArtifactsSectionState extends ConsumerState<_ArtifactsSection> {
                                 fontWeight: FontWeight.w600)),
                       ),
                       IconButton(
-                        tooltip: 'Load into editor',
+                        tooltip: context.tr('Load into editor'),
                         icon: const Icon(Icons.input, size: 16),
                         onPressed: () => ref
                             .read(codeLoadRequestProvider.notifier)
                             .state = a,
                       ),
                       IconButton(
-                        tooltip: 'Run',
+                        tooltip: context.tr('Run'),
                         icon: _busy == a.id
                             ? const SizedBox(
                                 width: 14,
@@ -1241,7 +1252,7 @@ class _ArtifactsSectionState extends ConsumerState<_ArtifactsSection> {
                         onPressed: _busy == null ? () => _run(a) : null,
                       ),
                       IconButton(
-                        tooltip: 'Delete',
+                        tooltip: context.tr('Delete'),
                         icon: const Icon(Icons.delete_outline,
                             size: 16, color: AppTokens.danger),
                         onPressed: () => _delete(a),
@@ -1346,17 +1357,18 @@ class _SubagentsTab extends ConsumerWidget {
               AppTokens.s16, AppTokens.s16, AppTokens.s16, 0),
           child: Row(
             children: [
-              Text('Subagents',
+              Text(context.tr('Subagents'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,
                       fontWeight: FontWeight.w700)),
               const SizedBox(width: AppTokens.s12),
               _TabSearchField(
-                  provider: _subagentsSearchProvider, hint: 'Tìm subagent…'),
+                  provider: _subagentsSearchProvider,
+                  hint: context.tr('Search subagents…')),
               const Spacer(),
               IconButton(
-                tooltip: 'Reload',
+                tooltip: context.tr('Reload'),
                 icon: const Icon(Icons.refresh, size: 18),
                 onPressed: () => ref.invalidate(subagentsProvider),
               ),
@@ -1366,7 +1378,7 @@ class _SubagentsTab extends ConsumerWidget {
                     context: context,
                     builder: (_) => const _SubagentEditor()),
                 icon: const Icon(Icons.add, size: 16),
-                label: const Text('New subagent'),
+                label: Text(context.tr('New subagent')),
               ),
             ],
           ),
@@ -1385,8 +1397,9 @@ class _SubagentsTab extends ConsumerWidget {
                   ? Center(
                       child: Text(
                           query.trim().isEmpty
-                              ? 'No subagents'
-                              : 'No subagents match "$query"',
+                              ? context.tr('No subagents')
+                              : context.trArgs('No subagents match "{q}"',
+                                  {'q': query}),
                           style: TextStyle(color: c.textMuted)))
                   : ListView.builder(
                       padding: const EdgeInsets.all(AppTokens.s16),
@@ -1428,25 +1441,31 @@ class _SubagentRow extends StatelessWidget {
                               fontWeight: FontWeight.w600)),
                     ),
                     const SizedBox(width: AppTokens.s8),
-                    _MiniTag('max ${s.maxConcurrent}', AppTokens.brandAlt),
+                    _MiniTag(
+                        context.trArgs('max {n}', {'n': s.maxConcurrent}),
+                        AppTokens.brandAlt),
                     if (s.model != null && s.model!.isNotEmpty) ...[
                       const SizedBox(width: 4),
                       _MiniTag(s.model!, AppTokens.brand),
                     ],
                     if (s.tools.isNotEmpty) ...[
                       const SizedBox(width: 4),
-                      _MiniTag('${s.tools.length} tools',
+                      _MiniTag(
+                          context.trArgs(
+                              '{n} tools', {'n': s.tools.length}),
                           const Color(0xFF8A8A99)),
                     ],
                     if (!s.enabled) ...[
                       const SizedBox(width: 4),
-                      _MiniTag('off', AppTokens.danger),
+                      _MiniTag(context.tr('off'), AppTokens.danger),
                     ],
                   ],
                 ),
                 const SizedBox(height: 2),
                 Text(
-                    s.description.isEmpty ? 'No description' : s.description,
+                    s.description.isEmpty
+                        ? context.tr('No description')
+                        : s.description,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: c.textMuted, fontSize: 12)),
@@ -1524,7 +1543,7 @@ You are a focused subagent. Describe the role and behavior here.
 
   Future<void> _save() async {
     if (_name.text.trim().isEmpty || _content.text.trim().isEmpty) {
-      setState(() => _error = 'Name and content are required');
+      setState(() => _error = context.tr('Name and content are required'));
       return;
     }
     setState(() {
@@ -1555,7 +1574,7 @@ You are a focused subagent. Describe the role and behavior here.
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('New subagent',
+              Text(context.tr('New subagent'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,
@@ -1563,8 +1582,8 @@ You are a focused subagent. Describe the role and behavior here.
               const SizedBox(height: AppTokens.s12),
               TextField(
                 controller: _name,
-                decoration: const InputDecoration(
-                    labelText: 'Name', hintText: 'my-agent'),
+                decoration: InputDecoration(
+                    labelText: context.tr('Name'), hintText: 'my-agent'),
               ),
               const SizedBox(height: AppTokens.s12),
               Expanded(
@@ -1575,8 +1594,9 @@ You are a focused subagent. Describe the role and behavior here.
                   textAlignVertical: TextAlignVertical.top,
                   style: TextStyle(
                       fontFamily: AppTokens.fontMono, fontSize: 12),
-                  decoration: const InputDecoration(
-                    labelText: 'Persona file (Markdown + frontmatter)',
+                  decoration: InputDecoration(
+                    labelText:
+                        context.tr('Persona file (Markdown + frontmatter)'),
                     alignLabelWithHint: true,
                   ),
                 ),
@@ -1593,7 +1613,7 @@ You are a focused subagent. Describe the role and behavior here.
                 children: [
                   TextButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton(
                     onPressed: _saving ? null : _save,
@@ -1602,7 +1622,7 @@ You are a focused subagent. Describe the role and behavior here.
                             width: 14,
                             height: 14,
                             child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text('Create'),
+                        : Text(context.tr('Create')),
                   ),
                 ],
               ),
@@ -1648,17 +1668,18 @@ class _SkillsTab extends ConsumerWidget {
               AppTokens.s16, AppTokens.s16, AppTokens.s16, 0),
           child: Row(
             children: [
-              Text('Skills',
+              Text(context.tr('Skills'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,
                       fontWeight: FontWeight.w700)),
               const SizedBox(width: AppTokens.s12),
               _TabSearchField(
-                  provider: _skillsSearchProvider, hint: 'Tìm skill…'),
+                  provider: _skillsSearchProvider,
+                  hint: context.tr('Search skills…')),
               const Spacer(),
               IconButton(
-                tooltip: 'Reload',
+                tooltip: context.tr('Reload'),
                 icon: const Icon(Icons.refresh, size: 18),
                 onPressed: () => ref.invalidate(skillsProvider),
               ),
@@ -1667,14 +1688,14 @@ class _SkillsTab extends ConsumerWidget {
                 onPressed: () => showDialog(
                     context: context, builder: (_) => const _SkillCreateDialog()),
                 icon: const Icon(Icons.add, size: 16),
-                label: const Text('Create skill'),
+                label: Text(context.tr('Create skill')),
               ),
               const SizedBox(width: AppTokens.s4),
               FilledButton.icon(
                 onPressed: () => showDialog(
                     context: context, builder: (_) => const _ClawHubDialog()),
                 icon: const Icon(Icons.cloud_download_outlined, size: 16),
-                label: const Text('Install from ClawHub'),
+                label: Text(context.tr('Install from ClawHub')),
               ),
             ],
           ),
@@ -1697,7 +1718,9 @@ class _SkillsTab extends ConsumerWidget {
         if (list.isEmpty) {
           return Center(
               child: Text(
-                  query.trim().isEmpty ? 'No skills' : 'No skills match "$query"',
+                  query.trim().isEmpty
+                      ? context.tr('No skills')
+                      : context.trArgs('No skills match "{q}"', {'q': query}),
                   style: TextStyle(color: c.textMuted)));
         }
         // Classify by source, ordered like the web SkillsPanel.
@@ -1759,7 +1782,7 @@ class _SourceBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppTokens.rSm),
         border: Border.all(color: info.color.withValues(alpha: 0.4)),
       ),
-      child: Text(info.label,
+      child: Text(context.tr(info.label),
           style: TextStyle(
               color: info.color, fontSize: 11, fontWeight: FontWeight.w600)),
     );
@@ -1800,8 +1823,8 @@ class _SkillRow extends StatelessWidget {
                           color: AppTokens.danger.withValues(alpha: 0.14),
                           borderRadius: BorderRadius.circular(AppTokens.rSm),
                         ),
-                        child: const Text('off',
-                            style: TextStyle(
+                        child: Text(context.tr('off'),
+                            style: const TextStyle(
                                 color: AppTokens.danger, fontSize: 11)),
                       ),
                     ],
@@ -1833,7 +1856,7 @@ class _SkillRow extends StatelessWidget {
           ),
           if (!s.builtin)
             IconButton(
-              tooltip: 'Uninstall',
+              tooltip: context.tr('Uninstall'),
               icon: const Icon(Icons.delete_outline,
                   size: 16, color: AppTokens.danger),
               onPressed: () async {
@@ -1898,7 +1921,7 @@ class _ReadmeDialog extends ConsumerWidget {
                 alignment: Alignment.centerRight,
                 child: TextButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Close')),
+                    child: Text(context.tr('Close'))),
               ),
             ],
           ),
@@ -1923,10 +1946,11 @@ class _McpTab extends ConsumerWidget {
           child: Row(
             children: [
               _TabSearchField(
-                  provider: _mcpSearchProvider, hint: 'Tìm server/tool…'),
+                  provider: _mcpSearchProvider,
+                  hint: context.tr('Search servers/tools…')),
               const Spacer(),
               IconButton(
-                tooltip: 'Reload',
+                tooltip: context.tr('Reload'),
                 icon: const Icon(Icons.refresh, size: 18),
                 onPressed: () => ref.invalidate(mcpServersProvider),
               ),
@@ -1935,7 +1959,7 @@ class _McpTab extends ConsumerWidget {
                 onPressed: () => showDialog(
                   context: context, builder: (_) => const _McpEditor()),
                 icon: const Icon(Icons.add, size: 16),
-                label: const Text('Add server'),
+                label: Text(context.tr('Add server')),
               ),
             ],
           ),
@@ -1959,8 +1983,9 @@ class _McpTab extends ConsumerWidget {
                 return Center(
                     child: Text(
                         query.trim().isEmpty
-                            ? 'No MCP servers'
-                            : 'No servers match "$query"',
+                            ? context.tr('No MCP servers')
+                            : context.trArgs(
+                                'No servers match "{q}"', {'q': query}),
                         style: TextStyle(color: c2.textMuted)));
               }
               return ListView.builder(
@@ -2079,7 +2104,7 @@ class _McpRowState extends ConsumerState<_McpRow> {
               ),
               if (server.builtin) ...[
                 const SizedBox(width: AppTokens.s8),
-                _badge(c, 'built-in'),
+                _badge(c, context.tr('built-in')),
               ],
               if (server.fromSpaceApp) ...[
                 const SizedBox(width: AppTokens.s8),
@@ -2098,39 +2123,40 @@ class _McpRowState extends ConsumerState<_McpRow> {
               crossAxisAlignment: WrapCrossAlignment.center,
               spacing: AppTokens.s4,
               children: [
-                Text('${server.tools.length} tools · ',
+                Text(
+                    '${context.trArgs('{n} tools', {'n': server.tools.length})} · ',
                     style: TextStyle(color: c.textMuted, fontSize: 12)),
                 if (server.tools.isNotEmpty)
                   allAuto
                       ? TextButton(
                           onPressed: () => _revokeAll(ref),
-                          child: const Text('Revoke auto-accept'))
+                          child: Text(context.tr('Revoke auto-accept')))
                       : TextButton(
                           onPressed: () => _allowAll(ref),
-                          child: const Text('Auto-accept all')),
+                          child: Text(context.tr('Auto-accept all'))),
                 if (!server.builtin) ...[
                   TextButton(
                       onPressed: () => _act(ref, 'connect'),
-                      child: const Text('Connect')),
+                      child: Text(context.tr('Connect'))),
                   TextButton(
                       onPressed: () => _act(ref, 'disconnect'),
-                      child: const Text('Disconnect')),
+                      child: Text(context.tr('Disconnect'))),
                   TextButton(
                       onPressed: () => _act(ref, 'test'),
-                      child: const Text('Test')),
+                      child: Text(context.tr('Test'))),
                   // Space-App servers are owned by their app: editing/deleting
                   // them here would desync the app's manifest, so only the
                   // enable/disable toggle + operational actions are offered.
                   if (!server.fromSpaceApp) ...[
                     IconButton(
-                      tooltip: 'Edit',
+                      tooltip: context.tr('Edit'),
                       icon: const Icon(Icons.edit_outlined, size: 16),
                       onPressed: () => showDialog(
                           context: context,
                           builder: (_) => _McpEditor(existing: server)),
                     ),
                     IconButton(
-                      tooltip: 'Delete',
+                      tooltip: context.tr('Delete'),
                       icon: const Icon(Icons.delete_outline,
                           size: 16, color: AppTokens.danger),
                       onPressed: () async {
@@ -2171,7 +2197,7 @@ class _McpRowState extends ConsumerState<_McpRow> {
                     ),
                     // Per-tool auto-accept toggle (disabled when wildcard on).
                     Tooltip(
-                      message: 'Auto-accept this tool',
+                      message: context.tr('Auto-accept this tool'),
                       child: Transform.scale(
                         scale: 0.7,
                         child: Switch(
@@ -2271,7 +2297,7 @@ class _SkillCreateDialogState extends ConsumerState<_SkillCreateDialog> {
                 children: [
                   Icon(Icons.bolt_outlined, color: c.accent, size: 20),
                   const SizedBox(width: AppTokens.s8),
-                  Text('Create skill',
+                  Text(context.tr('Create skill'),
                       style: TextStyle(
                           color: c.textPrimary,
                           fontSize: 18,
@@ -2284,10 +2310,10 @@ class _SkillCreateDialogState extends ConsumerState<_SkillCreateDialog> {
                 autofocus: true,
                 onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(
-                  labelText: 'Name (slug)',
-                  hintText: 'e.g. my-skill',
-                  helperText: 'Letters, digits, - and _ only',
-                  errorText: nameErr ? 'Invalid slug' : null,
+                  labelText: context.tr('Name (slug)'),
+                  hintText: context.tr('e.g. my-skill'),
+                  helperText: context.tr('Letters, digits, - and _ only'),
+                  errorText: nameErr ? context.tr('Invalid slug') : null,
                   border: const OutlineInputBorder(),
                   isDense: true,
                 ),
@@ -2297,10 +2323,10 @@ class _SkillCreateDialogState extends ConsumerState<_SkillCreateDialog> {
               TextField(
                 controller: _description,
                 onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  hintText: 'When should the agent use this skill?',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: context.tr('Description'),
+                  hintText: context.tr('When should the agent use this skill?'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
               ),
@@ -2309,10 +2335,11 @@ class _SkillCreateDialogState extends ConsumerState<_SkillCreateDialog> {
                 controller: _content,
                 minLines: 5,
                 maxLines: 12,
-                decoration: const InputDecoration(
-                  labelText: 'Instructions (markdown)',
-                  hintText: 'Leave empty to scaffold a starter template…',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: context.tr('Instructions (markdown)'),
+                  hintText:
+                      context.tr('Leave empty to scaffold a starter template…'),
+                  border: const OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
                 style: const TextStyle(
@@ -2332,7 +2359,7 @@ class _SkillCreateDialogState extends ConsumerState<_SkillCreateDialog> {
                       onPressed: _saving
                           ? null
                           : () => Navigator.of(context).pop(),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton.icon(
                     onPressed: _validName && !_saving ? _save : null,
@@ -2342,7 +2369,7 @@ class _SkillCreateDialogState extends ConsumerState<_SkillCreateDialog> {
                             height: 14,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.add, size: 16),
-                    label: const Text('Create'),
+                    label: Text(context.tr('Create')),
                   ),
                 ],
               ),
@@ -2465,7 +2492,9 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
                 children: [
                   Icon(Icons.dns_outlined, color: c.accent, size: 20),
                   const SizedBox(width: AppTokens.s8),
-                  Text(_isEdit ? 'Edit MCP server' : 'Add MCP server',
+                  Text(
+                      context
+                          .tr(_isEdit ? 'Edit MCP server' : 'Add MCP server'),
                       style: TextStyle(
                           color: c.textPrimary,
                           fontSize: 18,
@@ -2477,10 +2506,10 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
                 controller: _name,
                 enabled: !_isEdit, // name is the key — fixed when editing
                 onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
-                  labelText: 'Server name',
-                  hintText: 'e.g. filesystem-server',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: context.tr('Server name'),
+                  hintText: context.tr('e.g. filesystem-server'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
               ),
@@ -2488,7 +2517,7 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
               // Transport segmented.
               Row(
                 children: [
-                  Text('Transport',
+                  Text(context.tr('Transport'),
                       style: TextStyle(color: c.textSecondary, fontSize: 13)),
                   const SizedBox(width: AppTokens.s12),
                   Expanded(
@@ -2510,10 +2539,10 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
               const SizedBox(height: AppTokens.s12),
               TextField(
                 controller: _description,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  hintText: 'Optional',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: context.tr('Description'),
+                  hintText: context.tr('Optional'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
               ),
@@ -2523,12 +2552,15 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       initialValue: _scope,
-                      decoration: const InputDecoration(
-                          labelText: 'Scope', border: OutlineInputBorder()),
-                      items: const [
-                        DropdownMenuItem(value: 'user', child: Text('User')),
+                      decoration: InputDecoration(
+                          labelText: context.tr('Scope'),
+                          border: const OutlineInputBorder()),
+                      items: [
                         DropdownMenuItem(
-                            value: 'project', child: Text('Project')),
+                            value: 'user', child: Text(context.tr('User'))),
+                        DropdownMenuItem(
+                            value: 'project',
+                            child: Text(context.tr('Project'))),
                       ],
                       onChanged: (v) => setState(() => _scope = v ?? 'user'),
                     ),
@@ -2536,7 +2568,7 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
                   const SizedBox(width: AppTokens.s12),
                   Row(
                     children: [
-                      Text('Enabled',
+                      Text(context.tr('Enabled'),
                           style:
                               TextStyle(color: c.textSecondary, fontSize: 13)),
                       Switch(
@@ -2552,10 +2584,10 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
                 TextField(
                   controller: _command,
                   onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: 'Command',
+                  decoration: InputDecoration(
+                    labelText: context.tr('Command'),
                     hintText: 'npx -y @modelcontextprotocol/server-filesystem',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
                     isDense: true,
                   ),
                   style: const TextStyle(fontFamily: AppTokens.fontMono),
@@ -2563,10 +2595,10 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
                 const SizedBox(height: AppTokens.s12),
                 TextField(
                   controller: _args,
-                  decoration: const InputDecoration(
-                    labelText: 'Arguments (space-separated)',
+                  decoration: InputDecoration(
+                    labelText: context.tr('Arguments (space-separated)'),
                     hintText: '/path/to/allowed',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
                     isDense: true,
                   ),
                   style: const TextStyle(fontFamily: AppTokens.fontMono),
@@ -2576,10 +2608,10 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
                   controller: _env,
                   minLines: 2,
                   maxLines: 4,
-                  decoration: const InputDecoration(
-                    labelText: 'Environment (KEY=VALUE per line)',
+                  decoration: InputDecoration(
+                    labelText: context.tr('Environment (KEY=VALUE per line)'),
                     hintText: 'API_KEY=xxx',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
                     alignLabelWithHint: true,
                   ),
                   style: const TextStyle(
@@ -2602,10 +2634,10 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
                   controller: _headers,
                   minLines: 2,
                   maxLines: 4,
-                  decoration: const InputDecoration(
-                    labelText: 'Headers (Name: Value per line)',
+                  decoration: InputDecoration(
+                    labelText: context.tr('Headers (Name: Value per line)'),
                     hintText: 'Authorization: Bearer xxx',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
                     alignLabelWithHint: true,
                   ),
                   style: const TextStyle(
@@ -2618,11 +2650,11 @@ class _McpEditorState extends ConsumerState<_McpEditor> {
                 children: [
                   TextButton(
                       onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton(
                     onPressed: _canSave ? _save : null,
-                    child: Text(_isEdit ? 'Save' : 'Add'),
+                    child: Text(context.tr(_isEdit ? 'Save' : 'Add')),
                   ),
                 ],
               ),
@@ -2653,7 +2685,7 @@ class _AliasTab extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               IconButton(
-                tooltip: 'Reload',
+                tooltip: context.tr('Reload'),
                 icon: const Icon(Icons.refresh, size: 18),
                 onPressed: () {
                   ref.invalidate(toolAliasesProvider);
@@ -2665,7 +2697,7 @@ class _AliasTab extends ConsumerWidget {
                 onPressed: () => showDialog(
                     context: context, builder: (_) => const _AliasEditor()),
                 icon: const Icon(Icons.add, size: 16),
-                label: const Text('Add alias'),
+                label: Text(context.tr('Add alias')),
               ),
             ],
           ),
@@ -2685,7 +2717,7 @@ class _AliasTab extends ConsumerWidget {
                         children: [
                           Icon(Icons.sell_outlined, size: 16, color: c.accent),
                           const SizedBox(width: AppTokens.s8),
-                          Text('Rename or override MCP tools',
+                          Text(context.tr('Rename or override MCP tools'),
                               style: TextStyle(
                                   color: c.textPrimary,
                                   fontWeight: FontWeight.w600)),
@@ -2693,12 +2725,13 @@ class _AliasTab extends ConsumerWidget {
                       ),
                       const SizedBox(height: AppTokens.s6),
                       Text(
-                        '• New name: an alias that doesn\'t exist yet — the target tool '
-                        'shows up under the new name (the original name still resolves).\n'
-                        '• Override: an alias equal to an existing tool name — every call '
-                        'to that name executes the target tool instead.\n'
-                        '• Space-App aliases (mcp.toolAliases in senclaw-manifest.json) are '
-                        'imported disabled — enable them here before they take effect.',
+                        context.tr(
+                            '• New name: an alias that doesn\'t exist yet — the target tool '
+                            'shows up under the new name (the original name still resolves).\n'
+                            '• Override: an alias equal to an existing tool name — every call '
+                            'to that name executes the target tool instead.\n'
+                            '• Space-App aliases (mcp.toolAliases in senclaw-manifest.json) are '
+                            'imported disabled — enable them here before they take effect.'),
                         style: TextStyle(
                             color: c.textMuted, fontSize: 12, height: 1.5),
                       ),
@@ -2709,7 +2742,9 @@ class _AliasTab extends ConsumerWidget {
                   Padding(
                     padding: const EdgeInsets.only(top: AppTokens.s24),
                     child: Center(
-                      child: Text('No aliases yet — add one to rename or override a tool',
+                      child: Text(
+                          context.tr(
+                              'No aliases yet — add one to rename or override a tool'),
                           style: TextStyle(color: c.textMuted)),
                     ),
                   ),
@@ -2746,18 +2781,19 @@ class _AliasRow extends ConsumerWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Delete alias "${alias.alias}"?'),
+        title: Text(
+            context.trArgs('Delete alias "{alias}"?', {'alias': alias.alias})),
         content: alias.isUser
             ? null
-            : const Text(
-                'App-declared aliases are re-imported (disabled) the next time the app starts.'),
+            : Text(context.tr(
+                'App-declared aliases are re-imported (disabled) the next time the app starts.')),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(context.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Delete')),
+              child: Text(context.tr('Delete'))),
         ],
       ),
     );
@@ -2800,11 +2836,13 @@ class _AliasRow extends ConsumerWidget {
                               fontFamily: AppTokens.fontMono)),
                     ),
                     const SizedBox(width: AppTokens.s8),
-                    _MiniTag(isOverride ? 'override' : 'new name',
+                    _MiniTag(context.tr(isOverride ? 'override' : 'new name'),
                         isOverride ? AppTokens.warning : AppTokens.brand),
                     const SizedBox(width: AppTokens.s6),
                     _MiniTag(
-                        alias.isUser ? 'user' : 'app: ${alias.appId}',
+                        alias.isUser
+                            ? context.tr('user')
+                            : 'app: ${alias.appId}',
                         alias.isUser ? AppTokens.cyan : AppTokens.brandAlt),
                   ],
                 ),
@@ -2827,21 +2865,21 @@ class _AliasRow extends ConsumerWidget {
           // the enable toggle (the approval gate) + delete are offered.
           if (alias.isUser)
             IconButton(
-              tooltip: 'Edit',
+              tooltip: context.tr('Edit'),
               icon: const Icon(Icons.edit_outlined, size: 16),
               onPressed: () => showDialog(
                   context: context,
                   builder: (_) => _AliasEditor(existing: alias)),
             ),
           IconButton(
-            tooltip: 'Delete',
+            tooltip: context.tr('Delete'),
             icon: const Icon(Icons.delete_outline,
                 size: 16, color: AppTokens.danger),
             onPressed: () => _delete(ref, context),
           ),
           const SizedBox(width: AppTokens.s4),
           Tooltip(
-            message: alias.enabled ? 'Disable' : 'Enable',
+            message: context.tr(alias.enabled ? 'Disable' : 'Enable'),
             child: Switch(
               value: alias.enabled,
               onChanged: (v) => _setEnabled(ref, context, v),
@@ -3006,9 +3044,9 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
     Color aliasHelperColor = c.textMuted;
     if (!_isEdit && known != null && aliasText.isNotEmpty) {
       final overrides = _mcpToolExists(known, aliasText);
-      aliasHelper = overrides
+      aliasHelper = context.tr(overrides
           ? 'Overrides an existing tool — every call to this name will run the target instead.'
-          : 'New name — the target tool will show up under this name.';
+          : 'New name — the target tool will show up under this name.');
       if (overrides) aliasHelperColor = AppTokens.warning;
     }
 
@@ -3017,14 +3055,14 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
     Widget? targetSuffix;
     if (known != null && targetText.startsWith('mcp__')) {
       if (_mcpToolExists(known, targetText)) {
-        targetHelper = 'Tool exists on a connected MCP server.';
+        targetHelper = context.tr('Tool exists on a connected MCP server.');
         targetHelperColor = AppTokens.success;
         targetSuffix = const Icon(Icons.check_circle_outline,
             size: 18, color: AppTokens.success);
       } else {
-        targetHelper =
+        targetHelper = context.tr(
             'Not found on any connected MCP server — check the name or start '
-            'its server. You can still save.';
+            'its server. You can still save.');
         targetHelperColor = AppTokens.warning;
         targetSuffix = const Icon(Icons.warning_amber_rounded,
             size: 18, color: AppTokens.warning);
@@ -3049,7 +3087,7 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
                 children: [
                   Icon(Icons.sell_outlined, color: c.accent, size: 20),
                   const SizedBox(width: AppTokens.s8),
-                  Text(_isEdit ? 'Edit alias' : 'Add alias',
+                  Text(context.tr(_isEdit ? 'Edit alias' : 'Add alias'),
                       style: TextStyle(
                           color: c.textPrimary,
                           fontSize: 18,
@@ -3058,8 +3096,9 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
               ),
               const SizedBox(height: AppTokens.s8),
               Text(
-                'Maps the name agents call to the tool that actually runs. '
-                'Use an existing tool name as the alias to override that tool.',
+                context.tr(
+                    'Maps the name agents call to the tool that actually runs. '
+                    'Use an existing tool name as the alias to override that tool.'),
                 style: TextStyle(color: c.textMuted, fontSize: 12),
               ),
               const SizedBox(height: AppTokens.s16),
@@ -3069,7 +3108,7 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
                 enabled: !_isEdit, // alias is the key — fixed when editing
                 onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(
-                  labelText: 'Alias (name agents call)',
+                  labelText: context.tr('Alias (name agents call)'),
                   hintText: 'e.g. mcp__browser__navigate',
                   border: const OutlineInputBorder(),
                   isDense: true,
@@ -3087,7 +3126,7 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
                 focusNode: _targetFocus,
                 onChanged: (_) => setState(() {}),
                 decoration: InputDecoration(
-                  labelText: 'Target tool (actually executes)',
+                  labelText: context.tr('Target tool (actually executes)'),
                   hintText: 'e.g. mcp__senclaw-browser__browser_navigate',
                   border: const OutlineInputBorder(),
                   isDense: true,
@@ -3103,10 +3142,11 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
               const SizedBox(height: AppTokens.s12),
               TextField(
                 controller: _description,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  hintText: 'Optional — shown instead of the target\'s description on rename',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: context.tr('Description'),
+                  hintText: context.tr(
+                      'Optional — shown instead of the target\'s description on rename'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
               ),
@@ -3122,11 +3162,11 @@ class _AliasEditorState extends ConsumerState<_AliasEditor> {
                 children: [
                   TextButton(
                       onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton(
                     onPressed: _canSave && !_saving ? _save : null,
-                    child: Text(_isEdit ? 'Save' : 'Add'),
+                    child: Text(context.tr(_isEdit ? 'Save' : 'Add')),
                   ),
                 ],
               ),
@@ -3216,7 +3256,8 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
                     decoration: InputDecoration(
                       isDense: true,
                       prefixIcon: const Icon(Icons.search, size: 18),
-                      hintText: 'Search skills, subagents, MCP servers…',
+                      hintText:
+                          context.tr('Search skills, subagents, MCP servers…'),
                       hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
                       contentPadding:
                           const EdgeInsets.symmetric(vertical: AppTokens.s8),
@@ -3230,13 +3271,14 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
               OutlinedButton.icon(
                 onPressed: () => _showSourcesDialog(context),
                 icon: const Icon(Icons.settings_outlined, size: 16),
-                label: Text('Sources ($sourceCount)'),
+                label: Text(
+                    context.trArgs('Sources ({n})', {'n': sourceCount})),
               ),
               const SizedBox(width: AppTokens.s8),
               FilledButton.icon(
                 onPressed: () => _addSource(context, ref),
                 icon: const Icon(Icons.add, size: 16),
-                label: const Text('Add source'),
+                label: Text(context.tr('Add source')),
               ),
             ],
           ),
@@ -3252,8 +3294,8 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
                   children: [
                     for (final (id, label) in _kinds)
                       ChoiceChip(
-                        label:
-                            Text(label, style: const TextStyle(fontSize: 12)),
+                        label: Text(context.tr(label),
+                            style: const TextStyle(fontSize: 12)),
                         selected: _kind == id,
                         showCheckmark: false,
                         visualDensity: VisualDensity.compact,
@@ -3277,7 +3319,9 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
             data: (all) {
               if (sourceCount == 0) {
                 return Center(
-                    child: Text('No marketplace sources — add one to browse',
+                    child: Text(
+                        context
+                            .tr('No marketplace sources — add one to browse'),
                         style: TextStyle(color: c.textMuted)));
               }
               final list = all.where((e) => _matches(e.$2)).toList()
@@ -3289,16 +3333,16 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                          all.isEmpty
+                          context.tr(all.isEmpty
                               ? 'Catalog is empty'
-                              : 'Nothing matches your filter',
+                              : 'Nothing matches your filter'),
                           style: TextStyle(color: c.textMuted)),
                       if (all.isEmpty) ...[
                         const SizedBox(height: AppTokens.s8),
                         TextButton.icon(
                           onPressed: () => _syncAll(),
                           icon: const Icon(Icons.sync, size: 16),
-                          label: const Text('Sync all sources'),
+                          label: Text(context.tr('Sync all sources')),
                         ),
                       ],
                     ],
@@ -3331,7 +3375,7 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           IconButton(
-                            tooltip: 'Previous page',
+                            tooltip: context.tr('Previous page'),
                             iconSize: 18,
                             icon: const Icon(Icons.chevron_left),
                             onPressed: page > 0
@@ -3339,11 +3383,19 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
                                 : null,
                           ),
                           Text(
-                              '${start + 1}–${start + pageItems.length} of ${list.length}   ·   page ${page + 1}/$pageCount',
+                              context.trArgs(
+                                  '{from}–{to} of {total}   ·   page {page}/{pages}',
+                                  {
+                                    'from': start + 1,
+                                    'to': start + pageItems.length,
+                                    'total': list.length,
+                                    'page': page + 1,
+                                    'pages': pageCount,
+                                  }),
                               style: TextStyle(
                                   color: c.textSecondary, fontSize: 12)),
                           IconButton(
-                            tooltip: 'Next page',
+                            tooltip: context.tr('Next page'),
                             iconSize: 18,
                             icon: const Icon(Icons.chevron_right),
                             onPressed: page < pageCount - 1
@@ -3383,15 +3435,15 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
           children: [
             Icon(Icons.person_outline, size: 15, color: c.textMuted),
             const SizedBox(width: AppTokens.s4),
-            Text('Author',
+            Text(context.tr('Author'),
                 style: TextStyle(color: c.textMuted, fontSize: 12)),
           ],
         ),
         style: TextStyle(color: c.textPrimary, fontSize: 12),
         isDense: true,
         items: [
-          const DropdownMenuItem<String?>(
-              value: null, child: Text('All authors')),
+          DropdownMenuItem<String?>(
+              value: null, child: Text(context.tr('All authors'))),
           for (final a in authors)
             DropdownMenuItem<String?>(value: a, child: Text(a)),
         ],
@@ -3428,11 +3480,11 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
         backgroundColor: dctx.colors.surface,
         title: Row(
           children: [
-            const Expanded(child: Text('Marketplace sources')),
+            Expanded(child: Text(dctx.tr('Marketplace sources'))),
             TextButton.icon(
               onPressed: () => _addSource(dctx, ref),
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add'),
+              label: Text(dctx.tr('Add')),
             ),
           ],
         ),
@@ -3445,7 +3497,7 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
                   const Center(child: CircularProgressIndicator()),
               error: (e, _) => Text('$e'),
               data: (list) => list.isEmpty
-                  ? Text('No sources yet',
+                  ? Text(dctx.tr('No sources yet'),
                       style: TextStyle(color: dctx.colors.textMuted))
                   : ListView(
                       shrinkWrap: true,
@@ -3459,7 +3511,7 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
         actions: [
           TextButton(
               onPressed: () => Navigator.of(dctx).pop(),
-              child: const Text('Close')),
+              child: Text(dctx.tr('Close'))),
         ],
       ),
     );
@@ -3473,20 +3525,23 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
       builder: (dctx) => StatefulBuilder(
         builder: (dctx, setLocal) => AlertDialog(
           backgroundColor: dctx.colors.surface,
-          title: const Text('Add marketplace source'),
+          title: Text(dctx.tr('Add marketplace source')),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               DropdownButtonFormField<String>(
                 initialValue: type,
-                decoration: const InputDecoration(labelText: 'Type'),
-                items: const [
+                decoration: InputDecoration(labelText: dctx.tr('Type')),
+                items: [
                   DropdownMenuItem(
-                      value: 'hub', child: Text('Hub store (marketplace.json)')),
-                  DropdownMenuItem(value: 'git', child: Text('Git repository')),
+                      value: 'hub',
+                      child: Text(dctx.tr('Hub store (marketplace.json)'))),
                   DropdownMenuItem(
-                      value: 'local', child: Text('Local directory')),
+                      value: 'git', child: Text(dctx.tr('Git repository'))),
+                  DropdownMenuItem(
+                      value: 'local',
+                      child: Text(dctx.tr('Local directory'))),
                 ],
                 onChanged: (v) => setLocal(() => type = v ?? 'hub'),
               ),
@@ -3495,11 +3550,11 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
                 controller: ctrl,
                 autofocus: true,
                 decoration: InputDecoration(
-                  labelText: switch (type) {
+                  labelText: dctx.tr(switch (type) {
                     'local' => 'Directory path',
                     'git' => 'Git URL',
                     _ => 'Hub URL',
-                  },
+                  }),
                   hintText: switch (type) {
                     'local' => '/path/to/plugins',
                     'git' => 'https://github.com/user/repo',
@@ -3512,10 +3567,10 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
           actions: [
             TextButton(
                 onPressed: () => Navigator.of(dctx).pop(false),
-                child: const Text('Cancel')),
+                child: Text(dctx.tr('Cancel'))),
             FilledButton(
                 onPressed: () => Navigator.of(dctx).pop(true),
-                child: const Text('Add')),
+                child: Text(dctx.tr('Add'))),
           ],
         ),
       ),
@@ -3569,7 +3624,7 @@ class _HooksTab extends ConsumerWidget {
                 await _save(ref, hooks);
               },
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add hook'),
+              label: Text(context.tr('Add hook')),
             ),
           ),
         ),
@@ -3582,7 +3637,7 @@ class _HooksTab extends ConsumerWidget {
                   _hookEvents.where((e) => (hooks[e] as List?)?.isNotEmpty ?? false);
               if (events.isEmpty) {
                 return Center(
-                    child: Text('No hooks configured',
+                    child: Text(context.tr('No hooks configured'),
                         style: TextStyle(color: c.textMuted)));
               }
               return ListView(
@@ -3655,7 +3710,7 @@ class _HooksTab extends ConsumerWidget {
             ),
           ),
           IconButton(
-            tooltip: 'Edit',
+            tooltip: context.tr('Edit'),
             icon: const Icon(Icons.edit_outlined, size: 16),
             onPressed: () async {
               final firstHook =
@@ -3691,7 +3746,7 @@ class _HooksTab extends ConsumerWidget {
             },
           ),
           IconButton(
-            tooltip: 'Remove',
+            tooltip: context.tr('Remove'),
             icon: const Icon(Icons.delete_outline,
                 size: 16, color: AppTokens.danger),
             onPressed: () async {
@@ -3810,7 +3865,7 @@ class _HookEditorState extends State<_HookEditor> {
                 children: [
                   Icon(Icons.webhook_outlined, color: c.accent, size: 20),
                   const SizedBox(width: AppTokens.s8),
-                  Text(_editing ? 'Edit hook' : 'Add hook',
+                  Text(context.tr(_editing ? 'Edit hook' : 'Add hook'),
                       style: TextStyle(
                           color: c.textPrimary,
                           fontSize: 18,
@@ -3822,8 +3877,9 @@ class _HookEditorState extends State<_HookEditor> {
               DropdownButtonFormField<String>(
                 initialValue: _event,
                 isExpanded: true,
-                decoration: const InputDecoration(
-                    labelText: 'Event', border: OutlineInputBorder()),
+                decoration: InputDecoration(
+                    labelText: context.tr('Event'),
+                    border: const OutlineInputBorder()),
                 items: [
                   for (final (name, color, _) in _allHookEvents)
                     DropdownMenuItem(
@@ -3847,29 +3903,30 @@ class _HookEditorState extends State<_HookEditor> {
               if (evDesc.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 4, left: 4),
-                  child: Text(evDesc,
+                  child: Text(context.tr(evDesc),
                       style: TextStyle(color: c.textMuted, fontSize: 12)),
                 ),
               const SizedBox(height: AppTokens.s12),
               // Type segmented (command | prompt).
               Row(
                 children: [
-                  Text('Type',
+                  Text(context.tr('Type'),
                       style: TextStyle(color: c.textSecondary, fontSize: 13)),
                   const SizedBox(width: AppTokens.s12),
                   Expanded(
                     child: SegmentedButton<String>(
                       style: const ButtonStyle(
                           visualDensity: VisualDensity.compact),
-                      segments: const [
+                      segments: [
                         ButtonSegment(
                             value: 'command',
-                            icon: Icon(Icons.terminal, size: 14),
-                            label: Text('Command')),
+                            icon: const Icon(Icons.terminal, size: 14),
+                            label: Text(context.tr('Command'))),
                         ButtonSegment(
                             value: 'prompt',
-                            icon: Icon(Icons.chat_bubble_outline, size: 14),
-                            label: Text('Prompt')),
+                            icon:
+                                const Icon(Icons.chat_bubble_outline, size: 14),
+                            label: Text(context.tr('Prompt'))),
                       ],
                       selected: {_type},
                       onSelectionChanged: (s) =>
@@ -3881,10 +3938,10 @@ class _HookEditorState extends State<_HookEditor> {
               const SizedBox(height: AppTokens.s12),
               TextField(
                 controller: _matcher,
-                decoration: const InputDecoration(
-                  labelText: 'Matcher',
-                  hintText: 'e.g. Bash — empty = all tools',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: context.tr('Matcher'),
+                  hintText: context.tr('e.g. Bash — empty = all tools'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
                 style: const TextStyle(fontFamily: AppTokens.fontMono),
@@ -3895,10 +3952,10 @@ class _HookEditorState extends State<_HookEditor> {
                   controller: _command,
                   autofocus: true,
                   onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: 'Command',
+                  decoration: InputDecoration(
+                    labelText: context.tr('Command'),
                     hintText: 'e.g. echo done',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
                     isDense: true,
                   ),
                   style: const TextStyle(fontFamily: AppTokens.fontMono),
@@ -3910,10 +3967,11 @@ class _HookEditorState extends State<_HookEditor> {
                   minLines: 2,
                   maxLines: 4,
                   onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: 'Prompt',
-                    hintText: 'e.g. Review this tool call for security issues',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: context.tr('Prompt'),
+                    hintText: context
+                        .tr('e.g. Review this tool call for security issues'),
+                    border: const OutlineInputBorder(),
                     alignLabelWithHint: true,
                   ),
                 ),
@@ -3929,7 +3987,7 @@ class _HookEditorState extends State<_HookEditor> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('ADVANCED',
+                    Text(context.tr('ADVANCED'),
                         style: TextStyle(
                             color: c.textMuted,
                             fontSize: 10,
@@ -3962,12 +4020,12 @@ class _HookEditorState extends State<_HookEditor> {
                 children: [
                   TextButton(
                       onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton.icon(
                     onPressed: _canAdd ? _submit : null,
                     icon: Icon(_editing ? Icons.check : Icons.add, size: 16),
-                    label: Text(_editing ? 'Save' : 'Add'),
+                    label: Text(context.tr(_editing ? 'Save' : 'Add')),
                   ),
                 ],
               ),
@@ -4071,13 +4129,14 @@ class _ClawHubDialogState extends ConsumerState<_ClawHubDialog> {
         }
       });
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Installed $slug')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content:
+                Text(context.trArgs('Installed {slug}', {'slug': slug}))));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Install failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Install failed: {e}', {'e': e}))));
       }
     } finally {
       if (mounted) setState(() => _installing = null);
@@ -4100,7 +4159,7 @@ class _ClawHubDialogState extends ConsumerState<_ClawHubDialog> {
                 children: [
                   Icon(Icons.cloud_outlined, size: 18, color: c.accent),
                   const SizedBox(width: AppTokens.s8),
-                  Text('Install from ClawHub',
+                  Text(context.tr('Install from ClawHub'),
                       style: TextStyle(
                           color: c.textPrimary,
                           fontSize: 16,
@@ -4116,10 +4175,10 @@ class _ClawHubDialogState extends ConsumerState<_ClawHubDialog> {
                 controller: _q,
                 autofocus: true,
                 decoration: InputDecoration(
-                  hintText: 'Search skills on clawhub.ai…',
+                  hintText: context.tr('Search skills on clawhub.ai…'),
                   prefixIcon: const Icon(Icons.search, size: 16),
                   suffixIcon: TextButton(
-                      onPressed: _search, child: const Text('Search')),
+                      onPressed: _search, child: Text(context.tr('Search'))),
                 ),
                 onSubmitted: (_) => _search(),
               ),
@@ -4134,7 +4193,9 @@ class _ClawHubDialogState extends ConsumerState<_ClawHubDialog> {
                                     color: AppTokens.danger)))
                         : _results.isEmpty
                             ? Center(
-                                child: Text('Type a keyword to search ClawHub',
+                                child: Text(
+                                    context.tr(
+                                        'Type a keyword to search ClawHub'),
                                     style: TextStyle(color: c.textMuted)))
                             : ListView.separated(
                                 itemCount: _results.length,
@@ -4190,7 +4251,7 @@ class _ClawHubDialogState extends ConsumerState<_ClawHubDialog> {
                                                     size: 16,
                                                     color: AppTokens.success),
                                                 const SizedBox(width: 4),
-                                                Text('Installed',
+                                                Text(context.tr('Installed'),
                                                     style: TextStyle(
                                                         color: c.textMuted,
                                                         fontSize: 12)),
@@ -4206,7 +4267,8 @@ class _ClawHubDialogState extends ConsumerState<_ClawHubDialog> {
                                                         child:
                                                             CircularProgressIndicator(
                                                                 strokeWidth: 2))
-                                                    : const Text('Install'),
+                                                    : Text(
+                                                        context.tr('Install')),
                                               ),
                                       ],
                                     ),
@@ -4284,11 +4346,14 @@ class _MarketplaceCatalogCardState
         .toList();
     final author = '${p['author'] ?? ''}';
     final counts = [
-      if (author.isNotEmpty) 'by $author',
-      if (skills.isNotEmpty) '${skills.length} skills',
-      if (subagents.isNotEmpty) '${subagents.length} subagents',
-      if (mcpServers.isNotEmpty) '${mcpServers.length} MCP',
-      if (p['hasHooks'] == true) 'hooks',
+      if (author.isNotEmpty) context.trArgs('by {author}', {'author': author}),
+      if (skills.isNotEmpty)
+        context.trArgs('{n} skills', {'n': skills.length}),
+      if (subagents.isNotEmpty)
+        context.trArgs('{n} subagents', {'n': subagents.length}),
+      if (mcpServers.isNotEmpty)
+        context.trArgs('{n} MCP', {'n': mcpServers.length}),
+      if (p['hasHooks'] == true) context.tr('hooks'),
     ].join(' · ');
 
     return _Card(
@@ -4321,7 +4386,8 @@ class _MarketplaceCatalogCardState
                   widget.source.isHub ? AppTokens.brand : c.accent),
               if (!installed) ...[
                 const SizedBox(width: AppTokens.s6),
-                const _MiniTag('not installed', Color(0xFF8A8A99)),
+                _MiniTag(
+                    context.tr('not installed'), const Color(0xFF8A8A99)),
               ],
             ],
           ),
@@ -4358,7 +4424,7 @@ class _MarketplaceCatalogCardState
                       ),
                       if (widget.source.isHub)
                         IconButton(
-                          tooltip: 'Uninstall',
+                          tooltip: context.tr('Uninstall'),
                           icon: const Icon(Icons.delete_outline,
                               size: 16, color: AppTokens.danger),
                           onPressed: () =>
@@ -4369,7 +4435,7 @@ class _MarketplaceCatalogCardState
                         onPressed: () =>
                             _run(() => api.post('$_pluginPath/install')),
                         icon: const Icon(Icons.download_outlined, size: 14),
-                        label: const Text('Install'),
+                        label: Text(context.tr('Install')),
                       ),
                   ],
                 ),
@@ -4394,7 +4460,7 @@ class _MarketplaceCatalogCardState
             if (skills.isEmpty && subagents.isEmpty && mcpServers.isEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: AppTokens.s8),
-                child: Text('No item details in the catalog',
+                child: Text(context.tr('No item details in the catalog'),
                     style: TextStyle(color: c.textMuted, fontSize: 12)),
               ),
           ],
@@ -4432,7 +4498,7 @@ class _CatalogMetaGroup extends StatelessWidget {
                 children: [
                   SizedBox(
                     width: 80,
-                    child: Text(label,
+                    child: Text(context.tr(label),
                         style: TextStyle(
                             color: c.textSecondary,
                             fontSize: 11,
@@ -4471,7 +4537,7 @@ class _CatalogItemGroup extends StatelessWidget {
             children: [
               Icon(icon, size: 14, color: c.accent),
               const SizedBox(width: AppTokens.s6),
-              Text(label,
+              Text(context.tr(label),
                   style: TextStyle(
                       color: c.textSecondary,
                       fontSize: 12,
@@ -4552,13 +4618,14 @@ class _SourceSettingsRow extends ConsumerWidget {
                     const SizedBox(width: AppTokens.s6),
                     _MiniTag(s.type, s.isHub ? AppTokens.brand : c.accent),
                     const SizedBox(width: AppTokens.s4),
-                    _MiniTag(s.enabled ? 'enabled' : 'off',
+                    _MiniTag(context.tr(s.enabled ? 'enabled' : 'off'),
                         s.enabled ? AppTokens.success : const Color(0xFF8A8A99)),
                     if (s.syncError != null) ...[
                       const SizedBox(width: AppTokens.s4),
                       Tooltip(
                           message: '${s.syncError}',
-                          child: const _MiniTag('sync error', AppTokens.danger)),
+                          child: _MiniTag(
+                              context.tr('sync error'), AppTokens.danger)),
                     ],
                   ],
                 ),
@@ -4567,17 +4634,18 @@ class _SourceSettingsRow extends ConsumerWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: c.textMuted, fontSize: 11)),
                 if (s.lastSynced != null)
-                  Text('Synced: ${s.lastSynced}',
+                  Text(
+                      context.trArgs('Synced: {at}', {'at': s.lastSynced}),
                       style: TextStyle(color: c.textMuted, fontSize: 10)),
               ],
             ),
           ),
           TextButton(
             onPressed: () => _post(context, ref, '$base/sync'),
-            child: const Text('Sync'),
+            child: Text(context.tr('Sync')),
           ),
           PopupMenuButton<String>(
-            tooltip: 'More',
+            tooltip: context.tr('More'),
             iconSize: 18,
             onSelected: (v) async {
               switch (v) {
@@ -4597,15 +4665,17 @@ class _SourceSettingsRow extends ConsumerWidget {
                   ref.invalidate(marketplaceSourcesProvider);
               }
             },
-            itemBuilder: (_) => const [
+            itemBuilder: (_) => [
               PopupMenuItem(
-                  value: 'enable-all', child: Text('Enable all plugins')),
+                  value: 'enable-all',
+                  child: Text(context.tr('Enable all plugins'))),
               PopupMenuItem(
-                  value: 'disable-all', child: Text('Disable all plugins')),
+                  value: 'disable-all',
+                  child: Text(context.tr('Disable all plugins'))),
               PopupMenuItem(
                   value: 'remove',
-                  child: Text('Remove source',
-                      style: TextStyle(color: AppTokens.danger))),
+                  child: Text(context.tr('Remove source'),
+                      style: const TextStyle(color: AppTokens.danger))),
             ],
           ),
         ],

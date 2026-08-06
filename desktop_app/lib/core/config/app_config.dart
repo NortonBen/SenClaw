@@ -55,12 +55,21 @@ class AppConfig {
   /// discovery runs, or against a daemon too old to report it.
   final String? screenshotsDir;
 
+  /// API access token. Only enforced by daemons bound beyond loopback
+  /// (`SENCLAW_UI_BIND_HOST=0.0.0.0`) and only for non-loopback peers, so the
+  /// bundled local setup never needs it. Sources, first hit wins: Settings
+  /// (prefs) → `--dart-define=SENCLAW_API_TOKEN` → `~/.senclaw/api_token`
+  /// (same machine as the daemon). Sent as `X-SenClaw-Token` on every HTTP
+  /// request and as `?token=` on WS upgrades.
+  final String? apiToken;
+
   const AppConfig({
     required this.host,
     required this.uiPort,
     required this.wsPort,
     this.wsToken,
     this.screenshotsDir,
+    this.apiToken,
   });
 
   /// Initial config from --dart-define (or sensible localhost defaults).
@@ -71,18 +80,40 @@ class AppConfig {
     );
     const uiPort = int.fromEnvironment('SENCLAW_UI_PORT', defaultValue: 18788);
     const wsPort = int.fromEnvironment('SENCLAW_WS_PORT', defaultValue: 18789);
-    return const AppConfig(host: host, uiPort: uiPort, wsPort: wsPort);
+    const apiToken = String.fromEnvironment('SENCLAW_API_TOKEN');
+    return AppConfig(
+      host: host,
+      uiPort: uiPort,
+      wsPort: wsPort,
+      apiToken: apiToken.isEmpty ? null : apiToken,
+    );
   }
 
   String get httpBase => 'http://$host:$uiPort';
   String get wsUrl => 'ws://$host:$wsPort/';
 
-  AppConfig copyWith({int? wsPort, String? wsToken, String? screenshotsDir}) =>
+  /// Auth headers for requests that bypass [ApiClient] (multipart uploads,
+  /// binary downloads). Empty when no token is configured.
+  Map<String, String> get authHeaders {
+    final t = apiToken;
+    if (t == null || t.isEmpty) return const {};
+    return {'x-senclaw-token': t};
+  }
+
+  AppConfig copyWith({
+    String? host,
+    int? uiPort,
+    int? wsPort,
+    String? wsToken,
+    String? screenshotsDir,
+    String? apiToken,
+  }) =>
       AppConfig(
-        host: host,
-        uiPort: uiPort,
+        host: host ?? this.host,
+        uiPort: uiPort ?? this.uiPort,
         wsPort: wsPort ?? this.wsPort,
         wsToken: wsToken ?? this.wsToken,
         screenshotsDir: screenshotsDir ?? this.screenshotsDir,
+        apiToken: apiToken ?? this.apiToken,
       );
 }

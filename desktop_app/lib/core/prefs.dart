@@ -53,3 +53,7 @@ const kSortKey = 'senclaw:sessionlist-sort';
 const kCollapsedKey = 'senclaw:collapsed-folders';
 const kLastSeenKey = 'senclaw:chat-last-seen';
 const kPinnedAppsKey = 'senclaw:pinned-apps';
+
+/// API access token for daemons bound beyond loopback (Settings → General →
+/// Connection). Read once during connection bootstrap.
+const kApiTokenKey = 'senclaw:api-token';

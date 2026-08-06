@@ -255,6 +255,31 @@ fn seatbelt_command(
 /// `mounts` are host folders the user explicitly bound in. macOS cannot remap a
 /// path for a process, so a mount here is a symlink plus these rules: the real
 /// source path becomes readable, and writable unless the mount is read-only.
+/// Ancestor directories of `path` that lie inside one of `denied_roots`,
+/// nearest first. `path` itself is never included — it is already granted.
+///
+/// These are exactly the directories that a granted path cannot be reached
+/// through unless they are handed back.
+fn denied_ancestors(path: &str, denied_roots: &[String]) -> Vec<String> {
+    let inside = |p: &std::path::Path| {
+        denied_roots
+            .iter()
+            .any(|root| p.starts_with(std::path::Path::new(root)))
+    };
+    let mut out = Vec::new();
+    let mut cur = std::path::Path::new(path);
+    while let Some(parent) = cur.parent() {
+        if parent.as_os_str().is_empty() || parent == std::path::Path::new("/") {
+            break;
+        }
+        if inside(parent) {
+            out.push(parent.to_string_lossy().to_string());
+        }
+        cur = parent;
+    }
+    out
+}
+
 pub fn seatbelt_profile(
     workdir: &str,
     home: &str,
@@ -325,6 +350,35 @@ pub fn seatbelt_profile(
         // (say `~/.config/something`) is an explicit user decision and must win.
         for m in mounts {
             p.push_str(&format!("(allow file-read* (subpath {}))\n", sb_str(&m.source)));
+        }
+        // Re-allowing a directory is not enough: opening a file inside it also
+        // resolves every parent, and a parent that cannot be read at all breaks
+        // that. Measured — a Space App whose SQLite database lives in
+        // `~/.senclaw/space-app-data/<id>` died with
+        // `SQLITE_CANTOPEN: unable to open database file` even though its own
+        // directory was granted, because `~/.senclaw` above it was denied.
+        //
+        // So each granted path's ancestors *inside a denied tree* get metadata
+        // back, and nothing else: names, sizes and timestamps of two directories
+        // the app already knows the path of. Their contents — the daemon's
+        // database, its token, every other app's data — stay dark.
+        //
+        // The jailed branch above needs no equivalent: it allows metadata outright.
+        let denied_roots: Vec<String> = MAC_SECRET_SUBPATHS
+            .iter()
+            .map(|s| format!("{}/{}", home.trim_end_matches('/'), s))
+            .collect();
+        let granted = std::iter::once(workdir.to_string()).chain(mounts.iter().map(|m| m.source.clone()));
+        let mut rescued: Vec<String> = Vec::new();
+        for path in granted {
+            for anc in denied_ancestors(&path, &denied_roots) {
+                if !rescued.contains(&anc) {
+                    rescued.push(anc);
+                }
+            }
+        }
+        for a in &rescued {
+            p.push_str(&format!("(allow file-read-metadata (literal {}))\n", sb_str(a)));
         }
         p.push('\n');
     }
@@ -500,6 +554,61 @@ mod tests {
         let allow = p.find("(allow file-write*").expect("must allow the workdir");
         assert!(deny < allow, "the allow must come after the deny to win");
         assert!(p.contains("\"/w/sbx\""));
+    }
+
+    #[test]
+    fn a_granted_path_can_be_reached_through_its_denied_parents() {
+        // The regression: a Space App whose SQLite database lives in
+        // `~/.senclaw/space-app-data/<id>` panicked with
+        // `SQLITE_CANTOPEN: unable to open database file` although that very
+        // directory was granted — because `~/.senclaw` above it was denied, and
+        // opening a file resolves every parent.
+        let mounts = vec![crate::sandbox::mounts::Mount {
+            source: "/Users/u/.senclaw/space-app-data/ba".into(),
+            target: String::new(),
+            read_only: false,
+        }];
+        let p = seatbelt_profile(
+            "/Users/u/senclaw/workspace/space-apps/ba",
+            "/Users/u",
+            false,
+            &mounts,
+            crate::sandbox::fsmode::FsMode::Open,
+            &[],
+            &Default::default(),
+        );
+        assert!(
+            p.contains(r#"(allow file-read-metadata (literal "/Users/u/.senclaw/space-app-data"))"#),
+            "the parent of the granted folder must be stat-able:\n{p}"
+        );
+        assert!(
+            p.contains(r#"(allow file-read-metadata (literal "/Users/u/.senclaw"))"#),
+            "…and so must the denied root above it:\n{p}"
+        );
+        // Metadata only: the contents of the denied tree stay denied, so the
+        // daemon's database and every other app's data are still unreadable.
+        assert!(p.contains(r#"(subpath "/Users/u/.senclaw")"#), "the deny must remain");
+        assert!(
+            !p.contains(r#"(allow file-read* (subpath "/Users/u/.senclaw"))"#),
+            "nothing may re-open the whole tree:\n{p}"
+        );
+        // The rescue is scoped to what was granted — a credential store nobody
+        // mounted gains nothing.
+        assert!(
+            !p.contains(r#"file-read-metadata (literal "/Users/u/.ssh""#),
+            "unrelated denied trees must not be touched:\n{p}"
+        );
+    }
+
+    #[test]
+    fn denied_ancestors_stops_at_the_denied_root() {
+        let denied = vec!["/Users/u/.senclaw".to_string()];
+        let got = denied_ancestors("/Users/u/.senclaw/space-app-data/ba", &denied);
+        assert_eq!(got, vec!["/Users/u/.senclaw/space-app-data", "/Users/u/.senclaw"]);
+        // A path outside every denied tree needs no rescue at all.
+        assert!(denied_ancestors("/Users/u/Projects/app", &denied).is_empty());
+        // Never `/` — and never the granted path itself.
+        assert!(!got.iter().any(|p| p == "/" || p.ends_with("/ba")));
     }
 
     #[test]

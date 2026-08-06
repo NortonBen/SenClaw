@@ -196,6 +196,16 @@ impl EmbeddingProvider {
 pub struct UiServerConfig {
     pub port: u16,
     pub ws_token: Option<String>,
+    /// Bind host for the daemon's own HTTP UI (18788) *and* WS gateway
+    /// (18789). Default `127.0.0.1`. Deliberately a separate knob from the
+    /// Space-App `SENCLAW_BIND_HOST`: apps have no auth of their own, while
+    /// the daemon requires the API token from non-loopback peers as soon as
+    /// this is not a loopback host.
+    pub bind_host: String,
+    /// Optional API-token override. When unset the daemon uses (or creates)
+    /// `~/.senclaw/api_token`. Enforced only for non-loopback peers, and only
+    /// when `bind_host` is non-loopback.
+    pub api_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -609,6 +619,14 @@ impl Config {
                 port: env_int("SENCLAW_UI_PORT", 18788),
                 ws_token: match env::var("SENCLAW_WS_TOKEN") {
                     Ok(v) if !v.trim().is_empty() => Some(v),
+                    _ => None,
+                },
+                bind_host: match env::var("SENCLAW_UI_BIND_HOST") {
+                    Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+                    _ => "127.0.0.1".to_string(),
+                },
+                api_token: match env::var("SENCLAW_API_TOKEN") {
+                    Ok(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
                     _ => None,
                 },
             },

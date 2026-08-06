@@ -16,6 +16,8 @@
 //! (`~/.senclaw/sandbox`) so neither steps on the other.
 
 pub mod api;
+pub mod app_launch;
+pub mod app_policy;
 pub mod backend;
 pub mod caps;
 pub mod code;
@@ -27,6 +29,7 @@ pub mod monitor;
 pub mod mounts;
 pub mod policy;
 pub mod ports;
+pub mod proxy;
 pub mod pty;
 pub mod runner;
 pub mod settings;

@@ -8,6 +8,7 @@
 //! `sema-code-core` model manager which hasn't been ported yet.
 
 mod agent_behavior_config;
+pub mod auth;
 mod background;
 pub mod bash_sandbox;
 mod chat;
@@ -38,6 +39,7 @@ mod skills;
 mod spa;
 mod space;
 pub mod space_mcp;
+mod space_runtime;
 mod space_personas;
 mod space_skills;
 mod subagents;

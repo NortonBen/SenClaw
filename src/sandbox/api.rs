@@ -131,6 +131,8 @@ struct CreateBody {
     listen_ports: Vec<u16>,
     #[serde(default)]
     connect_ports: Vec<u16>,
+    #[serde(default)]
+    loopback_ports: Vec<u16>,
 }
 
 async fn create_sandbox(State(s): State<AppState>, Json(b): Json<CreateBody>) -> ApiResult {
@@ -151,7 +153,7 @@ async fn create_sandbox(State(s): State<AppState>, Json(b): Json<CreateBody>) ->
                 .map(|m| mounts::validate(&m.source, &m.target, m.read_only))
                 .collect::<Result<Vec<_>, _>>()?,
             fs_mode: b.fs_mode.as_deref().and_then(crate::sandbox::fsmode::FsMode::parse),
-            ports: crate::sandbox::ports::validate(&b.listen_ports, &b.connect_ports)?,
+            ports: crate::sandbox::ports::validate(&b.listen_ports, &b.connect_ports, &b.loopback_ports)?,
         },
     )
     .await?;
@@ -421,6 +423,10 @@ struct PortsBody {
     listen: Vec<u16>,
     #[serde(default)]
     connect: Vec<u16>,
+    /// Local services on this machine the sandbox may dial. Empty (the
+    /// default) means none — see `ports::seatbelt_rules`.
+    #[serde(default)]
+    loopback: Vec<u16>,
 }
 
 async fn set_ports(
@@ -429,7 +435,7 @@ async fn set_ports(
     Json(b): Json<PortsBody>,
 ) -> ApiResult {
     let before = s.db.sandbox(&id)?;
-    let policy = crate::sandbox::ports::validate(&b.listen, &b.connect)?;
+    let policy = crate::sandbox::ports::validate(&b.listen, &b.connect, &b.loopback)?;
     let sb = s.db.set_ports(&id, &policy)?;
     // Published ports are fixed at `docker run`, so a live container has to be
     // recreated for a new one to exist.

@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../config/app_config.dart';
+import '../config/token_file.dart';
 import '../daemon/daemon_provider.dart';
+import '../prefs.dart';
 import 'api_client.dart';
 import 'ws_client.dart';
 
@@ -47,6 +49,28 @@ final wsEventsProvider = StreamProvider<WsEvent>((ref) {
 /// One-shot bootstrap: (desktop) spawn/adopt the daemon, then discover
 /// wsPort/token via `/api/config`, then open WS. Call once at app start.
 final connectionBootstrapProvider = FutureProvider<void>((ref) async {
+  // Resolve the API access token BEFORE the first HTTP call, so a daemon
+  // bound beyond loopback (token-gated) is reachable from the very first
+  // request. Priority: Settings (prefs) → --dart-define (already in the
+  // config) → ~/.senclaw/api_token written by a local daemon. Loopback
+  // setups have no gate and lose nothing if all three are absent.
+  {
+    final current = ref.read(appConfigProvider);
+    String? token;
+    try {
+      final stored = ref.read(prefsProvider).getString(kApiTokenKey);
+      if (stored != null && stored.trim().isNotEmpty) token = stored.trim();
+    } catch (_) {
+      // prefsProvider not overridden (tests) — fall through.
+    }
+    token ??= current.apiToken ?? await readLocalDaemonToken();
+    if (token != null && token != current.apiToken) {
+      final updated = current.copyWith(apiToken: token);
+      ref.read(appConfigProvider.notifier).state = updated;
+      ref.read(wsClientProvider).updateConfig(updated);
+    }
+  }
+
   // Desktop hosts the daemon as a child process; web attaches to an external
   // one. `start()` adopts an already-running daemon and waits for the port.
   await ref.read(daemonSupervisorProvider).start();

@@ -12,6 +12,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Vietnamese strings for Flutter's built-in widgets (date pickers, tooltips,
+  # text-selection menus) — the app's own strings live in lib/core/i18n.
+  flutter_localizations:
+    sdk: flutter
 
   cupertino_icons: ^1.0.8
 

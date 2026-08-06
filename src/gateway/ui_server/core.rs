@@ -10,7 +10,7 @@ use axum::{
     routing::{delete, get, patch, post, put},
     Router,
 };
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use tower_http::services::ServeDir;
 
 use crate::config::Config;
 use crate::db::Db;
@@ -68,7 +68,8 @@ use super::spa::spa_fallback;
 use super::space::{
     space_app_config_delete, space_app_config_get, space_app_config_list, space_app_config_set,
     space_app_env, space_app_logs_clear, space_app_logs_get, space_app_mcp_info,
-    space_app_mcp_register, space_app_sqlite_query, space_apps_bridge, space_apps_delete,
+    space_app_mcp_register, space_app_sandbox_get, space_app_sandbox_put, space_app_sqlite_query,
+    space_apps_bridge, space_apps_delete,
     space_apps_install_zip, space_apps_list, space_apps_proxy, space_apps_proxy_root,
     space_apps_register, space_apps_register_local, space_apps_restart, space_apps_static,
     space_apps_update, space_apps_updates, space_events_create, space_events_delete,
@@ -169,6 +170,12 @@ pub struct UiState {
     pub usage_recorder: Option<Arc<crate::usage::UsageRecorder>>,
     pub ws_port: u16,
     pub ws_token: String,
+    /// API access-token policy. `ApiAuth::disabled()` for the default
+    /// loopback bind; enforcing when the daemon is exposed beyond loopback.
+    /// The middleware itself is layered at the serve sites (`lib.rs`,
+    /// `start_ui_server`) — the relay bridge reuses `build_router` without it
+    /// because relay frames are authenticated by relay pairing instead.
+    pub api_auth: Arc<super::auth::ApiAuth>,
 }
 
 /// Return the web/dist directory, falling back to cwd-based path.
@@ -224,8 +231,16 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         }),
     };
 
+    // Token handshake for remote (non-loopback) clients. Routed on a plain
+    // sub-router so the handlers see `Arc<ApiAuth>` state directly.
+    let auth_router = Router::new()
+        .route("/api/auth/login", post(super::auth::auth_login))
+        .route("/api/auth/status", get(super::auth::auth_status))
+        .with_state(Arc::clone(&state.api_auth));
+
     Router::new()
         // API endpoints
+        .merge(auth_router)
         .nest_service("/api/sandbox", sandbox_router)
         .route("/api/config", get(config_handler))
         // Open a URL in the host machine's default browser (see open_url.rs).
@@ -738,6 +753,20 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             post(space_apps_install_zip).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
         )
         .route("/api/space/apps/:id/env", get(space_app_env))
+        .route(
+            "/api/space/apps/:id/runtime",
+            get(super::space_runtime::space_app_runtime),
+        )
+        // Literal segment, so it wins over `:id` — same shape as the existing
+        // `/api/space/apps/updates`.
+        .route(
+            "/api/space/apps/sandbox-overview",
+            get(super::space_runtime::space_apps_sandbox_overview),
+        )
+        .route(
+            "/api/space/apps/:id/sandbox",
+            get(space_app_sandbox_get).put(space_app_sandbox_put),
+        )
         .route("/api/space/apps/:id/config", get(space_app_config_list))
         .route(
             "/api/space/apps/:id/config/:key",
@@ -904,7 +933,11 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .fallback(get(move |uri: axum::http::Uri| {
             spa_fallback(dist_dir.clone(), uri)
         }))
-        .layer(CorsLayer::permissive())
+        // Loopback-origin allowlist. The old `CorsLayer::permissive()` here
+        // (ACAO `*`) let any web page the user visited read API responses off
+        // the loopback daemon — /api/llm-config serves cleartext provider
+        // keys. See auth::restrictive_cors.
+        .layer(super::auth::restrictive_cors())
         .with_state(state)
 }
 
@@ -921,14 +954,25 @@ impl IntoResponse for AppError {
 
 // ===== Server launcher =====
 
-/// Start the UI HTTP server on the configured port. Binds to 127.0.0.1.
+/// Start the UI HTTP server on the configured port. Binds to
+/// `ui_server.bind_host` (default 127.0.0.1); non-loopback binds are token-
+/// gated by the auth middleware.
 pub async fn start_ui_server(state: Arc<UiState>, port: u16) -> Result<()> {
-    let router = build_router(state);
-    let addr = format!("127.0.0.1:{port}");
+    let host = state.config.ui_server.bind_host.clone();
+    let api_auth = Arc::clone(&state.api_auth);
+    let router = build_router(state).layer(axum::middleware::from_fn_with_state(
+        api_auth,
+        super::auth::http_auth_mw,
+    ));
+    let addr = format!("{host}:{port}");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .with_context(|| format!("bind {addr}"))?;
     tracing::info!("[UIServer] Web UI at http://{addr}");
-    axum::serve(listener, router).await?;
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

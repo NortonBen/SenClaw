@@ -41,6 +41,13 @@ pub struct ExecPolicy {
     /// could already read everything through its own Read tool, so starting
     /// stricter here would only break shell workflows without closing a door.
     pub exec_fs_mode: FsMode,
+    /// Services on this machine the agent's shell may call. Empty by default:
+    /// loopback is where SenClaw's own unauthenticated API lives, along with
+    /// every Space App, so a sandbox that may dial it is not sandboxed. Name a
+    /// port here when the agent legitimately needs one — the dev server it is
+    /// working on, typically.
+    #[serde(default)]
+    pub exec_loopback: Vec<u16>,
     /// Allow real Python via the sandbox (REPL + `/api/code/run`).
     pub run_python: bool,
     /// Allow real Node.js via the sandbox.
@@ -60,6 +67,7 @@ impl Default for ExecPolicy {
             exec_shell: false,
             exec_network: true,
             exec_fs_mode: FsMode::Open,
+            exec_loopback: Vec::new(),
             run_python: true,
             run_node: true,
             code_network: false,
@@ -129,7 +137,8 @@ pub fn ensure_agent_sandbox(db: &Db, working_dir: &str, p: &ExecPolicy) -> Resul
                 env: serde_json::json!({}),
                 mounts: Vec::new(),
                 fs_mode: p.exec_fs_mode,
-                ports: Default::default(),
+                ports: crate::sandbox::ports::validate(&[], &[], &p.exec_loopback)
+                    .unwrap_or_default(),
             })?
         }
     };
@@ -142,6 +151,14 @@ pub fn ensure_agent_sandbox(db: &Db, working_dir: &str, p: &ExecPolicy) -> Resul
     };
     let sb = if sb.fs_mode != p.exec_fs_mode {
         db.set_fs_mode(&sb.id, p.exec_fs_mode)?
+    } else {
+        sb
+    };
+    // Same reasoning as the two above: a port added in settings has to reach the
+    // next run, not the next sandbox.
+    let wanted = crate::sandbox::ports::validate(&[], &[], &p.exec_loopback).unwrap_or_default();
+    let sb = if sb.ports != wanted {
+        db.set_ports(&sb.id, &wanted)?
     } else {
         sb
     };
@@ -209,6 +226,30 @@ mod tests {
 
         db.set_setting(KEY, "{broken").unwrap();
         assert!(!load(&db).exec_shell, "corrupt row must fall back to defaults");
+    }
+
+    #[test]
+    fn the_agent_shell_reaches_no_local_service_until_one_is_named() {
+        // Enforced Bash runs with the network on. Left alone, that would let the
+        // agent's shell call SenClaw's own unauthenticated API (and every Space
+        // App) on loopback — so the default is an empty list, and a port added
+        // in settings must reach the existing sandbox rather than only new ones.
+        let db = Db::open_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let wd = dir.path().to_string_lossy().to_string();
+
+        let mut p = ExecPolicy::default();
+        assert!(p.exec_loopback.is_empty(), "no local service by default");
+        let sb = ensure_agent_sandbox(&db, &wd, &p).unwrap();
+        assert!(sb.ports.loopback.is_empty());
+
+        p.exec_loopback = vec![3000];
+        let sb = ensure_agent_sandbox(&db, &wd, &p).unwrap();
+        assert_eq!(sb.ports.loopback, vec![3000], "the same sandbox must pick it up");
+
+        p.exec_loopback.clear();
+        let sb = ensure_agent_sandbox(&db, &wd, &p).unwrap();
+        assert!(sb.ports.loopback.is_empty(), "removing it must close the door again");
     }
 
     #[test]

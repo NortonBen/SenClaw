@@ -62,6 +62,7 @@ class ApiClient {
     for (var attempt = 0; ; attempt++) {
       final req = http.Request(method, _uri(path, query));
       req.headers['accept'] = 'application/json';
+      req.headers.addAll(_config.authHeaders);
       if (body != null) {
         req.headers['content-type'] = 'application/json';
         req.body = jsonEncode(body);

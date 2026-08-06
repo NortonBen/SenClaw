@@ -2113,6 +2113,40 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // WS and UI listen on separate ports (matching TS config).
 
     // 5a. WebSocket gateway
+    // ===== 5b1. API access-token policy =====
+    // Default posture: bind loopback, no token required. Opting into LAN
+    // exposure (`SENCLAW_UI_BIND_HOST=0.0.0.0`) turns on token auth for every
+    // non-loopback peer of both the HTTP UI (18788) and the WS gateway
+    // (18789). Loopback peers stay exempt so the bundled desktop app and
+    // Space Apps calling back into the daemon keep working unchanged.
+    let ui_bind_host = cfg.ui_server.bind_host.clone();
+    let api_auth = {
+        let required = !gateway::ui_server::auth::is_loopback_host(&ui_bind_host);
+        let senclaw_dir = cfg
+            .paths
+            .global_config_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        // Resolve the token even when auth is off: local clients may read it
+        // from disk ahead of a later LAN-exposed restart.
+        let token = gateway::ui_server::auth::resolve_token(
+            cfg.ui_server.api_token.as_deref(),
+            &senclaw_dir,
+        );
+        if required {
+            tracing::warn!(
+                "[SenClaw] UI bound to non-loopback host {ui_bind_host:?} — API token \
+                 required for remote clients (token file: {}, override: SENCLAW_API_TOKEN)",
+                senclaw_dir.join("api_token").display()
+            );
+        }
+        Arc::new(gateway::ui_server::auth::ApiAuth {
+            required,
+            token: Some(token),
+        })
+    };
+
     let ws_gateway = {
         let ws_api = Arc::new(RealWsApi {
             group_queue: Arc::clone(&group_queue),
@@ -2709,9 +2743,16 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             let _mcp_dispatcher = mcp_dispatcher;
         }
 
-        let ws_router = gw.route(ws_state);
+        // Gate every WS route (`/`, `/browser`, `/browser-mcp`) at upgrade
+        // time when the daemon is exposed beyond loopback. The in-band
+        // `connect` token is not a sufficient gate — the message dispatcher
+        // runs handlers for sockets that never authenticated.
+        let ws_router = gw.route(ws_state).layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&api_auth),
+            gateway::ui_server::auth::ws_auth_mw,
+        ));
         let ws_port = cfg.ws_port;
-        let ws_addr = format!("127.0.0.1:{ws_port}");
+        let ws_addr = format!("{ui_bind_host}:{ws_port}");
         tracing::info!("[SenClaw] WebSocket gateway at ws://{ws_addr}");
         tokio::spawn(async move {
             let listener = match tokio::net::TcpListener::bind(&ws_addr).await {
@@ -2721,7 +2762,12 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                     return;
                 }
             };
-            if let Err(e) = axum::serve(listener, ws_router).await {
+            if let Err(e) = axum::serve(
+                listener,
+                ws_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            {
                 tracing::error!("[SenClaw] WS server error: {e}");
             }
         });
@@ -2924,6 +2970,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             usage_recorder: Some(Arc::clone(&usage_recorder)),
             ws_port: cfg.ws_port,
             ws_token: cfg.ui_server.ws_token.clone().unwrap_or_default(),
+            api_auth: Arc::clone(&api_auth),
         });
 
         // Make the same state reachable to app-channel relay clients (REST tunnel).
@@ -2931,18 +2978,30 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
         // Mount the built-in Kanban board's REST API under /api/kanban/* on the
         // daemon UI server (the native Flutter screen talks to these routes).
-        let ui_router = gateway::ui_server::build_router(ui_state).nest(
-            "/api/kanban",
-            kanban::api::api_router(std::sync::Arc::clone(&kanban_state)),
-        );
+        // Auth middleware is layered *after* the kanban nest so it covers
+        // those routes too (a layer added before a nest would not wrap it).
+        let ui_router = gateway::ui_server::build_router(ui_state)
+            .nest(
+                "/api/kanban",
+                kanban::api::api_router(std::sync::Arc::clone(&kanban_state)),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&api_auth),
+                gateway::ui_server::auth::http_auth_mw,
+            ));
         let http_port = cfg.ui_server.port;
-        let http_addr = format!("127.0.0.1:{http_port}");
+        let http_addr = format!("{ui_bind_host}:{http_port}");
         let listener = tokio::net::TcpListener::bind(&http_addr)
             .await
             .with_context(|| format!("bind {http_addr}"))?;
         tracing::info!("[SenClaw] Web UI at http://{http_addr}");
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, ui_router).await {
+            if let Err(e) = axum::serve(
+                listener,
+                ui_router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            {
                 tracing::error!("[SenClaw] UI server error: {e}");
             }
         });
@@ -2954,6 +3013,29 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // ===== 9. Graceful shutdown =====
     tracing::info!("[SenClaw] Daemon running. Press Ctrl-C to stop.");
 
+    // SIGINT *and* SIGTERM. Only Ctrl-C was handled before, and the desktop app
+    // stops the daemon with `kill -TERM` (then SIGKILL 800 ms later) — so the
+    // shutdown below never ran in the way people actually quit, and every Space
+    // App the daemon had launched survived it. Weeks-old orphans then held the
+    // apps' ports, and each new daemon adopted them instead of launching a fresh,
+    // sandboxed process.
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => tracing::info!("[SenClaw] SIGINT received"),
+                    _ = term.recv() => tracing::info!("[SenClaw] SIGTERM received"),
+                }
+            }
+            Err(e) => {
+                tracing::warn!("[SenClaw] cannot listen for SIGTERM ({e}); Ctrl-C only");
+                tokio::signal::ctrl_c().await.ok();
+            }
+        }
+    }
+    #[cfg(not(unix))]
     tokio::signal::ctrl_c().await.ok();
     tracing::info!("[SenClaw] Shutting down...");
 
@@ -2968,11 +3050,12 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         }
     }
 
+    // Stop every Space App process FIRST: they are what outlives the daemon,
+    // and the window before SIGKILL is short (~800 ms from the desktop app).
+    space_mcp_launcher.shutdown().await;
+
     // Flush in-flight workflow run state (running orphans reconcile on next boot)
     workflow_service.flush();
-
-    // Stop any MCP server processes launched for Space Apps
-    space_mcp_launcher.shutdown().await;
 
     // Drop ws_gateway to close all client connections
     drop(ws_gateway);
