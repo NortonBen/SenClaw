@@ -23,7 +23,7 @@ on:
       - "apps/**"
       # `@senclaw/space-sdk` is a file: dependency of several apps and its
       # dist/ is built in CI — SDK changes must rebuild the dependents.
-      - "examples/senclaw-space-sdk/**"
+      - "senclaw-sdk/senclaw-app-sdk/**"
       - ".github/workflows/space-apps.yml"
   workflow_dispatch:
 
@@ -61,7 +61,7 @@ jobs:
           # workflow file / shared space-sdk changed → build everything.
           if [[ -z "$base" ]] \
              || ! git rev-parse -q --verify "$base^{commit}" >/dev/null \
-             || ! git diff --quiet "$base" "$GITHUB_SHA" -- .github/workflows/space-apps.yml examples/senclaw-space-sdk/; then
+             || ! git diff --quiet "$base" "$GITHUB_SHA" -- .github/workflows/space-apps.yml senclaw-sdk/senclaw-app-sdk/; then
             echo "rust_matrix=$RUST_APPS" >> "$GITHUB_OUTPUT"
             echo "node_matrix=$NODE_APPS" >> "$GITHUB_OUTPUT"
             echo "Building ALL apps (no diff base, or workflow/space-sdk changed)."
@@ -114,7 +114,7 @@ jobs:
       # `@senclaw/space-sdk` is a file: dependency (ssh-manager's web UI);
       # its dist/ is gitignored, so build it before the app installs it.
       - name: Build @senclaw/space-sdk
-        working-directory: examples/senclaw-space-sdk
+        working-directory: senclaw-sdk/senclaw-app-sdk
         run: |
           npm install
           npm run build
@@ -148,7 +148,7 @@ jobs:
       # build it first or `next build` fails with "Can't resolve
       # '@senclaw/space-sdk'".
       - name: Build @senclaw/space-sdk
-        working-directory: examples/senclaw-space-sdk
+        working-directory: senclaw-sdk/senclaw-app-sdk
         run: |
           npm install
           npm run build
