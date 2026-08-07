@@ -69,7 +69,8 @@ void main() {
     for (final label in ['H1', 'H2', 'H3']) {
       expect(find.text(label), findsOneWidget);
     }
-    expect(find.textContaining('từ'), findsOneWidget);
+    // Word-count chip. Localized now, and tests run in English.
+    expect(find.textContaining('words'), findsOneWidget);
 
     // Undo with an empty history is a safe no-op.
     await tester.tap(find.byIcon(Icons.undo));

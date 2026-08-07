@@ -1,0 +1,7 @@
+# Golden-image tests are a review aid, not a regression gate: the bytes depend
+# on the host's font rasterization, so they diverge between a dev Mac and CI.
+# Skipped by default; regenerate or view them with
+#   flutter test test/i18n_screenshot_test.dart --update-goldens
+tags:
+  screenshot:
+    skip: "manual only — see test/i18n_screenshot_test.dart"
