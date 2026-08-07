@@ -29,6 +29,33 @@ health 200 · 0ms        [Khởi động lại] [Mở] [Mở thư mục]
   chạy chứ không đọc lại từ cấu hình: cấu hình có thể đã bị sửa sau đó, còn cái
   đang chạy mới là cái cần báo cáo. Xem [docs/space-app-sandbox.md](space-app-sandbox.md).
 
+## "Không chạy" thường là bình thường, không phải sự cố
+
+Từ khi có [hai chế độ vòng đời](space-app-lifecycle.md), phần lớn app là
+**`session`**: daemon khởi động chúng khi có người mở màn hình hoặc khi agent
+gọi một tool MCP, rồi dừng lại sau `idleTimeoutSecs` giây không ai dùng (mặc
+định 60s). Với những app đó, "không chạy" là trạng thái **nghỉ**, không phải
+outage — và supervisor cố tình không hồi sinh chúng.
+
+Payload `GET /api/space/apps/:id/runtime` vì thế có thêm khối `lifecycle`:
+
+```jsonc
+"lifecycle": {
+  "mode": "session",          // "background" = thường trực, có supervisor
+  "runner": "python",
+  "idleTimeoutSecs": 60,      // 0 với app background
+  "idleSecs": 12,             // đếm tới idleTimeoutSecs thì app bị dừng
+  "stoppedByUser": false      // người dùng bấm Stop — supervisor sẽ không đụng vào
+}
+```
+
+và `"requirements"` (null nếu app không khai `requires`) — cùng bài kiểm mà
+launcher chạy trước khi spawn, nên một app **không chạy được vì máy thiếu
+`ffmpeg`** hiện ra ở đây kèm câu phải làm gì, thay vì chỉ là một app "không chạy".
+
+Bảng đội hình ở Plugins → Sandbox (`GET /api/space/apps/sandbox-overview`) cũng
+có cột `mode` vì lý do đó: không có nó thì một nửa danh sách đọc như đang chết.
+
 ## "Đang chạy" và "do daemon khởi chạy" là hai chuyện khác nhau
 
 `ensure_server_running` **không** khởi chạy lại một app đã khoẻ: nếu cổng cố định

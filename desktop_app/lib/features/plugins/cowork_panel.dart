@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../models/cowork_models.dart';
 import '../../theme/tokens.dart';
@@ -35,13 +36,13 @@ class CoworkPanel extends ConsumerWidget {
                             color: c.textPrimary,
                             fontSize: 16,
                             fontWeight: FontWeight.w700)),
-                    Text('Manage team templates & multi-agent teams',
+                    Text(context.tr('Manage team templates & multi-agent teams'),
                         style: TextStyle(color: c.textMuted, fontSize: 12)),
                   ],
                 ),
                 const Spacer(),
                 IconButton(
-                  tooltip: 'Reload',
+                  tooltip: context.tr('Reload'),
                   icon: const Icon(Icons.refresh, size: 18),
                   onPressed: () {
                     ref.invalidate(coworkTemplatesProvider);
@@ -58,9 +59,9 @@ class CoworkPanel extends ConsumerWidget {
             unselectedLabelColor: c.textMuted,
             indicatorColor: c.accent,
             tabs: [
-              const Tab(text: 'Templates'),
-              Tab(text: 'Teams (${teams.length})'),
-              const Tab(text: 'Personas'),
+              Tab(text: context.tr('Templates')),
+              Tab(text: context.trArgs('Teams ({n})', {'n': teams.length})),
+              Tab(text: context.tr('Personas')),
             ],
           ),
           const Expanded(
@@ -92,8 +93,8 @@ class _TemplatesTab extends ConsumerWidget {
               children: [
                 Expanded(
                   child: Text(
-                      'Built-in blueprints + your custom templates. '
-                      'Use one to spin up a team.',
+                      context.tr('Built-in blueprints + your custom templates. '
+                          'Use one to spin up a team.'),
                       style: TextStyle(color: c.textMuted, fontSize: 12)),
                 ),
                 FilledButton.icon(
@@ -101,7 +102,7 @@ class _TemplatesTab extends ConsumerWidget {
                       context: context,
                       builder: (_) => const _TemplateEditor()),
                   icon: const Icon(Icons.add, size: 16),
-                  label: const Text('New template'),
+                  label: Text(context.tr('New template')),
                 ),
               ],
             ),
@@ -155,7 +156,7 @@ class _TemplateCard extends ConsumerWidget {
                     color: c.accentSoft,
                     borderRadius: BorderRadius.circular(AppTokens.rSm),
                   ),
-                  child: Text('built-in',
+                  child: Text(context.tr('built-in'),
                       style: TextStyle(color: c.accent, fontSize: 11)),
                 ),
             ],
@@ -164,7 +165,9 @@ class _TemplateCard extends ConsumerWidget {
           SizedBox(
             height: 54,
             child: Text(
-                t.description.isEmpty ? 'No description' : t.description,
+                t.description.isEmpty
+                    ? context.tr('No description')
+                    : t.description,
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: c.textMuted, fontSize: 12)),
@@ -177,7 +180,7 @@ class _TemplateCard extends ConsumerWidget {
               Expanded(
                 child: Text(
                     '${t.manager.isEmpty ? 'manager' : t.manager} · '
-                    '${t.memberCount} member${t.memberCount == 1 ? '' : 's'}',
+                    '${context.trPlural(t.memberCount, '{n} member', '{n} members')}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: c.textMuted, fontSize: 12)),
@@ -193,15 +196,17 @@ class _TemplateCard extends ConsumerWidget {
                   if (id != null && context.mounted) {
                     DefaultTabController.of(context).animateTo(1);
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text('Team created from ${t.name}')));
+                        content: Text(context.trArgs(
+                            'Team created from {name}', {'name': t.name}))));
                   }
                 },
                 icon: const Icon(Icons.bolt, size: 16),
-                label: const Text('Use'),
+                label: Text(context.tr('Use')),
               ),
               const Spacer(),
               IconButton(
-                tooltip: t.builtin ? 'Clone to edit' : 'Edit',
+                tooltip:
+                    context.tr(t.builtin ? 'Clone to edit' : 'Edit'),
                 icon: const Icon(Icons.edit_outlined, size: 16),
                 onPressed: () => showDialog(
                     context: context,
@@ -209,7 +214,7 @@ class _TemplateCard extends ConsumerWidget {
               ),
               if (!t.builtin)
                 IconButton(
-                  tooltip: 'Delete',
+                  tooltip: context.tr('Delete'),
                   icon: const Icon(Icons.delete_outline,
                       size: 16, color: AppTokens.danger),
                   onPressed: () async {
@@ -238,7 +243,7 @@ class _TeamsTab extends ConsumerWidget {
       error: (e, _) => Center(child: Text('$e')),
       data: (list) => list.isEmpty
           ? Center(
-              child: Text('No teams yet — create one from a template',
+              child: Text(context.tr('No teams yet — create one from a template'),
                   style: TextStyle(color: c.textMuted)))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(AppTokens.s24),
@@ -298,8 +303,8 @@ class _TeamCard extends ConsumerWidget {
               Icon(Icons.smart_toy_outlined, size: 14, color: c.textMuted),
               const SizedBox(width: 4),
               Text(
-                  '${t.managerFolder} · ${t.members.length} '
-                  'member${t.members.length == 1 ? '' : 's'}',
+                  '${t.managerFolder} · '
+                  '${context.trPlural(t.members.length, '{n} member', '{n} members')}',
                   style: TextStyle(color: c.textMuted, fontSize: 12)),
             ],
           ),
@@ -333,14 +338,14 @@ class _TeamCard extends ConsumerWidget {
                   context.go('/cowork');
                 },
                 icon: const Icon(Icons.open_in_new, size: 16),
-                label: const Text('Open'),
+                label: Text(context.tr('Open')),
               ),
               OutlinedButton.icon(
                 onPressed: () => showDialog(
                     context: context,
                     builder: (_) => _TeamSettingsDialog(team: t)),
                 icon: const Icon(Icons.settings_outlined, size: 16),
-                label: const Text('Settings'),
+                label: Text(context.tr('Settings')),
               ),
               TextButton.icon(
                 onPressed: () async {
@@ -349,12 +354,12 @@ class _TeamCard extends ConsumerWidget {
                       body: {});
                   ref.invalidate(coworkTemplatesProvider);
                   if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                        content: Text('Saved as template')));
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text(context.tr('Saved as template'))));
                   }
                 },
                 icon: const Icon(Icons.bookmark_add_outlined, size: 16),
-                label: const Text('Save as template'),
+                label: Text(context.tr('Save as template')),
               ),
             ],
           ),
@@ -443,7 +448,8 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
 
   Future<void> _save() async {
     if (_name.text.trim().isEmpty || _manager.text.trim().isEmpty) {
-      setState(() => _error = 'Name and manager folder are required');
+      setState(() =>
+          _error = context.tr('Name and manager folder are required'));
       return;
     }
     setState(() {
@@ -497,7 +503,7 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(_id.isEmpty ? 'New template' : 'Edit template',
+              Text(context.tr(_id.isEmpty ? 'New template' : 'Edit template'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,
@@ -514,7 +520,7 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                             controller: _icon,
                             textAlign: TextAlign.center,
                             decoration:
-                                const InputDecoration(labelText: 'Icon'),
+                                InputDecoration(labelText: context.tr('Icon')),
                           ),
                         ),
                         const SizedBox(width: AppTokens.s8),
@@ -522,7 +528,7 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                           child: TextField(
                             controller: _name,
                             decoration:
-                                const InputDecoration(labelText: 'Name'),
+                                InputDecoration(labelText: context.tr('Name')),
                           ),
                         ),
                       ],
@@ -532,8 +538,8 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                       controller: _description,
                       minLines: 2,
                       maxLines: 3,
-                      decoration:
-                          const InputDecoration(labelText: 'Description'),
+                      decoration: InputDecoration(
+                          labelText: context.tr('Description')),
                     ),
                     const SizedBox(height: AppTokens.s8),
                     Row(
@@ -541,16 +547,16 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                         Expanded(
                           child: TextField(
                             controller: _manager,
-                            decoration: const InputDecoration(
-                                labelText: 'Manager folder'),
+                            decoration: InputDecoration(
+                                labelText: context.tr('Manager folder')),
                           ),
                         ),
                         const SizedBox(width: AppTokens.s8),
                         Expanded(
                           child: TextField(
                             controller: _managerRole,
-                            decoration: const InputDecoration(
-                                labelText: 'Manager role'),
+                            decoration: InputDecoration(
+                                labelText: context.tr('Manager role')),
                           ),
                         ),
                       ],
@@ -558,7 +564,7 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                     const SizedBox(height: AppTokens.s12),
                     Row(
                       children: [
-                        Text('Members',
+                        Text(context.tr('Members'),
                             style: TextStyle(
                                 color: c.textSecondary,
                                 fontWeight: FontWeight.w700)),
@@ -567,7 +573,7 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                           onPressed: () =>
                               setState(() => _members.add(_MemberFields())),
                           icon: const Icon(Icons.add, size: 16),
-                          label: const Text('Add member'),
+                          label: Text(context.tr('Add member')),
                         ),
                       ],
                     ),
@@ -587,9 +593,10 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                                 Expanded(
                                   child: TextField(
                                     controller: _members[i].folder,
-                                    decoration: const InputDecoration(
+                                    decoration: InputDecoration(
                                         isDense: true,
-                                        hintText: 'folder (persona)'),
+                                        hintText:
+                                            context.tr('folder (persona)')),
                                   ),
                                 ),
                                 const SizedBox(width: AppTokens.s8),
@@ -597,8 +604,9 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                                   width: 130,
                                   child: TextField(
                                     controller: _members[i].role,
-                                    decoration: const InputDecoration(
-                                        isDense: true, hintText: 'role'),
+                                    decoration: InputDecoration(
+                                        isDense: true,
+                                        hintText: context.tr('role')),
                                   ),
                                 ),
                                 IconButton(
@@ -613,18 +621,18 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                             ),
                             TextField(
                               controller: _members[i].resp,
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                   isDense: true,
-                                  hintText: 'responsibilities'),
+                                  hintText: context.tr('responsibilities')),
                             ),
                             const SizedBox(height: 4),
                             TextField(
                               controller: _members[i].triggers,
                               style: const TextStyle(fontSize: 12),
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                   isDense: true,
-                                  hintText:
-                                      'triggers JSON e.g. [{"type":"task_assigned"}]'),
+                                  hintText: context.tr(
+                                      'triggers JSON e.g. [{"type":"task_assigned"}]')),
                             ),
                           ],
                         ),
@@ -632,7 +640,8 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                     const SizedBox(height: AppTokens.s8),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: Text('Auto-create tasks on each user message',
+                      title: Text(
+                          context.tr('Auto-create tasks on each user message'),
                           style: TextStyle(
                               color: c.textPrimary, fontSize: 14)),
                       value: _autoCreateTasks,
@@ -654,7 +663,7 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                 children: [
                   TextButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton(
                     onPressed: _saving ? null : _save,
@@ -663,7 +672,7 @@ class _TemplateEditorState extends ConsumerState<_TemplateEditor> {
                             width: 14,
                             height: 14,
                             child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text('Save'),
+                        : Text(context.tr('Save')),
                   ),
                 ],
               ),
@@ -733,7 +742,8 @@ class _TeamSettingsDialogState extends ConsumerState<_TeamSettingsDialog> {
     final c = context.colors;
     return AlertDialog(
       backgroundColor: c.surface,
-      title: Text('${widget.team.name} · settings'),
+      title: Text(context
+          .trArgs('{name} · settings', {'name': widget.team.name})),
       content: SizedBox(
         width: 480,
         child: Column(
@@ -742,7 +752,7 @@ class _TeamSettingsDialogState extends ConsumerState<_TeamSettingsDialog> {
           children: [
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: Text('Auto-create tasks on each user message',
+              title: Text(context.tr('Auto-create tasks on each user message'),
                   style: TextStyle(color: c.textPrimary, fontSize: 14)),
               value: _autoCreate,
               onChanged: (v) => setState(() => _autoCreate = v),
@@ -752,9 +762,10 @@ class _TeamSettingsDialogState extends ConsumerState<_TeamSettingsDialog> {
               controller: _preamble,
               minLines: 3,
               maxLines: 6,
-              decoration: const InputDecoration(
-                labelText: 'Manager preamble',
-                hintText: 'Extra system instructions prepended for the manager',
+              decoration: InputDecoration(
+                labelText: context.tr('Manager preamble'),
+                hintText: context
+                    .tr('Extra system instructions prepended for the manager'),
                 alignLabelWithHint: true,
               ),
             ),
@@ -764,7 +775,7 @@ class _TeamSettingsDialogState extends ConsumerState<_TeamSettingsDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
+            child: Text(context.tr('Cancel'))),
         FilledButton(
           onPressed: _saving ? null : _save,
           child: _saving
@@ -772,7 +783,7 @@ class _TeamSettingsDialogState extends ConsumerState<_TeamSettingsDialog> {
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(strokeWidth: 2))
-              : const Text('Save'),
+              : Text(context.tr('Save')),
         ),
       ],
     );
@@ -808,7 +819,7 @@ class _PersonasTab extends ConsumerWidget {
       error: (e, _) => Center(child: Text('$e')),
       data: (list) => list.isEmpty
           ? Center(
-              child: Text('No personas',
+              child: Text(context.tr('No personas'),
                   style: TextStyle(color: c.textMuted)))
           : ListView.builder(
               padding: const EdgeInsets.all(AppTokens.s16),
@@ -849,7 +860,7 @@ class _PersonasTab extends ConsumerWidget {
                             context: context,
                             builder: (_) => _PersonaEditor(name: p.name)),
                         icon: const Icon(Icons.edit_outlined, size: 14),
-                        label: const Text('Edit'),
+                        label: Text(context.tr('Edit')),
                       ),
                     ],
                   ),
@@ -913,7 +924,7 @@ class _PersonaEditorState extends ConsumerState<_PersonaEditor> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Persona · ${widget.name}',
+              Text(context.trArgs('Persona · {name}', {'name': widget.name}),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,
@@ -927,9 +938,9 @@ class _PersonaEditorState extends ConsumerState<_PersonaEditor> {
                         expands: true,
                         maxLines: null,
                         textAlignVertical: TextAlignVertical.top,
-                        decoration: const InputDecoration(
-                            hintText: 'Persona markdown…',
-                            border: OutlineInputBorder()),
+                        decoration: InputDecoration(
+                            hintText: context.tr('Persona markdown…'),
+                            border: const OutlineInputBorder()),
                       ),
               ),
               const SizedBox(height: AppTokens.s16),
@@ -938,11 +949,11 @@ class _PersonaEditorState extends ConsumerState<_PersonaEditor> {
                 children: [
                   TextButton(
                       onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton(
                       onPressed: _loading ? null : _save,
-                      child: const Text('Save')),
+                      child: Text(context.tr('Save'))),
                 ],
               ),
             ],

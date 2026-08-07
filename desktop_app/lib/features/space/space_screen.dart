@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import '../../core/i18n/l10n.dart';
+import 'app_health_gate.dart';
 import '../../core/transport/connection.dart';
 import '../../models/space_models.dart';
 import '../../theme/tokens.dart';
@@ -25,7 +27,7 @@ class NotesScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      const SectionScaffold(title: 'Notes', body: _NotesTab());
+      SectionScaffold(title: context.tr('Notes'), body: const _NotesTab());
 }
 
 /// Top-level Calendar screen (was the Space → Calendar tab). Rail item
@@ -35,7 +37,7 @@ class CalendarScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      const SectionScaffold(title: 'Calendar', body: _CalendarTab());
+      SectionScaffold(title: context.tr('Calendar'), body: const _CalendarTab());
 }
 
 /// Schedules manager, surfaced as a Plugins section (was the Space →
@@ -44,8 +46,8 @@ class SchedulesPanel extends StatelessWidget {
   const SchedulesPanel({super.key});
 
   @override
-  Widget build(BuildContext context) =>
-      const SectionScaffold(title: 'Schedules', body: _SchedulesTab());
+  Widget build(BuildContext context) => SectionScaffold(
+      title: context.tr('Schedules'), body: const _SchedulesTab());
 }
 
 // ── Notes ─────────────────────────────────────────────────────────────────
@@ -88,16 +90,16 @@ class _NotesTabState extends ConsumerState<_NotesTab> {
                     children: [
                       Expanded(
                         child: TextField(
-                          decoration: const InputDecoration(
-                            hintText: 'Search notes…',
-                            prefixIcon: Icon(Icons.search, size: 16),
+                          decoration: InputDecoration(
+                            hintText: context.tr('Search notes…'),
+                            prefixIcon: const Icon(Icons.search, size: 16),
                           ),
                           onChanged: (v) => setState(() => _query = v.toLowerCase()),
                         ),
                       ),
                       const SizedBox(width: AppTokens.s8),
                       IconButton.filled(
-                        tooltip: 'New note',
+                        tooltip: context.tr('New note'),
                         icon: const Icon(Icons.add, size: 18),
                         onPressed: () => _editNote(context, ref, null),
                       ),
@@ -117,8 +119,9 @@ class _NotesTabState extends ConsumerState<_NotesTab> {
                         return Center(
                           child: Text(
                               _tagFilter != null
-                                  ? 'No notes tagged #$_tagFilter'
-                                  : 'No notes',
+                                  ? context.trArgs('No notes tagged #{tag}',
+                                      {'tag': _tagFilter})
+                                  : context.tr('No notes'),
                               style: TextStyle(color: c.textMuted)),
                         );
                       }
@@ -141,7 +144,10 @@ class _NotesTabState extends ConsumerState<_NotesTab> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(n.title.isEmpty ? '(untitled)' : n.title,
+                                  Text(
+                                      n.title.isEmpty
+                                          ? context.tr('(untitled)')
+                                          : n.title,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
@@ -178,7 +184,7 @@ class _NotesTabState extends ConsumerState<_NotesTab> {
               final note = notes.where((n) => n.id == _selectedId).firstOrNull;
               if (note == null) {
                 return Center(
-                  child: Text('Select a note',
+                  child: Text(context.tr('Select a note'),
                       style: TextStyle(color: c.textMuted)),
                 );
               }
@@ -221,7 +227,7 @@ class _NotesTabState extends ConsumerState<_NotesTab> {
             AppTokens.s12, 0, AppTokens.s12, AppTokens.s4),
         children: [
           _FilterChip(
-              label: 'All',
+              label: context.tr('All'),
               active: _tagFilter == null,
               onTap: () => setState(() => _tagFilter = null)),
           for (final t in sorted) ...[
@@ -396,7 +402,10 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(widget.note == null ? 'New note' : 'Edit note',
+              Text(
+                  widget.note == null
+                      ? context.tr('New note')
+                      : context.tr('Edit note'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,
@@ -404,22 +413,23 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
               const SizedBox(height: AppTokens.s12),
               TextField(
                   controller: _title,
-                  decoration: const InputDecoration(hintText: 'Title')),
+                  decoration:
+                      InputDecoration(hintText: context.tr('Title'))),
               const SizedBox(height: AppTokens.s8),
               Align(
                 alignment: Alignment.centerRight,
                 child: SegmentedButton<bool>(
                   style:
                       const ButtonStyle(visualDensity: VisualDensity.compact),
-                  segments: const [
+                  segments: [
                     ButtonSegment(
                         value: false,
-                        icon: Icon(Icons.edit_outlined, size: 14),
-                        label: Text('Edit')),
+                        icon: const Icon(Icons.edit_outlined, size: 14),
+                        label: Text(context.tr('Edit'))),
                     ButtonSegment(
                         value: true,
-                        icon: Icon(Icons.visibility_outlined, size: 14),
-                        label: Text('Preview')),
+                        icon: const Icon(Icons.visibility_outlined, size: 14),
+                        label: Text(context.tr('Preview'))),
                   ],
                   selected: {_preview},
                   onSelectionChanged: (s) =>
@@ -439,18 +449,20 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
                   ),
                   child: Row(
                     children: [
-                      _toolBtn(Icons.check_box_outlined, 'Checklist item',
+                      _toolBtn(Icons.check_box_outlined,
+                          context.tr('Checklist item'),
                           () => _linePrefix('- [ ] ')),
-                      _toolBtn(Icons.format_list_bulleted, 'Bullet list',
-                          () => _linePrefix('- ')),
-                      _toolBtn(Icons.title, 'Heading',
+                      _toolBtn(Icons.format_list_bulleted,
+                          context.tr('Bullet list'), () => _linePrefix('- ')),
+                      _toolBtn(Icons.title, context.tr('Heading'),
                           () => _linePrefix('## ')),
                       const SizedBox(width: 2),
                       Container(width: 1, height: 18, color: c.border),
                       const SizedBox(width: 2),
-                      _toolBtn(Icons.format_bold, 'Bold', () => _wrap('**')),
-                      _toolBtn(
-                          Icons.format_italic, 'Italic', () => _wrap('_')),
+                      _toolBtn(Icons.format_bold, context.tr('Bold'),
+                          () => _wrap('**')),
+                      _toolBtn(Icons.format_italic, context.tr('Italic'),
+                          () => _wrap('_')),
                     ],
                   ),
                 ),
@@ -466,7 +478,7 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
                         ),
                         child: SingleChildScrollView(
                           child: _body.text.trim().isEmpty
-                              ? Text('(empty)',
+                              ? Text(context.tr('(empty)'),
                                   style: TextStyle(
                                       color: c.textMuted,
                                       fontStyle: FontStyle.italic))
@@ -486,9 +498,9 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
                         expands: true,
                         maxLines: null,
                         textAlignVertical: TextAlignVertical.top,
-                        decoration: const InputDecoration(
-                            hintText:
-                                'Body — Markdown, or “- [ ] task” for a checklist…'),
+                        decoration: InputDecoration(
+                            hintText: context.tr(
+                                'Body — Markdown, or “- [ ] task” for a checklist…')),
                       ),
               ),
               const SizedBox(height: AppTokens.s8),
@@ -500,7 +512,7 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
                     setState(() => _tagList = _tagList.where((x) => x != t).toList()),
               ),
               const SizedBox(height: 4),
-              Text('#hashtags trong nội dung sẽ tự thành nhãn khi lưu.',
+              Text(context.tr('#hashtags in the body become labels on save.'),
                   style: TextStyle(color: c.textMuted, fontSize: 11)),
               const SizedBox(height: AppTokens.s16),
               Row(
@@ -508,9 +520,10 @@ class _NoteEditorState extends ConsumerState<_NoteEditor> {
                 children: [
                   TextButton(
                       onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
-                  FilledButton(onPressed: _save, child: const Text('Save')),
+                  FilledButton(
+                      onPressed: _save, child: Text(context.tr('Save'))),
                 ],
               ),
             ],
@@ -619,7 +632,9 @@ class _TagEditor extends StatelessWidget {
               decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
-                hintText: tags.isEmpty ? 'Add label…' : 'Add…',
+                hintText: tags.isEmpty
+                    ? context.tr('Add label…')
+                    : context.tr('Add…'),
                 hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
                 contentPadding: EdgeInsets.zero,
               ),
@@ -673,7 +688,7 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
             children: [
               if (_monthView && !searching) ...[
                 IconButton(
-                  tooltip: 'Previous month',
+                  tooltip: context.tr('Previous month'),
                   icon: const Icon(Icons.chevron_left, size: 20),
                   onPressed: () => setState(
                       () => _month = DateTime(_month.year, _month.month - 1)),
@@ -684,7 +699,7 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
                         fontSize: 15,
                         fontWeight: FontWeight.w700)),
                 IconButton(
-                  tooltip: 'Next month',
+                  tooltip: context.tr('Next month'),
                   icon: const Icon(Icons.chevron_right, size: 20),
                   onPressed: () => setState(
                       () => _month = DateTime(_month.year, _month.month + 1)),
@@ -692,7 +707,7 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
                 TextButton(
                   onPressed: () => setState(() => _month = DateTime(
                       DateTime.now().year, DateTime.now().month)),
-                  child: const Text('Today'),
+                  child: Text(context.tr('Today')),
                 ),
               ],
               const SizedBox(width: AppTokens.s8),
@@ -702,7 +717,7 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
                 child: TextField(
                   onChanged: (v) => setState(() => _query = v.trim()),
                   decoration: InputDecoration(
-                    hintText: 'Search events…',
+                    hintText: context.tr('Search events…'),
                     prefixIcon: const Icon(Icons.search, size: 16),
                     isDense: true,
                     border: const OutlineInputBorder(),
@@ -731,7 +746,7 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
               ),
               const SizedBox(width: AppTokens.s8),
               IconButton(
-                tooltip: 'Reload events',
+                tooltip: context.tr('Reload events'),
                 icon: const Icon(Icons.refresh, size: 18),
                 onPressed: () => ref.invalidate(eventsProvider),
               ),
@@ -740,7 +755,7 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
                 onPressed: () => showDialog(
                     context: context, builder: (_) => const _EventEditor()),
                 icon: const Icon(Icons.add_rounded, size: 18),
-                label: const Text('New event'),
+                label: Text(context.tr('New event')),
                 style: FilledButton.styleFrom(
                   backgroundColor: context.colors.accent,
                   foregroundColor: Colors.white,
@@ -768,7 +783,9 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
               if (filtered.isEmpty) {
                 return Center(
                   child: Text(
-                      searching ? 'No matching events' : 'No upcoming events',
+                      searching
+                          ? context.tr('No matching events')
+                          : context.tr('No upcoming events'),
                       style: TextStyle(color: c.textMuted)),
                 );
               }
@@ -799,7 +816,10 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
                                   style: TextStyle(
                                       color: c.textPrimary,
                                       fontWeight: FontWeight.w600)),
-                              Text(e.allDay ? 'All day' : fmt.format(e.start),
+                              Text(
+                                  e.allDay
+                                      ? context.tr('All day')
+                                      : fmt.format(e.start),
                                   style: TextStyle(
                                       color: c.textMuted, fontSize: 12)),
                             ],
@@ -809,7 +829,9 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
                         // lesson, a board, a report) opens it directly.
                         if (isInternalAppLink(e.link))
                           IconButton(
-                            tooltip: 'Mở ${e.linkAppId ?? 'nội dung'}',
+                            tooltip: context.trArgs('Open {target}', {
+                              'target': e.linkAppId ?? context.tr('content')
+                            }),
                             icon: Icon(Icons.open_in_new,
                                 size: 16, color: c.accent),
                             onPressed: () async {
@@ -822,7 +844,7 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
                             },
                           ),
                         IconButton(
-                          tooltip: 'Edit',
+                          tooltip: context.tr('Edit'),
                           icon: Icon(Icons.edit_outlined,
                               size: 16, color: c.textSecondary),
                           onPressed: () => showDialog(
@@ -830,7 +852,7 @@ class _CalendarTabState extends ConsumerState<_CalendarTab> {
                               builder: (_) => _EventEditor(existing: e)),
                         ),
                         IconButton(
-                          tooltip: 'Delete',
+                          tooltip: context.tr('Delete'),
                           icon: const Icon(Icons.delete_outline,
                               size: 16, color: AppTokens.danger),
                           onPressed: () =>
@@ -882,7 +904,7 @@ class _MonthGrid extends StatelessWidget {
               for (final d in dow)
                 Expanded(
                   child: Center(
-                    child: Text(d,
+                    child: Text(context.tr(d),
                         style: TextStyle(
                             color: c.textMuted,
                             fontSize: 11,
@@ -1024,7 +1046,7 @@ class _DayEventsDialog extends ConsumerWidget {
               style: const TextStyle(fontSize: 16)),
         ),
         IconButton(
-          tooltip: 'New event',
+          tooltip: context.tr('New event'),
           icon: const Icon(Icons.add, size: 18),
           onPressed: () => showDialog(
               context: context,
@@ -1036,7 +1058,7 @@ class _DayEventsDialog extends ConsumerWidget {
         child: events.isEmpty
             ? Padding(
                 padding: const EdgeInsets.symmetric(vertical: AppTokens.s16),
-                child: Text('No events on this day.',
+                child: Text(context.tr('No events on this day.'),
                     style: TextStyle(color: c.textMuted)),
               )
             : Column(
@@ -1071,7 +1093,7 @@ class _DayEventsDialog extends ConsumerWidget {
                                       fontWeight: FontWeight.w600)),
                               Text(
                                   e.allDay
-                                      ? 'All day'
+                                      ? context.tr('All day')
                                       : '${fmt.format(e.start)} – ${fmt.format(DateTime.fromMillisecondsSinceEpoch(e.endAt))}',
                                   style: TextStyle(
                                       color: c.textMuted, fontSize: 12)),
@@ -1089,7 +1111,9 @@ class _DayEventsDialog extends ConsumerWidget {
                         // lesson, a board, a report) opens it directly.
                         if (isInternalAppLink(e.link))
                           IconButton(
-                            tooltip: 'Mở ${e.linkAppId ?? 'nội dung'}',
+                            tooltip: context.trArgs('Open {target}', {
+                              'target': e.linkAppId ?? context.tr('content')
+                            }),
                             icon: Icon(Icons.open_in_new,
                                 size: 16, color: c.accent),
                             onPressed: () async {
@@ -1102,7 +1126,7 @@ class _DayEventsDialog extends ConsumerWidget {
                             },
                           ),
                         IconButton(
-                          tooltip: 'Edit',
+                          tooltip: context.tr('Edit'),
                           icon: Icon(Icons.edit_outlined,
                               size: 16, color: c.textSecondary),
                           onPressed: () => showDialog(
@@ -1110,7 +1134,7 @@ class _DayEventsDialog extends ConsumerWidget {
                               builder: (_) => _EventEditor(existing: e)),
                         ),
                         IconButton(
-                          tooltip: 'Delete',
+                          tooltip: context.tr('Delete'),
                           icon: const Icon(Icons.delete_outline,
                               size: 16, color: AppTokens.danger),
                           onPressed: () =>
@@ -1124,7 +1148,7 @@ class _DayEventsDialog extends ConsumerWidget {
       actions: [
         TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close')),
+            child: Text(context.tr('Close'))),
       ],
     );
   }
@@ -1272,8 +1296,8 @@ class _EventEditorState extends ConsumerState<_EventEditor> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Failed: {e}', {'e': e}))));
       }
     }
   }
@@ -1310,7 +1334,10 @@ class _EventEditorState extends ConsumerState<_EventEditor> {
                     child: Icon(Icons.event, color: c.accent, size: 20),
                   ),
                   const SizedBox(width: AppTokens.s12),
-                  Text(widget.existing == null ? 'New event' : 'Edit event',
+                  Text(
+                      widget.existing == null
+                          ? context.tr('New event')
+                          : context.tr('Edit event'),
                       style: TextStyle(
                           color: c.textPrimary,
                           fontSize: 18,
@@ -1323,10 +1350,10 @@ class _EventEditorState extends ConsumerState<_EventEditor> {
                 autofocus: true,
                 textInputAction: TextInputAction.next,
                 onChanged: (_) => setState(() {}),
-                decoration: const InputDecoration(
-                  labelText: 'Title',
-                  hintText: 'What is it?',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: context.tr('Title'),
+                  hintText: context.tr('What is it?'),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
               ),
@@ -1335,21 +1362,21 @@ class _EventEditorState extends ConsumerState<_EventEditor> {
                 controller: _description,
                 minLines: 2,
                 maxLines: 4,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  hintText: 'Optional notes…',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: context.tr('Description'),
+                  hintText: context.tr('Optional notes…'),
+                  border: const OutlineInputBorder(),
                   alignLabelWithHint: true,
                 ),
               ),
               const SizedBox(height: AppTokens.s12),
               TextField(
                 controller: _location,
-                decoration: const InputDecoration(
-                  labelText: 'Location',
-                  hintText: 'Optional',
-                  prefixIcon: Icon(Icons.place_outlined, size: 18),
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: context.tr('Location'),
+                  hintText: context.tr('Optional'),
+                  prefixIcon: const Icon(Icons.place_outlined, size: 18),
+                  border: const OutlineInputBorder(),
                   isDense: true,
                 ),
               ),
@@ -1367,7 +1394,7 @@ class _EventEditorState extends ConsumerState<_EventEditor> {
                   children: [
                     Icon(Icons.today_outlined, size: 16, color: c.textSecondary),
                     const SizedBox(width: AppTokens.s8),
-                    Text('All day',
+                    Text(context.tr('All day'),
                         style: TextStyle(color: c.textPrimary, fontSize: 13)),
                     const Spacer(),
                     Switch(
@@ -1379,12 +1406,14 @@ class _EventEditorState extends ConsumerState<_EventEditor> {
               ),
               const SizedBox(height: AppTokens.s12),
               _DateField(
-                  label: 'Starts',
+                  label: context.tr('Starts'),
                   value: df.format(_start),
                   onTap: _editStart),
               const SizedBox(height: AppTokens.s8),
               _DateField(
-                  label: 'Ends', value: df.format(_end), onTap: _editEnd),
+                  label: context.tr('Ends'),
+                  value: df.format(_end),
+                  onTap: _editEnd),
               const SizedBox(height: AppTokens.s24),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -1393,7 +1422,7 @@ class _EventEditorState extends ConsumerState<_EventEditor> {
                       onPressed: _saving
                           ? null
                           : () => Navigator.of(context).pop(),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton.icon(
                     onPressed: canSave ? _save : null,
@@ -1403,7 +1432,7 @@ class _EventEditorState extends ConsumerState<_EventEditor> {
                             height: 14,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.check, size: 16),
-                    label: const Text('Create'),
+                    label: Text(context.tr('Create')),
                   ),
                 ],
               ),
@@ -1481,7 +1510,7 @@ class SpaceAppsScreen extends ConsumerWidget {
           decoration:
               BoxDecoration(border: Border(bottom: BorderSide(color: c.border))),
           child: Row(children: [
-            Text('Apps',
+            Text(context.tr('Apps'),
                 style: TextStyle(
                     color: c.textPrimary,
                     fontSize: 16,
@@ -1495,12 +1524,14 @@ class SpaceAppsScreen extends ConsumerWidget {
                   color: c.accentSoft,
                   borderRadius: BorderRadius.circular(AppTokens.rFull),
                 ),
-                child: Text('${run.running.length} running',
+                child: Text(
+                    context.trArgs(
+                        '{n} running', {'n': run.running.length}),
                     style: TextStyle(color: c.accent, fontSize: 11)),
               ),
             const Spacer(),
             IconButton(
-              tooltip: 'Reload apps',
+              tooltip: context.tr('Reload apps'),
               icon: const Icon(Icons.refresh, size: 18),
               onPressed: () => ref.invalidate(spaceAppsProvider),
             ),
@@ -1512,7 +1543,7 @@ class SpaceAppsScreen extends ConsumerWidget {
             error: (e, _) => Center(child: Text('$e')),
             data: (list) => list.isEmpty
                 ? Center(
-                    child: Text('No apps installed',
+                    child: Text(context.tr('No apps installed'),
                         style: TextStyle(color: c.textMuted)))
                 : GridView.builder(
                     padding: const EdgeInsets.all(AppTokens.s24),
@@ -1634,28 +1665,33 @@ Future<void> showAppContextMenu(
         pos & const Size(40, 40), Offset.zero & overlay.size),
     items: [
       if (running) ...[
-        const PopupMenuItem(
+        PopupMenuItem(
             value: 'stop',
-            child: _MenuRow(Icons.stop_circle_outlined, 'Stop',
+            child: _MenuRow(Icons.stop_circle_outlined, context.tr('Stop'),
                 color: AppTokens.danger)),
-        const PopupMenuItem(
+        PopupMenuItem(
             value: 'restart',
-            child: _MenuRow(Icons.restart_alt, 'Restart')),
+            child: _MenuRow(Icons.restart_alt, context.tr('Restart'))),
       ] else
-        const PopupMenuItem(
-            value: 'start', child: _MenuRow(Icons.play_arrow, 'Start')),
+        PopupMenuItem(
+            value: 'start',
+            child: _MenuRow(Icons.play_arrow, context.tr('Start'))),
       const PopupMenuDivider(),
       PopupMenuItem(
         value: 'pin',
         child: _MenuRow(
             pinned ? Icons.push_pin : Icons.push_pin_outlined,
-            pinned ? 'Unpin from dashboard' : 'Pin to dashboard'),
+            pinned
+                ? context.tr('Unpin from dashboard')
+                : context.tr('Pin to dashboard')),
       ),
       const PopupMenuDivider(),
-      const PopupMenuItem(
-          value: 'info', child: _MenuRow(Icons.info_outline, 'App info')),
-      const PopupMenuItem(
-          value: 'details', child: _MenuRow(Icons.tune, 'Details')),
+      PopupMenuItem(
+          value: 'info',
+          child: _MenuRow(Icons.info_outline, context.tr('App info'))),
+      PopupMenuItem(
+          value: 'details',
+          child: _MenuRow(Icons.tune, context.tr('Details'))),
     ],
   );
   if (choice == null || !context.mounted) return;
@@ -1670,8 +1706,9 @@ Future<void> showAppContextMenu(
           .read(apiClientProvider)
           .post('/api/space/apps/${app.id}/restart');
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Restarting ${app.name}…')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context
+                .trArgs('Restarting {name}…', {'name': app.name}))));
       }
     case 'pin':
       ref.read(pinnedAppsProvider.notifier).toggle(app.id);
@@ -1735,12 +1772,16 @@ class _AppInfoDialog extends ConsumerWidget {
                         const SizedBox(height: AppTokens.s4),
                         Row(children: [
                           _Badge(
-                            running ? 'Running' : 'Stopped',
+                            running
+                                ? context.tr('Running')
+                                : context.tr('Stopped'),
                             running ? AppTokens.success : c.textMuted,
                           ),
                           const SizedBox(width: AppTokens.s8),
                           _Badge(
-                            app.enabled ? 'Enabled' : 'Disabled',
+                            app.enabled
+                                ? context.tr('Enabled')
+                                : context.tr('Disabled'),
                             app.enabled ? AppTokens.brand : AppTokens.danger,
                           ),
                         ]),
@@ -1752,7 +1793,7 @@ class _AppInfoDialog extends ConsumerWidget {
               const SizedBox(height: AppTokens.s16),
               Text(
                 app.description.isEmpty
-                    ? 'No description provided.'
+                    ? context.tr('No description provided.')
                     : app.description,
                 style: TextStyle(color: c.textSecondary, height: 1.5),
               ),
@@ -1764,7 +1805,7 @@ class _AppInfoDialog extends ConsumerWidget {
                   children: [
                     TextButton(
                         onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('Close')),
+                        child: Text(context.tr('Close'))),
                     const SizedBox(width: AppTokens.s8),
                     FilledButton.icon(
                       onPressed: () {
@@ -1773,7 +1814,8 @@ class _AppInfoDialog extends ConsumerWidget {
                       },
                       icon: Icon(running ? Icons.open_in_full : Icons.play_arrow,
                           size: 16),
-                      label: Text(running ? 'Open' : 'Start'),
+                      label: Text(
+                          running ? context.tr('Open') : context.tr('Start')),
                     ),
                   ],
                 ),
@@ -1804,20 +1846,24 @@ class _AppDetailsDialog extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('${app.name} · details',
+              Text(context.trArgs('{name} · details', {'name': app.name}),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,
                       fontWeight: FontWeight.w700)),
               const SizedBox(height: AppTokens.s16),
               _DetailRow('ID', app.id),
-              if (app.version.isNotEmpty) _DetailRow('Version', app.version),
-              _DetailRow('Status', running ? 'Running' : 'Stopped'),
-              _DetailRow('Enabled', app.enabled ? 'Yes' : 'No'),
+              if (app.version.isNotEmpty)
+                _DetailRow(context.tr('Version'), app.version),
+              _DetailRow(
+                  context.tr('Status'),
+                  running ? context.tr('Running') : context.tr('Stopped')),
+              _DetailRow(context.tr('Enabled'),
+                  app.enabled ? context.tr('Yes') : context.tr('No')),
               _DetailRow('URL', app.url),
               if (app.permissions.isNotEmpty) ...[
                 const SizedBox(height: AppTokens.s12),
-                Text('PERMISSIONS',
+                Text(context.tr('PERMISSIONS'),
                     style: TextStyle(
                         color: c.textMuted,
                         fontSize: 11,
@@ -1830,7 +1876,7 @@ class _AppDetailsDialog extends ConsumerWidget {
               ],
               if (app.mcpServers.isNotEmpty) ...[
                 const SizedBox(height: AppTokens.s12),
-                Text('MCP SERVERS',
+                Text(context.tr('MCP SERVERS'),
                     style: TextStyle(
                         color: c.textMuted,
                         fontSize: 11,
@@ -1846,7 +1892,7 @@ class _AppDetailsDialog extends ConsumerWidget {
                 alignment: Alignment.centerRight,
                 child: TextButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Close')),
+                    child: Text(context.tr('Close'))),
               ),
             ],
           ),
@@ -1971,7 +2017,7 @@ class _RunningAppView extends ConsumerWidget {
             child: Row(
               children: [
                 IconButton(
-                  tooltip: 'Back to apps (keep running)',
+                  tooltip: context.tr('Back to apps (keep running)'),
                   icon: const Icon(Icons.grid_view_outlined, size: 18),
                   onPressed: ctl.background,
                 ),
@@ -1986,32 +2032,34 @@ class _RunningAppView extends ConsumerWidget {
                         .read(apiClientProvider)
                         .post('/api/space/apps/${app.id}/restart');
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Restarting…')));
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(context.tr('Restarting…'))));
                     }
                   },
                   icon: const Icon(Icons.restart_alt, size: 16),
-                  label: const Text('Restart'),
+                  label: Text(context.tr('Restart')),
                 ),
                 IconButton(
-                  tooltip: 'Fullscreen',
+                  tooltip: context.tr('Fullscreen'),
                   icon: const Icon(Icons.fullscreen, size: 18),
                   onPressed: () => showDialog(
                     context: context,
                     barrierColor: Colors.black87,
                     builder: (dctx) => _AppFullscreen(
+                        appId: app.id,
+                        icon: app.icon,
                         url: app.url,
                         name: app.name,
                         theme: _embedTheme(dctx)),
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Run in background',
+                  tooltip: context.tr('Run in background'),
                   icon: const Icon(Icons.minimize, size: 18),
                   onPressed: ctl.background,
                 ),
                 IconButton(
-                  tooltip: 'Close app (terminate)',
+                  tooltip: context.tr('Close app (terminate)'),
                   icon: const Icon(Icons.power_settings_new, size: 18),
                   color: AppTokens.danger,
                   onPressed: () => ctl.close(app.id),
@@ -2020,8 +2068,16 @@ class _RunningAppView extends ConsumerWidget {
             ),
           ),
           Expanded(
-            child: embeddedWebView(app.url,
-                title: app.name, theme: _embedTheme(context)),
+            // Never point the web view at an app that is not answering: a
+            // server app runs on its own port, so a dead one renders as a
+            // blank white rectangle with no error in it.
+            child: AppHealthGate(
+              appId: app.id,
+              appName: app.name,
+              appIcon: app.icon,
+              builder: (ctx) => embeddedWebView(app.url,
+                  title: app.name, theme: _embedTheme(ctx)),
+            ),
           ),
         ],
       ),
@@ -2062,7 +2118,7 @@ class _SchedulesTabState extends ConsumerState<_SchedulesTab> {
               OutlinedButton.icon(
                 onPressed: () => ref.invalidate(schedulesProvider),
                 icon: const Icon(Icons.refresh, size: 16),
-                label: const Text('Refresh'),
+                label: Text(context.tr('Refresh')),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: c.textSecondary,
                   side: BorderSide(color: c.border),
@@ -2077,7 +2133,7 @@ class _SchedulesTabState extends ConsumerState<_SchedulesTab> {
                 onPressed: () => showDialog(
                     context: context, builder: (_) => const ScheduleEditorDialog()),
                 icon: const Icon(Icons.add_rounded, size: 18),
-                label: const Text('New schedule'),
+                label: Text(context.tr('New schedule')),
                 style: FilledButton.styleFrom(
                   backgroundColor: c.accent,
                   foregroundColor: Colors.white,
@@ -2100,7 +2156,7 @@ class _SchedulesTabState extends ConsumerState<_SchedulesTab> {
             data: (list) {
               if (list.isEmpty) {
                 return Center(
-                    child: Text('No schedules',
+                    child: Text(context.tr('No schedules'),
                         style: TextStyle(color: c.textMuted)));
               }
               final active = list.where((s) => s.status == 'active').toList()
@@ -2112,9 +2168,18 @@ class _SchedulesTabState extends ConsumerState<_SchedulesTab> {
               final paused = list.where((s) => s.status == 'paused').toList();
               final other = list.where((s) => s.status != 'active' && s.status != 'paused').toList();
               final sections = [
-                if (active.isNotEmpty) ('Đang chạy (${active.length})', active),
-                if (paused.isNotEmpty) ('Tạm dừng (${paused.length})', paused),
-                if (other.isNotEmpty) ('Khác (${other.length})', other),
+                if (active.isNotEmpty)
+                  (
+                    context.trArgs('Active ({n})', {'n': active.length}),
+                    active
+                  ),
+                if (paused.isNotEmpty)
+                  (
+                    context.trArgs('Paused ({n})', {'n': paused.length}),
+                    paused
+                  ),
+                if (other.isNotEmpty)
+                  (context.trArgs('Other ({n})', {'n': other.length}), other),
               ];
               return ListView.builder(
                 padding: const EdgeInsets.all(AppTokens.s16),
@@ -2155,14 +2220,16 @@ class _SchedulesTabState extends ConsumerState<_SchedulesTab> {
 /// datetime in scheduleValue; recurring ones carry a 5-field cron.
 String? _describeSchedule(SpaceSchedule s) {
   if (s.scheduleType == 'once' || s.scheduleType == 'once_delete') {
-    final suffix = s.scheduleType == 'once_delete' ? ' · tự xoá' : '';
+    final suffix = s.scheduleType == 'once_delete'
+        ? ' · ${L10n.global.t('auto-delete')}'
+        : '';
     final dt = DateTime.tryParse(s.scheduleValue);
-    if (dt == null) return 'Một lần$suffix';
+    if (dt == null) return '${L10n.global.t('Once')}$suffix';
     final l = dt.toLocal();
     final d = '${l.day.toString().padLeft(2, '0')}/${l.month.toString().padLeft(2, '0')}';
     final hhmm =
         '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
-    return 'Một lần · $d $hhmm$suffix';
+    return '${L10n.global.tArgs('Once · {t}', {'t': '$d $hhmm'})}$suffix';
   }
   return s.scheduleValue.isNotEmpty ? _describeCron(s.scheduleValue) : null;
 }
@@ -2172,15 +2239,21 @@ String _describeCron(String cron) {
   if (parts.length != 5) return cron;
   final m = parts[0], h = parts[1], dom = parts[2], dow = parts[4];
   final hhmm = '${h.padLeft(2, '0')}:${m.padLeft(2, '0')}';
-  const dayLabels = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
-  if (dom == '*' && dow == '*') return 'Mỗi ngày · $hhmm';
-  if (dom == '*' && dow == '1-5') return 'Th 2–6 · $hhmm';
+  const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  if (dom == '*' && dow == '*') {
+    return L10n.global.tArgs('Every day · {t}', {'t': hhmm});
+  }
+  if (dom == '*' && dow == '1-5') {
+    return L10n.global.tArgs('Mon–Fri · {t}', {'t': hhmm});
+  }
   if (dom == '*' && RegExp(r'^\d$').hasMatch(dow)) {
     final d = int.tryParse(dow) ?? 0;
-    return 'Mỗi ${d < dayLabels.length ? dayLabels[d] : dow} · $hhmm';
+    final day = d < dayLabels.length ? L10n.global.t(dayLabels[d]) : dow;
+    return L10n.global.tArgs('Every {d} · {t}', {'d': day, 't': hhmm});
   }
   if (RegExp(r'^\d+$').hasMatch(dom) && dow == '*') {
-    return 'Ngày $dom mỗi tháng · $hhmm';
+    return L10n.global
+        .tArgs('Day {d} of every month · {t}', {'d': dom, 't': hhmm});
   }
   return cron;
 }
@@ -2234,9 +2307,9 @@ class _ScheduleCard extends ConsumerWidget {
                       ),
                       child: Text(
                           isActive
-                              ? 'Đang chạy'
+                              ? context.tr('Running')
                               : isPaused
-                                  ? 'Tạm dừng'
+                                  ? context.tr('Paused')
                                   : schedule.status,
                           style: TextStyle(
                               color: isActive
@@ -2277,14 +2350,17 @@ class _ScheduleCard extends ConsumerWidget {
                   children: [
                     if (schedule.nextRun != null && isActive)
                       Text(
-                          'Lần tới: ${_fmtLocalTs(schedule.nextRun) ?? '—'}',
+                          context.trArgs('Next run: {t}',
+                              {'t': _fmtLocalTs(schedule.nextRun) ?? '—'}),
                           style: TextStyle(color: c.textMuted, fontSize: 11)),
                     if (schedule.lastRun != null) ...[
                       if (schedule.nextRun != null && isActive)
                         Text('  ·  ',
                             style:
                                 TextStyle(color: c.textMuted, fontSize: 11)),
-                      Text('Lần cuối: ${_fmtLocalTs(schedule.lastRun) ?? '—'}',
+                      Text(
+                          context.trArgs('Last run: {t}',
+                              {'t': _fmtLocalTs(schedule.lastRun) ?? '—'}),
                           style: TextStyle(color: c.textMuted, fontSize: 11)),
                     ],
                   ],
@@ -2294,7 +2370,7 @@ class _ScheduleCard extends ConsumerWidget {
           ),
           if (isActive)
             IconButton(
-              tooltip: 'Tạm dừng',
+              tooltip: context.tr('Pause'),
               icon: const Icon(Icons.pause_circle_outline, size: 18),
               onPressed: () async {
                 await ref
@@ -2305,7 +2381,7 @@ class _ScheduleCard extends ConsumerWidget {
             )
           else if (isPaused)
             IconButton(
-              tooltip: 'Kích hoạt',
+              tooltip: context.tr('Activate'),
               icon: Icon(Icons.play_circle_outline,
                   size: 18, color: AppTokens.success),
               onPressed: () async {
@@ -2317,22 +2393,22 @@ class _ScheduleCard extends ConsumerWidget {
             ),
           if (isActive)
             IconButton(
-              tooltip: 'Chạy ngay',
+              tooltip: context.tr('Run now'),
               icon: Icon(Icons.bolt, size: 18, color: c.accent),
               onPressed: () async {
                 await ref.read(spaceApiProvider).runSchedule(schedule.id);
                 ref.invalidate(schedulesProvider);
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content:
-                            Text('Đã thêm vào hàng đợi — chạy trong vài giây')),
+                    SnackBar(
+                        content: Text(context
+                            .tr('Queued — runs in a few seconds'))),
                   );
                 }
               },
             ),
           IconButton(
-            tooltip: 'Sửa',
+            tooltip: context.tr('Edit'),
             icon: const Icon(Icons.edit_outlined, size: 16),
             onPressed: () async {
               await showDialog(
@@ -2342,7 +2418,7 @@ class _ScheduleCard extends ConsumerWidget {
             },
           ),
           IconButton(
-            tooltip: 'Xoá',
+            tooltip: context.tr('Delete'),
             icon: const Icon(Icons.delete_outline,
                 size: 16, color: AppTokens.danger),
             onPressed: () =>
@@ -2358,7 +2434,13 @@ class _ScheduleCard extends ConsumerWidget {
 /// Fullscreen overlay for a Space app's embedded view.
 class _AppFullscreen extends StatelessWidget {
   const _AppFullscreen(
-      {required this.url, required this.name, this.theme = 'light'});
+      {required this.appId,
+      required this.url,
+      required this.name,
+      this.icon = '',
+      this.theme = 'light'});
+  final String appId;
+  final String icon;
   final String url;
   final String name;
   final String theme;
@@ -2383,14 +2465,21 @@ class _AppFullscreen extends StatelessWidget {
                         color: c.textPrimary, fontWeight: FontWeight.w700)),
                 const Spacer(),
                 IconButton(
-                  tooltip: 'Exit fullscreen',
+                  tooltip: context.tr('Exit fullscreen'),
                   icon: const Icon(Icons.fullscreen_exit, size: 20),
                   onPressed: () => Navigator.of(context).pop(),
                 ),
               ],
             ),
           ),
-          Expanded(child: embeddedWebView(url, title: name, theme: theme)),
+          Expanded(
+            child: AppHealthGate(
+              appId: appId,
+              appName: name,
+              appIcon: icon,
+              builder: (_) => embeddedWebView(url, title: name, theme: theme),
+            ),
+          ),
         ],
       ),
     );

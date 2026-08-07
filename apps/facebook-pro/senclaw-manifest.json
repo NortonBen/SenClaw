@@ -5,6 +5,7 @@
   "icon": "📘",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./facebook-pro",
     "healthPath": "/api/status",
     "port": 4590

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/background_models.dart';
 import '../../theme/tokens.dart';
 import 'background_providers.dart';
@@ -21,6 +22,7 @@ void showBackgroundTaskEditor(BuildContext context, WidgetRef ref,
 /// exotic goes through "Advanced (cron)" rather than growing this list.
 enum _Freq { hourly, daily, weekly, monthly, interval, cron, once, manual }
 
+/// English labels; translated at the point of display (`context.tr`).
 const _freqLabels = {
   _Freq.hourly: 'Hourly',
   _Freq.daily: 'Daily',
@@ -234,7 +236,9 @@ class _EditorState extends ConsumerState<_Editor> {
                 children: [
                   Expanded(
                     child: Text(
-                      _isEdit ? 'Edit background task' : 'New background task',
+                      context.tr(_isEdit
+                          ? 'Edit background task'
+                          : 'New background task'),
                       style: TextStyle(
                           color: c.textPrimary,
                           fontSize: 14,
@@ -252,15 +256,18 @@ class _EditorState extends ConsumerState<_Editor> {
               child: ListView(
                 padding: const EdgeInsets.all(AppTokens.s16),
                 children: [
-                  _field('Title', _title, hint: 'Daily knowledge cleanup'),
-                  _field('Description', _desc,
-                      hint: 'Optional — what this is for', maxLines: 2),
+                  _field(context.tr('Title'), _title,
+                      hint: context.tr('Daily knowledge cleanup')),
+                  _field(context.tr('Description'), _desc,
+                      hint: context.tr('Optional — what this is for'),
+                      maxLines: 2),
                   const SizedBox(height: AppTokens.s8),
-                  _label('Prompt'),
+                  _label(context.tr('Prompt')),
                   Text(
-                    'Nobody is on the other end: the prompt must be self-contained, '
-                    'say what "done" looks like, and say what to do when there is '
-                    'nothing to do.',
+                    context.tr(
+                        'Nobody is on the other end: the prompt must be self-contained, '
+                        'say what "done" looks like, and say what to do when there is '
+                        'nothing to do.'),
                     style: TextStyle(color: c.textMuted, fontSize: 10, height: 1.4),
                   ),
                   const SizedBox(height: AppTokens.s4),
@@ -268,16 +275,22 @@ class _EditorState extends ConsumerState<_Editor> {
                     controller: _prompt,
                     maxLines: 5,
                     style: TextStyle(color: c.textPrimary, fontSize: 12),
-                    decoration: _dec('Review the knowledge base for contradictions…'),
+                    decoration: _dec(context
+                        .tr('Review the knowledge base for contradictions…')),
                   ),
                   const SizedBox(height: AppTokens.s12),
 
-                  _label('Prompt source'),
+                  _label(context.tr('Prompt source')),
                   SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'static', label: Text('Static')),
-                      ButtonSegment(value: 'template', label: Text('Template')),
-                      ButtonSegment(value: 'generator', label: Text('Generated')),
+                    segments: [
+                      ButtonSegment(
+                          value: 'static', label: Text(context.tr('Static'))),
+                      ButtonSegment(
+                          value: 'template',
+                          label: Text(context.tr('Template'))),
+                      ButtonSegment(
+                          value: 'generator',
+                          label: Text(context.tr('Generated'))),
                     ],
                     selected: {_promptKind},
                     showSelectedIcon: false,
@@ -290,12 +303,13 @@ class _EditorState extends ConsumerState<_Editor> {
                   ),
                   if (_promptKind == 'template') ...[
                     const SizedBox(height: AppTokens.s8),
-                    _field('Context URL', _contextUrl,
+                    _field(context.tr('Context URL'), _contextUrl,
                         hint: 'http://127.0.0.1:4390/api/bg/context/followup'),
                     Text(
-                      'Fetched before each run; its JSON fills {{placeholders}}. '
-                      'An empty response skips the run — so a task with nothing to '
-                      'do costs no tokens.',
+                      context.tr(
+                          'Fetched before each run; its JSON fills {{placeholders}}. '
+                          'An empty response skips the run — so a task with nothing to '
+                          'do costs no tokens.'),
                       style:
                           TextStyle(color: c.textMuted, fontSize: 10, height: 1.4),
                     ),
@@ -304,16 +318,17 @@ class _EditorState extends ConsumerState<_Editor> {
                     Padding(
                       padding: const EdgeInsets.only(top: AppTokens.s6),
                       child: Text(
-                        'The prompt above is an instruction; the model writes the real '
-                        'prompt from it each run. Doubles token cost and can invent its '
-                        'own task — prefer Template when the data can be fetched.',
+                        context.tr(
+                            'The prompt above is an instruction; the model writes the real '
+                            'prompt from it each run. Doubles token cost and can invent its '
+                            'own task — prefer Template when the data can be fetched.'),
                         style: TextStyle(
                             color: AppTokens.warning, fontSize: 10, height: 1.4),
                       ),
                     ),
                   const SizedBox(height: AppTokens.s12),
 
-                  _label('Runs'),
+                  _label(context.tr('Runs')),
                   DropdownButtonFormField<_Freq>(
                     initialValue: _freq,
                     isDense: true,
@@ -322,7 +337,7 @@ class _EditorState extends ConsumerState<_Editor> {
                     items: _Freq.values
                         .map((f) => DropdownMenuItem(
                             value: f,
-                            child: Text(_freqLabels[f]!,
+                            child: Text(context.tr(_freqLabels[f]!),
                                 style: const TextStyle(fontSize: 12))))
                         .toList(),
                     onChanged: (v) => setState(() => _freq = v ?? _Freq.daily),
@@ -331,16 +346,21 @@ class _EditorState extends ConsumerState<_Editor> {
                   ..._triggerControls(),
                   const SizedBox(height: AppTokens.s12),
 
-                  _field('Persona', _persona, hint: 'Optional — e.g. sale-closer'),
-                  _field('Tools', _tools,
-                      hint: 'Comma-separated. Empty = the persona\'s own list'),
+                  _field(context.tr('Persona'), _persona,
+                      hint: context.tr('Optional — e.g. sale-closer')),
+                  _field(context.tr('Tools'), _tools,
+                      hint: context.tr(
+                          'Comma-separated. Empty = the persona\'s own list')),
                   const SizedBox(height: AppTokens.s12),
 
-                  _label('Memory across runs'),
+                  _label(context.tr('Memory across runs')),
                   SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'fresh', label: Text('Fresh')),
-                      ButtonSegment(value: 'thread', label: Text('Remembers')),
+                    segments: [
+                      ButtonSegment(
+                          value: 'fresh', label: Text(context.tr('Fresh'))),
+                      ButtonSegment(
+                          value: 'thread',
+                          label: Text(context.tr('Remembers'))),
                     ],
                     selected: {_continuity},
                     showSelectedIcon: false,
@@ -353,22 +373,25 @@ class _EditorState extends ConsumerState<_Editor> {
                   Padding(
                     padding: const EdgeInsets.only(top: AppTokens.s4),
                     child: Text(
-                      _continuity == 'thread'
+                      context.tr(_continuity == 'thread'
                           ? 'Recent run summaries are injected. Use this for anything '
                               'touching people — otherwise it contacts the same person twice.'
-                          : 'Each run starts clean.',
+                          : 'Each run starts clean.'),
                       style: TextStyle(color: c.textMuted, fontSize: 10, height: 1.4),
                     ),
                   ),
                   const SizedBox(height: AppTokens.s12),
 
-                  _label('If the previous run is still going'),
+                  _label(context.tr('If the previous run is still going')),
                   SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'skip', label: Text('Skip')),
-                      ButtonSegment(value: 'queue', label: Text('Wait')),
+                    segments: [
                       ButtonSegment(
-                          value: 'cancel_previous', label: Text('Cancel it')),
+                          value: 'skip', label: Text(context.tr('Skip'))),
+                      ButtonSegment(
+                          value: 'queue', label: Text(context.tr('Wait'))),
+                      ButtonSegment(
+                          value: 'cancel_previous',
+                          label: Text(context.tr('Cancel it'))),
                     ],
                     selected: {_overlap},
                     showSelectedIcon: false,
@@ -384,11 +407,12 @@ class _EditorState extends ConsumerState<_Editor> {
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     controlAffinity: ListTileControlAffinity.leading,
-                    title: Text('Catch up after downtime',
+                    title: Text(context.tr('Catch up after downtime'),
                         style: TextStyle(color: c.textSecondary, fontSize: 12)),
                     subtitle: Text(
-                      'Run once for a window missed while the daemon was off. '
-                      'Off = the gap is dropped.',
+                      context.tr(
+                          'Run once for a window missed while the daemon was off. '
+                          'Off = the gap is dropped.'),
                       style: TextStyle(color: c.textMuted, fontSize: 10),
                     ),
                     onChanged: (v) => setState(() => _catchUp = v ?? false),
@@ -398,11 +422,12 @@ class _EditorState extends ConsumerState<_Editor> {
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     controlAffinity: ListTileControlAffinity.leading,
-                    title: Text('🔔 Chỉ thông báo',
+                    title: Text(context.tr('🔔 Notify only'),
                         style: TextStyle(color: c.textSecondary, fontSize: 12)),
                     subtitle: Text(
-                      'Đẩy thông báo OS với nội dung ở ô Prompt, KHÔNG chạy agent. '
-                      'Dùng cho nhắc/thông báo — nhanh, chắc chắn, không tốn token.',
+                      context.tr(
+                          'Pushes an OS notification with the Prompt text, does NOT run '
+                          'an agent. Use for reminders/alerts — fast, reliable, no tokens.'),
                       style: TextStyle(color: c.textMuted, fontSize: 10),
                     ),
                     onChanged: (v) => setState(() => _notify = v ?? false),
@@ -425,8 +450,9 @@ class _EditorState extends ConsumerState<_Editor> {
                           const SizedBox(width: AppTokens.s6),
                           Expanded(
                             child: Text(
-                              'This task can act outside this machine, so it will be '
-                              'created paused. Review it and press play to start it.',
+                              context.tr(
+                                  'This task can act outside this machine, so it will be '
+                                  'created paused. Review it and press play to start it.'),
                               style: TextStyle(
                                   color: c.textSecondary, fontSize: 10, height: 1.4),
                             ),
@@ -454,17 +480,17 @@ class _EditorState extends ConsumerState<_Editor> {
                 children: [
                   TextButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton(
                     onPressed: _saving || _title.text.trim().isEmpty ? null : _save,
-                    child: Text(_saving
+                    child: Text(context.tr(_saving
                         ? 'Saving…'
                         : _isEdit
                             ? 'Save'
                             : _isOutwardFacing
                                 ? 'Create (paused)'
-                                : 'Create'),
+                                : 'Create')),
                   ),
                 ],
               ),
@@ -480,24 +506,26 @@ class _EditorState extends ConsumerState<_Editor> {
     switch (_freq) {
       case _Freq.manual:
         return [
-          Text('Only runs when you press "Run now".',
+          Text(context.tr('Only runs when you press "Run now".'),
               style: TextStyle(color: c.textMuted, fontSize: 10)),
         ];
       case _Freq.cron:
         return [
-          _field('Cron expression', _cron, hint: '0 9 * * *'),
-          Text('5-field form, evaluated in your local timezone.',
+          _field(context.tr('Cron expression'), _cron, hint: '0 9 * * *'),
+          Text(context.tr('5-field form, evaluated in your local timezone.'),
               style: TextStyle(color: c.textMuted, fontSize: 10)),
         ];
       case _Freq.once:
         return [
-          _field('When (RFC3339)', _once, hint: '2026-12-25T09:00:00+07:00'),
+          _field(context.tr('When (RFC3339)'), _once,
+              hint: '2026-12-25T09:00:00+07:00'),
         ];
       case _Freq.interval:
         return [
           Row(
             children: [
-              Text('Every', style: TextStyle(color: c.textSecondary, fontSize: 12)),
+              Text(context.tr('Every'),
+                  style: TextStyle(color: c.textSecondary, fontSize: 12)),
               const SizedBox(width: AppTokens.s8),
               SizedBox(
                 width: 80,
@@ -511,7 +539,7 @@ class _EditorState extends ConsumerState<_Editor> {
                 ),
               ),
               const SizedBox(width: AppTokens.s8),
-              Text('minutes',
+              Text(context.tr('minutes'),
                   style: TextStyle(color: c.textSecondary, fontSize: 12)),
             ],
           ),
@@ -544,7 +572,10 @@ class _EditorState extends ConsumerState<_Editor> {
     return OutlinedButton.icon(
       icon: const Icon(Icons.schedule, size: 14),
       label: Text(
-        'At ${_at.hour.toString().padLeft(2, '0')}:${_at.minute.toString().padLeft(2, '0')}',
+        context.trArgs('At {t}', {
+          't':
+              '${_at.hour.toString().padLeft(2, '0')}:${_at.minute.toString().padLeft(2, '0')}'
+        }),
         style: TextStyle(color: c.textPrimary, fontSize: 12),
       ),
       onPressed: () async {
@@ -557,7 +588,8 @@ class _EditorState extends ConsumerState<_Editor> {
   Widget _minutePicker() {
     final c = context.colors;
     return Row(children: [
-      Text('At minute', style: TextStyle(color: c.textSecondary, fontSize: 12)),
+      Text(context.tr('At minute'),
+          style: TextStyle(color: c.textSecondary, fontSize: 12)),
       const SizedBox(width: AppTokens.s8),
       SizedBox(
         width: 70,
@@ -582,7 +614,9 @@ class _EditorState extends ConsumerState<_Editor> {
       items: List.generate(
         7,
         (i) => DropdownMenuItem(
-            value: i, child: Text(names[i], style: const TextStyle(fontSize: 12))),
+            value: i,
+            child: Text(context.tr(names[i]),
+                style: const TextStyle(fontSize: 12))),
       ),
       onChanged: (v) => setState(() => _weekday = v ?? 1),
     );
@@ -596,7 +630,9 @@ class _EditorState extends ConsumerState<_Editor> {
       items: List.generate(
         28,
         (i) => DropdownMenuItem(
-            value: i + 1, child: Text('Day ${i + 1}', style: const TextStyle(fontSize: 12))),
+            value: i + 1,
+            child: Text(context.trArgs('Day {n}', {'n': i + 1}),
+                style: const TextStyle(fontSize: 12))),
       ),
       // Capped at 28 on purpose: day 29–31 silently skips short months.
       onChanged: (v) => setState(() => _dayOfMonth = v ?? 1),

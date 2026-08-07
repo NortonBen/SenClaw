@@ -5,6 +5,7 @@
   "icon": "🕸️",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./rule-engine",
     "healthPath": "/api/status",
     "port": 4550

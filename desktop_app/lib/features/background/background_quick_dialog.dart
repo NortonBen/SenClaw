@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/background_models.dart';
 import '../../theme/tokens.dart';
 import 'background_providers.dart';
@@ -103,7 +104,7 @@ class _QuickDialogState extends ConsumerState<_QuickDialog> {
                   const Icon(Icons.bolt, size: 18, color: AppTokens.brand),
                   const SizedBox(width: AppTokens.s8),
                   Expanded(
-                    child: Text('Quick task',
+                    child: Text(context.tr('Quick task'),
                         style: TextStyle(
                             color: c.textPrimary,
                             fontSize: 15,
@@ -123,7 +124,8 @@ class _QuickDialogState extends ConsumerState<_QuickDialog> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Mô tả task bằng một câu — AI sẽ tự điền lịch chạy và nội dung.',
+                    context.tr(
+                        'Describe the task in one line — AI fills in the schedule and prompt.'),
                     style: TextStyle(color: c.textMuted, fontSize: 12),
                   ),
                   const SizedBox(height: AppTokens.s8),
@@ -134,8 +136,8 @@ class _QuickDialogState extends ConsumerState<_QuickDialog> {
                     enabled: !_parsing && !_creating,
                     style: TextStyle(color: c.textPrimary, fontSize: 13),
                     decoration: InputDecoration(
-                      hintText:
-                          'vd: mỗi sáng 9h rà soát tri thức và dọn mâu thuẫn',
+                      hintText: context.tr(
+                          'e.g. every morning at 9, review the knowledge base and clean up contradictions'),
                       hintStyle: TextStyle(color: c.textMuted, fontSize: 12),
                       border: const OutlineInputBorder(),
                       isDense: true,
@@ -152,9 +154,11 @@ class _QuickDialogState extends ConsumerState<_QuickDialog> {
                               height: 14,
                               child: CircularProgressIndicator(strokeWidth: 2))
                           : const Icon(Icons.auto_awesome, size: 15),
-                      label: Text(_parsing
-                          ? 'Đang phân tích…'
-                          : (_draft == null ? 'AI phân tích' : 'Phân tích lại')),
+                      label: Text(context.tr(_parsing
+                          ? 'Analyzing…'
+                          : (_draft == null
+                              ? 'Analyze with AI'
+                              : 'Re-analyze'))),
                       onPressed:
                           (_parsing || _creating) ? null : _parse,
                     ),
@@ -181,12 +185,13 @@ class _QuickDialogState extends ConsumerState<_QuickDialog> {
                 children: [
                   TextButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('Huỷ')),
+                      child: Text(context.tr('Cancel'))),
                   const SizedBox(width: AppTokens.s8),
                   FilledButton(
                     onPressed:
                         (_draft == null || _creating) ? null : _create,
-                    child: Text(_creating ? 'Đang tạo…' : 'Tạo task'),
+                    child: Text(
+                        context.tr(_creating ? 'Creating…' : 'Create task')),
                   ),
                 ],
               ),
@@ -247,18 +252,21 @@ class _DraftPreview extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('AI đề xuất',
+          Text(context.tr('AI suggestion'),
               style: TextStyle(
                   color: c.textMuted,
                   fontSize: 10,
                   fontWeight: FontWeight.w600)),
           const SizedBox(height: AppTokens.s4),
-          row('Tiêu đề', '${draft['title'] ?? ''}'),
-          row('Lịch chạy', t.triggerLabel),
-          if (draft['notify'] == true) row('Kiểu', '🔔 Thông báo (không chạy agent)'),
-          if (t.continuity == 'thread') row('Bộ nhớ', 'nhớ các lần trước'),
+          row(context.tr('Title'), '${draft['title'] ?? ''}'),
+          row(context.tr('Schedule'), t.triggerLabel),
+          if (draft['notify'] == true)
+            row(context.tr('Kind'),
+                context.tr('🔔 Notification (no agent run)')),
+          if (t.continuity == 'thread')
+            row(context.tr('Memory'), context.tr('remembers prior runs')),
           const SizedBox(height: AppTokens.s4),
-          Text('Nội dung',
+          Text(context.tr('Content'),
               style: TextStyle(color: c.textMuted, fontSize: 11)),
           const SizedBox(height: 2),
           Text('${draft['prompt'] ?? ''}',

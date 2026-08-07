@@ -24,6 +24,7 @@ import type { MenuProps } from 'antd'
 import { api, fmtTime, type CliInfo, type Workspace, type WsDetail } from './api'
 import { AddWorkspaceModal } from './addws'
 import { ConsoleDrawer, RunsTab, StatusTag } from './console'
+import { TfvarsPickerModal } from './tfpicker'
 import { VarsForm } from './vars'
 
 const { Title, Text } = Typography
@@ -51,8 +52,19 @@ function InfoPane({
   const [subdir, setSubdir] = useState(ws.subdir)
   const [subdirOpts, setSubdirOpts] = useState<string[]>([])
   const [varFile, setVarFile] = useState(ws.var_file)
+  const [pickerOpen, setPickerOpen] = useState(false)
   useEffect(() => setName(ws.name), [ws.id, ws.name])
   useEffect(() => setVarFile(ws.var_file), [ws.id, ws.var_file])
+
+  const saveVarFile = async (f: string) => {
+    try {
+      await api.wsPatch(ws.id, { var_file: f })
+      message.success(f ? `Plan/apply sẽ dùng ${f}` : 'Đã bỏ var-file mặc định')
+      onChanged()
+    } catch (e) {
+      message.error(String(e))
+    }
+  }
   useEffect(() => {
     setSubdir(ws.subdir)
     api.subdirs(ws.id).then((r) => setSubdirOpts(r.subdirs)).catch(() => setSubdirOpts([]))
@@ -157,23 +169,10 @@ function InfoPane({
                         new Set([...detail.tfvars_files, ...(ws.var_file ? [ws.var_file] : [])]),
                       ).map((f) => ({ value: f, label: f })),
                     ]}
-                    notFoundContent="Chưa có file .tfvars trong thư mục Terraform"
+                    notFoundContent="Chưa có file .tfvars trong thư mục Terraform — bấm 📂 Chọn…"
                   />
-                  <Button
-                    onClick={async () => {
-                      try {
-                        await api.wsPatch(ws.id, { var_file: varFile })
-                        message.success(
-                          varFile ? `Plan/apply sẽ dùng ${varFile}` : 'Đã bỏ var-file mặc định',
-                        )
-                        onChanged()
-                      } catch (e) {
-                        message.error(String(e))
-                      }
-                    }}
-                  >
-                    Lưu
-                  </Button>
+                  <Button onClick={() => setPickerOpen(true)}>📂 Chọn…</Button>
+                  <Button onClick={() => saveVarFile(varFile)}>Lưu</Button>
                 </Space.Compact>
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   plan / apply / destroy tự truyền <Text code>-var-file={varFile || '…'}</Text>.
@@ -289,6 +288,16 @@ function InfoPane({
           <Button danger>Xoá workspace</Button>
         </Popconfirm>
       </div>
+
+      <TfvarsPickerModal
+        wsId={ws.id}
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onPicked={(rel) => {
+          setVarFile(rel)
+          saveVarFile(rel)
+        }}
+      />
     </div>
   )
 }

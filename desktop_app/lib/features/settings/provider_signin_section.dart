@@ -14,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
 import 'settings_screen.dart' show SettingsBody;
@@ -213,15 +214,15 @@ class _Pill extends StatelessWidget {
 
 /// Remaining-life pill for a token.
 Widget _expiryPill(BuildContext context, OauthAccount a) {
-  if (a.expired) return const _Pill('Expired', color: Colors.redAccent);
+  if (a.expired) return _Pill(context.tr('Expired'), color: Colors.redAccent);
   final secs = a.expiresIn;
-  if (secs == null) return const _Pill('No expiry');
+  if (secs == null) return _Pill(context.tr('No expiry'));
   final label = secs > 86400
       ? '${secs ~/ 86400}d'
       : secs > 3600
           ? '${secs ~/ 3600}h'
           : '${(secs ~/ 60).clamp(1, 59)}m';
-  return _Pill('$label left',
+  return _Pill(context.trArgs('{t} left', {'t': label}),
       color: secs < 600 ? Colors.orangeAccent : Colors.greenAccent);
 }
 
@@ -276,7 +277,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
         // screen until the poll resolves.
         _showDeviceDialog(p, data['userCode'] as String? ?? '', url);
       } else {
-        _toast('Finish the sign-in in your browser.');
+        _toast(L10n.global.t('Finish the sign-in in your browser.'));
       }
 
       _poll?.cancel();
@@ -289,13 +290,14 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
             t.cancel();
             _dismissDeviceDialog();
             if (mounted) setState(() => _connecting = null);
-            _toast('Connected ${s['label'] ?? p.displayName}');
+            _toast(L10n.global.tArgs(
+                'Connected {label}', {'label': s['label'] ?? p.displayName}));
             ref.invalidate(oauthAccountsProvider);
           } else if (s['status'] == 'failed') {
             t.cancel();
             _dismissDeviceDialog();
             if (mounted) setState(() => _connecting = null);
-            _toast(s['error'] as String? ?? 'Sign-in failed');
+            _toast(s['error'] as String? ?? L10n.global.t('Sign-in failed'));
           }
         } catch (_) {
           // Daemon restarting or momentarily unreachable — keep polling.
@@ -329,7 +331,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
             ProviderLogo(color: p.brandColor, mark: p.brandMark, size: 26),
             const SizedBox(width: AppTokens.s8),
             Expanded(
-              child: Text('Connect ${p.displayName}',
+              child: Text(ctx.trArgs('Connect {name}', {'name': p.displayName}),
                   style: TextStyle(color: c.textPrimary, fontSize: 15)),
             ),
           ]),
@@ -337,7 +339,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Enter this code at $url',
+              Text(ctx.trArgs('Enter this code at {url}', {'url': url}),
                   style: TextStyle(color: c.textSecondary, fontSize: 13)),
               const SizedBox(height: AppTokens.s16),
               Container(
@@ -362,22 +364,22 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
               Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                 TextButton.icon(
                   icon: const Icon(Icons.copy, size: 15),
-                  label: const Text('Copy code'),
+                  label: Text(ctx.tr('Copy code')),
                   onPressed: () {
                     Clipboard.setData(ClipboardData(text: code));
-                    _toast('Code copied');
+                    _toast(L10n.global.t('Code copied'));
                   },
                 ),
                 TextButton.icon(
                   icon: const Icon(Icons.open_in_new, size: 15),
-                  label: const Text('Open page'),
+                  label: Text(ctx.tr('Open page')),
                   onPressed: () => launchUrl(Uri.parse(url),
                       mode: LaunchMode.externalApplication),
                 ),
               ]),
               const SizedBox(height: AppTokens.s8),
               Text(
-                'Waiting for approval — this closes on its own.',
+                ctx.tr('Waiting for approval — this closes on its own.'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: c.textMuted, fontSize: 12),
               ),
@@ -393,7 +395,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                 Navigator.of(ctx).pop();
                 if (mounted) setState(() => _connecting = null);
               },
-              child: const Text('Cancel'),
+              child: Text(ctx.tr('Cancel')),
             ),
           ],
         );
@@ -406,7 +408,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
       await ref
           .read(apiClientProvider)
           .post('/api/oauth/accounts/${a.id}/refresh');
-      _toast('Token refreshed');
+      _toast(L10n.global.t('Token refreshed'));
       ref.invalidate(oauthAccountsProvider);
     } catch (e) {
       _toast('$e');
@@ -418,21 +420,21 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: ctx.colors.surface,
-        title: Text('Disconnect ${a.label}?',
+        title: Text(ctx.trArgs('Disconnect {label}?', {'label': a.label}),
             style: TextStyle(color: ctx.colors.textPrimary, fontSize: 15)),
         content: Text(
-          'SenClaw forgets the stored tokens. Any model bound to this account '
-          'stops working until you connect again.',
+          ctx.tr('SenClaw forgets the stored tokens. Any model bound to this '
+              'account stops working until you connect again.'),
           style: TextStyle(color: ctx.colors.textSecondary, fontSize: 13),
         ),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(ctx.tr('Cancel'))),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Disconnect',
-                style: TextStyle(color: Colors.redAccent)),
+            child: Text(ctx.tr('Disconnect'),
+                style: const TextStyle(color: Colors.redAccent)),
           ),
         ],
       ),
@@ -440,7 +442,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
     if (ok != true) return;
     try {
       await ref.read(apiClientProvider).delete('/api/oauth/accounts/${a.id}');
-      _toast('Disconnected');
+      _toast(L10n.global.t('Account disconnected'));
       ref.invalidate(oauthAccountsProvider);
     } catch (e) {
       _toast('$e');
@@ -490,7 +492,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
 
           return AlertDialog(
             backgroundColor: c.surface,
-            title: Text('Use ${a.label} as a model',
+            title: Text(ctx.trArgs('Use {label} as a model', {'label': a.label}),
                 style: TextStyle(color: c.textPrimary, fontSize: 15)),
             content: SizedBox(
               width: 430,
@@ -499,8 +501,9 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'Creates a model entry backed by this account. No token is '
-                    'written into config.json — only a reference to the account.',
+                    ctx.tr('Creates a model entry backed by this account. No '
+                        'token is written into config.json — only a reference '
+                        'to the account.'),
                     style: TextStyle(color: c.textMuted, fontSize: 12),
                   ),
                   const SizedBox(height: AppTokens.s12),
@@ -537,11 +540,12 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                                     Tooltip(
                                       message: probes[id]!.ok
                                           ? '${probes[id]!.latencyMs} ms'
-                                          : (probes[id]!.error ?? 'unavailable'),
+                                          : (probes[id]!.error ??
+                                              ctx.tr('unavailable')),
                                       child: Text(
                                         probes[id]!.ok
                                             ? '${probes[id]!.latencyMs} ms'
-                                            : 'unavailable',
+                                            : ctx.tr('unavailable'),
                                         style: TextStyle(
                                           fontSize: 11,
                                           color: probes[id]!.ok
@@ -551,7 +555,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                                       ),
                                     ),
                                   IconButton(
-                                    tooltip: 'Test this model',
+                                    tooltip: ctx.tr('Test this model'),
                                     visualDensity: VisualDensity.compact,
                                     constraints: const BoxConstraints(),
                                     padding: const EdgeInsets.only(left: 8),
@@ -569,10 +573,10 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                   TextField(
                     controller: controller,
                     style: TextStyle(color: c.textPrimary, fontSize: 13),
-                    decoration: const InputDecoration(
-                      labelText: 'Model id',
+                    decoration: InputDecoration(
+                      labelText: ctx.tr('Model id'),
                       isDense: true,
-                      border: OutlineInputBorder(),
+                      border: const OutlineInputBorder(),
                     ),
                   ),
                 ],
@@ -591,14 +595,15 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                             await probe(id);
                           }
                         },
-                  child: Text('Test all ${p.models.length}'),
+                  child: Text(
+                      ctx.trArgs('Test all {n}', {'n': p.models.length})),
                 ),
               TextButton(
                   onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Cancel')),
+                  child: Text(ctx.tr('Cancel'))),
               TextButton(
                 onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-                child: const Text('Add model'),
+                child: Text(ctx.tr('Add model')),
               ),
             ],
           );
@@ -609,7 +614,8 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
     try {
       final r = await ref.read(apiClientProvider).post('/api/oauth/bind',
           body: {'accountId': a.id, 'modelName': model}) as Map;
-      _toast('Added "${r['label'] ?? model}"');
+      _toast(L10n.global
+          .tArgs('Added "{label}"', {'label': r['label'] ?? model}));
     } catch (e) {
       _toast('$e');
     }
@@ -632,7 +638,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
             ProviderLogo(color: p.brandColor, mark: p.brandMark, size: 26),
             const SizedBox(width: AppTokens.s8),
             Expanded(
-              child: Text('Add ${p.displayName}',
+              child: Text(ctx.trArgs('Add {name}', {'name': p.displayName}),
                   style: TextStyle(color: c.textPrimary, fontSize: 15)),
             ),
           ]),
@@ -659,10 +665,10 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                     controller: keyCtl,
                     obscureText: true,
                     style: TextStyle(color: c.textPrimary, fontSize: 13),
-                    decoration: const InputDecoration(
-                      labelText: 'API key',
+                    decoration: InputDecoration(
+                      labelText: ctx.tr('API key'),
                       isDense: true,
-                      border: OutlineInputBorder(),
+                      border: const OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: AppTokens.s12),
@@ -684,10 +690,10 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                 TextField(
                   controller: modelCtl,
                   style: TextStyle(color: c.textPrimary, fontSize: 13),
-                  decoration: const InputDecoration(
-                    labelText: 'Model id',
+                  decoration: InputDecoration(
+                    labelText: ctx.tr('Model id'),
                     isDense: true,
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
                   ),
                 ),
               ],
@@ -696,10 +702,10 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Cancel')),
+                child: Text(ctx.tr('Cancel'))),
             TextButton(
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Add model')),
+                child: Text(ctx.tr('Add model'))),
           ],
         );
       },
@@ -707,7 +713,8 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
     if (ok != true || modelCtl.text.trim().isEmpty) return;
 
     if (p.urlPlaceholder != null && urlCtl.text.trim().isEmpty) {
-      _toast('${p.urlPlaceholder} is required');
+      _toast(L10n.global
+          .tArgs('{field} is required', {'field': p.urlPlaceholder}));
       return;
     }
 
@@ -726,7 +733,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
         'maxTokens': p.maxTokens,
         'contextLength': p.contextLength,
       });
-      _toast('Added ${p.displayName}');
+      _toast(L10n.global.tArgs('Added {name}', {'name': p.displayName}));
     } catch (e) {
       _toast('$e');
     }
@@ -740,20 +747,21 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
     final catalog = ref.watch(providerCatalogProvider);
 
     return SettingsBody(
-      title: 'Provider Sign-in',
+      title: context.tr('Provider Sign-in'),
       onRefresh: _reload,
       children: [
         _riskBanner(c),
         const SizedBox(height: AppTokens.s16),
 
-        _heading(c, 'Subscription accounts'),
+        _heading(c, context.tr('Subscription accounts')),
         const SizedBox(height: AppTokens.s8),
         providers.when(
           loading: () => const Center(
               child: Padding(
                   padding: EdgeInsets.all(AppTokens.s24),
                   child: CircularProgressIndicator(strokeWidth: 2))),
-          error: (e, _) => Text('Could not load providers: $e',
+          error: (e, _) => Text(
+              context.trArgs('Could not load providers: {e}', {'e': e}),
               style: TextStyle(color: c.textMuted, fontSize: 12)),
           data: (list) => Wrap(
             spacing: AppTokens.s12,
@@ -773,18 +781,19 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
         ),
 
         const SizedBox(height: AppTokens.s24),
-        _heading(c, 'Free-tier providers'),
+        _heading(c, context.tr('Free-tier providers')),
         Padding(
           padding: const EdgeInsets.only(top: 4, bottom: AppTokens.s8),
           child: Text(
-            'Ready-made endpoints with a free allowance. Each needs its own '
-            'API key unless marked otherwise.',
+            context.tr('Ready-made endpoints with a free allowance. Each '
+                'needs its own API key unless marked otherwise.'),
             style: TextStyle(color: c.textMuted, fontSize: 12),
           ),
         ),
         catalog.when(
           loading: () => const SizedBox.shrink(),
-          error: (e, _) => Text('Could not load the catalog: $e',
+          error: (e, _) => Text(
+              context.trArgs('Could not load the catalog: {e}', {'e': e}),
               style: TextStyle(color: c.textMuted, fontSize: 12)),
           data: (list) => Wrap(
             spacing: AppTokens.s12,
@@ -820,21 +829,25 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
           tilePadding: const EdgeInsets.symmetric(horizontal: AppTokens.s12),
           leading: const Icon(Icons.warning_amber_rounded,
               size: 18, color: Colors.orange),
-          title: const Text(
-            "Subscription sign-in is against the vendors' terms of service",
-            style: TextStyle(color: Colors.orange, fontSize: 13),
+          title: Text(
+            context.tr(
+                "Subscription sign-in is against the vendors' terms of "
+                'service'),
+            style: const TextStyle(color: Colors.orange, fontSize: 13),
           ),
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(AppTokens.s12, 0,
                   AppTokens.s12, AppTokens.s12),
               child: Text(
-                'Subscription credentials are licensed for each vendor\'s own '
-                'clients. Using them from SenClaw can get the account suspended, '
-                'and the vendors detect it. SenClaw identifies itself honestly '
-                'rather than imitating the vendor client, so a provider that '
-                'blocks third-party access returns a clear error instead of '
-                'failing silently. For anything you depend on, use an API key.',
+                context.tr(
+                    "Subscription credentials are licensed for each vendor's "
+                    'own clients. Using them from SenClaw can get the account '
+                    'suspended, and the vendors detect it. SenClaw identifies '
+                    'itself honestly rather than imitating the vendor client, '
+                    'so a provider that blocks third-party access returns a '
+                    'clear error instead of failing silently. For anything '
+                    'you depend on, use an API key.'),
                 style: TextStyle(color: c.textSecondary, fontSize: 12),
               ),
             ),
@@ -883,7 +896,8 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                     ],
                   ]),
                   Text(
-                    p.isDeviceFlow ? 'Device code' : 'Browser redirect',
+                    context.tr(
+                        p.isDeviceFlow ? 'Device code' : 'Browser redirect'),
                     style: TextStyle(color: c.textMuted, fontSize: 11),
                   ),
                 ],
@@ -921,7 +935,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                   ]),
                   Row(mainAxisAlignment: MainAxisAlignment.end, children: [
                     IconButton(
-                      tooltip: 'Use as model',
+                      tooltip: context.tr('Use as model'),
                       visualDensity: VisualDensity.compact,
                       constraints: const BoxConstraints(),
                       padding: const EdgeInsets.only(left: 8),
@@ -930,9 +944,9 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                       onPressed: () => _useAsModel(p, a),
                     ),
                     IconButton(
-                      tooltip: a.hasRefreshToken
+                      tooltip: context.tr(a.hasRefreshToken
                           ? 'Refresh token'
-                          : 'No refresh token — reconnect by hand',
+                          : 'No refresh token — reconnect by hand'),
                       visualDensity: VisualDensity.compact,
                       constraints: const BoxConstraints(),
                       padding: const EdgeInsets.only(left: 8),
@@ -945,7 +959,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                           a.hasRefreshToken ? () => _refreshAccount(a) : null,
                     ),
                     IconButton(
-                      tooltip: 'Disconnect',
+                      tooltip: context.tr('Disconnect'),
                       visualDensity: VisualDensity.compact,
                       constraints: const BoxConstraints(),
                       padding: const EdgeInsets.only(left: 8),
@@ -975,7 +989,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                       height: 12,
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.link, size: 15),
-              label: Text(mine.isEmpty ? 'Connect' : 'Add another',
+              label: Text(context.tr(mine.isEmpty ? 'Connect' : 'Add another'),
                   style: const TextStyle(fontSize: 12)),
               onPressed: busy ? null : () => _connect(p),
             ),
@@ -983,7 +997,7 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
           if (p.requiresFixedPort)
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text('Needs port 1455 free.',
+              child: Text(context.tr('Needs port 1455 free.'),
                   style: TextStyle(color: c.textMuted, fontSize: 11)),
             ),
         ],
@@ -1020,11 +1034,13 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
                     ),
                     if (!p.needsKey) ...[
                       const SizedBox(width: 6),
-                      const _Pill('No key', color: Colors.greenAccent),
+                      _Pill(context.tr('No key'), color: Colors.greenAccent),
                     ],
                     if (p.urlPlaceholder != null) ...[
                       const SizedBox(width: 6),
-                      _Pill('needs ${p.urlPlaceholder}',
+                      _Pill(
+                          context.trArgs(
+                              'needs {field}', {'field': p.urlPlaceholder}),
                           color: Colors.lightBlueAccent),
                     ],
                   ]),
@@ -1039,14 +1055,16 @@ class _ProviderSignInSectionState extends ConsumerState<ProviderSignInSection> {
             if (p.signupUrl != null)
               TextButton.icon(
                 icon: const Icon(Icons.open_in_new, size: 14),
-                label: const Text('Get key', style: TextStyle(fontSize: 12)),
+                label: Text(context.tr('Get key'),
+                    style: const TextStyle(fontSize: 12)),
                 onPressed: () => launchUrl(Uri.parse(p.signupUrl!),
                     mode: LaunchMode.externalApplication),
               ),
             const SizedBox(width: AppTokens.s8),
             OutlinedButton.icon(
               icon: const Icon(Icons.add, size: 14),
-              label: const Text('Add', style: TextStyle(fontSize: 12)),
+              label:
+                  Text(context.tr('Add'), style: const TextStyle(fontSize: 12)),
               onPressed: () => _addPreset(p),
             ),
           ]),

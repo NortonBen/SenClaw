@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
 import '../chat/flow_defaults.dart';
@@ -38,8 +39,9 @@ class WidgetInfo {
       );
 }
 
-const _oldDaemonMsg =
-    'Daemon chưa hỗ trợ /api/widgets — cần build lại và khởi động daemon mới.';
+/// Providers carry no BuildContext — translate through the global L10n.
+String get _oldDaemonMsg => L10n.global.t(
+    'This daemon does not serve /api/widgets yet — rebuild and restart the daemon.');
 
 // ── Providers ───────────────────────────────────────────────────────────────
 
@@ -99,7 +101,7 @@ class WidgetsManagePanel extends ConsumerWidget {
                       fontWeight: FontWeight.w700)),
               const Spacer(),
               IconButton(
-                tooltip: 'Reload',
+                tooltip: context.tr('Reload'),
                 icon: const Icon(Icons.refresh, size: 18),
                 onPressed: () {
                   ref.invalidate(widgetCatalogProvider);
@@ -115,15 +117,16 @@ class WidgetsManagePanel extends ConsumerWidget {
             padding: const EdgeInsets.all(AppTokens.s16),
             children: [
               Text(
-                'Widget hiển thị trong ô chat (emit_widget) và trên Dashboard. '
-                'Space App khai báo trong senclaw-manifest.json → widgets[]; '
-                'plugin trong widgets/widgets.json.',
+                context.tr(
+                    'Widgets render in the chat pane (emit_widget) and on the '
+                    'Dashboard. Space Apps declare them in senclaw-manifest.json '
+                    '→ widgets[]; plugins in widgets/widgets.json.'),
                 style: TextStyle(color: c.textMuted, fontSize: 12),
               ),
               const SizedBox(height: AppTokens.s12),
               const _DefaultsCard(),
               const SizedBox(height: AppTokens.s16),
-              Text('Danh mục widget',
+              Text(context.tr('Widget catalog'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 13,
@@ -141,7 +144,7 @@ class WidgetsManagePanel extends ConsumerWidget {
                     if (list.isEmpty)
                       Padding(
                         padding: const EdgeInsets.all(AppTokens.s16),
-                        child: Text('Chưa có widget nào.',
+                        child: Text(context.tr('No widgets yet.'),
                             style:
                                 TextStyle(color: c.textMuted, fontSize: 12)),
                       ),
@@ -212,8 +215,8 @@ class _WidgetRowState extends ConsumerState<_WidgetRow> {
       ref.invalidate(widgetCatalogProvider);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Không lưu được: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Save failed: {e}', {'e': e}))));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -320,13 +323,14 @@ class _DefaultsCard extends ConsumerWidget {
           .put('/api/defaults', body: {key: value});
       ref.invalidate(flowDefaultsProvider);
       // Chat link taps read the ChatLinkFlow static cache — refresh it now so
-      // the new "Mở link" default applies without restarting the app.
+      // the new "Open link" default applies without restarting the app.
       await ChatLinkFlow.prefetch(ref.read(appConfigProvider).httpBase,
-          force: true);
+          force: true,
+          authHeaders: ref.read(appConfigProvider).authHeaders);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Không lưu được: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Save failed: {e}', {'e': e}))));
       }
     }
   }
@@ -362,7 +366,7 @@ class _DefaultsCard extends ConsumerWidget {
               children: [
                 Icon(Icons.tune, size: 15, color: c.accent),
                 const SizedBox(width: AppTokens.s6),
-                Text('Luồng mặc định',
+                Text(context.tr('Default flows'),
                     style: TextStyle(
                         color: c.textPrimary,
                         fontSize: 13,
@@ -372,35 +376,38 @@ class _DefaultsCard extends ConsumerWidget {
             const SizedBox(height: AppTokens.s8),
             _row(
               context,
-              'Mở link',
+              context.tr('Open link'),
               _dropdown(context, '${d['openLink']}', [
-                ('system-browser', 'Trình duyệt hệ thống', true),
-                ('new-tab', 'Tab mới (web UI)', true),
-                ('mini-browser', 'Mini Browser (trong SenClaw)',
+                ('system-browser', context.tr('System browser'), true),
+                ('new-tab', context.tr('New tab (web UI)'), true),
+                ('mini-browser', context.tr('Mini Browser (inside SenClaw)'),
                     hasMiniBrowser),
               ], (v) => _save(context, ref, 'openLink', v)),
               hint: hasMiniBrowser
                   ? null
-                  : 'cài app mini-browser để mở trong SenClaw',
+                  : context.tr('install the mini-browser app to open '
+                      'inside SenClaw'),
             ),
             _row(
               context,
-              'Media',
+              context.tr('Media'),
               _dropdown(context, '${d['media']}', [
-                ('inline-widget', 'Phát ngay trong chat (widget)', true),
+                ('inline-widget', context.tr('Play inline in chat (widget)'),
+                    true),
                 ('mini-browser', 'Mini Browser', hasMiniBrowser),
-                ('system-browser', 'Trình duyệt hệ thống', true),
+                ('system-browser', context.tr('System browser'), true),
               ], (v) => _save(context, ref, 'media', v)),
             ),
             _row(
               context,
-              'Search',
+              context.tr('Search'),
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _dropdown(context, '${d['search']}', [
                     ('browser', 'browser_search (SERP)', true),
-                    ('search-app', 'App Search (federated)', hasSearchApp),
+                    ('search-app', context.tr('App Search (federated)'),
+                        hasSearchApp),
                   ], (v) => _save(context, ref, 'search', v)),
                   const SizedBox(width: AppTokens.s8),
                   _dropdown(context, '${d['searchEngine']}', [
@@ -409,12 +416,13 @@ class _DefaultsCard extends ConsumerWidget {
                   ], (v) => _save(context, ref, 'searchEngine', v)),
                 ],
               ),
-              hint:
-                  hasSearchApp ? null : 'cài app search để dùng federated search',
+              hint: hasSearchApp
+                  ? null
+                  : context.tr('install the search app for federated search'),
             ),
             _row(
               context,
-              'Ghi chú',
+              context.tr('Note'),
               _dropdown(context, '${d['note']}', [
                 ('space-notes', 'Space Notes', true),
                 ('wiki', 'Wiki (wiki_write)', true),
@@ -423,9 +431,10 @@ class _DefaultsCard extends ConsumerWidget {
             ),
             const SizedBox(height: AppTokens.s6),
             Text(
-              'Các mặc định này được đưa vào system prompt của agent ("User defaults") '
-              'và điều khiển hành vi click link. Kênh nhắn tin luôn nhận bản tóm tắt '
-              'text thay cho widget.',
+              context.tr(
+                  'These defaults go into the agent system prompt ("User '
+                  'defaults") and drive what a link tap does. Messaging '
+                  'channels always get a text summary instead of the widget.'),
               style: TextStyle(color: c.textMuted, fontSize: 11),
             ),
           ],

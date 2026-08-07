@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/background_models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/section_scaffold.dart';
@@ -27,15 +28,15 @@ class BackgroundScreen extends ConsumerWidget {
     final selected = ref.watch(bgSelectedTaskProvider);
 
     return SectionScaffold(
-      title: 'Background',
-      subtitle: 'Tasks SenClaw runs by itself — no chat, no reply',
+      title: context.tr('Background'),
+      subtitle: context.tr('Tasks SenClaw runs by itself — no chat, no reply'),
       actions: [
         const _WindowPicker(),
         const SizedBox(width: AppTokens.s8),
         _InternalToggle(),
         const SizedBox(width: AppTokens.s8),
         IconButton(
-          tooltip: 'Refresh',
+          tooltip: context.tr('Refresh'),
           icon: const Icon(Icons.refresh, size: 18),
           onPressed: () => ref.read(bgRevProvider.notifier).state++,
         ),
@@ -44,13 +45,13 @@ class BackgroundScreen extends ConsumerWidget {
         // beside it is the manual, field-by-field path.
         OutlinedButton.icon(
           icon: const Icon(Icons.bolt, size: 16),
-          label: const Text('Quick task'),
+          label: Text(context.tr('Quick task')),
           onPressed: () => showBackgroundQuickDialog(context),
         ),
         const SizedBox(width: AppTokens.s8),
         FilledButton.icon(
           icon: const Icon(Icons.add, size: 16),
-          label: const Text('New task'),
+          label: Text(context.tr('New task')),
           onPressed: () => showBackgroundTaskEditor(context, ref),
         ),
       ],
@@ -119,7 +120,7 @@ class _StatusFilterBar extends ConsumerWidget {
   const _StatusFilterBar();
 
   static const _options = <String?, String>{
-    null: 'Tất cả',
+    null: 'All',
     'active': 'Active',
     'paused': 'Paused',
     'failed': 'Failed',
@@ -155,7 +156,7 @@ class _StatusFilterBar extends ConsumerWidget {
                         color: active ? c.accent : c.border),
                   ),
                   child: Text(
-                    e.value,
+                    context.tr(e.value),
                     style: TextStyle(
                       color: active ? c.accent : c.textSecondary,
                       fontSize: 11,
@@ -170,7 +171,7 @@ class _StatusFilterBar extends ConsumerWidget {
         if (total != null)
           Padding(
             padding: const EdgeInsets.only(left: AppTokens.s8),
-            child: Text('$total task',
+            child: Text(context.trArgs('{n} task', {'n': total}),
                 style: TextStyle(color: c.textMuted, fontSize: 11)),
           ),
       ],
@@ -224,7 +225,9 @@ class _FilterEmpty extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppTokens.s32),
       child: Center(
-        child: Text('Không có task nào ở trạng thái "$status".',
+        child: Text(
+            context.trArgs(
+                'No tasks with status "{s}".', {'s': context.tr(status)}),
             style: TextStyle(color: c.textMuted, fontSize: 12)),
       ),
     );
@@ -245,16 +248,20 @@ class _StatsRow extends ConsumerWidget {
         return Row(
           children: [
             _StatCard(
-              label: 'Runs',
+              label: context.tr('Runs'),
               value: '${t.runs}',
-              hint: t.running > 0 ? '${t.running} in flight' : null,
+              hint: t.running > 0
+                  ? context.trArgs('{n} in flight', {'n': t.running})
+                  : null,
             ),
             _StatCard(
-              label: 'Success',
+              label: context.tr('Success'),
               value: t.runs == 0 ? '—' : '${(t.successRate * 100).round()}%',
               // Skips are excluded from the rate on purpose: a template task
               // with nothing to do is healthy, not a failure.
-              hint: t.skipped > 0 ? '${t.skipped} skipped' : null,
+              hint: t.skipped > 0
+                  ? context.trArgs('{n} skipped', {'n': t.skipped})
+                  : null,
               color: t.runs == 0
                   ? null
                   : t.successRate >= 0.9
@@ -263,9 +270,10 @@ class _StatsRow extends ConsumerWidget {
                           ? AppTokens.warning
                           : AppTokens.danger,
             ),
-            _StatCard(label: 'Avg', value: fmtBgDuration(t.avgDurationMs)),
             _StatCard(
-              label: 'Tokens',
+                label: context.tr('Avg'), value: fmtBgDuration(t.avgDurationMs)),
+            _StatCard(
+              label: context.tr('Tokens'),
               value: _compact(t.tokensIn + t.tokensOut),
             ),
           ],
@@ -356,7 +364,7 @@ class _AttentionBand extends ConsumerWidget {
                   size: 15, color: AppTokens.danger),
               const SizedBox(width: AppTokens.s6),
               Text(
-                'Needs attention (${items.length})',
+                context.trArgs('Needs attention ({n})', {'n': items.length}),
                 style: const TextStyle(
                   color: AppTokens.danger,
                   fontSize: 12,
@@ -383,10 +391,13 @@ class _AttentionBand extends ConsumerWidget {
                       ),
                     ),
                     if (a.status == 'failed')
-                      const _Pill(text: 'auto-paused', color: AppTokens.danger),
+                      _Pill(
+                          text: context.tr('auto-paused'),
+                          color: AppTokens.danger),
                     const SizedBox(width: AppTokens.s6),
                     Text(
-                      '${a.consecutiveFailures}× failed',
+                      context.trArgs(
+                          '{n}× failed', {'n': a.consecutiveFailures}),
                       style: TextStyle(color: c.textMuted, fontSize: 11),
                     ),
                   ],
@@ -495,7 +506,9 @@ class _TaskRow extends ConsumerWidget {
                     icon: task.status == 'active'
                         ? Icons.pause
                         : Icons.play_arrow,
-                    tooltip: task.status == 'active' ? 'Pause' : 'Resume',
+                    tooltip: task.status == 'active'
+                        ? context.tr('Pause')
+                        : context.tr('Resume'),
                     onTap: () => _guard(
                       context,
                       () => task.status == 'active'
@@ -505,7 +518,7 @@ class _TaskRow extends ConsumerWidget {
                   ),
                   _IconAction(
                     icon: Icons.bolt,
-                    tooltip: 'Run now',
+                    tooltip: context.tr('Run now'),
                     onTap: () async {
                       final runId = await _guard(context, () => api.runNow(task.id));
                       if (runId != null && runId.isNotEmpty && context.mounted) {
@@ -516,17 +529,19 @@ class _TaskRow extends ConsumerWidget {
                   if (task.isEditable)
                     _IconAction(
                       icon: Icons.edit_outlined,
-                      tooltip: 'Edit',
+                      tooltip: context.tr('Edit'),
                       onTap: () =>
                           showBackgroundTaskEditor(context, ref, task: task),
                     ),
                   _IconAction(
                     icon: Icons.delete_outline,
                     tooltip: task.isEditable
-                        ? 'Delete'
+                        ? context.tr('Delete')
                         : task.ownerKind == 'app'
-                            ? 'Owned by ${task.ownerId} — uninstall the app to remove'
-                            : 'Core upkeep — pause it instead',
+                            ? context.trArgs(
+                                'Owned by {app} — uninstall the app to remove',
+                                {'app': task.ownerId})
+                            : context.tr('Core upkeep — pause it instead'),
                     enabled: task.isEditable,
                     onTap: () => _confirmDelete(context, ref, task),
                   ),
@@ -545,18 +560,18 @@ Future<void> _confirmDelete(
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: Text('Delete "${t.title}"?'),
-      content: const Text(
-        'The task stops firing and is removed. Its run history is kept.',
+      title: Text(ctx.trArgs('Delete "{title}"?', {'title': t.title})),
+      content: Text(
+        ctx.tr('The task stops firing and is removed. Its run history is kept.'),
       ),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel')),
+            child: Text(ctx.tr('Cancel'))),
         FilledButton(
           style: FilledButton.styleFrom(backgroundColor: AppTokens.danger),
           onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Delete'),
+          child: Text(ctx.tr('Delete')),
         ),
       ],
     ),
@@ -581,7 +596,7 @@ class _DetailPane extends ConsumerWidget {
     final t = task;
     if (t == null) {
       return Center(
-        child: Text('Task no longer exists',
+        child: Text(context.tr('Task no longer exists'),
             style: TextStyle(color: c.textMuted, fontSize: 12)),
       );
     }
@@ -604,7 +619,7 @@ class _DetailPane extends ConsumerWidget {
             ),
             IconButton(
               icon: const Icon(Icons.close, size: 16),
-              tooltip: 'Close',
+              tooltip: context.tr('Close'),
               onPressed: () =>
                   ref.read(bgSelectedTaskProvider.notifier).state = null,
             ),
@@ -626,37 +641,47 @@ class _DetailPane extends ConsumerWidget {
             ),
             child: Text(
               t.ownerKind == 'app'
-                  ? 'Declared by the "${t.ownerId}" app. Its configuration lives in '
+                  ? context.trArgs(
+                      'Declared by the "{app}" app. Its configuration lives in '
                       'the app manifest — an edit here would be reverted on reinstall. '
-                      'You can still pause it or run it now.'
-                  : 'Core upkeep. Its body is Rust, not a prompt. You can pause it '
-                      'or run it now.',
+                      'You can still pause it or run it now.',
+                      {'app': t.ownerId})
+                  : context.tr(
+                      'Core upkeep. Its body is Rust, not a prompt. You can pause it '
+                      'or run it now.'),
               style: TextStyle(color: c.textMuted, fontSize: 11, height: 1.4),
             ),
           ),
-        _kv(context, 'Trigger', t.triggerLabel),
+        _kv(context, context.tr('Trigger'), t.triggerLabel),
         _kv(
           context,
-          'Next run',
+          context.tr('Next run'),
           t.status == 'active'
               ? '${fmtBgTime(t.nextRun)} · ${fmtBgNextRun(t.nextRun, t.status)}'
               : '—',
         ),
-        _kv(context, 'Last run', fmtBgTime(t.lastRun)),
-        _kv(context, 'Prompt kind', t.promptKind),
-        if (t.contextUrl != null) _kv(context, 'Context URL', t.contextUrl!),
-        if (t.persona != null) _kv(context, 'Persona', t.persona!),
-        if (t.nativeJob != null) _kv(context, 'Native job', t.nativeJob!),
-        _kv(context, 'Continuity',
-            t.continuity == 'thread' ? 'thread (remembers prior runs)' : 'fresh'),
-        _kv(context, 'On overlap', t.overlapPolicy),
-        if (t.useTools.isNotEmpty) _kv(context, 'Tools', t.useTools.join(', ')),
+        _kv(context, context.tr('Last run'), fmtBgTime(t.lastRun)),
+        _kv(context, context.tr('Prompt kind'), context.tr(t.promptKind)),
+        if (t.contextUrl != null)
+          _kv(context, context.tr('Context URL'), t.contextUrl!),
+        if (t.persona != null) _kv(context, context.tr('Persona'), t.persona!),
+        if (t.nativeJob != null)
+          _kv(context, context.tr('Native job'), t.nativeJob!),
+        _kv(
+            context,
+            context.tr('Continuity'),
+            context.tr(t.continuity == 'thread'
+                ? 'thread (remembers prior runs)'
+                : 'fresh')),
+        _kv(context, context.tr('On overlap'), context.tr(t.overlapPolicy)),
+        if (t.useTools.isNotEmpty)
+          _kv(context, context.tr('Tools'), t.useTools.join(', ')),
         if (t.consecutiveFailures > 0)
-          _kv(context, 'Consecutive failures',
+          _kv(context, context.tr('Consecutive failures'),
               '${t.consecutiveFailures} / ${t.maxFailures == 0 ? '∞' : t.maxFailures}'),
         if (t.prompt != null && t.prompt!.isNotEmpty) ...[
           const SizedBox(height: AppTokens.s12),
-          Text('Prompt',
+          Text(context.tr('Prompt'),
               style: TextStyle(
                   color: c.textMuted, fontSize: 11, fontWeight: FontWeight.w600)),
           const SizedBox(height: AppTokens.s4),
@@ -675,7 +700,7 @@ class _DetailPane extends ConsumerWidget {
           ),
         ],
         const SizedBox(height: AppTokens.s16),
-        Text('Run history',
+        Text(context.tr('Run history'),
             style: TextStyle(
                 color: c.textPrimary, fontSize: 13, fontWeight: FontWeight.w700)),
         const SizedBox(height: AppTokens.s8),
@@ -686,7 +711,7 @@ class _DetailPane extends ConsumerWidget {
           ),
           error: (e, _) => _ErrorPane(message: '$e'),
           data: (list) => list.isEmpty
-              ? Text('Has not run yet.',
+              ? Text(context.tr('Has not run yet.'),
                   style: TextStyle(color: c.textMuted, fontSize: 12))
               : Column(children: list.map((r) => _RunRow(run: r)).toList()),
         ),
@@ -744,13 +769,13 @@ class _RunRow extends ConsumerWidget {
                 style: TextStyle(color: c.textMuted, fontSize: 11)),
             if (run.triggerKind != 'schedule') ...[
               const SizedBox(width: AppTokens.s6),
-              _Pill(text: run.triggerKind, color: c.textMuted),
+              _Pill(text: context.tr(run.triggerKind), color: c.textMuted),
             ],
             const Spacer(),
             if (run.isRunning)
               _IconAction(
                 icon: Icons.stop_circle_outlined,
-                tooltip: 'Cancel run',
+                tooltip: context.tr('Cancel run'),
                 onTap: () => _guard(
                     context, () => ref.read(backgroundApiProvider).cancelRun(run.id)),
               ),
@@ -792,7 +817,8 @@ class _StatusPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _Pill(text: status, color: bgStatusColor(status, context.colors));
+    return _Pill(
+        text: context.tr(status), color: bgStatusColor(status, context.colors));
   }
 }
 
@@ -876,10 +902,10 @@ class _InternalToggle extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final on = ref.watch(bgShowInternalProvider);
     return Tooltip(
-      message: 'Show core upkeep jobs (cognitive decay, maintenance, …)',
+      message: context.tr('Show core upkeep jobs (cognitive decay, maintenance, …)'),
       child: TextButton.icon(
         icon: Icon(on ? Icons.visibility : Icons.visibility_off, size: 15),
-        label: const Text('System', style: TextStyle(fontSize: 11)),
+        label: Text(context.tr('System'), style: const TextStyle(fontSize: 11)),
         onPressed: () =>
             ref.read(bgShowInternalProvider.notifier).state = !on,
       ),
@@ -900,15 +926,16 @@ class _EmptyState extends StatelessWidget {
           // Matches the nav rail — see the icon note in `app/nav.dart`.
           Icon(Icons.pending_actions, size: 32, color: c.textMuted),
           const SizedBox(height: AppTokens.s8),
-          Text('No background tasks',
+          Text(context.tr('No background tasks'),
               style: TextStyle(color: c.textSecondary, fontSize: 13)),
           const SizedBox(height: AppTokens.s4),
           SizedBox(
             width: 320,
             child: Text(
-              'Background tasks run on a schedule with nobody watching — periodic '
-              'upkeep, unattended follow-up, an app\'s standing duties. Unlike a '
-              'calendar schedule, they never reply to you; their output lands here.',
+              context.tr(
+                  'Background tasks run on a schedule with nobody watching — periodic '
+                  'upkeep, unattended follow-up, an app\'s standing duties. Unlike a '
+                  'calendar schedule, they never reply to you; their output lands here.'),
               textAlign: TextAlign.center,
               style: TextStyle(color: c.textMuted, fontSize: 11, height: 1.5),
             ),

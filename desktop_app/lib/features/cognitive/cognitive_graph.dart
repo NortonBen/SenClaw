@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_graph_view/flutter_graph_view.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
 import 'cognitive_screen.dart' show cogSpaceProvider;
@@ -111,11 +112,11 @@ class CogGraphView extends ConsumerWidget {
     return sub.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(
-          child: Text('Graph error: $e',
+          child: Text(context.trArgs('Graph error: {err}', {'err': e}),
               style: const TextStyle(color: AppTokens.danger))),
       data: (g) => g.nodes.length < 2
           ? Center(
-              child: Text('Not enough connected nodes to graph',
+              child: Text(context.tr('Not enough connected nodes to graph'),
                   style: TextStyle(color: c.textMuted, fontSize: 12)))
           : _GraphCanvas(
               graph: g,
@@ -150,7 +151,7 @@ class _CogGraphExplorerState extends ConsumerState<CogGraphExplorer> {
     return sub.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(
-          child: Text('Graph error: $e',
+          child: Text(context.trArgs('Graph error: {err}', {'err': e}),
               style: const TextStyle(color: AppTokens.danger))),
       data: (g) {
         final kindCounts = <String, int>{};
@@ -178,15 +179,19 @@ class _CogGraphExplorerState extends ConsumerState<CogGraphExplorer> {
                 children: [
                   Icon(Icons.hub_outlined, size: 16, color: c.accent),
                   const SizedBox(width: 6),
-                  Text('Knowledge',
+                  Text(context.tr('Knowledge'),
                       style: TextStyle(
                           fontWeight: FontWeight.w600,
                           fontSize: 13,
                           color: c.textPrimary)),
                   const SizedBox(width: 12),
-                  _chip('${g.nodes.length} nodes', AppTokens.brand),
+                  _chip(
+                      context.trArgs('{n} nodes', {'n': g.nodes.length}),
+                      AppTokens.brand),
                   const SizedBox(width: 6),
-                  _chip('${g.edges.length} edges', AppTokens.cyan),
+                  _chip(
+                      context.trArgs('{n} edges', {'n': g.edges.length}),
+                      AppTokens.cyan),
                   const SizedBox(width: 6),
                   for (final kv in kindCounts.entries) ...[
                     Text('${kv.value} ${kv.key}',
@@ -203,7 +208,7 @@ class _CogGraphExplorerState extends ConsumerState<CogGraphExplorer> {
                     child: TextField(
                       style: TextStyle(fontSize: 12, color: c.textPrimary),
                       decoration: InputDecoration(
-                        hintText: 'Search nodes…',
+                        hintText: context.tr('Search nodes…'),
                         hintStyle: TextStyle(
                             fontSize: 11, color: c.textMuted),
                         prefixIcon: Icon(Icons.search,
@@ -225,17 +230,17 @@ class _CogGraphExplorerState extends ConsumerState<CogGraphExplorer> {
                   ),
                   const SizedBox(width: 12),
                   // Connected toggle
-                  _toggle('Connected', _connectedOnly, (v) {
+                  _toggle(context.tr('Connected'), _connectedOnly, (v) {
                     setState(() => _connectedOnly = v);
                   }, c),
                   const SizedBox(width: 10),
                   // Chunks toggle
-                  _toggle('Chunks', _includeChunks, (v) {
+                  _toggle(context.tr('Chunks'), _includeChunks, (v) {
                     setState(() => _includeChunks = v);
                   }, c),
                   const SizedBox(width: 8),
                   IconButton(
-                    tooltip: 'Refresh',
+                    tooltip: context.tr('Refresh'),
                     icon: const Icon(Icons.refresh, size: 16),
                     onPressed: () =>
                         ref.invalidate(cogFullGraphProvider(params)),
@@ -250,7 +255,7 @@ class _CogGraphExplorerState extends ConsumerState<CogGraphExplorer> {
             Expanded(
               child: g.nodes.length < 2
                   ? Center(
-                      child: Text('No graph data yet',
+                      child: Text(context.tr('No graph data yet'),
                           style:
                               TextStyle(color: c.textMuted, fontSize: 12)))
                   : Row(
@@ -291,12 +296,14 @@ class _CogGraphExplorerState extends ConsumerState<CogGraphExplorer> {
               padding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Row(children: [
-                Text('Drag node = move · Scroll = zoom · Tap node = focus',
+                Text(
+                    context.tr(
+                        'Drag node = move · Scroll = zoom · Tap node = focus'),
                     style:
                         TextStyle(fontSize: 10, color: c.textMuted)),
                 if (g.truncated) ...[
                   const Spacer(),
-                  Text('Graph truncated',
+                  Text(context.tr('Graph truncated'),
                       style: TextStyle(
                           fontSize: 10, color: AppTokens.warning)),
                 ],
@@ -384,7 +391,7 @@ class _DetailPanel extends StatelessWidget {
                 const Spacer(),
                 IconButton(
                   icon: const Icon(Icons.open_in_new, size: 14),
-                  tooltip: 'Open in data view',
+                  tooltip: context.tr('Open in data view'),
                   onPressed: () => onOpenData(node),
                   visualDensity: VisualDensity.compact,
                   iconSize: 14,
@@ -421,7 +428,8 @@ class _DetailPanel extends StatelessWidget {
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            child: Text('${edges.length} connections',
+            child: Text(
+                context.trArgs('{n} connections', {'n': edges.length}),
                 style: TextStyle(fontSize: 10, color: c.textMuted)),
           ),
           const Divider(height: 1),
@@ -429,7 +437,7 @@ class _DetailPanel extends StatelessWidget {
           Expanded(
             child: edges.isEmpty
                 ? Center(
-                    child: Text('No connections',
+                    child: Text(context.tr('No connections'),
                         style:
                             TextStyle(fontSize: 11, color: c.textMuted)))
                 : ListView.builder(
@@ -439,7 +447,9 @@ class _DetailPanel extends StatelessWidget {
                       if (i >= 30) {
                         return Padding(
                           padding: const EdgeInsets.all(8),
-                          child: Text('+${edges.length - 30} more',
+                          child: Text(
+                              context.trArgs(
+                                  '+{n} more', {'n': edges.length - 30}),
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                   fontSize: 10, color: c.textMuted)),
@@ -588,7 +598,8 @@ class _GraphCanvas extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              '${n.kind} · ${v.degree} connections',
+              '${n.kind} · '
+              '${context.trArgs('{n} connections', {'n': v.degree})}',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.6), fontSize: 10,
               ),

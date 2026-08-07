@@ -2,6 +2,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../theme/tokens.dart';
 import 'kanban_providers.dart';
 
@@ -20,25 +21,27 @@ class _WorkspaceFieldState extends State<WorkspaceField> {
   Widget build(BuildContext context) {
     final c = context.colors;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(widget.label, style: TextStyle(color: c.textMuted, fontSize: 11)),
+      Text(context.tr(widget.label),
+          style: TextStyle(color: c.textMuted, fontSize: 11)),
       const SizedBox(height: 2),
       Row(children: [
         Expanded(
           child: TextField(
             controller: widget.controller,
-            decoration: const InputDecoration(
-                isDense: true, hintText: '~/work/… (worker outputs land here)'),
+            decoration: InputDecoration(
+                isDense: true,
+                hintText: context.tr('~/work/… (worker outputs land here)')),
           ),
         ),
         const SizedBox(width: AppTokens.s8),
         OutlinedButton.icon(
           onPressed: () async {
             final dir = await FilePicker.platform.getDirectoryPath(
-                dialogTitle: 'Choose the board workspace folder');
+                dialogTitle: context.tr('Choose the board workspace folder'));
             if (dir != null) setState(() => widget.controller.text = dir);
           },
           icon: const Icon(Icons.folder_open, size: 16),
-          label: const Text('Browse…'),
+          label: Text(context.tr('Browse…')),
         ),
       ]),
     ]);
@@ -64,19 +67,25 @@ class TemplateDropdown extends ConsumerWidget {
     final c = context.colors;
     final templates = ref.watch(kanbanTemplatesProvider);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text('Columns template', style: TextStyle(color: c.textMuted, fontSize: 11)),
+      Text(context.tr('Columns template'),
+          style: TextStyle(color: c.textMuted, fontSize: 11)),
       templates.when(
         loading: () => const LinearProgressIndicator(),
         error: (e, _) => Text('$e', style: const TextStyle(fontSize: 11)),
         data: (list) {
           final items = <DropdownMenuItem<String>>[
             if (allowAi)
-              const DropdownMenuItem(
-                  value: aiTemplateSentinel, child: Text('✨ AI generates columns')),
+              DropdownMenuItem(
+                  value: aiTemplateSentinel,
+                  child: Text('✨ ${context.tr('AI generates columns')}')),
+            // Builtin names come from the daemon in English; custom ones are
+            // user data and pass through untouched.
             for (final t in list)
               DropdownMenuItem(
                   value: t.id,
-                  child: Text('${t.name}${t.builtin ? '' : ' (custom)'}')),
+                  child: Text(t.builtin
+                      ? context.tr(t.name)
+                      : context.trArgs('{name} (custom)', {'name': t.name}))),
           ];
           final safe = items.any((i) => i.value == value)
               ? value
@@ -106,15 +115,16 @@ Future<void> showNewBoardDialog(BuildContext context, WidgetRef ref) async {
     builder: (dctx) => StatefulBuilder(
       builder: (dctx, setSt) => AlertDialog(
         backgroundColor: dctx.colors.surface,
-        title: const Text('New board'),
+        title: Text(dctx.tr('New board')),
         content: SizedBox(
           width: 460,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
               controller: titleCtl,
               autofocus: true,
-              decoration: const InputDecoration(
-                  labelText: 'Title', hintText: 'e.g. Q3 product launch'),
+              decoration: InputDecoration(
+                  labelText: dctx.tr('Title'),
+                  hintText: dctx.tr('e.g. Q3 product launch')),
             ),
             const SizedBox(height: AppTokens.s12),
             TemplateDropdown(
@@ -125,7 +135,8 @@ Future<void> showNewBoardDialog(BuildContext context, WidgetRef ref) async {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(dctx), child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(dctx),
+              child: Text(dctx.tr('Cancel'))),
           FilledButton(
             onPressed: () async {
               if (titleCtl.text.trim().isEmpty) return;
@@ -136,7 +147,7 @@ Future<void> showNewBoardDialog(BuildContext context, WidgetRef ref) async {
                   );
               if (dctx.mounted) Navigator.pop(dctx, id);
             },
-            child: const Text('Create'),
+            child: Text(dctx.tr('Create')),
           ),
         ],
       ),
@@ -155,7 +166,7 @@ Future<void> showGenerateBoardDialog(BuildContext context, WidgetRef ref) async 
     builder: (dctx) => StatefulBuilder(
       builder: (dctx, setSt) => AlertDialog(
         backgroundColor: dctx.colors.surface,
-        title: const Text('✨ AI board from a goal'),
+        title: Text('✨ ${dctx.tr('AI board from a goal')}'),
         content: SizedBox(
           width: 480,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -163,9 +174,10 @@ Future<void> showGenerateBoardDialog(BuildContext context, WidgetRef ref) async 
               controller: goalCtl,
               autofocus: true,
               maxLines: 3,
-              decoration: const InputDecoration(
-                  labelText: 'Goal',
-                  hintText: 'e.g. Plan a customer workshop in 6 weeks'),
+              decoration: InputDecoration(
+                  labelText: dctx.tr('Goal'),
+                  hintText:
+                      dctx.tr('e.g. Plan a customer workshop in 6 weeks')),
             ),
             const SizedBox(height: AppTokens.s12),
             TemplateDropdown(
@@ -179,18 +191,18 @@ Future<void> showGenerateBoardDialog(BuildContext context, WidgetRef ref) async 
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(dctx, false),
-              child: const Text('Cancel')),
+              child: Text(dctx.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(dctx, true),
-              child: const Text('Generate')),
+              child: Text(dctx.tr('Generate'))),
         ],
       ),
     ),
   );
   if (ok == true && goalCtl.text.trim().isNotEmpty && context.mounted) {
     final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(
-        const SnackBar(content: Text('Generating board with AI…')));
+    messenger.showSnackBar(SnackBar(
+        content: Text(context.tr('Generating board with AI…'))));
     try {
       final id = await ref.read(kanbanApiProvider).generateBoard(
             goalCtl.text.trim(),
@@ -199,7 +211,8 @@ Future<void> showGenerateBoardDialog(BuildContext context, WidgetRef ref) async 
           );
       if (id != null) ref.read(openBoardProvider.notifier).state = id;
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('AI failed: $e')));
+      messenger.showSnackBar(SnackBar(
+          content: Text(L10n.global.tArgs('AI failed: {e}', {'e': e}))));
     }
   }
 }

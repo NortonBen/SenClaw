@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/kanban_models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_markdown.dart';
@@ -79,18 +80,18 @@ class _BoardListView extends ConsumerWidget {
     final boards = ref.watch(kanbanBoardsProvider);
     return SectionScaffold(
       title: 'Kanban',
-      subtitle: 'Task board — agents work the Ready column',
+      subtitle: context.tr('Task board — agents work the Ready column'),
       actions: [
         OutlinedButton.icon(
           onPressed: () => showGenerateBoardDialog(context, ref),
           icon: const Icon(Icons.auto_awesome, size: 16),
-          label: const Text('AI board'),
+          label: Text(context.tr('AI board')),
         ),
         const SizedBox(width: AppTokens.s8),
         FilledButton.icon(
           onPressed: () => showNewBoardDialog(context, ref),
           icon: const Icon(Icons.add, size: 16),
-          label: const Text('New board'),
+          label: Text(context.tr('New board')),
         ),
       ],
       body: boards.when(
@@ -104,10 +105,10 @@ class _BoardListView extends ConsumerWidget {
                 children: [
                   Icon(Icons.view_kanban_outlined, size: 48, color: c.textMuted),
                   const SizedBox(height: AppTokens.s12),
-                  Text('No boards yet',
+                  Text(context.tr('No boards yet'),
                       style: TextStyle(color: c.textSecondary, fontSize: 15)),
                   const SizedBox(height: AppTokens.s4),
-                  Text('Create a board, or let AI plan one from a goal.',
+                  Text(context.tr('Create a board, or let AI plan one from a goal.'),
                       style: TextStyle(color: c.textMuted, fontSize: 12)),
                 ],
               ),
@@ -162,24 +163,26 @@ class _BoardCard extends ConsumerWidget {
                           color: c.textPrimary, fontWeight: FontWeight.w600)),
                 ),
                 IconButton(
-                  tooltip: 'Delete board',
+                  tooltip: context.tr('Delete board'),
                   icon: Icon(Icons.delete_outline, size: 16, color: c.textMuted),
                   onPressed: () async {
                     final ok = await showDialog<bool>(
                       context: context,
                       builder: (dctx) => AlertDialog(
                         backgroundColor: dctx.colors.surface,
-                        title: const Text('Delete board?'),
-                        content: Text(
-                            'Delete “${board.title}” and all of its cards?'),
+                        title: Text(dctx.tr('Delete board?')),
+                        content: Text(dctx.trArgs(
+                            'Delete “{title}” and all of its cards?',
+                            {'title': board.title})),
                         actions: [
                           TextButton(
                               onPressed: () => Navigator.pop(dctx, false),
-                              child: const Text('Cancel')),
+                              child: Text(dctx.tr('Cancel'))),
                           TextButton(
                               onPressed: () => Navigator.pop(dctx, true),
-                              child: const Text('Delete',
-                                  style: TextStyle(color: AppTokens.danger))),
+                              child: Text(dctx.tr('Delete'),
+                                  style: const TextStyle(
+                                      color: AppTokens.danger))),
                         ],
                       ),
                     );
@@ -190,7 +193,9 @@ class _BoardCard extends ConsumerWidget {
                 ),
               ]),
               const SizedBox(height: AppTokens.s8),
-              Text('${board.columnCount} columns · ${board.cardCount} cards',
+              Text(
+                  context.trArgs('{c} columns · {k} cards',
+                      {'c': board.columnCount, 'k': board.cardCount}),
                   style: TextStyle(color: c.textMuted, fontSize: 12)),
             ],
           ),
@@ -225,19 +230,19 @@ class _BoardView extends ConsumerWidget {
     final ws = (board?.workspaceDir ?? '').trim();
 
     return SectionScaffold(
-      title: board?.title ?? 'Board',
+      title: board?.title ?? context.tr('Board'),
       subtitle: ws.isEmpty
-          ? 'Drag cards between columns · Ready is picked up by workers'
-          : 'Workspace: $ws',
+          ? context.tr('Drag cards between columns · Ready is picked up by workers')
+          : context.trArgs('Workspace: {dir}', {'dir': ws}),
       actions: [
         IconButton(
-          tooltip: 'Back to boards',
+          tooltip: context.tr('Back to boards'),
           icon: const Icon(Icons.arrow_back, size: 18),
           onPressed: () => ref.read(openBoardProvider.notifier).state = null,
         ),
         const SizedBox(width: AppTokens.s8),
         Row(mainAxisSize: MainAxisSize.min, children: [
-          Text('Worker lanes',
+          Text(context.tr('Worker lanes'),
               style: TextStyle(color: c.textSecondary, fontSize: 12)),
           const SizedBox(width: AppTokens.s4),
           Switch(
@@ -249,12 +254,12 @@ class _BoardView extends ConsumerWidget {
         if (assignees.isNotEmpty)
           DropdownButton<String?>(
             value: filter,
-            hint: Text('All workers',
+            hint: Text(context.tr('All workers'),
                 style: TextStyle(color: c.textMuted, fontSize: 12)),
             underline: const SizedBox.shrink(),
             items: [
-              const DropdownMenuItem<String?>(
-                  value: null, child: Text('All workers')),
+              DropdownMenuItem<String?>(
+                  value: null, child: Text(context.tr('All workers'))),
               for (final a in assignees)
                 DropdownMenuItem<String?>(value: a, child: Text(a)),
             ],
@@ -265,22 +270,24 @@ class _BoardView extends ConsumerWidget {
         OutlinedButton.icon(
           onPressed: () => _showAiTaskDialog(context, ref, boardId),
           icon: const Icon(Icons.auto_awesome, size: 16),
-          label: const Text('AI Task'),
+          label: Text(context.tr('AI Task')),
         ),
         const SizedBox(width: AppTokens.s8),
         OutlinedButton.icon(
           onPressed: () => _showAddColumnDialog(context, ref, boardId),
           icon: const Icon(Icons.add, size: 16),
-          label: const Text('Add column'),
+          label: Text(context.tr('Add column')),
         ),
         const SizedBox(width: AppTokens.s8),
         IconButton(
-          tooltip: 'Refresh',
+          tooltip: context.tr('Refresh'),
           onPressed: () => ref.invalidate(kanbanColumnsProvider(boardId)),
           icon: const Icon(Icons.refresh, size: 18),
         ),
         IconButton(
-          tooltip: drawerOpen ? 'Hide activity' : 'Show running tasks',
+          tooltip: drawerOpen
+              ? context.tr('Hide activity')
+              : context.tr('Show running tasks'),
           isSelected: drawerOpen,
           onPressed: () => ref.read(activityDrawerProvider.notifier).state =
               !drawerOpen,
@@ -330,14 +337,14 @@ class _ActivityDrawer extends ConsumerWidget {
           child: Row(children: [
             Icon(Icons.bolt, size: 16, color: AppTokens.brand),
             const SizedBox(width: AppTokens.s8),
-            Text('Activity',
+            Text(context.tr('Activity'),
                 style: TextStyle(
                     color: c.textPrimary,
                     fontWeight: FontWeight.w600,
                     fontSize: 13)),
             const Spacer(),
             IconButton(
-              tooltip: 'Close',
+              tooltip: context.tr('Close'),
               iconSize: 16,
               onPressed: () =>
                   ref.read(activityDrawerProvider.notifier).state = false,
@@ -353,16 +360,17 @@ class _ActivityDrawer extends ConsumerWidget {
             data: (a) => ListView(
               padding: const EdgeInsets.all(AppTokens.s12),
               children: [
-                _drawerLabel(context, 'Running now (${a.running.length})'),
+                _drawerLabel(context,
+                    context.trArgs('Running now ({n})', {'n': a.running.length})),
                 if (a.running.isEmpty)
-                  _drawerEmpty(context, 'No tasks in progress')
+                  _drawerEmpty(context, context.tr('No tasks in progress'))
                 else
                   for (final card in a.running)
                     _RunningTile(boardId: boardId, card: card),
                 const SizedBox(height: AppTokens.s16),
-                _drawerLabel(context, 'Recent worker feed'),
+                _drawerLabel(context, context.tr('Recent worker feed')),
                 if (a.recent.isEmpty)
-                  _drawerEmpty(context, 'No activity yet')
+                  _drawerEmpty(context, context.tr('No activity yet'))
                 else
                   for (final item in a.recent) _FeedTile(item: item),
               ],
@@ -612,7 +620,7 @@ class _ColumnView extends ConsumerWidget {
                     ),
                   ),
                   PopupMenuButton<String>(
-                    tooltip: 'Column',
+                    tooltip: context.tr('Column'),
                     icon: Icon(Icons.more_horiz, size: 16, color: c.textMuted),
                     onSelected: (v) async {
                       if (v == 'delete') {
@@ -621,9 +629,10 @@ class _ColumnView extends ConsumerWidget {
                             .deleteColumn(boardId, column.id);
                       }
                     },
-                    itemBuilder: (_) => const [
+                    itemBuilder: (_) => [
                       PopupMenuItem(
-                          value: 'delete', child: Text('Delete column')),
+                          value: 'delete',
+                          child: Text(context.tr('Delete column'))),
                     ],
                   ),
                 ]),
@@ -679,7 +688,7 @@ class _LaneHeader extends StatelessWidget {
         else
           Icon(Icons.circle_outlined, size: 14, color: c.textMuted),
         const SizedBox(width: AppTokens.s6),
-        Text(name ?? 'Unassigned',
+        Text(name ?? context.tr('Unassigned'),
             style: TextStyle(
                 fontSize: 11, color: c.textMuted, fontWeight: FontWeight.w600)),
         Text(' · $count', style: TextStyle(fontSize: 11, color: c.textMuted)),
@@ -753,7 +762,7 @@ class _CardChipBody extends StatelessWidget {
               Text('#${card.id}',
                   style: TextStyle(fontSize: 10, color: c.textMuted)),
               if (card.priority != null)
-                _Tag(card.priority!.toUpperCase(),
+                _Tag(context.tr(card.priority!).toUpperCase(),
                     color: _priorityColor(card.priority)),
               if (card.tenant != null) _Tag(card.tenant!),
               for (final l in card.labels) _Tag(l),
@@ -872,7 +881,7 @@ class _AddCardTileState extends ConsumerState<_AddCardTile> {
       return TextButton.icon(
         onPressed: () => setState(() => _editing = true),
         icon: Icon(Icons.add, size: 14, color: c.textMuted),
-        label: Text('Add card',
+        label: Text(context.tr('Add card'),
             style: TextStyle(color: c.textMuted, fontSize: 12)),
       );
     }
@@ -881,7 +890,7 @@ class _AddCardTileState extends ConsumerState<_AddCardTile> {
       child: TextField(
         controller: _ctl,
         autofocus: true,
-        decoration: const InputDecoration(hintText: 'Card title…'),
+        decoration: InputDecoration(hintText: context.tr('Card title…')),
         onSubmitted: (_) => _commit(),
         onTapOutside: (_) => _commit(),
       ),
@@ -908,23 +917,23 @@ Future<void> _showAddColumnDialog(
     builder: (dctx) => StatefulBuilder(
       builder: (dctx, setSt) => AlertDialog(
         backgroundColor: dctx.colors.surface,
-        title: const Text('New column'),
+        title: Text(dctx.tr('New column')),
         content: SizedBox(
           width: 380,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
               controller: ctl,
               autofocus: true,
-              decoration: const InputDecoration(labelText: 'Title'),
+              decoration: InputDecoration(labelText: dctx.tr('Title')),
               onSubmitted: (_) => Navigator.pop(dctx, true),
             ),
             const SizedBox(height: AppTokens.s12),
             DropdownButtonFormField<String>(
               initialValue: role,
-              decoration: const InputDecoration(labelText: 'Type'),
+              decoration: InputDecoration(labelText: dctx.tr('Type')),
               items: [
                 for (final (key, label) in _columnRoles)
-                  DropdownMenuItem(value: key, child: Text(label)),
+                  DropdownMenuItem(value: key, child: Text(dctx.tr(label))),
               ],
               onChanged: (v) => setSt(() => role = v ?? 'custom'),
             ),
@@ -933,10 +942,10 @@ Future<void> _showAddColumnDialog(
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(dctx, false),
-              child: const Text('Cancel')),
+              child: Text(dctx.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(dctx, true),
-              child: const Text('Add')),
+              child: Text(dctx.tr('Add'))),
         ],
       ),
     ),
@@ -956,11 +965,13 @@ Future<void> _showAiTaskDialog(
     context: context,
     builder: (dctx) => AlertDialog(
       backgroundColor: dctx.colors.surface,
-      title: const Text('✨ AI Task'),
+      title: Text('✨ ${dctx.tr('AI Task')}'),
       content: SizedBox(
         width: 480,
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('Mô tả yêu cầu — AI sẽ tự break down thành các task và đưa vào board để chạy.',
+          Text(
+              dctx.tr(
+                  'Describe the request — AI will break it down into tasks and add them to the board to run.'),
               style: TextStyle(
                   color: dctx.colors.textMuted, fontSize: 12)),
           const SizedBox(height: AppTokens.s12),
@@ -968,25 +979,25 @@ Future<void> _showAiTaskDialog(
             controller: ctl,
             autofocus: true,
             maxLines: 4,
-            decoration: const InputDecoration(
-                labelText: 'Yêu cầu',
-                hintText: 'VD: Viết báo cáo phân tích thị trường Q3…'),
+            decoration: InputDecoration(
+                labelText: dctx.tr('Request'),
+                hintText: dctx.tr('e.g. Write a Q3 market analysis report…')),
           ),
         ]),
       ),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(dctx, false),
-            child: const Text('Cancel')),
+            child: Text(dctx.tr('Cancel'))),
         FilledButton(
             onPressed: () => Navigator.pop(dctx, true),
-            child: const Text('Generate')),
+            child: Text(dctx.tr('Generate'))),
       ],
     ),
   );
   if (ok == true && ctl.text.trim().isNotEmpty) {
     messenger.showSnackBar(
-        const SnackBar(content: Text('AI đang break down task…')));
+        SnackBar(content: Text(L10n.global.t('AI breaking the task down…'))));
     try {
       await ref.read(kanbanApiProvider).generateBoard(
             ctl.text.trim(),
@@ -994,10 +1005,11 @@ Future<void> _showAiTaskDialog(
           );
       messenger.clearSnackBars();
       messenger.showSnackBar(
-          const SnackBar(content: Text('Đã thêm tasks vào board')));
+          SnackBar(content: Text(L10n.global.t('Tasks added to the board'))));
     } catch (e) {
       messenger.clearSnackBars();
-      messenger.showSnackBar(SnackBar(content: Text('AI failed: $e')));
+      messenger.showSnackBar(SnackBar(
+          content: Text(L10n.global.tArgs('AI failed: {e}', {'e': e}))));
     }
   }
 }
@@ -1040,10 +1052,10 @@ class _CardDetailDialogState extends ConsumerState<_CardDetailDialog> {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(dctx, false),
-              child: const Text('Cancel')),
+              child: Text(dctx.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(dctx, true),
-              child: const Text('OK')),
+              child: Text(dctx.tr('OK'))),
         ],
       ),
     );
@@ -1089,12 +1101,13 @@ class _CardDetailDialogState extends ConsumerState<_CardDetailDialog> {
                     const Spacer(),
                     FilledButton.icon(
                       onPressed: () async {
-                        final s = await _prompt('Complete — summary (optional)');
+                        final s = await _prompt(
+                            context.tr('Complete — summary (optional)'));
                         if (s == null) return;
                         await api.completeCard(widget.boardId, card.id, s);
                       },
                       icon: const Icon(Icons.check, size: 14),
-                      label: const Text('Complete'),
+                      label: Text(context.tr('Complete')),
                     ),
                     const SizedBox(width: AppTokens.s4),
                     if (isBlockedCol)
@@ -1103,19 +1116,19 @@ class _CardDetailDialogState extends ConsumerState<_CardDetailDialog> {
                           await api.unblockCard(widget.boardId, card.id);
                         },
                         icon: const Icon(Icons.play_arrow, size: 14),
-                        label: const Text('Unblock'),
+                        label: Text(context.tr('Unblock')),
                       )
                     else
                       OutlinedButton.icon(
                         onPressed: () async {
-                          final r = await _prompt('Block — reason');
+                          final r = await _prompt(context.tr('Block — reason'));
                           if (r == null) return;
                           await api.blockCard(widget.boardId, card.id, r);
                         },
                         icon: const Icon(Icons.block, size: 14,
                             color: AppTokens.danger),
-                        label: const Text('Block',
-                            style: TextStyle(color: AppTokens.danger)),
+                        label: Text(context.tr('Block'),
+                            style: const TextStyle(color: AppTokens.danger)),
                       ),
                     IconButton(
                         onPressed: () => Navigator.pop(context),
@@ -1144,7 +1157,7 @@ class _CardDetailDialogState extends ConsumerState<_CardDetailDialog> {
                           runSpacing: AppTokens.s8,
                           children: [
                             _PropDropdown(
-                              label: 'Column',
+                              label: context.tr('Column'),
                               value: '${card.columnId}',
                               items: [
                                 for (final k in cols)
@@ -1154,11 +1167,12 @@ class _CardDetailDialogState extends ConsumerState<_CardDetailDialog> {
                                   widget.boardId, card.id, int.parse(v)),
                             ),
                             _PropDropdown(
-                              label: 'Priority',
+                              label: context.tr('Priority'),
                               value: card.priority ?? '',
                               items: [
                                 const MapEntry('', '—'),
-                                for (final p in _priorities) MapEntry(p, p)
+                                for (final p in _priorities)
+                                  MapEntry(p, context.tr(p))
                               ],
                               onChanged: (v) => api.updateCard(widget.boardId,
                                   card.id, {'priority': v.isEmpty ? null : v}),
@@ -1169,7 +1183,7 @@ class _CardDetailDialogState extends ConsumerState<_CardDetailDialog> {
                                   card.id, {'assignee': v.isEmpty ? null : v}),
                             ),
                             _PropText(
-                              label: 'Labels (a, b)',
+                              label: context.tr('Labels (a, b)'),
                               value: card.labels.join(', '),
                               onSubmit: (v) => api.updateCard(
                                   widget.boardId, card.id, {
@@ -1187,19 +1201,20 @@ class _CardDetailDialogState extends ConsumerState<_CardDetailDialog> {
                           OutlinedButton.icon(
                             onPressed: () async {
                               final messenger = ScaffoldMessenger.of(context);
-                              messenger.showSnackBar(const SnackBar(
-                                  content:
-                                      Text('AI breaking the task down…')));
+                              messenger.showSnackBar(SnackBar(
+                                  content: Text(
+                                      context.tr('AI breaking the task down…'))));
                               try {
                                 await api.breakdownCard(
                                     widget.boardId, card.id);
                               } catch (e) {
                                 messenger.showSnackBar(SnackBar(
-                                    content: Text('AI failed: $e')));
+                                    content: Text(L10n.global
+                                        .tArgs('AI failed: {e}', {'e': e}))));
                               }
                             },
                             icon: const Icon(Icons.auto_awesome, size: 14),
-                            label: const Text('Break down (AI)'),
+                            label: Text(context.tr('Break down (AI)')),
                           ),
                           const Spacer(),
                           TextButton.icon(
@@ -1209,13 +1224,14 @@ class _CardDetailDialogState extends ConsumerState<_CardDetailDialog> {
                             },
                             icon: const Icon(Icons.delete_outline,
                                 size: 14, color: AppTokens.danger),
-                            label: const Text('Delete',
-                                style: TextStyle(color: AppTokens.danger)),
+                            label: Text(context.tr('Delete'),
+                                style: const TextStyle(
+                                    color: AppTokens.danger)),
                           ),
                         ]),
                         if (d.links.isNotEmpty) ...[
                           const SizedBox(height: AppTokens.s12),
-                          Text('Dependencies',
+                          Text(context.tr('Dependencies'),
                               style: TextStyle(
                                   color: c.textSecondary,
                                   fontWeight: FontWeight.w700,
@@ -1226,15 +1242,21 @@ class _CardDetailDialogState extends ConsumerState<_CardDetailDialog> {
                               padding: const EdgeInsets.only(bottom: 2),
                               child: Text(
                                 l.childId == card.id
-                                    ? '⛔ blocked by: ${l.parentTitle}${l.parentDone ? ' ✓' : ''}'
-                                    : '→ blocks: ${l.childTitle}${l.childDone ? ' ✓' : ''}',
+                                    ? '${context.trArgs('⛔ blocked by: {title}', {
+                                        'title': l.parentTitle
+                                      })}${l.parentDone ? ' ✓' : ''}'
+                                    : '${context.trArgs('→ blocks: {title}', {
+                                        'title': l.childTitle
+                                      })}${l.childDone ? ' ✓' : ''}',
                                 style: TextStyle(
                                     color: c.textSecondary, fontSize: 12),
                               ),
                             ),
                         ],
                         const SizedBox(height: AppTokens.s12),
-                        Text('Comments (${d.comments.length})',
+                        Text(
+                            context.trArgs('Comments ({n})',
+                                {'n': d.comments.length}),
                             style: TextStyle(
                                 color: c.textSecondary,
                                 fontWeight: FontWeight.w700,
@@ -1246,15 +1268,15 @@ class _CardDetailDialogState extends ConsumerState<_CardDetailDialog> {
                           Expanded(
                             child: TextField(
                               controller: _commentCtl,
-                              decoration: const InputDecoration(
-                                  hintText: 'Add a note…'),
+                              decoration: InputDecoration(
+                                  hintText: context.tr('Add a note…')),
                               onSubmitted: (_) => _sendComment(api),
                             ),
                           ),
                           const SizedBox(width: AppTokens.s8),
                           FilledButton(
                               onPressed: () => _sendComment(api),
-                              child: const Text('Send')),
+                              child: Text(context.tr('Send'))),
                         ]),
                       ],
                     ),
@@ -1310,7 +1332,7 @@ class _CommentTile extends StatelessWidget {
                   fontWeight: FontWeight.w700)),
           if (m.kind != 'comment') ...[
             const SizedBox(width: AppTokens.s6),
-            _Tag(m.kind),
+            _Tag(context.tr(m.kind)),
           ],
           const Spacer(),
           Text(when, style: TextStyle(color: c.textMuted, fontSize: 10)),
@@ -1415,7 +1437,7 @@ class _AssigneeField extends ConsumerWidget {
     return SizedBox(
       width: 240,
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Assignee (worker profile)',
+        Text(context.tr('Assignee (worker profile)'),
             style: TextStyle(color: c.textMuted, fontSize: 11)),
         profiles.when(
           loading: () => const LinearProgressIndicator(),
@@ -1436,7 +1458,7 @@ class _AssigneeField extends ConsumerWidget {
                   DropdownMenuItem(
                     value: o,
                     child: Text(
-                      o.isEmpty ? '— default profile —' : o,
+                      o.isEmpty ? context.tr('— default profile —') : o,
                       style: o.isEmpty
                           ? TextStyle(color: c.textMuted, fontStyle: FontStyle.italic)
                           : null,

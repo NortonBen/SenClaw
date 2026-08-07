@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/daemon/app_shutdown.dart';
 import '../../core/daemon/daemon_provider.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
 import '../space/space_providers.dart';
@@ -103,15 +104,15 @@ class _PermissionCard extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Cần quyền ghi màn hình',
+            Text(context.tr('Screen Recording permission required'),
                 style: TextStyle(
                     color: c.textPrimary,
                     fontWeight: FontWeight.w700,
                     fontSize: 16)),
             const SizedBox(height: AppTokens.s8),
             Text(
-              'Bật SenClaw trong System Settings → Privacy & Security → Screen '
-              'Recording.',
+              context.tr('Enable SenClaw in System Settings → Privacy & '
+                  'Security → Screen Recording.'),
               style: TextStyle(color: c.textMuted, fontSize: 13, height: 1.5),
             ),
             const SizedBox(height: AppTokens.s8),
@@ -124,8 +125,9 @@ class _PermissionCard extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(AppTokens.rLg),
               ),
               child: Text(
-                'Đã bật rồi mà vẫn hỏi? macOS chỉ nhận quyền này sau khi khởi '
-                'động lại. Thoát và mở lại SenClaw.',
+                context.tr('Already enabled but still asked? macOS only picks '
+                    'this permission up after a restart. Quit and reopen '
+                    'SenClaw.'),
                 style: TextStyle(
                     color: c.textPrimary, fontSize: 12.5, height: 1.5),
               ),
@@ -133,13 +135,13 @@ class _PermissionCard extends ConsumerWidget {
             const SizedBox(height: AppTokens.s20),
             Row(
               children: [
-                TextButton(onPressed: close, child: const Text('Để sau')),
+                TextButton(onPressed: close, child: Text(context.tr('Not now'))),
                 const Spacer(),
                 OutlinedButton(
                   onPressed: () {
                     openScreenRecordingSettings();
                   },
-                  child: const Text('Mở Settings'),
+                  child: Text(context.tr('Open Settings')),
                 ),
                 const SizedBox(width: AppTokens.s8),
                 FilledButton(
@@ -147,7 +149,7 @@ class _PermissionCard extends ConsumerWidget {
                     supervisor: ref.read(daemonSupervisorProvider),
                     uiPort: ref.read(appConfigProvider).uiPort,
                   ),
-                  child: const Text('Thoát để mở lại'),
+                  child: Text(context.tr('Quit to reopen')),
                 ),
               ],
             ),
@@ -175,7 +177,7 @@ class _ErrorCard extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Chụp màn hình thất bại',
+            Text(context.tr('Screenshot failed'),
                 style: TextStyle(
                     color: c.textPrimary,
                     fontWeight: FontWeight.w700,
@@ -186,7 +188,8 @@ class _ErrorCard extends ConsumerWidget {
             const SizedBox(height: AppTokens.s20),
             Align(
               alignment: Alignment.centerRight,
-              child: FilledButton(onPressed: close, child: const Text('Đóng')),
+              child:
+                  FilledButton(onPressed: close, child: Text(context.tr('Close'))),
             ),
           ],
         ),
@@ -259,7 +262,7 @@ class _CaptureDialogState extends ConsumerState<_CaptureDialog> {
   Future<void> _save() async {
     final title = _title.text.trim();
     if (title.isEmpty) {
-      setState(() => _error = 'Nhập tiêu đề đã.');
+      setState(() => _error = context.tr('Enter a title first.'));
       return;
     }
     setState(() {
@@ -283,8 +286,8 @@ class _CaptureDialogState extends ConsumerState<_CaptureDialog> {
           ..writeln(_body.text.trim())
           ..writeln();
       }
-      noteBody.writeln(
-          '_Chụp lúc ${DateFormat('d/M/y HH:mm').format(DateTime.now())}._');
+      noteBody.writeln(context.trArgs('_Captured at {t}._',
+          {'t': DateFormat('d/M/y HH:mm').format(DateTime.now())}));
 
       await api.createNote(title, noteBody.toString(), ['screenshot']);
       if (mounted) _close();
@@ -292,7 +295,7 @@ class _CaptureDialogState extends ConsumerState<_CaptureDialog> {
       if (mounted) {
         setState(() {
           _saving = false;
-          _error = 'Lưu thất bại: $e';
+          _error = context.trArgs('Save failed: {e}', {'e': e});
         });
       }
     }
@@ -333,14 +336,14 @@ class _CaptureDialogState extends ConsumerState<_CaptureDialog> {
             const Text('📸', style: TextStyle(fontSize: 18)),
             const SizedBox(width: AppTokens.s8),
             Expanded(
-              child: Text('Lưu ảnh vào ghi chú',
+              child: Text(context.tr('Save screenshot to a note'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontWeight: FontWeight.w700,
                       fontSize: 16)),
             ),
             IconButton(
-              tooltip: 'Đóng',
+              tooltip: context.tr('Close'),
               icon: const Icon(Icons.close, size: 18),
               onPressed: _saving ? null : _close,
             ),
@@ -368,7 +371,7 @@ class _CaptureDialogState extends ConsumerState<_CaptureDialog> {
             const SizedBox(height: AppTokens.s12),
             Row(
               children: [
-                Text('Điền thông tin',
+                Text(context.tr('Fill in the details'),
                     style: TextStyle(
                         color: c.textMuted,
                         fontSize: 12,
@@ -385,7 +388,9 @@ class _CaptureDialogState extends ConsumerState<_CaptureDialog> {
                           height: 14,
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.auto_awesome, size: 16),
-                  label: Text(_extracting ? 'Đang đọc ảnh…' : 'AI tự điền'),
+                  label: Text(_extracting
+                      ? context.tr('Reading the image…')
+                      : context.tr('AI fill')),
                 ),
               ],
             ),
@@ -395,7 +400,7 @@ class _CaptureDialogState extends ConsumerState<_CaptureDialog> {
               autofocus: true,
               enabled: !_extracting,
               style: TextStyle(color: c.textPrimary, fontSize: 14),
-              decoration: _dec(c, 'Tiêu đề ghi chú'),
+              decoration: _dec(c, context.tr('Note title')),
             ),
             const SizedBox(height: AppTokens.s8),
             TextField(
@@ -404,7 +409,7 @@ class _CaptureDialogState extends ConsumerState<_CaptureDialog> {
               maxLines: 4,
               enabled: !_extracting,
               style: TextStyle(color: c.textPrimary, fontSize: 14),
-              decoration: _dec(c, 'Ghi chú thêm (tuỳ chọn)'),
+              decoration: _dec(c, context.tr('More notes (optional)')),
             ),
           ],
         ),
@@ -434,7 +439,8 @@ class _CaptureDialogState extends ConsumerState<_CaptureDialog> {
           mainAxisAlignment: MainAxisAlignment.end,
           children: [
             TextButton(
-                onPressed: _saving ? null : _close, child: const Text('Huỷ')),
+                onPressed: _saving ? null : _close,
+                child: Text(context.tr('Cancel'))),
             const SizedBox(width: AppTokens.s8),
             FilledButton(
               onPressed: _saving ? null : _save,
@@ -443,7 +449,7 @@ class _CaptureDialogState extends ConsumerState<_CaptureDialog> {
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text('Lưu ghi chú'),
+                  : Text(context.tr('Save note')),
             ),
           ],
         ),

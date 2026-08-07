@@ -285,7 +285,25 @@ fn grant_access(
 /// `spec.argv` is the program to run, already resolved. `spec.script` is
 /// written to a file and passed as its final argument by the caller, so nothing
 /// here interpolates user text into a command line.
+/// Every Win32 value used below — `HANDLE`, `PSID`, `PROCESS_INFORMATION` — is a
+/// raw pointer, and therefore `!Send`. Holding one across an `.await` makes the
+/// *caller's* future `!Send` too, and axum handlers, `rmcp` tools and the
+/// scheduler all require `Send` futures: the first version of this file
+/// awaited inside the launch sequence and broke the build of 24 unrelated call
+/// sites, none of which mention Windows.
+///
+/// So the whole sequence runs inside one blocking task and never awaits within
+/// it. Everything crossing the boundary is owned, plain data.
 pub async fn exec(sb: &Sandbox, spec: &ExecSpec, allowlist: &[String]) -> Outcome {
+    let start = Instant::now();
+    let (sb, spec, allowlist) = (sb.clone(), spec.clone(), allowlist.to_vec());
+    match tokio::task::spawn_blocking(move || exec_blocking(&sb, &spec, &allowlist)).await {
+        Ok(outcome) => outcome,
+        Err(e) => failed(format!("the sandbox task did not finish: {e}"), start),
+    }
+}
+
+fn exec_blocking(sb: &Sandbox, spec: &ExecSpec, allowlist: &[String]) -> Outcome {
     let start = Instant::now();
     let argv = match spec.argv.as_ref().filter(|a| !a.is_empty()) {
         Some(a) => a.clone(),
@@ -311,13 +329,13 @@ pub async fn exec(sb: &Sandbox, spec: &ExecSpec, allowlist: &[String]) -> Outcom
         Err(e) => return failed(e, start),
     };
 
-    match spawn(&container, sb, &argv, spec, &job).await {
+    match spawn(&container, sb, &argv, spec, &job) {
         Ok(o) => o,
         Err(e) => failed(e, start),
     }
 }
 
-async fn spawn(
+fn spawn(
     container: &Container,
     sb: &Sandbox,
     argv: &[String],
@@ -430,19 +448,14 @@ async fn spawn(
     let err_h = err_r.as_raw_handle() as isize;
     std::mem::forget(out_r);
     std::mem::forget(err_r);
-    let out_task = tokio::task::spawn_blocking(move || read_all(out_h));
-    let err_task = tokio::task::spawn_blocking(move || read_all(err_h));
+    // Plain threads, not `spawn_blocking`: this is already a blocking task, and
+    // joining a tokio handle would need the `.await` this function must not have.
+    let out_task = std::thread::spawn(move || read_all(out_h));
+    let err_task = std::thread::spawn(move || read_all(err_h));
 
     let proc = pi.hProcess;
     let timeout_ms = spec.timeout_ms as u32;
-    // HANDLE wraps a raw pointer and so is not `Send`; it crosses to the
-    // blocking pool as an integer and is rebuilt there.
-    let proc_raw = proc.0 as isize;
-    let waited = tokio::task::spawn_blocking(move || unsafe {
-        WaitForSingleObject(HANDLE(proc_raw as _), timeout_ms)
-    })
-    .await
-    .map_err(|e| format!("waiting for the process failed: {e}"))?;
+    let waited = unsafe { WaitForSingleObject(proc, timeout_ms) };
 
     let timed_out = waited != WAIT_OBJECT_0;
     if timed_out {
@@ -453,8 +466,8 @@ async fn spawn(
         }
     }
 
-    let stdout = out_task.await.unwrap_or_default();
-    let stderr = err_task.await.unwrap_or_default();
+    let stdout = out_task.join().unwrap_or_default();
+    let stderr = err_task.join().unwrap_or_default();
     let mut code = 0u32;
     unsafe {
         let _ = GetExitCodeProcess(proc, &mut code);

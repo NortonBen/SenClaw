@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/i18n/l10n.dart';
+import '../core/i18n/locale_provider.dart';
 import '../core/transport/connection.dart';
 import '../features/chat/mini_chat_screen.dart';
 import '../features/chat/widgets/plan_exit_dialog.dart';
@@ -41,6 +44,14 @@ class _MiniWindowAppState extends ConsumerState<MiniWindowApp> {
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ref.watch(themeModeProvider),
+      locale: Locale(ref.watch(localeCodeProvider)),
+      supportedLocales: const [Locale('en'), Locale('vi')],
+      localizationsDelegates: const [
+        L10nDelegate(),
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       home: const MiniChatScreen(),
       // Plan-approval modal works here too (the mini window can run plans).
       builder: (context, child) => Stack(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../core/i18n/l10n.dart';
 import '../theme/tokens.dart';
 import 'app_markdown.dart';
 
@@ -270,7 +271,7 @@ class _ChecklistState extends State<_Checklist> {
                     const SizedBox(width: AppTokens.s4),
                     Icon(Icons.check, size: 14, color: c.textMuted),
                     const SizedBox(width: AppTokens.s6),
-                    Text('${done.length} completed',
+                    Text(context.trArgs('{n} completed', {'n': done.length}),
                         style: TextStyle(
                             color: c.textMuted,
                             fontSize: 12.5,
@@ -357,7 +358,7 @@ class _ChecklistState extends State<_Checklist> {
                 child: Icon(Icons.add, size: 18, color: c.textMuted),
               ),
               const SizedBox(width: AppTokens.s4),
-              Text('List item',
+              Text(context.tr('List item'),
                   style: TextStyle(color: c.textMuted, fontSize: 13.5)),
             ],
           ),
@@ -378,11 +379,11 @@ class _ChecklistState extends State<_Checklist> {
             focusNode: _addFocus,
             autofocus: true,
             style: TextStyle(color: c.textPrimary, fontSize: 13.5),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               isDense: true,
-              hintText: 'List item',
+              hintText: context.tr('List item'),
               border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(vertical: 6),
+              contentPadding: const EdgeInsets.symmetric(vertical: 6),
             ),
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _submitAdd(),

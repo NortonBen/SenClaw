@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
+import 'package:intl/date_symbol_data_local.dart' show initializeDateFormatting;
 import 'package:local_notifier/local_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
@@ -22,6 +23,12 @@ Future<void> main(List<String> args) async {
   }
 
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Month and weekday names for every `DateFormat` in the app. Without this,
+  // `EEE`/`MMMM` render in English no matter what language is selected —
+  // `localeCodeProvider` sets `Intl.defaultLocale`, but the symbols have to be
+  // loaded first.
+  await initializeDateFormatting();
 
   final prefs = await SharedPreferences.getInstance();
 
@@ -63,6 +70,7 @@ Future<void> main(List<String> args) async {
 /// it can stay open alongside the full window.
 Future<void> _runMiniWindow(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting();
 
   final windowId = int.tryParse(args.length > 1 ? args[1] : '') ?? 0;
   // args[2] is reserved for future per-window arguments (JSON); unused for now.

@@ -5,6 +5,7 @@
   "icon": "🎬",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./video-flow",
     "healthPath": "/api/status",
     "port": 4460

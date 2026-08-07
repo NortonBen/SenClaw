@@ -5,6 +5,7 @@
   "icon": "🛒",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./shopee",
     "healthPath": "/api/status",
     "port": 4492

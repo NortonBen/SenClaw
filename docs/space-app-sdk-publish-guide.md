@@ -183,10 +183,13 @@ Manifest **runtime** — daemon đọc nó để cài, chạy, nhúng UI, đăng
   "icon": "🧩",
   "runtime": {
     "kind": "server",
+    "mode": "session",
     "start": "./my-app",
     "healthPath": "/api/status",
     "port": 4800
   },
+  "requires": { "bin": ["ffmpeg"] },
+  "sandbox": { "enabled": true, "network": "hosts", "hosts": ["api.example.com"] },
   "integration": { "type": "iframe", "url": "/" },
   "bridge": {
     "postMessage": true,
@@ -211,6 +214,25 @@ Manifest **runtime** — daemon đọc nó để cài, chạy, nhúng UI, đăng
 Lưu ý:
 
 - `runtime.start` là đường dẫn **tương đối trong zip** (`./my-app` = binary ở gốc zip).
+- `runtime.mode` — **`session` là mặc định**: daemon khởi động app khi người dùng
+  mở nó hoặc khi agent gọi một tool MCP, rồi dừng lại sau `idleTimeoutSecs` giây
+  rảnh (60s). Chỉ khai `background` khi app **tự làm việc** lúc không ai dùng
+  (poll kênh chat, chạy lịch, giữ WebSocket cho extension) — app `background`
+  chạy suốt đời daemon. Viết sai giá trị **không báo lỗi ở đâu**, nó rơi về
+  `session`.
+- `requires` — máy phải có gì (`node` / `python` với range version, `bin`, `env`,
+  `os`). Kiểm lúc cài **và** trước mỗi lần chạy; thiếu thứ bắt buộc thì app
+  không chạy và người dùng đọc được lý do, thay vì `exit 127` trong log.
+- `sandbox` — mức giam app tự khai, áp dụng ngay lúc cài. `"force": true` khiến
+  người dùng không tắt được sandbox của app.
+- `runtime.runner` (`binary` | `node` | `python` | `shell`, đoán được từ `start`
+  thì bỏ) — app Node/Python được cài phụ thuộc một lần sau cài/update; Python
+  thêm `.venv` riêng trong thư mục app.
+- Chi tiết cả bốn mục trên: [docs/space-app-lifecycle.md](space-app-lifecycle.md).
+  SDK cho ngôn ngữ khác Rust: [Node](../senclaw-sdk/senclaw-app-sdk) ·
+  [Python](../senclaw-sdk/senclaw-app-sdk-python), kèm app mẫu chạy được
+  [`senclaw-sdk/senclaw-app-sdk/examples/`](../senclaw-sdk/senclaw-app-sdk/examples/) và
+  [`senclaw-sdk/senclaw-app-sdk-python/examples/`](../senclaw-sdk/senclaw-app-sdk-python/examples/).
 - `description` viết thật kỹ — nó vừa là mô tả gói trên hub, vừa là ngữ cảnh để agent hiểu app.
 - Trường tuỳ chọn `widgets[]` cho phép app đưa UI mini vào thẳng ô chat — xem mục 3.5.
 - Link mở ra ngoài trong UI phải đi qua flow `openExternal` → `POST /api/ui/open-url` (xem [docs/space-app-open-external.md](space-app-open-external.md), helper chuẩn `apps/zeach/web/src/openExternal.ts`), đừng để navigate webview nhúng.

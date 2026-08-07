@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../models/chat_message.dart';
 import '../../theme/tokens.dart';
@@ -57,7 +58,8 @@ Future<String> ensureRemindersChat(WidgetRef ref) async {
     'type': 'register:group',
     'jid': kRemindersJid,
     'folder': 'reminders',
-    'name': 'Reminders',
+    // Display name in the session list (the jid/folder beside it stay literal).
+    'name': L10n.global.t('Reminders'),
     'groupType': 'chat',
     'requiresTrigger': false,
   });
@@ -256,14 +258,14 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
             await ref.read(audioServiceProvider).transcribe(bytes, filename);
         if (text.trim().isNotEmpty) _sendTurn(text, voice: true);
       } catch (e) {
-        _snack('Nhận dạng giọng nói thất bại: $e');
+        _snack(L10n.global.tArgs('Transcription failed: {e}', {'e': e}));
       } finally {
         if (mounted) setState(() => _transcribing = false);
       }
       return;
     }
     if (!await _recorder.hasPermission()) {
-      _snack('Không có quyền truy cập micro');
+      _snack(L10n.global.t('Microphone permission denied'));
       return;
     }
     String path = '';
@@ -384,8 +386,8 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
                             color: AppTokens.warning.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(AppTokens.rFull),
                           ),
-                          child: const Text('Trễ',
-                              style: TextStyle(
+                          child: Text(context.tr('Late'),
+                              style: const TextStyle(
                                   color: AppTokens.warning,
                                   fontSize: 11,
                                   fontWeight: FontWeight.w700)),
@@ -397,14 +399,14 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
                   Text(
                     t.startAtMs != null
                         ? _fmtWhen(t.startAtMs!)
-                        : 'Nhắc nhở lịch',
+                        : context.tr('Calendar reminder'),
                     style: TextStyle(color: c.textMuted, fontSize: 12),
                   ),
                 ],
               ),
             ),
             IconButton(
-              tooltip: 'Đóng',
+              tooltip: context.tr('Close'),
               icon: const Icon(Icons.close, size: 18),
               onPressed: _close,
             ),
@@ -435,7 +437,7 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
               height: 12,
               child: CircularProgressIndicator(strokeWidth: 2)),
           const SizedBox(width: AppTokens.s8),
-          Text('SenClaw đang xử lý…',
+          Text(context.tr('SenClaw is working…'),
               style: TextStyle(color: c.textMuted, fontSize: 12)),
         ]),
       ));
@@ -445,7 +447,8 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
         child: Padding(
           padding: const EdgeInsets.all(AppTokens.s24),
           child: Text(
-            'Nhắn hoặc nói để dời lịch, xoá, hay nhờ SenClaw việc khác 👋',
+            context.tr(
+                'Type or talk to reschedule, delete, or ask SenClaw for something else 👋'),
             textAlign: TextAlign.center,
             style: TextStyle(color: c.textMuted),
           ),
@@ -489,10 +492,13 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
   }
 
   Widget _quickActions(AppColors c) {
+    // (UI label, prompt sent to the agent). The prompt half is agent input —
+    // it stays Vietnamese like the reminder preamble; only the label is
+    // localized (at the usage site below).
     const chips = <(String, String)>[
-      ('Nhắc lại sau 10 phút', 'Nhắc lại nhắc nhở này sau 10 phút nữa.'),
-      ('Dời sang tối nay 20:00', 'Dời sự kiện này sang 20:00 tối nay.'),
-      ('Xoá nhắc nhở', 'Xoá nhắc nhở và sự kiện này giúp tôi.'),
+      ('Snooze 10 minutes', 'Nhắc lại nhắc nhở này sau 10 phút nữa.'),
+      ('Move to tonight 20:00', 'Dời sự kiện này sang 20:00 tối nay.'),
+      ('Delete reminder', 'Xoá nhắc nhở và sự kiện này giúp tôi.'),
     ];
     final disabled = _jid == null || _transcribing;
     return Padding(
@@ -510,7 +516,9 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
           if (_link != null)
             ActionChip(
               avatar: Icon(Icons.open_in_new, size: 14, color: c.accent),
-              label: Text('Mở ${_linkApp ?? 'nội dung'}',
+              label: Text(
+                  context.trArgs(
+                      'Open {app}', {'app': _linkApp ?? context.tr('content')}),
                   style: const TextStyle(fontSize: 12)),
               onPressed: () async {
                 final err = await openEventLink(context, ref, _link);
@@ -524,7 +532,8 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
             ),
           for (final (label, prompt) in chips)
             ActionChip(
-              label: Text(label, style: const TextStyle(fontSize: 12)),
+              label:
+                  Text(context.tr(label), style: const TextStyle(fontSize: 12)),
               onPressed:
                   disabled ? null : () => _sendTurn(prompt, voice: false),
             ),
@@ -551,7 +560,7 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
                   canSend ? (v) => _sendTurn(v, voice: false) : null,
               style: TextStyle(color: c.textPrimary, fontSize: 14),
               decoration: InputDecoration(
-                hintText: 'Nhắn cho SenClaw…',
+                hintText: context.tr('Message SenClaw…'),
                 hintStyle: TextStyle(color: c.textMuted, fontSize: 14),
                 filled: true,
                 fillColor: c.surfaceAlt,
@@ -571,7 +580,9 @@ class _ReminderDialogState extends ConsumerState<_ReminderDialog> {
           ),
           const SizedBox(width: AppTokens.s4),
           IconButton(
-            tooltip: _recording ? 'Dừng & gửi' : 'Nói (giọng nói)',
+            tooltip: _recording
+                ? context.tr('Stop & send')
+                : context.tr('Talk (voice)'),
             icon: _transcribing
                 ? const SizedBox(
                     width: 16,

@@ -35,6 +35,9 @@ fn temp_state() -> (Arc<UiState>, Arc<Db>) {
         usage_recorder: None,
         ws_port: 0,
         ws_token: String::new(),
+        // Loopback-bind posture: the token gate is off, which is what every
+        // test here exercises (a request from 127.0.0.1 is always exempt).
+        api_auth: Arc::new(senclaw::gateway::ui_server::auth::ApiAuth::disabled()),
     });
     (state, db)
 }

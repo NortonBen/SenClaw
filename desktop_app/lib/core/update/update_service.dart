@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
 import '../config/app_config.dart';
+import '../i18n/l10n.dart';
 import 'update_manifest.dart';
 import 'version.dart';
 
@@ -124,19 +125,26 @@ class UpdateService {
   /// Fail before downloading ~200 MB the swap could never install anyway.
   Future<void> ensureInstallable(UpdateManifest m) async {
     if (isDevBuild) {
-      throw UpdateUnavailable('This is a dev build — updates are disabled.');
+      throw UpdateUnavailable(
+          L10n.global.t('This is a dev build — updates are disabled.'));
     }
     if (_target.isEmpty || assetFor(m) == null) {
       throw UpdateUnavailable(
-        'Release ${m.version} has no bundle for this platform ($_target).',
+        L10n.global.tArgs(
+          'Release {v} has no bundle for this platform ({target}).',
+          {'v': m.version, 'target': _target},
+        ),
       );
     }
     final min = m.minVersion;
     final current = Version.tryParse(_version);
     if (min != null && current != null && current < min) {
       throw UpdateUnavailable(
-        'Version $_version is too old to update directly to ${m.version} — '
-        'reinstall from the SenClaw website.',
+        L10n.global.tArgs(
+          'Version {from} is too old to update directly to {to} — reinstall '
+          'from the SenClaw website.',
+          {'from': _version, 'to': m.version},
+        ),
       );
     }
     await _ensureBundleWritable();
@@ -153,8 +161,11 @@ class UpdateService {
       await probe.delete();
     } catch (_) {
       throw UpdateUnavailable(
-        'Cannot write to ${dir.path} — the app was installed by another user. '
-        'Update from a terminal instead: senclaw update',
+        L10n.global.tArgs(
+          'Cannot write to {dir} — the app was installed by another user. '
+          'Update from a terminal instead: senclaw update',
+          {'dir': dir.path},
+        ),
       );
     }
   }
@@ -173,7 +184,8 @@ class UpdateService {
     final req = http.Request('GET', Uri.parse(assetUrl(asset.name)));
     final resp = await _client.send(req);
     if (resp.statusCode != 200) {
-      throw UpdateUnavailable('Download failed (HTTP ${resp.statusCode}).');
+      throw UpdateUnavailable(L10n.global
+          .tArgs('Download failed (HTTP {code}).', {'code': resp.statusCode}));
     }
     final total = resp.contentLength ?? asset.size;
 
@@ -182,7 +194,7 @@ class UpdateService {
     try {
       await for (final chunk in resp.stream) {
         if (cancel?.isCancelled ?? false) {
-          throw UpdateUnavailable('Download cancelled.');
+          throw UpdateUnavailable(L10n.global.t('Download cancelled.'));
         }
         sink.add(chunk);
         received += chunk.length;
@@ -256,7 +268,7 @@ class UpdateService {
         helper ?? await (_resolveDaemonBinary?.call() ?? Future.value(null));
     if (src == null) {
       throw UpdateUnavailable(
-        'Cannot find the senclaw binary to run the update with.',
+        L10n.global.t('Cannot find the senclaw binary to run the update with.'),
       );
     }
     final tmp = senclawTmpDir();

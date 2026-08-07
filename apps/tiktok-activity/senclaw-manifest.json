@@ -5,6 +5,7 @@
   "icon": "🎵",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./tiktok-activity",
     "healthPath": "/api/health",
     "port": 4580

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_notifier/local_notifier.dart';
 import 'package:window_manager/window_manager.dart';
+import '../i18n/l10n.dart';
 import '../transport/connection.dart';
 import '../transport/ws_client.dart';
 import '../../features/chat/reminder_interaction.dart';
@@ -10,9 +11,9 @@ import '../../features/chat/reminder_interaction.dart';
 /// isn't focused (so background-running SenClaw still pings the user). Desktop
 /// only; a no-op on web.
 ///
-/// Calendar reminders are interactive: clicking the toast (or its "Mở" action)
-/// focuses the window and opens the reminder dialog; the "Xoá" action deletes
-/// the event directly.
+/// Calendar reminders are interactive: clicking the toast (or its "Open"
+/// action) focuses the window and opens the reminder dialog; the "Delete"
+/// action deletes the event directly.
 class SystemNotifier {
   SystemNotifier(this._ref);
   final Ref _ref;
@@ -36,12 +37,12 @@ class SystemNotifier {
         title = '${e['title'] ?? e['kind'] ?? 'SenClaw'}';
         body = '${e['message'] ?? e['text'] ?? ''}';
       case 'space:event:reminder':
-        title = '⏰ ${e['title'] ?? 'Reminder'}';
-        body = 'Calendar reminder';
+        title = '⏰ ${e['title'] ?? L10n.global.t('Reminder')}';
+        body = L10n.global.t('Calendar reminder');
         target = _target(e);
       case 'space:event:pending':
-        title = '📅 ${e['title'] ?? 'Upcoming'}';
-        body = 'Scheduled activity';
+        title = '📅 ${e['title'] ?? L10n.global.t('Upcoming')}';
+        body = L10n.global.t('Scheduled activity');
         target = _target(e, kind: 'pending');
       default:
         return;
@@ -57,8 +58,9 @@ class SystemNotifier {
         body: body,
         actions: target != null
             ? [
-                LocalNotificationAction(text: 'Mở'),
-                if (canDelete) LocalNotificationAction(text: 'Xoá'),
+                LocalNotificationAction(text: L10n.global.t('Open')),
+                if (canDelete)
+                  LocalNotificationAction(text: L10n.global.t('Delete')),
               ]
             : null,
       );
@@ -80,7 +82,7 @@ class SystemNotifier {
 
   ReminderTarget _target(WsEvent e, {String? kind}) => ReminderTarget(
         eventId: e['eventId']?.toString(),
-        title: '${e['title'] ?? 'Reminder'}',
+        title: '${e['title'] ?? L10n.global.t('Reminder')}',
         startAtMs: (e['startAt'] as num?)?.toInt(),
         kind: kind ?? '${e['kind'] ?? 'reminder'}',
         notificationId: e['id']?.toString(),

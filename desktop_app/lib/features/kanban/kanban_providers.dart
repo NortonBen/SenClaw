@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../models/kanban_models.dart';
 
@@ -209,8 +210,10 @@ class KanbanApi {
   }
 
   Future<void> comment(int boardId, int cardId, String body) async {
+    // The author is a display label stored alongside the comment (the daemon
+    // never matches on it), so it follows the UI language.
     await _client.post('/api/kanban/card/comment',
-        body: {'card_id': cardId, 'body': body, 'author': 'Bạn'});
+        body: {'card_id': cardId, 'body': body, 'author': L10n.global.t('You')});
     _ref.invalidate(kanbanCardDetailProvider(cardId));
     _refreshBoard(boardId);
   }

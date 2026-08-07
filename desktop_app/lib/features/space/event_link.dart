@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/i18n/l10n.dart';
 import 'space_providers.dart';
 
 /// Opening a calendar event's linked screen.
@@ -43,16 +44,18 @@ Future<String?> openEventLink(
   String? link,
 ) async {
   if (!isInternalAppLink(link)) {
-    return 'Sự kiện này không có liên kết hợp lệ để mở.';
+    return L10n.global.t('This event has no valid link to open.');
   }
   final id = appIdOfLink(link!.trim())!;
   final apps = await ref.read(spaceAppsProvider.future);
   final app = apps.where((a) => a.id == id).firstOrNull;
   if (app == null) {
-    return 'Chưa cài app `$id` — hãy cài lại rồi mở sự kiện này.';
+    return L10n.global.tArgs(
+        'App `{id}` is not installed — install it, then open this event again.',
+        {'id': id});
   }
   if (!app.enabled) {
-    return 'App `$id` đang bị tắt.';
+    return L10n.global.tArgs('App `{id}` is disabled.', {'id': id});
   }
   ref.read(runningAppsProvider.notifier).openAt(app, link.trim());
   if (context.mounted) context.go('/apps');

@@ -5,6 +5,7 @@
   "icon": "🛡️",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./sentinel",
     "healthPath": "/api/status",
     "port": 4680

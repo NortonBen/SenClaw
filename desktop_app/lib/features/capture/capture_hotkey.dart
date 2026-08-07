@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../core/prefs.dart';
 
 const kCaptureHotkeyPrefKey = 'senclaw:capture-hotkey';
@@ -101,9 +102,10 @@ class CaptureHotkeyNotifier extends StateNotifier<CaptureHotkeyState> {
     // macOS refuses duplicates outright; the raw PlatformException says nothing
     // a user could act on, so name the likely cause and the way out.
     if (s.contains('already') || s.contains('duplicate') || s.contains('-9878')) {
-      return 'Tổ hợp này đã bị hệ thống hoặc ứng dụng khác chiếm. Chọn tổ hợp khác.';
+      return L10n.global.t('This shortcut is already taken by the system or '
+          'another app. Pick a different one.');
     }
-    return 'Không đăng ký được phím tắt: $s';
+    return L10n.global.tArgs('Could not register the shortcut: {e}', {'e': s});
   }
 }
 

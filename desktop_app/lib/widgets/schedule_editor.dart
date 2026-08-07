@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../core/i18n/l10n.dart';
 import '../models/space_models.dart';
 import '../theme/tokens.dart';
 import '../features/space/space_providers.dart';
@@ -194,7 +195,7 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
   List<DropdownMenuItem<String>> _profileItems(Iterable<AgentInfo> agents) {
     final list = agents.toList();
     return [
-      const DropdownMenuItem(value: null, child: Text('Default')),
+      DropdownMenuItem(value: null, child: Text(context.tr('Default'))),
       for (final a in list)
         DropdownMenuItem(value: a.folder, child: Text(a.name)),
       if (_agentFolder != null &&
@@ -241,7 +242,9 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
       // Surface the failure instead of silently leaving the dialog open.
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Không lưu được lịch: $e')),
+          SnackBar(
+              content:
+                  Text(context.trArgs('Failed to save schedule: {e}', {'e': e}))),
         );
       }
       return;
@@ -259,7 +262,9 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
       title: Row(children: [
         Icon(Icons.event_repeat_outlined, size: 20, color: c.accent),
         const SizedBox(width: AppTokens.s8),
-        Text(widget.existing == null ? 'New schedule' : 'Edit schedule'),
+        Text(widget.existing == null
+            ? context.tr('New schedule')
+            : context.tr('Edit schedule')),
       ]),
       content: SizedBox(
         width: 460,
@@ -275,9 +280,9 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                 onChanged: (_) => setState(() {}),
                 style: const TextStyle(fontSize: 14, height: 1.4),
                 decoration: InputDecoration(
-                  labelText: 'Prompt',
+                  labelText: context.tr('Prompt'),
                   alignLabelWithHint: true,
-                  hintText: 'Describe the task to run on schedule…',
+                  hintText: context.tr('Describe the task to run on schedule…'),
                   filled: true,
                   fillColor: c.surfaceAlt,
                   contentPadding: const EdgeInsets.all(AppTokens.s12),
@@ -298,13 +303,14 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                     child: DropdownButtonFormField<String>(
                       initialValue: _freq,
                       isExpanded: true,
-                      decoration: const InputDecoration(
-                          labelText: 'Frequency',
-                          border: OutlineInputBorder()),
+                      decoration: InputDecoration(
+                          labelText: context.tr('Frequency'),
+                          border: const OutlineInputBorder()),
                       items: [
                         for (final f in _freqs)
                           DropdownMenuItem(
-                              value: f, child: Text(_freqLabels[f] ?? f)),
+                              value: f,
+                              child: Text(context.tr(_freqLabels[f] ?? f))),
                       ],
                       onChanged: (v) => setState(() => _freq = v ?? 'daily'),
                     ),
@@ -315,10 +321,10 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                       width: 110,
                       child: TextField(
                         controller: _time,
-                        decoration: const InputDecoration(
-                            labelText: 'Time',
+                        decoration: InputDecoration(
+                            labelText: context.tr('Time'),
                             hintText: 'HH:MM',
-                            border: OutlineInputBorder()),
+                            border: const OutlineInputBorder()),
                       ),
                     ),
                 ],
@@ -329,15 +335,17 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                   onTap: _pickDate,
                   borderRadius: BorderRadius.circular(AppTokens.rMd),
                   child: InputDecorator(
-                    decoration: const InputDecoration(
-                      labelText: 'Ngày chạy',
-                      border: OutlineInputBorder(),
-                      suffixIcon: Icon(Icons.calendar_today_outlined, size: 18),
+                    decoration: InputDecoration(
+                      labelText: context.tr('Run date'),
+                      border: const OutlineInputBorder(),
+                      suffixIcon:
+                          const Icon(Icons.calendar_today_outlined, size: 18),
                     ),
                     child: Text(
                       _onceDate != null
                           ? _fmtDate(_onceDate!)
-                          : 'Lần kế tiếp của giờ (hôm nay / mai)',
+                          : context
+                              .tr('Next occurrence of the time (today / tomorrow)'),
                       style: TextStyle(
                         color: _onceDate != null ? c.textPrimary : c.textMuted,
                       ),
@@ -350,7 +358,7 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                     child: TextButton.icon(
                       onPressed: () => setState(() => _onceDate = null),
                       icon: const Icon(Icons.clear, size: 16),
-                      label: const Text('Bỏ chọn ngày'),
+                      label: Text(context.tr('Clear date')),
                     ),
                   ),
               ],
@@ -358,12 +366,13 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                 const SizedBox(height: AppTokens.s12),
                 DropdownButtonFormField<int>(
                   initialValue: _weekday,
-                  decoration: const InputDecoration(
-                      labelText: 'Weekday', border: OutlineInputBorder()),
+                  decoration: InputDecoration(
+                      labelText: context.tr('Weekday'),
+                      border: const OutlineInputBorder()),
                   items: [
                     for (var i = 0; i < 7; i++)
                       DropdownMenuItem(
-                          value: i + 1, child: Text(_weekdays[i])),
+                          value: i + 1, child: Text(context.tr(_weekdays[i]))),
                   ],
                   onChanged: (v) => setState(() => _weekday = v ?? 1),
                 ),
@@ -372,9 +381,9 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                 const SizedBox(height: AppTokens.s12),
                 DropdownButtonFormField<int>(
                   initialValue: _dom,
-                  decoration: const InputDecoration(
-                      labelText: 'Day of month',
-                      border: OutlineInputBorder()),
+                  decoration: InputDecoration(
+                      labelText: context.tr('Day of month'),
+                      border: const OutlineInputBorder()),
                   items: [
                     for (var d = 1; d <= 28; d++)
                       DropdownMenuItem(value: d, child: Text('$d')),
@@ -386,10 +395,10 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                 const SizedBox(height: AppTokens.s12),
                 TextField(
                   controller: _cron,
-                  decoration: const InputDecoration(
-                      labelText: 'Cron expression',
+                  decoration: InputDecoration(
+                      labelText: context.tr('Cron expression'),
                       hintText: '0 9 * * *',
-                      border: OutlineInputBorder()),
+                      border: const OutlineInputBorder()),
                   style: const TextStyle(fontFamily: AppTokens.fontMono),
                 ),
               ],
@@ -400,14 +409,14 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                     child: DropdownButtonFormField<String>(
                       initialValue: _mode,
                       isExpanded: true,
-                      decoration: const InputDecoration(
-                          labelText: 'Agent mode',
-                          border: OutlineInputBorder()),
-                      items: const [
+                      decoration: InputDecoration(
+                          labelText: context.tr('Agent mode'),
+                          border: const OutlineInputBorder()),
+                      items: [
                         DropdownMenuItem(
-                            value: 'agent', child: Text('Agent')),
+                            value: 'agent', child: Text(context.tr('Agent'))),
                         DropdownMenuItem(
-                            value: 'plan', child: Text('Plan')),
+                            value: 'plan', child: Text(context.tr('Plan'))),
                       ],
                       onChanged: (v) =>
                           setState(() => _mode = v ?? 'agent'),
@@ -418,10 +427,10 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                     child: DropdownButtonFormField<String>(
                       initialValue: _agentFolder,
                       isExpanded: true,
-                      decoration: const InputDecoration(
-                          labelText: 'Profile (agent)',
-                          border: OutlineInputBorder()),
-                      hint: const Text('Default'),
+                      decoration: InputDecoration(
+                          labelText: context.tr('Profile (agent)'),
+                          border: const OutlineInputBorder()),
+                      hint: Text(context.tr('Default')),
                       items: _profileItems(
                           ref.watch(agentsProvider).where((a) => !a.isSchedule)),
                       onChanged: (v) =>
@@ -435,13 +444,13 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                     data: (d) => DropdownButtonFormField<String?>(
                       initialValue: _modelId,
                       isExpanded: true,
-                      decoration: const InputDecoration(
-                          labelText: 'Model',
-                          border: OutlineInputBorder()),
+                      decoration: InputDecoration(
+                          labelText: context.tr('Model'),
+                          border: const OutlineInputBorder()),
                       items: [
-                        const DropdownMenuItem(
+                        DropdownMenuItem(
                             value: null,
-                            child: Text('Active default')),
+                            child: Text(context.tr('Active default'))),
                         for (final m in d.configs)
                           DropdownMenuItem(
                               value: m.id,
@@ -460,15 +469,17 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
                       ['active', 'paused', 'cancelled'].contains(_status)
                           ? _status
                           : 'active',
-                  decoration: const InputDecoration(
-                      labelText: 'Status', border: OutlineInputBorder()),
-                  items: const [
+                  decoration: InputDecoration(
+                      labelText: context.tr('Status'),
+                      border: const OutlineInputBorder()),
+                  items: [
                     DropdownMenuItem(
-                        value: 'active', child: Text('Active')),
+                        value: 'active', child: Text(context.tr('Active'))),
                     DropdownMenuItem(
-                        value: 'paused', child: Text('Paused')),
+                        value: 'paused', child: Text(context.tr('Paused'))),
                     DropdownMenuItem(
-                        value: 'cancelled', child: Text('Cancelled')),
+                        value: 'cancelled',
+                        child: Text(context.tr('Cancelled'))),
                   ],
                   onChanged: (v) =>
                       setState(() => _status = v ?? _status),
@@ -481,10 +492,12 @@ class _ScheduleEditorDialogState extends ConsumerState<ScheduleEditorDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
+            child: Text(context.tr('Cancel'))),
         FilledButton(
           onPressed: _prompt.text.trim().isEmpty ? null : _save,
-          child: Text(widget.existing == null ? 'Create' : 'Save'),
+          child: Text(widget.existing == null
+              ? context.tr('Create')
+              : context.tr('Save')),
         ),
       ],
     );

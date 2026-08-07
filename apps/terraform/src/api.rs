@@ -52,6 +52,7 @@ pub fn api_router(state: AppState) -> Router {
         .route("/workspaces/:id/sync", post(ws_sync_h))
         .route("/workspaces/:id/open-dir", post(open_dir_h))
         .route("/workspaces/:id/subdirs", get(subdirs_h))
+        .route("/workspaces/:id/tfvars-files", get(tfvars_pick_h))
         .route("/workspaces/:id/variables", get(vars_h))
         .route("/workspaces/:id/tfvars", get(tfvars_get_h).post(tfvars_set_h))
         .route("/workspaces/:id/run", post(run_h))
@@ -370,7 +371,11 @@ pub(crate) fn ws_patch_value(s: &AppState, id: i64, req: &WsPatchReq) -> Value {
     }
     if let Some(f) = req.var_file.as_deref() {
         if !f.is_empty() {
-            if let Err(e) = hcl_form::validate_tfvars_name(f) {
+            let Some(ws) = s.db.workspace_get(id).ok().flatten() else {
+                return err(format!("workspace {id} không tồn tại"));
+            };
+            let root = PathBuf::from(ws["dir"].as_str().unwrap_or_default());
+            if let Err(e) = resolve_var_file(&root, &work_dir(&ws), f) {
                 return err(e);
             }
         }
@@ -547,6 +552,115 @@ async fn subdirs_h(State(s): State<AppState>, AxPath(id): AxPath<i64>) -> Json<V
     Json(subdirs_value(&s, id))
 }
 
+/// Resolve var-file của workspace: tên trần (`prod.tfvars`) nằm trong work_dir,
+/// hoặc đường dẫn tương đối (`../../environments/prod.tfvars`) — miễn là điểm
+/// đến vẫn NẰM TRONG thư mục gốc workspace và đúng đuôi .tfvars(.json).
+pub fn resolve_var_file(root: &Path, work_dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    if !(name.ends_with(".tfvars") || name.ends_with(".tfvars.json")) {
+        anyhow::bail!("var-file phải có đuôi .tfvars hoặc .tfvars.json: {name:?}");
+    }
+    if !name.contains('/') && !name.contains('\\') {
+        hcl_form::validate_tfvars_name(name)?;
+        return Ok(work_dir.join(name));
+    }
+    if name.starts_with('/') || name.starts_with('\\') || name.contains('\0') {
+        anyhow::bail!("var-file phải là đường dẫn tương đối trong workspace: {name:?}");
+    }
+    let rootc = root
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("workspace không tồn tại: {e}"))?;
+    let mut p = work_dir
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("thư mục Terraform không tồn tại: {e}"))?;
+    for seg in name.split(['/', '\\']) {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                p.pop();
+            }
+            s => {
+                if !s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+                    || s.starts_with('.') && s != ".." && !s.ends_with(".tfvars") && !s.ends_with(".json")
+                {
+                    anyhow::bail!("var-file chứa thành phần không hợp lệ: {s:?}");
+                }
+                p.push(s);
+            }
+        }
+    }
+    if !p.starts_with(&rootc) {
+        anyhow::bail!("var-file thoát ra ngoài workspace: {name:?}");
+    }
+    Ok(p)
+}
+
+/// Đường dẫn tương đối từ `from` tới `to` (cả hai tuyệt đối, cùng cây).
+fn rel_between(from: &Path, to: &Path) -> String {
+    let f: Vec<_> = from.components().collect();
+    let t: Vec<_> = to.components().collect();
+    let common = f.iter().zip(t.iter()).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = vec!["..".into(); f.len() - common];
+    parts.extend(t[common..].iter().map(|c| c.as_os_str().to_string_lossy().to_string()));
+    parts.join("/")
+}
+
+/// Quét toàn workspace (depth ≤ 4) tìm file *.tfvars / *.tfvars.json.
+pub fn tfvars_files_deep(root: &Path) -> Vec<PathBuf> {
+    fn walk(base: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        if depth > 4 || out.len() >= 200 {
+            return;
+        }
+        let Ok(rd) = std::fs::read_dir(base) else { return };
+        let mut entries: Vec<PathBuf> = rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        entries.sort();
+        for p in entries {
+            let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_string()) else {
+                continue;
+            };
+            if p.is_dir() {
+                if name.starts_with('.') || name == "node_modules" || name == "target" {
+                    continue;
+                }
+                walk(&p, depth + 1, out);
+            } else if name.ends_with(".tfvars") || name.ends_with(".tfvars.json") {
+                out.push(p);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, 1, &mut out);
+    out
+}
+
+/// Danh sách file .tfvars trong toàn workspace cho dialog chọn — mỗi file kèm
+/// `rel` (giá trị var_file: tương đối so với work_dir) + `display` (so với gốc).
+pub(crate) fn tfvars_pick_value(s: &AppState, id: i64) -> Value {
+    let Some(ws) = s.db.workspace_get(id).ok().flatten() else {
+        return err(format!("workspace {id} không tồn tại"));
+    };
+    let root = PathBuf::from(ws["dir"].as_str().unwrap_or_default());
+    let Ok(rootc) = root.canonicalize() else {
+        return err("workspace không tồn tại trên đĩa");
+    };
+    let wdc = work_dir(&ws).canonicalize().unwrap_or_else(|_| rootc.clone());
+    let files: Vec<Value> = tfvars_files_deep(&rootc)
+        .into_iter()
+        .map(|p| {
+            let rel = rel_between(&wdc, &p);
+            json!({
+                "rel": rel,
+                "display": rel_between(&rootc, &p),
+                "in_work_dir": p.parent() == Some(wdc.as_path()),
+            })
+        })
+        .collect();
+    json!({ "ok": true, "files": files, "current": ws["var_file"] })
+}
+
+async fn tfvars_pick_h(State(s): State<AppState>, AxPath(id): AxPath<i64>) -> Json<Value> {
+    Json(tfvars_pick_value(&s, id))
+}
+
 /// Lệnh mở thư mục trong file manager của hệ điều hành đang chạy.
 pub fn opener_command(dir: &str) -> (&'static str, Vec<String>) {
     if cfg!(target_os = "macos") {
@@ -623,6 +737,7 @@ pub(crate) fn tfvars_get_value(s: &AppState, id: i64, file: Option<String>) -> V
     let Some(ws) = s.db.workspace_get(id).ok().flatten() else {
         return err(format!("workspace {id} không tồn tại"));
     };
+    let root = PathBuf::from(ws["dir"].as_str().unwrap_or_default());
     let dir = work_dir(&ws);
     let file = file
         .filter(|f| !f.is_empty())
@@ -630,10 +745,14 @@ pub(crate) fn tfvars_get_value(s: &AppState, id: i64, file: Option<String>) -> V
     let Some(file) = file else {
         return json!({ "ok": true, "file": null, "exists": false, "values": {} });
     };
-    if !dir.join(&file).exists() {
+    let path = match resolve_var_file(&root, &dir, &file) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
+    if !path.exists() {
         return json!({ "ok": true, "file": file, "exists": false, "values": {} });
     }
-    match hcl_form::read_tfvars(&dir, &file) {
+    match hcl_form::read_tfvars_at(&path) {
         Ok(values) => json!({ "ok": true, "file": file, "exists": true, "values": values }),
         Err(e) => err(e),
     }
@@ -660,19 +779,24 @@ pub(crate) fn tfvars_set_value(s: &AppState, id: i64, req: &TfvarsSetReq) -> Val
     let Some(ws) = s.db.workspace_get(id).ok().flatten() else {
         return err(format!("workspace {id} không tồn tại"));
     };
+    let root = PathBuf::from(ws["dir"].as_str().unwrap_or_default());
     let dir = work_dir(&ws);
     if !dir.is_dir() {
         return err(format!("thư mục Terraform không tồn tại: {}", dir.display()));
     }
-    let mut merged = if !req.replace && dir.join(&req.file).exists() {
-        hcl_form::read_tfvars(&dir, &req.file).unwrap_or_default()
+    let path = match resolve_var_file(&root, &dir, &req.file) {
+        Ok(p) => p,
+        Err(e) => return err(e),
+    };
+    let mut merged = if !req.replace && path.exists() {
+        hcl_form::read_tfvars_at(&path).unwrap_or_default()
     } else {
         Map::new()
     };
     for (k, v) in &req.values {
         merged.insert(k.clone(), v.clone());
     }
-    if let Err(e) = hcl_form::write_tfvars(&dir, &req.file, &merged) {
+    if let Err(e) = hcl_form::write_tfvars_at(&path, &merged) {
         return err(e);
     }
     // Ghi xong tự chọn file này làm var-file mặc định của workspace.
@@ -800,11 +924,12 @@ pub(crate) async fn run_value(s: &AppState, id: i64, req: &RunReq) -> Value {
         .filter(|f| !f.is_empty())
         .or_else(|| ws["var_file"].as_str().filter(|f| !f.is_empty()).map(String::from));
     if let Some(f) = &var_file {
-        if let Err(e) = hcl_form::validate_tfvars_name(f) {
-            return err(e);
-        }
-        if matches!(req.command.as_str(), "plan" | "apply" | "destroy") && !wd.join(f).exists() {
-            return err(format!("var-file {f} không tồn tại trong thư mục Terraform"));
+        let path = match resolve_var_file(&dir, &wd, f) {
+            Ok(p) => p,
+            Err(e) => return err(e),
+        };
+        if matches!(req.command.as_str(), "plan" | "apply" | "destroy") && !path.exists() {
+            return err(format!("var-file {f} không tồn tại trong workspace"));
         }
     }
     let steps = build_steps(
@@ -1050,6 +1175,49 @@ mod tests {
         assert!(validate_subdir("../thoat").is_err());
         assert!(validate_subdir("a/../../b").is_err());
         assert!(validate_subdir("a//b").is_err());
+    }
+
+    #[test]
+    fn resolve_var_file_plain_and_relative() {
+        let root = tempfile::tempdir().unwrap();
+        let wd = root.path().join("deployments/terraform");
+        std::fs::create_dir_all(&wd).unwrap();
+        std::fs::create_dir_all(root.path().join("environments")).unwrap();
+        std::fs::write(root.path().join("environments/prod.tfvars"), "a=1\n").unwrap();
+
+        // Tên trần → nằm trong work_dir.
+        let p = resolve_var_file(root.path(), &wd, "prod.tfvars").unwrap();
+        assert_eq!(p, wd.join("prod.tfvars"));
+
+        // Đường dẫn tương đối ../../ vẫn trong workspace → OK.
+        let p = resolve_var_file(root.path(), &wd, "../../environments/prod.tfvars").unwrap();
+        assert!(p.ends_with("environments/prod.tfvars"));
+        assert!(p.starts_with(root.path().canonicalize().unwrap()));
+
+        // Thoát ra ngoài workspace → chặn.
+        assert!(resolve_var_file(root.path(), &wd, "../../../../etc/x.tfvars").is_err());
+        // Đuôi sai → chặn. Tuyệt đối → chặn. Thành phần ẩn → chặn.
+        assert!(resolve_var_file(root.path(), &wd, "../../environments/prod.txt").is_err());
+        assert!(resolve_var_file(root.path(), &wd, "/etc/x.tfvars").is_err());
+        assert!(resolve_var_file(root.path(), &wd, "../.git/x.tfvars").is_err());
+    }
+
+    #[test]
+    fn tfvars_deep_scan_and_rel() {
+        let root = tempfile::tempdir().unwrap();
+        let rootc = root.path().canonicalize().unwrap();
+        let wd = rootc.join("deployments/terraform");
+        std::fs::create_dir_all(&wd).unwrap();
+        std::fs::create_dir_all(rootc.join("environments")).unwrap();
+        std::fs::write(rootc.join("environments/prod.tfvars"), "a=1\n").unwrap();
+        std::fs::write(wd.join("dev.tfvars"), "a=2\n").unwrap();
+        std::fs::write(rootc.join("ghi-chú.txt"), "x").unwrap();
+
+        let files = tfvars_files_deep(&rootc);
+        assert_eq!(files.len(), 2);
+        let rels: Vec<String> = files.iter().map(|p| rel_between(&wd, p)).collect();
+        assert!(rels.contains(&"dev.tfvars".to_string()));
+        assert!(rels.contains(&"../../environments/prod.tfvars".to_string()));
     }
 
     #[test]

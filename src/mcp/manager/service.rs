@@ -137,6 +137,40 @@ impl McpManager {
         Ok(self.get_server_info(&config.name).await)
     }
 
+    /// Register a server **without connecting to it**, seeding its tool list
+    /// from a cache.
+    ///
+    /// This exists for on-demand Space Apps. Their process is not running at
+    /// boot — that is the point of them — but their tools still have to appear
+    /// in every agent's roster, or nothing would ever call one and the app
+    /// would never start. Connecting to list the tools would start all of them
+    /// at boot, which is precisely what we are avoiding, so the tools come from
+    /// what the last successful connection reported and the connection itself
+    /// happens on the first call (see [`Self::call_external_tool`]).
+    pub async fn add_or_update_offline(
+        &self,
+        config: ExternalMcpServerConfig,
+        scope: McpScopeType,
+        cached_tools: Vec<crate::mcp::config::McpToolDef>,
+    ) -> Result<McpServerInfo> {
+        config.validate().map_err(|e| anyhow::anyhow!(e))?;
+        self.config_mgr
+            .add_or_update_server(&self.working_dir, scope, &config)?;
+        self.disconnect_server(&config.name).await.ok();
+
+        let mut external = self.external.write().await;
+        let mut state = ExternalServerState::new(config.clone(), scope);
+        let n = cached_tools.len();
+        state.tools = cached_tools;
+        external.insert(config.name.clone(), state);
+        drop(external);
+        info!(
+            "MCP external {} registered on demand — {n} cached tool(s), not connected",
+            config.name
+        );
+        Ok(self.get_server_info(&config.name).await)
+    }
+
     /// Remove an external MCP server (disconnects + removes config).
     pub async fn remove(&self, name: &str, scope: McpScopeType) -> Result<bool> {
         // Disconnect first
@@ -761,6 +795,25 @@ impl McpManager {
     ) -> Result<serde_json::Value> {
         let (server_name, tool_name) = parse_mcp_tool_name(full_name)
             .ok_or_else(|| anyhow::anyhow!("invalid MCP tool name: {full_name}"))?;
+
+        // Connect on demand. A registered-but-disconnected server is the normal
+        // resting state for an on-demand Space App (registered from cached
+        // tools, its process stopped), and it is also what a server that died
+        // since boot looks like. Both want the same thing: connect, then call.
+        // For a Space App the connect is itself the trigger that starts it —
+        // its URL points at the daemon's app proxy, which spawns it.
+        let connected = {
+            let external = self.external.read().await;
+            match external.get(&server_name) {
+                Some(s) => s.client.is_some(),
+                None => return Err(anyhow::anyhow!("MCP server not found: {server_name}")),
+            }
+        };
+        if !connected {
+            self.connect_server(&server_name).await.map_err(|e| {
+                anyhow::anyhow!("MCP server not connected: {server_name} — {e}")
+            })?;
+        }
 
         let mut external = self.external.write().await;
         let state = external

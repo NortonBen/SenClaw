@@ -1224,14 +1224,37 @@ pub(crate) async fn install_app_from_zip(
     })
     .map_err(internal)?;
 
+    // What the app needs from this machine. Checked before the launch so the
+    // answer is a sentence in the install response — "install ffmpeg" — rather
+    // than a non-zero exit code in a log file minutes later. It does not block:
+    // the app is installed either way, and refuses to start with the same
+    // reason attached until the machine has what it asked for.
+    let requires = crate::apps::Requires::parse(&manifest);
+    let requirements = if requires.is_empty() {
+        serde_json::Value::Null
+    } else {
+        let report = crate::apps::requirements::check(&requires).await;
+        if !report.satisfied {
+            tracing::warn!(
+                "[space] '{app_id}' installed but cannot start yet — {}",
+                report.summary
+            );
+        }
+        serde_json::to_value(&report).unwrap_or(serde_json::Value::Null)
+    };
+
     // Auto-register the app's declared MCP server (launch + register) if any.
     try_autoregister_app_mcp(&s, &app_id, &manifest).await;
 
+    let spec = crate::apps::RuntimeSpec::parse(&manifest);
     Ok(AppInstallOutcome::Installed(serde_json::json!({
         "id": app_id,
         "manifest": manifest,
         "enabled": true,
         "installed_at": now,
+        "mode": spec.mode.as_str(),
+        "runner": spec.runner.as_str(),
+        "requirements": requirements,
         // Present even on success: a Warn verdict installs and still has
         // findings the user needs to see.
         "scan": scan,
@@ -1456,6 +1479,230 @@ pub(crate) async fn space_apps_restart(
             format!("Restart failed: {e}"),
         )),
     }
+}
+
+/// The app's manifest, or a 404.
+fn app_manifest(s: &UiState, id: &str) -> Result<serde_json::Value, AppError> {
+    if !valid_space_app_id(id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    let db = db(s)?;
+    db.with_conn(|conn| {
+        let raw: Result<String, rusqlite::Error> = conn.query_row(
+            "SELECT manifest FROM space_apps WHERE id=?1",
+            params![id],
+            |row| row.get(0),
+        );
+        Ok(raw.ok().and_then(|s| serde_json::from_str(&s).ok()))
+    })
+    .map_err(internal)?
+    .ok_or_else(|| AppError(StatusCode::NOT_FOUND, "App not found".into()))
+}
+
+fn app_dir_of(s: &UiState, id: &str, manifest: &serde_json::Value) -> PathBuf {
+    manifest
+        .get("install")
+        .and_then(|i| i.get("localPath"))
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .or_else(|| space_app_dir(s, id).ok())
+        .unwrap_or_default()
+}
+
+/// Stop an app's server process now.
+///
+/// For a session app this is simply doing early what the idle reaper would do
+/// later. For a background app it is an override the supervisor honours until
+/// the app is started again — otherwise the button would appear not to work,
+/// the app being back inside one supervisor tick.
+pub(crate) async fn space_apps_stop(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let manifest = app_manifest(&s, &id)?;
+    let launcher = s.space_mcp_launcher.as_ref().ok_or_else(|| {
+        AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "App runtime not available".into(),
+        )
+    })?;
+    let was_running = launcher.is_running(&id).await;
+    let mcp_name = manifest
+        .get("mcp")
+        .filter(|v| v.is_object())
+        .map(|m| super::space_mcp::mcp_server_name(m, &id));
+    launcher
+        .stop_by_user(&id, s.mcp_manager.as_deref(), mcp_name.as_deref())
+        .await;
+    let spec = crate::apps::RuntimeSpec::parse(&manifest);
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "wasRunning": was_running,
+        "mode": spec.mode.as_str(),
+        // Said plainly, because "stopped" means different things in the two
+        // modes: a session app comes back by itself, a background one does not.
+        "note": if spec.mode.is_background() {
+            "Stopped. A background app stays stopped until you start it again."
+        } else {
+            "Stopped. It starts again by itself when the app is opened or one of its tools is called."
+        },
+    })))
+}
+
+/// Start an app's server process now (and register/refresh its MCP).
+pub(crate) async fn space_apps_start(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let manifest = app_manifest(&s, &id)?;
+    let (Some(launcher), Some(mgr), Some(db)) = (
+        s.space_mcp_launcher.as_ref(),
+        s.mcp_manager.as_ref(),
+        s.db.as_deref(),
+    ) else {
+        return Err(AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "App runtime not available".into(),
+        ));
+    };
+    let app_dir = app_dir_of(&s, &id, &manifest);
+    let base_url = format!("http://127.0.0.1:{}", s.config.ui_server.port);
+    launcher
+        .run_and_register(db, mgr, &id, &app_dir, &manifest, &base_url)
+        .await
+        .map_err(|e| {
+            // The reason is in the app's own log, and a caller that just got a
+            // failed start is exactly who needs it — otherwise the UI can only
+            // say "it didn't work".
+            let log = crate::gateway::ui_server::space_mcp::app_runtime_log_path(&app_dir);
+            let tail = read_log_tail(&log, 40);
+            AppError(
+                StatusCode::BAD_GATEWAY,
+                if tail.is_empty() {
+                    format!("Start failed: {e}")
+                } else {
+                    format!("Start failed: {e}\n\n{tail}")
+                },
+            )
+        })?;
+    launcher.touch(&id).await;
+    Ok(Json(app_readiness(&s, &id, &manifest).await))
+}
+
+/// Is this app up and answering *right now*, without starting anything?
+///
+/// The UI calls this before it points a webview at an app: a server Space App
+/// runs on its own port, so a page loaded against a stopped app is a blank
+/// window with no error in it — and "stopped" is the resting state for a
+/// `session` app, not a fault. Cheap enough to poll.
+pub(crate) async fn space_apps_ready(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let manifest = app_manifest(&s, &id)?;
+    Ok(Json(app_readiness(&s, &id, &manifest).await))
+}
+
+/// The shape both `/start` and `/ready` answer with. `ready` is a health probe,
+/// never merely "we have a pid": see `SpaceMcpLauncher::is_answering`.
+async fn app_readiness(s: &Arc<UiState>, id: &str, manifest: &serde_json::Value) -> serde_json::Value {
+    let spec = crate::apps::RuntimeSpec::parse(manifest);
+    // A non-server app is served by the daemon itself, so it is always ready —
+    // saying "not ready" would strand static and esm apps behind a gate that
+    // has nothing to open it.
+    if !spec.is_server {
+        return serde_json::json!({
+            "appId": id, "kind": "static", "ready": true, "running": true,
+        });
+    }
+    let port = manifest
+        .get("runtime")
+        .and_then(|r| r.get("port"))
+        .and_then(|p| p.as_u64())
+        .map(|p| p as u16)
+        .filter(|p| *p > 0)
+        .unwrap_or(spec.port);
+    // Two different questions, deliberately answered by two different means.
+    //
+    // `running` is bookkeeping: does the launcher track a pid it started. It is
+    // false for an app running outside this daemon, and true for a process that
+    // has a pid but has not bound its port yet.
+    //
+    // `ready` is the one a UI gates on, so it asks the port itself rather than
+    // the bookkeeping — no launcher required. Deriving it from `running` would
+    // report "not ready" for an app that is plainly answering, and the UI would
+    // sit on a spinner in front of a working app.
+    let running = match s.space_mcp_launcher.as_ref() {
+        Some(l) => l.is_running(id).await,
+        None => false,
+    };
+    let ready = port > 0 && health_probe(port, &spec.health_path).await;
+    serde_json::json!({
+        "appId": id,
+        "kind": "server",
+        "mode": spec.mode.as_str(),
+        // Tracked and not exited. NOT the same as usable.
+        "running": running,
+        // Answered a health request. This is the one a UI should gate on.
+        "ready": ready,
+        "port": port,
+        "healthPath": spec.health_path,
+        // Where to point a webview once ready: the app's own origin (a direct
+        // connection, which is also the only way its WebSockets work), and the
+        // daemon proxy as the same-origin alternative.
+        "url": format!("http://127.0.0.1:{port}"),
+        "proxyUrl": format!("/api/space/apps/{id}/proxy/"),
+    })
+}
+
+/// Does something answer a health request on this port, right now?
+///
+/// Short timeout on purpose: this sits in front of a UI that is waiting to draw,
+/// and a slow answer is a "no" for its purposes — it will ask again.
+async fn health_probe(port: u16, health_path: &str) -> bool {
+    let path = if health_path.starts_with('/') {
+        health_path.to_string()
+    } else {
+        format!("/{health_path}")
+    };
+    let url = format!("http://127.0.0.1:{port}{path}");
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(1500))
+        .build()
+    else {
+        return false;
+    };
+    matches!(client.get(&url).send().await, Ok(r) if r.status().is_success())
+}
+
+/// Last `lines` lines of a log file, empty when unreadable.
+fn read_log_tail(path: &Path, lines: usize) -> String {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    let all: Vec<&str> = text.lines().collect();
+    all[all.len().saturating_sub(lines)..].join("\n")
+}
+
+/// What this app needs from the machine, and whether the machine has it.
+///
+/// The same check the launcher runs before spawning — exposed so the answer is
+/// visible before an app fails to start, and after the user installs the thing
+/// that was missing.
+pub(crate) async fn space_app_requirements(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let manifest = app_manifest(&s, &id)?;
+    let requires = crate::apps::Requires::parse(&manifest);
+    let report = crate::apps::requirements::check(&requires).await;
+    let spec = crate::apps::RuntimeSpec::parse(&manifest);
+    Ok(Json(serde_json::json!({
+        "appId": id,
+        "runner": spec.runner.as_str(),
+        "mode": spec.mode.as_str(),
+        "report": report,
+    })))
 }
 
 pub(crate) async fn space_apps_static(
@@ -2212,7 +2459,24 @@ pub(crate) async fn space_app_sandbox_put(
             "Sandbox engine not available".into(),
         )
     })?;
-    let saved = crate::sandbox::app_policy::save(&db, &id, &body)
+
+    // An app whose manifest declares `sandbox.force` cannot be un-sandboxed
+    // here. The flag itself is never taken from the request body either — it is
+    // the manifest's to set, and a client that could send `forced: false` would
+    // be able to unlock any app by asking.
+    let current = crate::sandbox::app_policy::load(&db, &id);
+    let mut next = body;
+    next.forced = current.forced;
+    if current.forced && !next.enabled {
+        return Err(AppError(
+            StatusCode::CONFLICT,
+            "This app requires the sandbox (its manifest declares `sandbox.force`). \
+             You can change what it may reach, but not turn the sandbox off."
+                .into(),
+        ));
+    }
+
+    let saved = crate::sandbox::app_policy::save(&db, &id, &next)
         .map_err(|e| AppError(StatusCode::BAD_REQUEST, format!("{e}")))?;
 
     // An edited allowlist reaches a running app's proxy immediately; everything
@@ -2660,6 +2924,11 @@ async fn try_autoregister_app_mcp(s: &UiState, app_id: &str, manifest: &serde_js
     super::space_skills::install_app_skills(&s.config, app_id, &app_dir, manifest);
     super::space_personas::install_app_personas(&s.config, app_id, &app_dir, manifest);
 
+    // Apply the confinement the app declares for itself, before it has ever
+    // run. An app that says `sandbox.force` must never get one unconfined
+    // launch on the way to being sandboxed.
+    crate::apps::sandbox_decl::apply(app_id, manifest);
+
     let (Some(launcher), Some(mgr), Some(db)) = (
         s.space_mcp_launcher.as_ref(),
         s.mcp_manager.as_ref(),
@@ -2891,14 +3160,36 @@ pub(crate) async fn space_apps_proxy(
             .map_err(|e| AppError(StatusCode::BAD_GATEWAY, format!("App is not running: {e}")))
     };
 
+    // Every use of an app travels this handler: the UI iframe, the app's own
+    // REST calls, and — for a session app — every MCP tool call, whose server
+    // URL points here. So this is where "the app is being used" is recorded,
+    // and what the idle reaper measures against.
+    if let Some(launcher) = s.space_mcp_launcher.as_ref() {
+        launcher.touch(&id).await;
+    }
+
     // Prefer the last-known port; if none is recorded, start the app first.
-    let mut port = match manifest
+    //
+    // A recorded port is only trustworthy while *we* are the ones running the
+    // process. If the launcher tracks no live child for this app, the number in
+    // the manifest is a leftover: the app may be stopped (the resting state for
+    // a `session` app), or — worse — the port may now be held by an orphan from
+    // a previous daemon run, which answers the forward and serves the wrong
+    // thing. Start it properly in that case; `ensure_running` reclaims the port
+    // and health-gates before returning.
+    let recorded = manifest
         .get("runtime")
         .and_then(|r| r.get("port"))
         .and_then(|p| p.as_u64())
-    {
-        Some(p) => p as u16,
-        None => ensure_port().await?,
+        .map(|p| p as u16)
+        .filter(|p| *p > 0);
+    let tracked = match s.space_mcp_launcher.as_ref() {
+        Some(l) => l.is_running(&id).await,
+        None => false,
+    };
+    let mut port = match recorded {
+        Some(p) if tracked => p,
+        _ => ensure_port().await?,
     };
 
     let forward = |port: u16| {

@@ -21,6 +21,7 @@ import {
   Typography,
 } from 'antd'
 import { api, type VarDef, type Workspace } from './api'
+import { TfvarsPickerModal } from './tfpicker'
 
 const { Text } = Typography
 
@@ -76,6 +77,7 @@ export function VarsForm({
   const [subdirOpts, setSubdirOpts] = useState<string[] | null>(null)
   const [subdirPick, setSubdirPick] = useState<string>('')
   const [subdirSaving, setSubdirSaving] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   const loadValues = useCallback(
     async (defsNow: VarDef[], f: string) => {
@@ -242,9 +244,13 @@ export function VarsForm({
           placeholder="— chưa chọn —"
           value={file || undefined}
           onChange={changeFile}
-          options={files.map((f) => ({ value: f, label: f }))}
-          notFoundContent="Chưa có file .tfvars"
+          options={Array.from(new Set([...files, ...(file ? [file] : [])])).map((f) => ({
+            value: f,
+            label: f,
+          }))}
+          notFoundContent="Chưa có file .tfvars — bấm 📂 Chọn…"
         />
+        <Button onClick={() => setPickerOpen(true)}>📂 Chọn…</Button>
         <Button onClick={() => setNewFileOpen(true)}>➕ File mới</Button>
         {ws.subdir && (
           <Tooltip title="Root Terraform trong repo — đổi ở tab Thông tin">
@@ -403,6 +409,23 @@ export function VarsForm({
           </Button>
         </Space>
       )}
+
+      <TfvarsPickerModal
+        wsId={ws.id}
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onPicked={async (rel) => {
+          try {
+            await api.wsPatch(ws.id, { var_file: rel })
+          } catch (e) {
+            message.error(String(e))
+            return
+          }
+          if (!files.includes(rel)) setFiles([...files, rel])
+          await changeFile(rel)
+          onChanged()
+        }}
+      />
 
       <Modal
         open={newFileOpen}

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/prefs.dart';
 import '../../models/group.dart';
 import '../../theme/tokens.dart';
@@ -72,32 +73,34 @@ class _SessionListState extends ConsumerState<SessionList> {
     if (ms <= 0) return '';
     final dt = DateTime.fromMillisecondsSinceEpoch(ms);
     final d = DateTime.now().difference(dt);
-    if (d.inSeconds < 60) return 'now';
-    if (d.inMinutes < 60) return '${d.inMinutes}m';
-    if (d.inHours < 24) return '${d.inHours}h';
-    if (d.inDays < 7) return '${d.inDays}d';
+    if (d.inSeconds < 60) return context.tr('now');
+    if (d.inMinutes < 60) return context.trArgs('{n}m', {'n': d.inMinutes});
+    if (d.inHours < 24) return context.trArgs('{n}h', {'n': d.inHours});
+    if (d.inDays < 7) return context.trArgs('{n}d', {'n': d.inDays});
     return '${dt.day}/${dt.month}';
   }
 
   (String, String) _bucket(GroupInfo g, GroupMode mode, int ts) {
     if (mode == GroupMode.project) {
-      final f = (g.folder == null || g.folder!.isEmpty) ? '(unknown)' : g.folder!;
+      final f = (g.folder == null || g.folder!.isEmpty)
+          ? context.tr('(unknown)')
+          : g.folder!;
       return (f, f);
     }
-    if (mode == GroupMode.none) return ('all', 'Sessions');
-    if (ts == 0) return ('older', 'Older');
+    if (mode == GroupMode.none) return ('all', context.tr('Sessions'));
+    if (ts == 0) return ('older', context.tr('Older'));
     final d = DateTime.fromMillisecondsSinceEpoch(ts);
     final now = DateTime.now();
     bool sameDay(DateTime a, DateTime b) =>
         a.year == b.year && a.month == b.month && a.day == b.day;
-    if (sameDay(d, now)) return ('today', 'Today');
+    if (sameDay(d, now)) return ('today', context.tr('Today'));
     if (sameDay(d, now.subtract(const Duration(days: 1)))) {
-      return ('yesterday', 'Yesterday');
+      return ('yesterday', context.tr('Yesterday'));
     }
     final diff = now.difference(d).inDays;
-    if (diff <= 7) return ('past7', 'Previous 7 days');
-    if (diff <= 30) return ('past30', 'Previous 30 days');
-    return ('older', 'Older');
+    if (diff <= 7) return ('past7', context.tr('Previous 7 days'));
+    if (diff <= 30) return ('past30', context.tr('Previous 30 days'));
+    return ('older', context.tr('Older'));
   }
 
   static const _chronoOrder = {
@@ -167,7 +170,7 @@ class _SessionListState extends ConsumerState<SessionList> {
                 child: FilledButton.icon(
                   onPressed: widget.onNewChat,
                   icon: const Icon(Icons.add_rounded, size: 18),
-                  label: const Text('New Session'),
+                  label: Text(context.tr('New Session')),
                   style: FilledButton.styleFrom(
                     backgroundColor: c.accent,
                     foregroundColor: Colors.white,
@@ -183,7 +186,7 @@ class _SessionListState extends ConsumerState<SessionList> {
               ),
               const SizedBox(width: AppTokens.s8),
               IconButton(
-                tooltip: 'Reload chats',
+                tooltip: context.tr('Reload chats'),
                 icon: const Icon(Icons.refresh, size: 18),
                 onPressed: () => ref.read(groupsProvider.notifier).refresh(),
               ),
@@ -198,7 +201,9 @@ class _SessionListState extends ConsumerState<SessionList> {
                     const WorkflowSessionSection(),
                     Padding(
                       padding: const EdgeInsets.only(top: AppTokens.s24),
-                      child: Text('No chats yet.\nClick + New Session above.',
+                      child: Text(
+                          context.tr(
+                              'No chats yet.\nClick + New Session above.'),
                           textAlign: TextAlign.center,
                           style:
                               TextStyle(color: c.textMuted, fontSize: 12)),
@@ -230,7 +235,7 @@ class _SessionListState extends ConsumerState<SessionList> {
   Widget _sectionLabel(String label) => Padding(
         padding: const EdgeInsets.fromLTRB(
             AppTokens.s16, AppTokens.s8, AppTokens.s16, AppTokens.s4),
-        child: Text(label.toUpperCase(),
+        child: Text(context.tr(label).toUpperCase(),
             style: TextStyle(
               color: context.colors.textMuted,
               fontSize: 11,
@@ -244,10 +249,10 @@ class _SessionListState extends ConsumerState<SessionList> {
     // Date mode groups by time buckets below, so no redundant wrapper label
     // here — keep just the group/sort menu.
     final title = groupMode == GroupMode.none
-        ? 'Sessions'
+        ? context.tr('Sessions')
         : groupMode == GroupMode.date
             ? ''
-            : 'Projects';
+            : context.tr('Projects');
     return Padding(
       padding: const EdgeInsets.fromLTRB(
           AppTokens.s16, AppTokens.s8, AppTokens.s8, AppTokens.s4),
@@ -403,7 +408,7 @@ class _SessionListState extends ConsumerState<SessionList> {
           child: Row(children: [
             Icon(icon, size: 17, color: color ?? c.textSecondary),
             const SizedBox(width: AppTokens.s12),
-            Text(label,
+            Text(context.tr(label),
                 style: TextStyle(
                     color: color ?? c.textPrimary,
                     fontSize: 14,
@@ -468,7 +473,7 @@ class _OrganizeMenu extends ConsumerWidget {
     final sort = ref.watch(sortProvider);
     final c = context.colors;
     return PopupMenuButton<String>(
-      tooltip: 'Group & sort',
+      tooltip: context.tr('Group & sort'),
       iconSize: 16,
       icon: Icon(Icons.tune_rounded, size: 15, color: c.textMuted),
       color: c.surface,
@@ -498,7 +503,7 @@ class _OrganizeMenu extends ConsumerWidget {
         PopupMenuItem<String> header(String label) => PopupMenuItem(
               enabled: false,
               height: 30,
-              child: Text(label.toUpperCase(),
+              child: Text(ctx.tr(label).toUpperCase(),
                   style: TextStyle(
                     color: cc.textMuted,
                     fontSize: 10.5,
@@ -515,7 +520,7 @@ class _OrganizeMenu extends ConsumerWidget {
                 Icon(icon, size: 16, color: on ? cc.accent : cc.textSecondary),
                 const SizedBox(width: AppTokens.s12),
                 Expanded(
-                  child: Text(label,
+                  child: Text(ctx.tr(label),
                       style: TextStyle(
                         fontSize: 13.5,
                         color: on ? cc.accent : cc.textPrimary,

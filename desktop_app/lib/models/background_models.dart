@@ -9,6 +9,8 @@
 /// `background_providers.dart` for the live-event side).
 library;
 
+import '../core/i18n/l10n.dart';
+
 class BackgroundTask {
   final String id;
   final String ownerKind; // 'system' | 'app' | 'user'
@@ -112,18 +114,19 @@ class BackgroundTask {
 
   /// Human label for the owner badge.
   String get ownerLabel => switch (ownerKind) {
-        'system' => 'System',
+        'system' => L10n.global.t('System'),
         'app' => ownerId,
-        _ => 'You',
+        _ => L10n.global.t('You'),
       };
 
   /// The trigger in prose. A cron expression tells the user nothing at a glance,
   /// and a mis-set schedule is invisible until it fails to fire.
   String get triggerLabel => switch (triggerType) {
-        'manual' => 'Manual only',
-        'on_install' => 'Once, on install',
-        'once' => 'Once at ${_fmtTime(triggerValue)}',
-        'interval' => 'Every ${_fmtInterval(triggerValue)}',
+        'manual' => L10n.global.t('Manual only'),
+        'on_install' => L10n.global.t('Once, on install'),
+        'once' => L10n.global.tArgs('Once at {t}', {'t': _fmtTime(triggerValue)}),
+        'interval' =>
+          L10n.global.tArgs('Every {t}', {'t': _fmtInterval(triggerValue)}),
         'cron' => _cronLabel(triggerValue),
         _ => triggerValue ?? '—',
       };
@@ -370,13 +373,16 @@ String _fmtTime(String? iso) {
   return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
 }
 
+/// A short duration unit: "30m" in English, "30 phút" in Vietnamese.
+String _unit(int n, String key) => L10n.global.tArgs(key, {'n': n});
+
 String _fmtInterval(String? ms) {
   final v = int.tryParse(ms ?? '');
   if (v == null || v <= 0) return '?';
-  if (v < 60000) return '${(v / 1000).round()}s';
-  if (v < 3600000) return '${(v / 60000).round()}m';
-  if (v < 86400000) return '${(v / 3600000).round()}h';
-  return '${(v / 86400000).round()}d';
+  if (v < 60000) return _unit((v / 1000).round(), '{n}s');
+  if (v < 3600000) return _unit((v / 60000).round(), '{n}m');
+  if (v < 86400000) return _unit((v / 3600000).round(), '{n}h');
+  return _unit((v / 86400000).round(), '{n}d');
 }
 
 /// Render the common cron shapes in words. Falls back to the raw expression —
@@ -389,10 +395,12 @@ String _cronLabel(String? expr) {
   if (p.length != 5) return expr;
   final [min, hour, dom, mon, dow] = p;
 
-  String at() {
+  // Null when the expression has no single wall-clock time (e.g. `*/5`), which
+  // is what picks the "…at {t}" phrasing apart from the bare one.
+  String? at() {
     final h = int.tryParse(hour), m = int.tryParse(min);
-    if (h == null || m == null) return '';
-    return ' at ${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+    if (h == null || m == null) return null;
+    return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
   }
 
   const days = {
@@ -400,16 +408,28 @@ String _cronLabel(String? expr) {
     '4': 'Thursday', '5': 'Friday', '6': 'Saturday', '7': 'Sunday',
   };
 
+  final t = at();
+  final l = L10n.global;
+
   if (dom == '*' && mon == '*' && dow == '*') {
-    if (hour == '*') return min == '*' ? 'Every minute' : 'Hourly at :$min';
-    return 'Daily${at()}';
+    if (hour == '*') {
+      return min == '*' ? l.t('Every minute') : l.tArgs('Hourly at :{m}', {'m': min});
+    }
+    return t == null ? l.t('Daily') : l.tArgs('Daily at {t}', {'t': t});
   }
   if (dom == '*' && mon == '*' && days.containsKey(dow)) {
-    return 'Weekly on ${days[dow]}${at()}';
+    final day = l.t(days[dow]!);
+    return t == null
+        ? l.tArgs('Weekly on {day}', {'day': day})
+        : l.tArgs('Weekly on {day} at {t}', {'day': day, 't': t});
   }
-  if (dom == '*' && mon == '*' && dow == '1-5') return 'Weekdays${at()}';
+  if (dom == '*' && mon == '*' && dow == '1-5') {
+    return t == null ? l.t('Weekdays') : l.tArgs('Weekdays at {t}', {'t': t});
+  }
   if (mon == '*' && dow == '*' && int.tryParse(dom) != null) {
-    return 'Monthly on day $dom${at()}';
+    return t == null
+        ? l.tArgs('Monthly on day {d}', {'d': dom})
+        : l.tArgs('Monthly on day {d} at {t}', {'d': dom, 't': t});
   }
   return expr;
 }
@@ -433,15 +453,17 @@ String fmtBgRelative(String? iso) {
   final s = diff.abs();
   String unit;
   if (s.inSeconds < 60) {
-    unit = '${s.inSeconds}s';
+    unit = _unit(s.inSeconds, '{n}s');
   } else if (s.inMinutes < 60) {
-    unit = '${s.inMinutes}m';
+    unit = _unit(s.inMinutes, '{n}m');
   } else if (s.inHours < 24) {
-    unit = '${s.inHours}h';
+    unit = _unit(s.inHours, '{n}h');
   } else {
-    unit = '${s.inDays}d';
+    unit = _unit(s.inDays, '{n}d');
   }
-  return ahead ? 'in $unit' : '$unit ago';
+  return ahead
+      ? L10n.global.tArgs('in {t}', {'t': unit})
+      : L10n.global.tArgs('{t} ago', {'t': unit});
 }
 
 /// The next-run line for a task row.
@@ -452,10 +474,10 @@ String fmtBgRelative(String? iso) {
 /// composing "Next " with a past tense, which reads as gibberish
 /// ("Next 24s ago") and looks like a bug when nothing is wrong.
 String fmtBgNextRun(String? iso, String status) {
-  if (status != 'active') return 'Not scheduled';
-  if (iso == null || iso.isEmpty) return 'Not scheduled';
+  if (status != 'active') return L10n.global.t('Not scheduled');
+  if (iso == null || iso.isEmpty) return L10n.global.t('Not scheduled');
   final d = DateTime.tryParse(iso);
-  if (d == null) return 'Not scheduled';
-  if (d.toLocal().isBefore(DateTime.now())) return 'Due now';
-  return 'Next ${fmtBgRelative(iso)}';
+  if (d == null) return L10n.global.t('Not scheduled');
+  if (d.toLocal().isBefore(DateTime.now())) return L10n.global.t('Due now');
+  return L10n.global.tArgs('Next {rel}', {'rel': fmtBgRelative(iso)});
 }

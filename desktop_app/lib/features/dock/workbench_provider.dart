@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 
 class WorkbenchArtifact {
@@ -18,7 +19,7 @@ class WorkbenchArtifact {
   factory WorkbenchArtifact.fromJson(Map<String, dynamic> j) =>
       WorkbenchArtifact(
         id: '${j['id'] ?? ''}',
-        title: '${j['title'] ?? 'Artifact'}',
+        title: '${j['title'] ?? L10n.global.t('Artifact')}',
         mode: '${j['mode'] ?? 'static'}',
         files: ((j['files'] as List?) ?? const [])
             .whereType<Map>()

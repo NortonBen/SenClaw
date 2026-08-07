@@ -13,7 +13,7 @@
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@senclaw/space-sdk": "file:../../examples/senclaw-space-sdk",
+    "@senclaw/space-sdk": "file:../../senclaw-sdk/senclaw-app-sdk",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",

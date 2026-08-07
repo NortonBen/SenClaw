@@ -309,6 +309,17 @@ pub(crate) async fn space_app_runtime(
         .map(|db| crate::sandbox::app_policy::load(&db, &id))
         .unwrap_or_default();
 
+    let spec = crate::apps::RuntimeSpec::parse(&manifest);
+    // Only probed when the app actually declared requirements — otherwise this
+    // is a `which` per panel refresh for every app that needs nothing.
+    let requires = crate::apps::Requires::parse(&manifest);
+    let requirements = if requires.is_empty() {
+        Value::Null
+    } else {
+        serde_json::to_value(crate::apps::requirements::check(&requires).await)
+            .unwrap_or(Value::Null)
+    };
+
     let now = std::time::SystemTime::now();
     // An adopted process reports the same shape, minus what only the launcher
     // knows. `isolation: "unknown"` is the honest value: this daemon did not
@@ -345,6 +356,17 @@ pub(crate) async fn space_app_runtime(
         // Launch count, not "restarts": the first start counts as one, and the
         // difference matters when reading "3" on an app installed a minute ago.
         "launches": launches,
+        // Which lifecycle this app is on, and — for a session app — how close it
+        // is to being stopped for being idle. Without this, "not running" reads
+        // as a fault when for most apps it is the normal resting state.
+        "lifecycle": {
+            "mode": spec.mode.as_str(),
+            "runner": spec.runner.as_str(),
+            "idleTimeoutSecs": if spec.mode.is_background() { 0 } else { spec.idle_timeout_secs },
+            "idleSecs": info.as_ref().map(|i| i.idle_secs),
+            "stoppedByUser": launcher.is_user_stopped(&id).await,
+        },
+        "requirements": requirements,
         "health": health,
         "resources": resources,
         "network": {
@@ -480,7 +502,13 @@ pub(crate) async fn space_apps_sandbox_overview(
                     "hosts": cfg.hosts,
                     "daemonApi": cfg.daemon_api,
                     "folders": cfg.folders.len(),
+                    // The app's manifest requires the sandbox — the row is not
+                    // one the user can switch off.
+                    "forced": cfg.forced,
                 },
+                // A session app that is not running is idle, not broken. The
+                // fleet view says so, or half this list reads as an outage.
+                "mode": crate::apps::RuntimeSpec::parse(&manifest).mode.as_str(),
                 "running": info.is_some() || ad.is_some(),
                 // True when the process was already up and this daemon adopted
                 // it: the launcher never built its profile, so nothing here can

@@ -27,6 +27,12 @@ Mặc định **tắt** cho mọi app. Bật lên = app chỉ còn **ghi** đư�
 chính nó và thư mục dữ liệu của nó (đọc và mạng vẫn nguyên) — bước đầu tiên rẻ
 nhất, gần như không app nào hỏng vì nó.
 
+> **App có thể tự khai mức giam của nó** trong `senclaw-manifest.json`, và
+> `"force": true` khiến ô này không tắt được (`PUT .../sandbox` trả 409). Khai
+> báo **không** `force` chỉ áp dụng khi người dùng chưa từng lưu cài đặt cho app
+> đó — một bản update app không ghi đè được lựa chọn của bạn. Chi tiết + luật:
+> [space-app-lifecycle.md § sandbox](space-app-lifecycle.md#4-sandbox--app-tự-khai-mức-giam-của-mình).
+
 Được cấp tự động, đọc+ghi:
 
 - thư mục cài của app (`<workspace>/space-apps/<id>`)

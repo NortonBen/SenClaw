@@ -1,14 +1,16 @@
 import 'package:appflowy_editor/appflowy_editor.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../theme/tokens.dart';
 
 /// SenClaw-themed AppFlowy block builders for the note editor.
 ///
 /// Replaces the stock visuals where they fight the app theme: the SVG todo
 /// checkbox (a 1 px #BDBDBD outline — effectively invisible on our grey
-/// panes), the blue quote bar, the grey divider, and the English block
-/// placeholders ("To-do", …) that leak through regardless of app language.
+/// panes), the blue quote bar, the grey divider, and the stock block
+/// placeholders ("To-do", …) that ignore the app language — ours go through
+/// [L10n.global] so they follow it.
 Map<String, BlockComponentBuilder> noteBlockBuilders(AppColors c) {
   final config = BlockComponentConfiguration(
     placeholderTextStyle: (node, {textSpan}) =>
@@ -23,7 +25,8 @@ Map<String, BlockComponentBuilder> noteBlockBuilders(AppColors c) {
       configuration: config.copyWith(placeholderText: (_) => ''),
     ),
     TodoListBlockKeys.type: TodoListBlockComponentBuilder(
-      configuration: config.copyWith(placeholderText: (_) => 'Việc cần làm'),
+      configuration: config.copyWith(
+          placeholderText: (_) => L10n.global.t('To-do')),
       iconBuilder: (context, node, onCheck) => NoteCheckbox(
         checked: node.attributes[TodoListBlockKeys.checked] == true,
         colors: c,
@@ -38,21 +41,24 @@ Map<String, BlockComponentBuilder> noteBlockBuilders(AppColors c) {
           : const TextStyle(),
     ),
     BulletedListBlockKeys.type: BulletedListBlockComponentBuilder(
-      configuration: config.copyWith(placeholderText: (_) => 'Mục danh sách'),
+      configuration: config.copyWith(
+          placeholderText: (_) => L10n.global.t('List item')),
       iconBuilder: (context, node) => NoteBulletDot(node: node, colors: c),
     ),
     NumberedListBlockKeys.type: NumberedListBlockComponentBuilder(
       // Stock icon renders "N." with the editor text style — already themed.
-      configuration: config.copyWith(placeholderText: (_) => 'Mục danh sách'),
+      configuration: config.copyWith(
+          placeholderText: (_) => L10n.global.t('List item')),
     ),
     QuoteBlockKeys.type: QuoteBlockComponentBuilder(
-      configuration: config.copyWith(placeholderText: (_) => 'Trích dẫn'),
+      configuration:
+          config.copyWith(placeholderText: (_) => L10n.global.t('Quote')),
       iconBuilder: (context, node) => NoteQuoteBar(colors: c),
     ),
     HeadingBlockKeys.type: HeadingBlockComponentBuilder(
       configuration: config.copyWith(
-        placeholderText: (node) =>
-            'Tiêu đề ${node.attributes[HeadingBlockKeys.level] ?? ''}',
+        placeholderText: (node) => L10n.global.tArgs('Heading {n}',
+            {'n': node.attributes[HeadingBlockKeys.level] ?? ''}),
         padding: (_) => const EdgeInsets.only(top: 12, bottom: 2),
       ),
       textStyleBuilder: (level) => switch (level) {

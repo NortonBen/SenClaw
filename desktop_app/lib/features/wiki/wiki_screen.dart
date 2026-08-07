@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_markdown.dart';
@@ -19,6 +20,7 @@ Future<void> _uploadWikiFile(WidgetRef ref, {String folder = ''}) async {
   final cfg = ref.read(appConfigProvider);
   final uri = Uri.parse('http://${cfg.host}:${cfg.uiPort}/api/wiki/upload');
   final req = http.MultipartRequest('POST', uri)..fields['folder'] = folder;
+  req.headers.addAll(cfg.authHeaders);
   if (kIsWeb && f.bytes != null) {
     req.files
         .add(http.MultipartFile.fromBytes('file', f.bytes!, filename: f.name));
@@ -45,22 +47,26 @@ Future<void> _showNodeMenu(
     position: RelativeRect.fromRect(
         pos & const Size(1, 1), Offset.zero & overlay.size),
     items: n.isDir
-        ? const [
-            PopupMenuItem(value: 'newfile', child: Text('New file…')),
-            PopupMenuItem(value: 'newfolder', child: Text('New folder…')),
-            PopupMenuItem(value: 'upload', child: Text('Upload file…')),
-            PopupMenuDivider(),
+        ? [
+            PopupMenuItem(
+                value: 'newfile', child: Text(context.tr('New file…'))),
+            PopupMenuItem(
+                value: 'newfolder', child: Text(context.tr('New folder…'))),
+            PopupMenuItem(
+                value: 'upload', child: Text(context.tr('Upload file…'))),
+            const PopupMenuDivider(),
             PopupMenuItem(
                 value: 'deletedir',
-                child: Text('Delete folder',
-                    style: TextStyle(color: AppTokens.danger))),
+                child: Text(context.tr('Delete folder'),
+                    style: const TextStyle(color: AppTokens.danger))),
           ]
-        : const [
-            PopupMenuItem(value: 'download', child: Text('Download')),
+        : [
+            PopupMenuItem(
+                value: 'download', child: Text(context.tr('Download'))),
             PopupMenuItem(
                 value: 'deletefile',
-                child: Text('Delete',
-                    style: TextStyle(color: AppTokens.danger))),
+                child: Text(context.tr('Delete'),
+                    style: const TextStyle(color: AppTokens.danger))),
           ],
   );
   ref.read(wikiContextTargetProvider.notifier).state = null;
@@ -98,10 +104,10 @@ Future<String?> _promptName(
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(dctx, false),
-            child: const Text('Cancel')),
+            child: Text(dctx.tr('Cancel'))),
         FilledButton(
             onPressed: () => Navigator.pop(dctx, true),
-            child: const Text('OK')),
+            child: Text(dctx.tr('OK'))),
       ],
     ),
   );
@@ -113,7 +119,9 @@ Future<String?> _promptName(
 Future<void> _newWikiNode(BuildContext context, WidgetRef ref, String folder,
     {required bool isDir}) async {
   final name = await _promptName(
-      context, isDir ? 'New folder' : 'New file', isDir ? 'name' : 'name.md');
+      context,
+      isDir ? context.tr('New folder') : context.tr('New file'),
+      isDir ? context.tr('name') : 'name.md');
   if (name == null) return;
   final path = folder.isEmpty ? name : '$folder/$name';
   final api = ref.read(apiClientProvider);
@@ -134,18 +142,19 @@ Future<void> _deleteWikiNode(BuildContext context, WidgetRef ref, String path,
     context: context,
     builder: (dctx) => AlertDialog(
       backgroundColor: dctx.colors.surface,
-      title: Text(isDir ? 'Delete folder?' : 'Delete file?'),
+      title: Text(
+          dctx.tr(isDir ? 'Delete folder?' : 'Delete file?')),
       content: Text(isDir
-          ? 'Only empty folders can be removed.\n$path'
-          : 'This cannot be undone.\n$path'),
+          ? '${dctx.tr('Only empty folders can be removed.')}\n$path'
+          : '${dctx.tr('This cannot be undone.')}\n$path'),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(dctx, false),
-            child: const Text('Cancel')),
+            child: Text(dctx.tr('Cancel'))),
         FilledButton(
             style: FilledButton.styleFrom(backgroundColor: AppTokens.danger),
             onPressed: () => Navigator.pop(dctx, true),
-            child: const Text('Delete')),
+            child: Text(dctx.tr('Delete'))),
       ],
     ),
   );
@@ -161,21 +170,24 @@ Future<void> _deleteWikiNode(BuildContext context, WidgetRef ref, String path,
     ref.invalidate(wikiTreeProvider);
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.trArgs('Delete failed: {err}', {'err': e}))));
     }
   }
 }
 
 Future<void> _downloadWikiFile(
     BuildContext context, WidgetRef ref, WikiNode n) async {
+  // Resolved up front: the save-dialog title is needed after the fetch await,
+  // where `context` may no longer be mounted.
+  final dialogTitle = context.trArgs('Save {name}', {'name': n.name});
   final r = await ref
       .read(apiClientProvider)
       .get('/api/wiki/file', query: {'path': n.path});
   final content = (r is Map ? '${r['content'] ?? ''}' : '$r');
   final bytes = utf8.encode(content);
   final savePath = await FilePicker.platform.saveFile(
-    dialogTitle: 'Save ${n.name}',
+    dialogTitle: dialogTitle,
     fileName: n.name,
     bytes: kIsWeb ? Uint8List.fromList(bytes) : null,
   );
@@ -183,8 +195,8 @@ Future<void> _downloadWikiFile(
     await File(savePath).writeAsBytes(bytes);
   }
   if (context.mounted && (savePath != null || kIsWeb)) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('Saved ${n.name}')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(context.trArgs('Saved {name}', {'name': n.name}))));
   }
 }
 
@@ -312,7 +324,7 @@ class WikiScreen extends ConsumerWidget {
                               fontWeight: FontWeight.w700)),
                       const Spacer(),
                       IconButton(
-                        tooltip: 'New folder',
+                        tooltip: context.tr('New folder'),
                         icon: const Icon(Icons.create_new_folder_outlined,
                             size: 18),
                         onPressed: () async {
@@ -321,23 +333,23 @@ class WikiScreen extends ConsumerWidget {
                             context: context,
                             builder: (dctx) => AlertDialog(
                               backgroundColor: dctx.colors.surface,
-                              title: const Text('New folder'),
+                              title: Text(dctx.tr('New folder')),
                               content: TextField(
                                 controller: ctrl,
                                 autofocus: true,
-                                decoration: const InputDecoration(
-                                    labelText: 'Folder path',
+                                decoration: InputDecoration(
+                                    labelText: dctx.tr('Folder path'),
                                     hintText: 'category/subfolder'),
                               ),
                               actions: [
                                 TextButton(
                                     onPressed: () =>
                                         Navigator.pop(dctx, false),
-                                    child: const Text('Cancel')),
+                                    child: Text(dctx.tr('Cancel'))),
                                 FilledButton(
                                     onPressed: () =>
                                         Navigator.pop(dctx, true),
-                                    child: const Text('Create')),
+                                    child: Text(dctx.tr('Create'))),
                               ],
                             ),
                           );
@@ -350,19 +362,19 @@ class WikiScreen extends ConsumerWidget {
                         },
                       ),
                       IconButton(
-                        tooltip: 'New page',
+                        tooltip: context.tr('New page'),
                         icon: const Icon(Icons.note_add_outlined, size: 18),
                         onPressed: () => showDialog(
                             context: context,
                             builder: (_) => const _NewPageDialog()),
                       ),
                       IconButton(
-                        tooltip: 'Upload file',
+                        tooltip: context.tr('Upload file'),
                         icon: const Icon(Icons.upload_file_outlined, size: 18),
                         onPressed: () => _uploadWikiFile(ref),
                       ),
                       IconButton(
-                        tooltip: 'Reload',
+                        tooltip: context.tr('Reload'),
                         icon: const Icon(Icons.refresh, size: 18),
                         onPressed: () => ref.invalidate(wikiTreeProvider),
                       ),
@@ -382,9 +394,11 @@ class WikiScreen extends ConsumerWidget {
                           child: DefaultTextStyle(
                             style: TextStyle(color: c.textMuted, fontSize: 11),
                             child: Wrap(spacing: AppTokens.s12, children: [
-                              Text('$pages pages'),
-                              Text('$dirs folders'),
-                              if (tagCount > 0) Text('$tagCount tags'),
+                              Text(context.trArgs('{n} pages', {'n': pages})),
+                              Text(context.trArgs('{n} folders', {'n': dirs})),
+                              if (tagCount > 0)
+                                Text(context
+                                    .trArgs('{n} tags', {'n': tagCount})),
                             ]),
                           ),
                         );
@@ -394,9 +408,9 @@ class WikiScreen extends ConsumerWidget {
                   padding: const EdgeInsets.fromLTRB(
                       AppTokens.s12, 0, AppTokens.s12, AppTokens.s8),
                   child: TextField(
-                    decoration: const InputDecoration(
-                      hintText: 'Search wiki…',
-                      prefixIcon: Icon(Icons.search, size: 16),
+                    decoration: InputDecoration(
+                      hintText: context.tr('Search wiki…'),
+                      prefixIcon: const Icon(Icons.search, size: 16),
                     ),
                     onChanged: (v) =>
                         ref.read(wikiQueryProvider.notifier).state = v,
@@ -450,7 +464,7 @@ class WikiScreen extends ConsumerWidget {
                           error: (e, _) => Center(child: Text('$e')),
                           data: (hits) => hits.isEmpty
                               ? Center(
-                                  child: Text('No results',
+                                  child: Text(context.tr('No results'),
                                       style: TextStyle(color: c.textMuted)))
                               : ListView.builder(
                                   itemCount: hits.length,
@@ -516,7 +530,7 @@ class WikiScreen extends ConsumerWidget {
         Expanded(
           child: selected == null
               ? Center(
-                  child: Text('Select a document',
+                  child: Text(context.tr('Select a document'),
                       style: TextStyle(color: c.textMuted)),
                 )
               : _FileView(path: selected),
@@ -668,20 +682,20 @@ class _FileViewState extends ConsumerState<_FileView> {
                     onPressed: _saving
                         ? null
                         : () => setState(() => _editing = false),
-                    child: const Text('Cancel')),
+                    child: Text(context.tr('Cancel'))),
                 FilledButton(
                     onPressed: _saving ? null : _save,
-                    child: const Text('Save')),
+                    child: Text(context.tr('Save'))),
               ] else ...[
                 IconButton(
-                  tooltip: 'History',
+                  tooltip: context.tr('History'),
                   icon: const Icon(Icons.history, size: 18),
                   onPressed: () => showDialog(
                       context: context,
                       builder: (_) => _HistoryDialog(path: widget.path)),
                 ),
                 IconButton(
-                  tooltip: 'Edit',
+                  tooltip: context.tr('Edit'),
                   icon: const Icon(Icons.edit_outlined, size: 18),
                   onPressed: () {
                     _ctrl.text = content.valueOrNull ?? '';
@@ -708,8 +722,9 @@ class _FileViewState extends ConsumerState<_FileView> {
                           fontFamily: AppTokens.fontMono,
                           fontSize: 14,
                           color: c.textPrimary),
-                      decoration: const InputDecoration(
-                          hintText: 'Markdown (with frontmatter)…'),
+                      decoration: InputDecoration(
+                          hintText:
+                              context.tr('Markdown (with frontmatter)…')),
                     ),
                   )
                 : SelectionArea(
@@ -758,7 +773,7 @@ class _NewPageDialogState extends ConsumerState<_NewPageDialog> {
   Future<void> _create() async {
     var path = _path.text.trim();
     if (path.isEmpty) {
-      setState(() => _error = 'Path is required');
+      setState(() => _error = context.tr('Path is required'));
       return;
     }
     if (!path.endsWith('.md')) path = '$path.md';
@@ -784,7 +799,7 @@ class _NewPageDialogState extends ConsumerState<_NewPageDialog> {
     final c = context.colors;
     return AlertDialog(
       backgroundColor: c.surface,
-      title: const Text('New wiki page'),
+      title: Text(context.tr('New wiki page')),
       content: SizedBox(
         width: 520,
         child: Column(
@@ -793,8 +808,9 @@ class _NewPageDialogState extends ConsumerState<_NewPageDialog> {
           children: [
             TextField(
               controller: _path,
-              decoration: const InputDecoration(
-                  labelText: 'Path', hintText: 'category/page-name.md'),
+              decoration: InputDecoration(
+                  labelText: context.tr('Path'),
+                  hintText: 'category/page-name.md'),
             ),
             const SizedBox(height: AppTokens.s8),
             TextField(
@@ -802,8 +818,9 @@ class _NewPageDialogState extends ConsumerState<_NewPageDialog> {
               minLines: 5,
               maxLines: 10,
               style: TextStyle(fontFamily: AppTokens.fontMono, fontSize: 12),
-              decoration: const InputDecoration(
-                  labelText: 'Content (Markdown)', alignLabelWithHint: true),
+              decoration: InputDecoration(
+                  labelText: context.tr('Content (Markdown)'),
+                  alignLabelWithHint: true),
             ),
             if (_error != null)
               Padding(
@@ -817,7 +834,7 @@ class _NewPageDialogState extends ConsumerState<_NewPageDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
+            child: Text(context.tr('Cancel'))),
         FilledButton(
           onPressed: _saving ? null : _create,
           child: _saving
@@ -825,7 +842,7 @@ class _NewPageDialogState extends ConsumerState<_NewPageDialog> {
                   width: 14,
                   height: 14,
                   child: CircularProgressIndicator(strokeWidth: 2))
-              : const Text('Create'),
+              : Text(context.tr('Create')),
         ),
       ],
     );
@@ -851,7 +868,8 @@ class _HistoryDialog extends ConsumerWidget {
                 Icon(Icons.history, size: 18, color: c.accent),
                 const SizedBox(width: AppTokens.s8),
                 Expanded(
-                  child: Text('History · $path',
+                  child: Text(
+                      context.trArgs('History · {path}', {'path': path}),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -877,7 +895,7 @@ class _HistoryDialog extends ConsumerWidget {
                         (r is Map ? r['commits'] : null) as List? ?? const [];
                     if (commits.isEmpty) {
                       return Center(
-                          child: Text('No history',
+                          child: Text(context.tr('No history'),
                               style: TextStyle(color: c.textMuted)));
                     }
                     return ListView.separated(

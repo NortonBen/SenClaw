@@ -5,6 +5,7 @@
   "icon": "🔮",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./predict",
     "healthPath": "/api/status",
     "port": 4600

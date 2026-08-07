@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/i18n/l10n.dart';
 import '../../../theme/tokens.dart';
 import '../../../widgets/app_markdown.dart';
 import '../plan_provider.dart';
@@ -41,7 +42,7 @@ class PlanExitOverlay extends ConsumerWidget {
                         Icon(Icons.checklist_rtl, color: c.accent, size: 20),
                         const SizedBox(width: AppTokens.s8),
                         Text(
-                          'Plan ready for review',
+                          context.tr('Plan ready for review'),
                           style: TextStyle(
                             color: c.textPrimary,
                             fontWeight: FontWeight.w700,
@@ -57,7 +58,7 @@ class PlanExitOverlay extends ConsumerWidget {
                           horizontal: AppTokens.s24, vertical: AppTokens.s8),
                       child: AppMarkdown(
                         req.planContent.isEmpty
-                            ? '_No plan content._'
+                            ? context.tr('_No plan content._')
                             : req.planContent,
                         style: TextStyle(color: c.textSecondary, height: 1.5),
                       ),
@@ -72,16 +73,19 @@ class PlanExitOverlay extends ConsumerWidget {
                       children: [
                         TextButton(
                           onPressed: () => notifier.resolve('cancelled'),
-                          child: const Text('Cancel'),
+                          child: Text(context.tr('Cancel')),
                         ),
                         OutlinedButton(
                           onPressed: () =>
                               notifier.resolve('clearContextAndStart'),
-                          child: Text(req.clearContextLabel),
+                          // The daemon may send its own labels; only the English
+                          // defaults have translations, so a custom label falls
+                          // through `tr` unchanged.
+                          child: Text(context.tr(req.clearContextLabel)),
                         ),
                         FilledButton(
                           onPressed: () => notifier.resolve('startEditing'),
-                          child: Text(req.startEditingLabel),
+                          child: Text(context.tr(req.startEditingLabel)),
                         ),
                       ],
                     ),

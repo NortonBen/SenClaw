@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/workflow_models.dart';
 import '../../theme/tokens.dart';
 import 'workflow_providers.dart';
@@ -23,11 +24,11 @@ Future<void> showWorkflowRunDialog(
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: Text('Run: ${def.name}'),
+      title: Text(ctx.trArgs('Run: {name}', {'name': def.name})),
       content: SizedBox(
         width: 420,
         child: def.inputs.isEmpty
-            ? const Text('This workflow takes no inputs.')
+            ? Text(ctx.tr('This workflow takes no inputs.'))
             : Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -51,10 +52,10 @@ Future<void> showWorkflowRunDialog(
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel')),
+            child: Text(ctx.tr('Cancel'))),
         FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Run')),
+            child: Text(ctx.tr('Run'))),
       ],
     ),
   );
@@ -65,8 +66,9 @@ Future<void> showWorkflowRunDialog(
       .map((i) => i.name)
       .toList();
   if (missing.isNotEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Missing required input(s): ${missing.join(', ')}')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(context.trArgs('Missing required input(s): {names}',
+            {'names': missing.join(', ')}))));
     return;
   }
   try {
@@ -76,14 +78,14 @@ Future<void> showWorkflowRunDialog(
     };
     final runId = await startWorkflowRun(ref, def.name, inputs);
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Started: $runId')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.trArgs('Started: {id}', {'id': runId}))));
     }
     onStarted?.call(runId);
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Run failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.trArgs('Run failed: {e}', {'e': e}))));
     }
   }
 }

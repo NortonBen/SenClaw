@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../models/chat_message.dart';
 import '../../theme/tokens.dart';
@@ -123,7 +124,9 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Transcription failed: $e')),
+            SnackBar(
+                content: Text(
+                    context.trArgs('Transcription failed: {e}', {'e': e}))),
           );
         }
       } finally {
@@ -134,7 +137,7 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
     if (!await _recorder.hasPermission()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Microphone permission denied')),
+          SnackBar(content: Text(context.tr('Microphone permission denied'))),
         );
       }
       return;
@@ -279,13 +282,13 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
               ),
               _ContextUsageMeter(jid: widget.jid),
               IconButton(
-                tooltip: 'Trò chuyện thoại (giọng nói)',
+                tooltip: context.tr('Voice chat'),
                 icon: const Icon(Icons.graphic_eq, size: 18),
                 onPressed: () =>
                     showVoiceChat(context, widget.jid, widget.title),
               ),
               IconButton(
-                tooltip: 'Chat info',
+                tooltip: context.tr('Chat info'),
                 icon: const Icon(Icons.info_outline, size: 18),
                 onPressed: () => showDialog(
                   context: context,
@@ -295,7 +298,7 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
               ),
               if (widget.jid.startsWith('cowork:')) ...[
                 IconButton(
-                  tooltip: 'Team tasks',
+                  tooltip: context.tr('Team tasks'),
                   icon: const Icon(Icons.view_kanban_outlined, size: 18),
                   onPressed: () => showDialog(
                     context: context,
@@ -304,7 +307,7 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Open Cowork board',
+                  tooltip: context.tr('Open Cowork board'),
                   icon: const Icon(Icons.dashboard_outlined, size: 18),
                   onPressed: () {
                     ref.read(openTeamProvider.notifier).state =
@@ -315,7 +318,7 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
               ],
               if (kind == 'schedule')
                 IconButton(
-                  tooltip: 'Schedule',
+                  tooltip: context.tr('Schedule'),
                   icon: const Icon(Icons.event_repeat_outlined, size: 18),
                   onPressed: () => showDialog(
                     context: context,
@@ -326,7 +329,7 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
                 )
               else if (kind != 'cowork')
                 IconButton(
-                  tooltip: 'Plan history',
+                  tooltip: context.tr('Plan history'),
                   icon: const Icon(Icons.history_edu_outlined, size: 18),
                   onPressed: () {
                     ref
@@ -354,7 +357,7 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
                       : (info ? context.colors.accent : null);
                   return Stack(clipBehavior: Clip.none, children: [
                     IconButton(
-                      tooltip: 'Toggle console / workbench',
+                      tooltip: context.tr('Toggle console / workbench'),
                       icon: const Icon(Icons.view_sidebar_outlined, size: 18),
                       onPressed: () => ref
                           .read(dockVisibleProvider.notifier)
@@ -388,7 +391,7 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
                 TextButton.icon(
                   onPressed: notifier.stop,
                   icon: const Icon(Icons.stop_circle_outlined, size: 16),
-                  label: const Text('Stop'),
+                  label: Text(context.tr('Stop')),
                 ),
               ],
             ],
@@ -400,7 +403,7 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
           child: convo.messages.isEmpty
               ? Center(
                   child: Text(
-                    'No messages yet. Say hello 👋',
+                    context.tr('No messages yet. Say hello 👋'),
                     style: TextStyle(color: c.textMuted),
                   ),
                 )
@@ -583,7 +586,7 @@ class _ModeToggle extends StatelessWidget {
                   borderRadius: BorderRadius.circular(AppTokens.rFull),
                 ),
                 child: Text(
-                  m,
+                  context.tr(m),
                   style: TextStyle(
                     color: m == mode ? Colors.white : c.textMuted,
                     fontSize: 12,
@@ -636,7 +639,8 @@ class _Composer extends ConsumerWidget {
     final configs = ref.watch(llmConfigsProvider).valueOrNull?.configs ?? const [];
     final modelId = group?.modelId;
     final selected = configs.where((m) => m.id == modelId).firstOrNull;
-    final modelLabel = selected?.label ?? (modelId ?? 'Default model');
+    final modelLabel =
+        selected?.label ?? (modelId ?? context.tr('Default model'));
 
     return Container(
       padding: const EdgeInsets.fromLTRB(
@@ -656,7 +660,7 @@ class _Composer extends ConsumerWidget {
                 children: [
                   for (var i = 0; i < attachments.length; i++)
                     Chip(
-                      label: Text('image ${i + 1}',
+                      label: Text(context.trArgs('image {n}', {'n': i + 1}),
                           style: const TextStyle(fontSize: 12)),
                       avatar: const Icon(Icons.image_outlined, size: 14),
                       onDeleted: () => onRemoveAttachment(i),
@@ -672,7 +676,7 @@ class _Composer extends ConsumerWidget {
             fileScope: mentionScopeForJid(jid),
             style: TextStyle(color: c.textPrimary, fontSize: 14),
             decoration: InputDecoration(
-              hintText: 'Message the agent…   / # skill · @ file',
+              hintText: context.tr('Message the agent…   / # skill · @ file'),
               hintStyle: TextStyle(color: c.textMuted, fontSize: 14),
               filled: true,
               fillColor: c.surfaceAlt,
@@ -690,7 +694,7 @@ class _Composer extends ConsumerWidget {
               suffixIcon: Padding(
                 padding: const EdgeInsets.only(right: AppTokens.s4),
                 child: IconButton(
-                  tooltip: 'Send (Enter)',
+                  tooltip: context.tr('Send (Enter)'),
                   icon: Icon(Icons.keyboard_return,
                       size: 18, color: c.textMuted),
                   onPressed: onSend,
@@ -715,12 +719,14 @@ class _Composer extends ConsumerWidget {
             final modelChip =
                 _ModelPickerChip(jid: jid, label: modelLabel, configs: configs);
             final attachBtn = IconButton(
-              tooltip: 'Attach images',
+              tooltip: context.tr('Attach images'),
               icon: const Icon(Icons.attach_file, size: 18),
               onPressed: onAttach,
             );
             final micBtn = IconButton(
-              tooltip: recording ? 'Stop & transcribe' : 'Voice input',
+              tooltip: recording
+                  ? context.tr('Stop & transcribe')
+                  : context.tr('Voice input'),
               icon: transcribing
                   ? const SizedBox(
                       width: 16,
@@ -783,13 +789,13 @@ class _ModelPickerChip extends ConsumerWidget {
     return Material(
       color: Colors.transparent,
       child: PopupMenuButton<String>(
-        tooltip: 'Model',
+        tooltip: context.tr('Model'),
         position: PopupMenuPosition.under,
         onSelected: (id) => ref
             .read(groupsProvider.notifier)
             .setModel(jid, id.isEmpty ? null : id),
         itemBuilder: (_) => [
-          const PopupMenuItem(value: '', child: Text('Default model')),
+          PopupMenuItem(value: '', child: Text(context.tr('Default model'))),
           for (final m in configs)
             PopupMenuItem(value: m.id, child: Text(m.label)),
         ],
@@ -849,7 +855,7 @@ class _PlanHistoryDialogState extends ConsumerState<_PlanHistoryDialog> {
               Row(children: [
                 Icon(Icons.history_edu_outlined, size: 18, color: c.accent),
                 const SizedBox(width: AppTokens.s8),
-                Text('Plan history',
+                Text(context.tr('Plan history'),
                     style: TextStyle(
                         color: c.textPrimary,
                         fontSize: 16,
@@ -863,7 +869,7 @@ class _PlanHistoryDialogState extends ConsumerState<_PlanHistoryDialog> {
               Expanded(
                 child: st.summaries.isEmpty
                     ? Center(
-                        child: Text('No plans yet',
+                        child: Text(context.tr('No plans yet'),
                             style: TextStyle(color: c.textMuted)))
                     : Row(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -925,7 +931,7 @@ class _PlanHistoryDialogState extends ConsumerState<_PlanHistoryDialog> {
                           Expanded(
                             child: _selected == null
                                 ? Center(
-                                    child: Text('Select a plan',
+                                    child: Text(context.tr('Select a plan'),
                                         style:
                                             TextStyle(color: c.textMuted)))
                                 : content == null
@@ -963,8 +969,12 @@ class _ContextUsageMeter extends ConsumerWidget {
         ? AppTokens.danger
         : (u.pct > 0.7 ? AppTokens.warning : c.accent);
     return Tooltip(
-      message:
-          'Context: ${u.useTokens} / ${u.maxTokens} tokens · ${u.remaining} left',
+      message: context.trArgs(
+          'Context: {use} / {max} tokens · {remaining} left', {
+        'use': u.useTokens,
+        'max': u.maxTokens,
+        'remaining': u.remaining,
+      }),
       child: Padding(
         padding: const EdgeInsets.only(right: AppTokens.s8),
         child: Row(
@@ -1040,7 +1050,7 @@ class _CoworkTasksDialog extends ConsumerWidget {
       context: context,
       builder: (dctx) => StatefulBuilder(
         builder: (dctx, setLocal) => AlertDialog(
-          title: const Text('Edit task'),
+          title: Text(dctx.tr('Edit task')),
           content: SizedBox(
             width: 460,
             child: Column(
@@ -1049,24 +1059,26 @@ class _CoworkTasksDialog extends ConsumerWidget {
               children: [
                 TextField(
                   controller: title,
-                  decoration: const InputDecoration(
-                      labelText: 'Title', border: OutlineInputBorder()),
+                  decoration: InputDecoration(
+                      labelText: dctx.tr('Title'),
+                      border: const OutlineInputBorder()),
                 ),
                 const SizedBox(height: AppTokens.s12),
                 TextField(
                   controller: content,
                   minLines: 3,
                   maxLines: 8,
-                  decoration: const InputDecoration(
-                      labelText: 'Content (prompt to run)',
+                  decoration: InputDecoration(
+                      labelText: dctx.tr('Content (prompt to run)'),
                       alignLabelWithHint: true,
-                      border: OutlineInputBorder()),
+                      border: const OutlineInputBorder()),
                 ),
                 const SizedBox(height: AppTokens.s12),
                 DropdownButtonFormField<String>(
                   initialValue: status,
-                  decoration: const InputDecoration(
-                      labelText: 'Status', border: OutlineInputBorder()),
+                  decoration: InputDecoration(
+                      labelText: dctx.tr('Status'),
+                      border: const OutlineInputBorder()),
                   items: [
                     for (final s in _editStatuses)
                       DropdownMenuItem(value: s, child: Text(s)),
@@ -1079,10 +1091,10 @@ class _CoworkTasksDialog extends ConsumerWidget {
           actions: [
             TextButton(
                 onPressed: () => Navigator.of(dctx).pop(false),
-                child: const Text('Cancel')),
+                child: Text(dctx.tr('Cancel'))),
             FilledButton(
                 onPressed: () => Navigator.of(dctx).pop(true),
-                child: const Text('Save')),
+                child: Text(dctx.tr('Save'))),
           ],
         ),
       ),
@@ -1101,7 +1113,7 @@ class _CoworkTasksDialog extends ConsumerWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (dctx) => AlertDialog(
-        title: const Text('New task'),
+        title: Text(dctx.tr('New task')),
         content: SizedBox(
           width: 460,
           child: Column(
@@ -1111,18 +1123,19 @@ class _CoworkTasksDialog extends ConsumerWidget {
               TextField(
                 controller: title,
                 autofocus: true,
-                decoration: const InputDecoration(
-                    labelText: 'Title', border: OutlineInputBorder()),
+                decoration: InputDecoration(
+                    labelText: dctx.tr('Title'),
+                    border: const OutlineInputBorder()),
               ),
               const SizedBox(height: AppTokens.s12),
               TextField(
                 controller: content,
                 minLines: 4,
                 maxLines: 10,
-                decoration: const InputDecoration(
-                    labelText: 'Content (prompt to run)',
+                decoration: InputDecoration(
+                    labelText: dctx.tr('Content (prompt to run)'),
                     alignLabelWithHint: true,
-                    border: OutlineInputBorder()),
+                    border: const OutlineInputBorder()),
               ),
             ],
           ),
@@ -1130,10 +1143,10 @@ class _CoworkTasksDialog extends ConsumerWidget {
         actions: [
           TextButton(
               onPressed: () => Navigator.of(dctx).pop(false),
-              child: const Text('Cancel')),
+              child: Text(dctx.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.of(dctx).pop(true),
-              child: const Text('Create')),
+              child: Text(dctx.tr('Create'))),
         ],
       ),
     );
@@ -1166,17 +1179,17 @@ class _CoworkTasksDialog extends ConsumerWidget {
                 children: [
                   Icon(Icons.view_kanban_outlined, size: 18, color: c.accent),
                   const SizedBox(width: AppTokens.s8),
-                  Text('Team tasks',
+                  Text(context.tr('Team tasks'),
                       style: TextStyle(
                           color: c.textPrimary, fontWeight: FontWeight.w700)),
                   const Spacer(),
                   TextButton.icon(
                     onPressed: () => _newTask(context, ref),
                     icon: const Icon(Icons.add, size: 16),
-                    label: const Text('New task'),
+                    label: Text(context.tr('New task')),
                   ),
                   IconButton(
-                    tooltip: 'Reload',
+                    tooltip: context.tr('Reload'),
                     icon: const Icon(Icons.refresh, size: 16),
                     onPressed: () =>
                         ref.invalidate(teamTasksProvider(teamId)),
@@ -1199,7 +1212,7 @@ class _CoworkTasksDialog extends ConsumerWidget {
                 data: (list) {
                   if (list.isEmpty) {
                     return Center(
-                      child: Text('No tasks yet',
+                      child: Text(context.tr('No tasks yet'),
                           style: TextStyle(color: c.textMuted, fontSize: 12)),
                     );
                   }
@@ -1224,7 +1237,8 @@ class _CoworkTasksDialog extends ConsumerWidget {
                                           color: color,
                                           shape: BoxShape.circle)),
                                   const SizedBox(width: AppTokens.s8),
-                                  Text('$label · ${group.length}',
+                                  Text(
+                                      '${context.tr(label)} · ${group.length}',
                                       style: TextStyle(
                                           color: c.textMuted,
                                           fontSize: 11,
@@ -1259,7 +1273,7 @@ class _CoworkTasksDialog extends ConsumerWidget {
                                         children: [
                                           Text(
                                               t.title.trim().isEmpty
-                                                  ? '(untitled)'
+                                                  ? context.tr('(untitled)')
                                                   : t.title,
                                               style: TextStyle(
                                                   color: t.title.trim().isEmpty
@@ -1297,7 +1311,7 @@ class _CoworkTasksDialog extends ConsumerWidget {
                                       ),
                                     ),
                                     IconButton(
-                                      tooltip: 'Edit',
+                                      tooltip: context.tr('Edit'),
                                       visualDensity: VisualDensity.compact,
                                       icon: const Icon(Icons.edit_outlined,
                                           size: 16),
@@ -1308,7 +1322,7 @@ class _CoworkTasksDialog extends ConsumerWidget {
                                         key == 'todo' ||
                                         key == 'review')
                                       IconButton(
-                                        tooltip: 'Stop',
+                                        tooltip: context.tr('Stop'),
                                         visualDensity: VisualDensity.compact,
                                         icon: const Icon(Icons.stop_circle_outlined,
                                             size: 16),
@@ -1316,7 +1330,7 @@ class _CoworkTasksDialog extends ConsumerWidget {
                                             ref, t.id, {'status': 'blocked'}),
                                       ),
                                     IconButton(
-                                      tooltip: 'Delete',
+                                      tooltip: context.tr('Delete'),
                                       visualDensity: VisualDensity.compact,
                                       icon: const Icon(Icons.delete_outline,
                                           size: 16, color: AppTokens.danger),
@@ -1400,12 +1414,12 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
       if (mounted) {
         setState(() => _memDirty = false);
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Memory saved')));
+            SnackBar(content: Text(context.tr('Memory saved'))));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Save failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('${context.tr('Save failed')}: $e')));
       }
     } finally {
       if (mounted) setState(() => _savingMem = false);
@@ -1419,7 +1433,7 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
           children: [
             SizedBox(
                 width: 110,
-                child: Text(k,
+                child: Text(context.tr(k),
                     style: TextStyle(color: labelColor, fontSize: 12))),
             Expanded(
                 child: SelectableText(v,
@@ -1449,7 +1463,7 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
                   Icon(Icons.info_outline, size: 18, color: c.accent),
                   const SizedBox(width: AppTokens.s8),
                   Expanded(
-                    child: Text('Chat info',
+                    child: Text(context.tr('Chat info'),
                         style: TextStyle(
                             color: c.textPrimary,
                             fontWeight: FontWeight.w700)),
@@ -1470,13 +1484,16 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
                   _row('Name', widget.title, c.textMuted),
                   _row('Agent', _folder?.isEmpty ?? true ? '—' : _folder!,
                       c.textMuted),
-                  _row('Model',
-                      (_modelId?.isEmpty ?? true) ? 'Active default' : _modelId!,
+                  _row(
+                      'Model',
+                      (_modelId?.isEmpty ?? true)
+                          ? context.tr('Active default')
+                          : _modelId!,
                       c.textMuted),
                   _row('JID', widget.jid, c.textMuted),
                   const SizedBox(height: AppTokens.s16),
                   // Context length.
-                  Text('CONTEXT LENGTH',
+                  Text(context.tr('CONTEXT LENGTH'),
                       style: TextStyle(
                           color: c.textMuted,
                           fontSize: 11,
@@ -1497,12 +1514,22 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
                     ),
                     const SizedBox(height: AppTokens.s8),
                     Text(
-                        '${u.useTokens} / ${u.maxTokens} tokens '
-                        '(${(u.pct * 100).round()}%) · ${u.remaining} left'
-                        '${u.promptTokens > 0 ? ' · prompt ${u.promptTokens}' : ''}',
+                        context.trArgs(
+                            '{use} / {max} tokens ({pct}%) · {remaining} left{promptPart}',
+                            {
+                              'use': u.useTokens,
+                              'max': u.maxTokens,
+                              'pct': (u.pct * 100).round(),
+                              'remaining': u.remaining,
+                              'promptPart': u.promptTokens > 0
+                                  ? context.trArgs(' · prompt {p}',
+                                      {'p': u.promptTokens})
+                                  : '',
+                            },
+                        ),
                         style: TextStyle(color: c.textSecondary, fontSize: 12)),
                   ] else
-                    Text('No usage reported yet (send a message).',
+                    Text(context.tr('No usage reported yet (send a message).'),
                         style: TextStyle(color: c.textMuted, fontSize: 12)),
                   const SizedBox(height: AppTokens.s12),
                   Align(
@@ -1514,21 +1541,22 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
                             .post('/api/groups/${widget.jid}/compact');
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                                content: Text('Compacting context…')),
+                            SnackBar(
+                                content:
+                                    Text(context.tr('Compacting context…'))),
                           );
                           Navigator.of(context).pop();
                         }
                       },
                       icon: const Icon(Icons.compress, size: 16),
-                      label: const Text('Compact context'),
+                      label: Text(context.tr('Compact context')),
                     ),
                   ),
                   const SizedBox(height: AppTokens.s20),
                   // Memory context — editable MEMORY.md for this session's agent.
                   Row(
                     children: [
-                      Text('MEMORY CONTEXT (MEMORY.md)',
+                      Text(context.tr('MEMORY CONTEXT (MEMORY.md)'),
                           style: TextStyle(
                               color: c.textMuted,
                               fontSize: 11,
@@ -1539,7 +1567,7 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
                         TextButton.icon(
                           onPressed: _saveMemory,
                           icon: const Icon(Icons.save_outlined, size: 14),
-                          label: const Text('Save'),
+                          label: Text(context.tr('Save')),
                           style: TextButton.styleFrom(
                               visualDensity: VisualDensity.compact),
                         ),
@@ -1558,7 +1586,7 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
                   if (_loadingMem)
                     const Center(child: CircularProgressIndicator())
                   else if (_folder == null || _folder!.isEmpty)
-                    Text('No agent folder bound to this chat.',
+                    Text(context.tr('No agent folder bound to this chat.'),
                         style: TextStyle(color: c.textMuted, fontSize: 12))
                   else
                     TextField(
@@ -1574,8 +1602,8 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
                           height: 1.5,
                           fontFamily: AppTokens.fontMono),
                       decoration: InputDecoration(
-                        hintText: 'No memory yet — type to add notes the '
-                            'agent should remember…',
+                        hintText: context.tr('No memory yet — type to add '
+                            'notes the agent should remember…'),
                         hintStyle:
                             TextStyle(color: c.textMuted, fontSize: 12),
                         filled: true,
@@ -1595,7 +1623,7 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
                     ),
                   const SizedBox(height: AppTokens.s20),
                   // Danger zone — wipe this session's entire chat history.
-                  Text('DANGER ZONE',
+                  Text(context.tr('DANGER ZONE'),
                       style: TextStyle(
                           color: c.textMuted,
                           fontSize: 11,
@@ -1611,13 +1639,14 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
                       ),
                       onPressed: _clearAllMessages,
                       icon: const Icon(Icons.delete_sweep_outlined, size: 16),
-                      label: const Text('Clear all messages'),
+                      label: Text(context.tr('Clear all messages')),
                     ),
                   ),
                   const SizedBox(height: AppTokens.s4),
                   Text(
-                      'Stops the agent and permanently deletes every message, '
-                      'tool log, and chat event of this session.',
+                      context.tr('Stops the agent and permanently deletes '
+                          'every message, tool log, and chat event of this '
+                          'session.'),
                       style: TextStyle(color: c.textMuted, fontSize: 11)),
                 ],
               ),
@@ -1636,19 +1665,19 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Clear all messages?'),
-        content: const Text(
-            'This stops the agent and permanently deletes the entire chat '
-            'history of this session. This cannot be undone.'),
+        title: Text(ctx.tr('Clear all messages?')),
+        content: Text(ctx.tr('This stops the agent and permanently deletes '
+            'the entire chat history of this session. This cannot be '
+            'undone.')),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
+            child: Text(ctx.tr('Cancel')),
           ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: AppTokens.danger),
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Delete'),
+            child: Text(ctx.tr('Delete')),
           ),
         ],
       ),
@@ -1662,7 +1691,7 @@ class _ChatInfoDialogState extends ConsumerState<_ChatInfoDialog> {
     ref.read(conversationProvider(widget.jid).notifier).clearLocal();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Chat history deleted')),
+        SnackBar(content: Text(context.tr('Chat history deleted'))),
       );
       Navigator.of(context).pop();
     }
@@ -1676,10 +1705,12 @@ class _KindBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    // 'Cowork' is a brand name and is never translated; 'Schedule' / 'Code'
+    // are plain UI labels.
     final (label, color, icon) = switch (kind) {
       'cowork' => ('Cowork', c.accent, Icons.groups_outlined),
-      'schedule' => ('Schedule', AppTokens.warning, Icons.schedule),
-      _ => ('Code', AppTokens.cyan, Icons.code),
+      'schedule' => (context.tr('Schedule'), AppTokens.warning, Icons.schedule),
+      _ => (context.tr('Code'), AppTokens.cyan, Icons.code),
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: AppTokens.s8, vertical: 3),
@@ -1729,14 +1760,14 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
           .post('/api/space/schedules/${widget.scheduleId}/run-now');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Queued to run now')));
+            SnackBar(content: Text(context.tr('Queued to run now'))));
         Navigator.of(context).pop();
       }
     } catch (e) {
       if (mounted) {
         setState(() => _running = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Run failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('${context.tr('Run failed')}: $e')));
       }
     }
   }
@@ -1802,7 +1833,7 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
                   Icon(Icons.event_repeat_outlined,
                       size: 18, color: c.accent),
                   const SizedBox(width: AppTokens.s8),
-                  Text('Schedule',
+                  Text(context.tr('Schedule'),
                       style: TextStyle(
                           color: c.textPrimary, fontWeight: FontWeight.w700)),
                   const Spacer(),
@@ -1816,17 +1847,17 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
                               child:
                                   CircularProgressIndicator(strokeWidth: 2))
                           : const Icon(Icons.play_arrow_rounded, size: 18),
-                      label: const Text('Run now'),
+                      label: Text(context.tr('Run now')),
                     ),
                   const SizedBox(width: AppTokens.s8),
                   if (_data != null)
                     TextButton.icon(
                       onPressed: _edit,
                       icon: const Icon(Icons.edit_outlined, size: 16),
-                      label: const Text('Edit'),
+                      label: Text(context.tr('Edit')),
                     ),
                   IconButton(
-                    tooltip: 'Reload',
+                    tooltip: context.tr('Reload'),
                     icon: const Icon(Icons.refresh, size: 16),
                     onPressed: _load,
                   ),
@@ -1850,7 +1881,7 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
                           padding: const EdgeInsets.all(AppTokens.s16),
                           children: [
                             // Prompt in its own box (it's usually multi-line).
-                            Text('PROMPT',
+                            Text(context.tr('PROMPT'),
                                 style: TextStyle(
                                     color: c.textMuted,
                                     fontSize: 11,
@@ -1897,7 +1928,7 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
                             if (_s('last_run').isNotEmpty)
                               _kv(c, 'Last run', _localTs('last_run')),
                             const SizedBox(height: AppTokens.s16),
-                            Text('HISTORY',
+                            Text(context.tr('HISTORY'),
                                 style: TextStyle(
                                     color: c.textMuted,
                                     fontSize: 11,
@@ -1905,7 +1936,7 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
                                     letterSpacing: 0.5)),
                             const SizedBox(height: AppTokens.s8),
                             if (runs.isEmpty)
-                              Text('No runs yet',
+                              Text(context.tr('No runs yet'),
                                   style: TextStyle(
                                       color: c.textMuted, fontSize: 12))
                             else
@@ -1952,7 +1983,7 @@ class _ScheduleInfoDialogState extends ConsumerState<_ScheduleInfoDialog> {
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           SizedBox(
               width: 90,
-              child: Text(k,
+              child: Text(context.tr(k),
                   style: TextStyle(color: c.textMuted, fontSize: 12))),
           Expanded(
               child: SelectableText(v.isEmpty ? '—' : v,

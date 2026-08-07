@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../core/transport/ws_client.dart';
 import '../../theme/tokens.dart';
@@ -39,24 +40,30 @@ class NotificationsNotifier extends StateNotifier<List<AppNotification>> {
     // Replay snapshots carry the persisted read state — honor it so items the
     // user already marked read don't come back as unread after a restart.
     final wasRead = e['read'] == true;
+    // Titles/details land in the bell list, so the fallbacks are localized
+    // (the frame's `type`/`kind` values themselves stay literal).
     switch (e['type']) {
       case 'notification':
         _add(
           '${e['id'] ?? 'n${_seq++}'}',
-          '${e['title'] ?? e['kind'] ?? 'Notification'}',
+          '${e['title'] ?? e['kind'] ?? L10n.global.t('Notification')}',
           '${e['message'] ?? e['text'] ?? ''}',
           rawId: e['id']?.toString(),
           read: wasRead,
         );
       case 'space:event:reminder':
-        _add('rem-${e['id'] ?? _seq++}', '⏰ ${e['title'] ?? 'Reminder'}',
-            'Calendar reminder',
+        _add(
+            'rem-${e['id'] ?? _seq++}',
+            '⏰ ${e['title'] ?? L10n.global.t('Reminder')}',
+            L10n.global.t('Calendar reminder'),
             rawId: e['id']?.toString(),
             read: wasRead,
             target: _reminderTarget(e));
       case 'space:event:pending':
-        _add('pend-${e['id'] ?? _seq++}', '📅 ${e['title'] ?? 'Upcoming'}',
-            'Scheduled',
+        _add(
+            'pend-${e['id'] ?? _seq++}',
+            '📅 ${e['title'] ?? L10n.global.t('Upcoming')}',
+            L10n.global.t('Scheduled'),
             rawId: e['id']?.toString(),
             read: wasRead,
             target: _reminderTarget(e, kind: 'pending'));
@@ -66,7 +73,7 @@ class NotificationsNotifier extends StateNotifier<List<AppNotification>> {
   /// Build the interactive-reminder context from a `space:event:*` frame.
   ReminderTarget _reminderTarget(WsEvent e, {String? kind}) => ReminderTarget(
         eventId: e['eventId']?.toString(),
-        title: '${e['title'] ?? 'Reminder'}',
+        title: '${e['title'] ?? L10n.global.t('Reminder')}',
         startAtMs: (e['startAt'] as num?)?.toInt(),
         kind: kind ?? '${e['kind'] ?? 'reminder'}',
         notificationId: e['id']?.toString(),
@@ -144,7 +151,7 @@ class NotificationsBell extends ConsumerWidget {
     final unread = items.where((n) => !n.read).length;
 
     return PopupMenuButton<String>(
-      tooltip: 'Notifications',
+      tooltip: context.tr('Notifications'),
       offset: const Offset(0, 32),
       icon: Badge(
         isLabelVisible: unread > 0,
@@ -179,7 +186,7 @@ class NotificationsBell extends ConsumerWidget {
           return [
             PopupMenuItem(
               enabled: false,
-              child: Text('No notifications',
+              child: Text(context.tr('No notifications'),
                   style: TextStyle(color: c.textMuted)),
             ),
           ];
@@ -234,7 +241,7 @@ class NotificationsBell extends ConsumerWidget {
             child: Row(children: [
               Icon(Icons.clear_all, size: 16, color: c.textSecondary),
               const SizedBox(width: AppTokens.s8),
-              const Text('Clear all'),
+              Text(context.tr('Clear all')),
             ]),
           ),
         ];

@@ -15,7 +15,8 @@ import {
 } from 'antd';
 import {
   AppstoreOutlined, CloudDownloadOutlined, DeleteOutlined, InfoCircleOutlined,
-  LinkOutlined, SafetyCertificateOutlined, SyncOutlined, UploadOutlined,
+  LinkOutlined, PlayCircleOutlined, PoweroffOutlined, SafetyCertificateOutlined,
+  SyncOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import { SpaceAppDetailModal, type DetailApp } from '../space/SpaceAppDetailModal';
 import ScanReportDialog, { readScanError, type ScanReport } from '../security/ScanReportDialog';
@@ -57,7 +58,27 @@ export const SpaceAppsSettings: React.FC = () => {
   const [checking, setChecking] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [sandboxApp, setSandboxApp] = useState<{ id: string; name: string } | null>(null);
+  const [lifecycleBusy, setLifecycleBusy] = useState<string | null>(null);
   const [form] = Form.useForm();
+
+  // Stop / start an app's server process by hand. Stopping a session app just
+  // does early what the idle timer would do; stopping a background one is an
+  // override the supervisor honours until it is started again.
+  const setRunning = async (id: string, run: boolean) => {
+    setLifecycleBusy(id);
+    try {
+      const r = await fetch(`/api/space/apps/${encodeURIComponent(id)}/${run ? 'start' : 'stop'}`, {
+        method: 'POST',
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body?.error ?? `HTTP ${r.status}`);
+      message.success(body?.note ?? (run ? 'Started' : 'Stopped'));
+    } catch (e: any) {
+      message.error(e?.message ?? 'Failed');
+    } finally {
+      setLifecycleBusy(null);
+    }
+  };
 
   const loadApps = async () => {
     setLoading(true);
@@ -254,6 +275,11 @@ export const SpaceAppsSettings: React.FC = () => {
                   <AppstoreOutlined />
                   <span>{manifest.name ?? app.id}</span>
                   <Tag>{app.id}</Tag>
+                  {manifest.runtime?.kind === 'server' && (
+                    <Tag color={manifest.runtime?.mode === 'background' ? 'volcano' : 'default'}>
+                      {manifest.runtime?.mode === 'background' ? 'always on' : 'on demand'}
+                    </Tag>
+                  )}
                   {manifest.install?.type === 'zip' && <Tag color="green">ZIP</Tag>}
                   {upd?.hasUpdate && (
                     <Tag color="orange">
@@ -310,6 +336,26 @@ export const SpaceAppsSettings: React.FC = () => {
                 >
                   Sandbox
                 </Button>
+                {manifest.runtime?.kind === 'server' && (
+                  <>
+                    <Button
+                      size="small"
+                      icon={<PlayCircleOutlined />}
+                      loading={lifecycleBusy === app.id}
+                      onClick={() => setRunning(app.id, true)}
+                    >
+                      Start
+                    </Button>
+                    <Button
+                      size="small"
+                      icon={<PoweroffOutlined />}
+                      loading={lifecycleBusy === app.id}
+                      onClick={() => setRunning(app.id, false)}
+                    >
+                      Stop
+                    </Button>
+                  </>
+                )}
               </Space>
             </Card>
           );

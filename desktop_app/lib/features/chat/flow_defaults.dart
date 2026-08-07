@@ -32,13 +32,17 @@ class ChatLinkFlow {
   static Future<String?> Function(String route)? openInternal;
 
   /// Warm the cache. Cheap and idempotent; re-fetches only when [force].
-  static Future<void> prefetch(String httpBase, {bool force = false}) async {
+  static Future<void> prefetch(
+    String httpBase, {
+    bool force = false,
+    Map<String, String> authHeaders = const {},
+  }) async {
     _httpBase = httpBase;
     if (_fetched && !force) return;
     _fetched = true;
     try {
       final res = await http
-          .get(Uri.parse('$httpBase/api/defaults'))
+          .get(Uri.parse('$httpBase/api/defaults'), headers: authHeaders)
           .timeout(const Duration(seconds: 4));
       if (res.statusCode != 200) return;
       final body = jsonDecode(res.body);

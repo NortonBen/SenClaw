@@ -5,6 +5,7 @@
   "icon": "🏢",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./ai-office",
     "healthPath": "/api/status",
     "port": 4420

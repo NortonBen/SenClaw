@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/workflow_models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_markdown.dart';
@@ -78,13 +79,13 @@ Future<void> showRenameRunDialog(
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: const Text('Rename run'),
+      title: Text(ctx.tr('Rename run')),
       content: TextField(
         controller: ctrl,
         autofocus: true,
         decoration: InputDecoration(
           hintText: r.id,
-          helperText: 'Empty resets back to the run id.',
+          helperText: ctx.tr('Empty resets back to the run id.'),
           border: const OutlineInputBorder(),
           isDense: true,
         ),
@@ -93,10 +94,10 @@ Future<void> showRenameRunDialog(
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel')),
+            child: Text(ctx.tr('Cancel'))),
         FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Save')),
+            child: Text(ctx.tr('Save'))),
       ],
     ),
   );
@@ -105,8 +106,8 @@ Future<void> showRenameRunDialog(
     await renameWorkflowRun(ref, r.id, ctrl.text);
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Rename failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.trArgs('Rename failed: {e}', {'e': e}))));
     }
   }
 }
@@ -117,17 +118,17 @@ Future<bool> showDeleteRunDialog(
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: Text('Delete run "${r.title}"?'),
-      content:
-          const Text('Only the history record is removed — workspace files are kept.'),
+      title: Text(ctx.trArgs('Delete run "{title}"?', {'title': r.title})),
+      content: Text(ctx.tr(
+          'Only the history record is removed — workspace files are kept.')),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel')),
+            child: Text(ctx.tr('Cancel'))),
         FilledButton(
           style: FilledButton.styleFrom(backgroundColor: AppTokens.danger),
           onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Delete'),
+          child: Text(ctx.tr('Delete')),
         ),
       ],
     ),
@@ -138,8 +139,8 @@ Future<bool> showDeleteRunDialog(
     return true;
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(context.trArgs('Delete failed: {e}', {'e': e}))));
     }
     return false;
   }
@@ -181,9 +182,9 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
   Future<void> _cancel(String id) async {
     try {
       await cancelWorkflowRun(ref, id);
-      _snack('Cancel requested: $id');
+      _snack(L10n.global.tArgs('Cancel requested: {id}', {'id': id}));
     } catch (e) {
-      _snack('Cancel failed: $e');
+      _snack(L10n.global.tArgs('Cancel failed: {e}', {'e': e}));
     }
   }
 
@@ -197,7 +198,8 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
       }
     }
     if (def == null) {
-      _snack('Definition "${r.workflowName}" no longer exists');
+      _snack(context.trArgs(
+          'Definition "{name}" no longer exists', {'name': r.workflowName}));
       return;
     }
     showWorkflowRunDialog(context, ref, def, preset: r.inputs, onStarted: (id) {
@@ -257,7 +259,7 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
                   child: Row(
                     children: [
                       IconButton(
-                        tooltip: 'Workflow templates',
+                        tooltip: context.tr('Workflow templates'),
                         icon: const Icon(Icons.arrow_back_rounded, size: 18),
                         onPressed: () {
                           ref.read(pluginsSectionProvider.notifier).state =
@@ -265,14 +267,14 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
                           context.go('/plugins');
                         },
                       ),
-                      Text('Workflow runs',
+                      Text(context.tr('Workflow runs'),
                           style: TextStyle(
                               color: c.textPrimary,
                               fontSize: 15,
                               fontWeight: FontWeight.w700)),
                       const Spacer(),
                       PopupMenuButton<String>(
-                        tooltip: 'Group & sort',
+                        tooltip: context.tr('Group & sort'),
                         icon: Icon(Icons.filter_list_rounded,
                             size: 18, color: c.textSecondary),
                         onSelected: (v) => setState(() {
@@ -286,39 +288,43 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
                           }
                         }),
                         itemBuilder: (ctx) => [
-                          const PopupMenuItem(
-                              enabled: false, height: 28, child: Text('Group by')),
+                          PopupMenuItem(
+                              enabled: false,
+                              height: 28,
+                              child: Text(ctx.tr('Group by'))),
                           CheckedPopupMenuItem(
                               value: 'g-date',
                               checked: _group == _RunGroup.date,
-                              child: const Text('Date')),
+                              child: Text(ctx.tr('Date'))),
                           CheckedPopupMenuItem(
                               value: 'g-wf',
                               checked: _group == _RunGroup.workflow,
-                              child: const Text('Workflow')),
+                              child: Text(ctx.tr('Workflow'))),
                           CheckedPopupMenuItem(
                               value: 'g-none',
                               checked: _group == _RunGroup.none,
-                              child: const Text('No grouping')),
+                              child: Text(ctx.tr('No grouping'))),
                           const PopupMenuDivider(),
-                          const PopupMenuItem(
-                              enabled: false, height: 28, child: Text('Sort by')),
+                          PopupMenuItem(
+                              enabled: false,
+                              height: 28,
+                              child: Text(ctx.tr('Sort by'))),
                           CheckedPopupMenuItem(
                               value: 's-recent',
                               checked: _sort == _RunSort.recent,
-                              child: const Text('Recent activity')),
+                              child: Text(ctx.tr('Recent activity'))),
                           CheckedPopupMenuItem(
                               value: 's-created',
                               checked: _sort == _RunSort.created,
-                              child: const Text('Created')),
+                              child: Text(ctx.tr('Created'))),
                           CheckedPopupMenuItem(
                               value: 's-name',
                               checked: _sort == _RunSort.name,
-                              child: const Text('Name A–Z')),
+                              child: Text(ctx.tr('Name A–Z'))),
                         ],
                       ),
                       IconButton(
-                        tooltip: 'Refresh',
+                        tooltip: context.tr('Refresh'),
                         icon: const Icon(Icons.refresh_rounded, size: 18),
                         onPressed: () => ref.invalidate(workflowRunsProvider),
                       ),
@@ -330,11 +336,12 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
                     loading: () =>
                         const Center(child: CircularProgressIndicator()),
                     error: (e, _) => Center(
-                        child: Text('Cannot load runs: $e',
+                        child: Text(
+                            context.trArgs('Cannot load runs: {e}', {'e': e}),
                             style: TextStyle(color: c.textSecondary))),
                     data: (_) => all.isEmpty
                         ? Center(
-                            child: Text('No runs yet',
+                            child: Text(context.tr('No runs yet'),
                                 style: TextStyle(
                                     color: c.textSecondary, fontSize: 12)))
                         : ListView(
@@ -346,7 +353,8 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
                                     padding: const EdgeInsets.fromLTRB(
                                         AppTokens.s4, AppTokens.s8,
                                         AppTokens.s4, AppTokens.s4),
-                                    child: Text(e.key.toUpperCase(),
+                                    child: Text(
+                                        context.tr(e.key).toUpperCase(),
                                         style: TextStyle(
                                           color: c.textMuted,
                                           fontSize: 10,
@@ -364,8 +372,8 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
                                   child: OutlinedButton(
                                     onPressed: () => setState(
                                         () => _limit += _pageSize),
-                                    child: Text(
-                                        'Show more (${all.length - _limit})'),
+                                    child: Text(context.trArgs('Show more ({n})',
+                                        {'n': all.length - _limit})),
                                   ),
                                 ),
                             ],
@@ -381,7 +389,7 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
         Expanded(
           child: selected == null
               ? Center(
-                  child: Text('Select a run to see its details',
+                  child: Text(context.tr('Select a run to see its details'),
                       style: TextStyle(color: c.textSecondary)))
               : WorkflowRunDetail(
                   run: selected,
@@ -422,7 +430,8 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
                               fontSize: 12.5,
                               fontWeight: FontWeight.w600)),
                     ),
-                    _chip(c, r.status, color: _runStatusColor(r.status, c)),
+                    _chip(c, context.tr(r.status),
+                        color: _runStatusColor(r.status, c)),
                   ]),
                   const SizedBox(height: 2),
                   Row(children: [
@@ -459,11 +468,12 @@ class _WorkflowRunsScreenState extends ConsumerState<WorkflowRunsScreen> {
                 }
               },
               itemBuilder: (ctx) => [
-                const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                PopupMenuItem(value: 'rename', child: Text(ctx.tr('Rename'))),
                 if (r.isActive)
-                  const PopupMenuItem(value: 'cancel', child: Text('Cancel run'))
+                  PopupMenuItem(
+                      value: 'cancel', child: Text(ctx.tr('Cancel run')))
                 else
-                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  PopupMenuItem(value: 'delete', child: Text(ctx.tr('Delete'))),
               ],
             ),
           ],
@@ -509,27 +519,33 @@ class WorkflowRunDetail extends ConsumerWidget {
       BuildContext context, String fileName, String content) async {
     if (kIsWeb) {
       await Clipboard.setData(ClipboardData(text: content));
-      if (context.mounted) _snack(context, 'Copied to clipboard');
+      if (context.mounted) _snack(context, context.tr('Copied to clipboard'));
       return;
     }
     final path = await FilePicker.platform.saveFile(
-      dialogTitle: 'Save markdown',
+      dialogTitle: L10n.global.t('Save markdown'),
       fileName: fileName,
       type: FileType.custom,
       allowedExtensions: ['md'],
     );
     if (path == null) return;
     await File(path).writeAsString(content);
-    if (context.mounted) _snack(context, 'Saved to $path');
+    if (context.mounted) {
+      _snack(context, context.trArgs('Saved to {path}', {'path': path}));
+    }
   }
 
   Future<void> _wiki(BuildContext context, WidgetRef ref, String path,
       String content) async {
     try {
       await saveRunToWiki(ref, path, content);
-      if (context.mounted) _snack(context, 'Saved to wiki: $path');
+      if (context.mounted) {
+        _snack(context, context.trArgs('Saved to wiki: {path}', {'path': path}));
+      }
     } catch (e) {
-      if (context.mounted) _snack(context, 'Wiki save failed: $e');
+      if (context.mounted) {
+        _snack(context, context.trArgs('Wiki save failed: {e}', {'e': e}));
+      }
     }
   }
 
@@ -562,15 +578,16 @@ class WorkflowRunDetail extends ConsumerWidget {
                 ],
               ),
             ),
-            _chip(c, run.status, color: _runStatusColor(run.status, c)),
+            _chip(c, context.tr(run.status),
+                color: _runStatusColor(run.status, c)),
             const SizedBox(width: AppTokens.s6),
             IconButton(
-              tooltip: 'Rename',
+              tooltip: context.tr('Rename'),
               icon: Icon(Icons.edit_outlined, size: 17, color: c.textSecondary),
               onPressed: () => showRenameRunDialog(context, ref, run),
             ),
             IconButton(
-              tooltip: 'Download full result (.md)',
+              tooltip: context.tr('Download full result (.md)'),
               icon: Icon(Icons.download_outlined,
                   size: 17, color: c.textSecondary),
               onPressed: () => _download(
@@ -578,14 +595,16 @@ class WorkflowRunDetail extends ConsumerWidget {
                   run.toMarkdown()),
             ),
             IconButton(
-              tooltip: 'Save full result to wiki',
+              tooltip: context.tr('Save full result to wiki'),
               icon: Icon(Icons.menu_book_outlined,
                   size: 17, color: c.textSecondary),
               onPressed: () => _wiki(context, ref,
                   'workflows/$wfSeg/$runSeg.md', run.toMarkdown()),
             ),
             IconButton(
-              tooltip: run.isActive ? 'Cancel the run before deleting' : 'Delete run',
+              tooltip: run.isActive
+                  ? context.tr('Cancel the run before deleting')
+                  : context.tr('Delete run'),
               icon: Icon(Icons.delete_outline,
                   size: 17,
                   color: run.isActive ? c.textMuted : AppTokens.danger),
@@ -602,7 +621,7 @@ class WorkflowRunDetail extends ConsumerWidget {
               OutlinedButton.icon(
                 onPressed: onCancel,
                 icon: const Icon(Icons.stop_circle_outlined, size: 16),
-                label: const Text('Cancel'),
+                label: Text(context.tr('Cancel')),
                 style: OutlinedButton.styleFrom(
                     foregroundColor: AppTokens.danger),
               )
@@ -610,7 +629,7 @@ class WorkflowRunDetail extends ConsumerWidget {
               OutlinedButton.icon(
                 onPressed: onRerun,
                 icon: const Icon(Icons.replay_rounded, size: 16),
-                label: const Text('Re-run'),
+                label: Text(context.tr('Re-run')),
               ),
           ]),
           const SizedBox(height: AppTokens.s12),
@@ -626,12 +645,12 @@ class WorkflowRunDetail extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _infoRow(c, 'Workflow', run.workflowName),
-                _infoRow(c, 'Trigger', run.trigger ?? '—'),
-                _infoRow(c, 'Started', _fmtTime(run.createdAt)),
+                _infoRow(c, context.tr('Workflow'), run.workflowName),
+                _infoRow(c, context.tr('Trigger'), run.trigger ?? '—'),
+                _infoRow(c, context.tr('Started'), _fmtTime(run.createdAt)),
                 _infoRow(
                     c,
-                    'Finished',
+                    context.tr('Finished'),
                     run.completedAt == null
                         ? '—'
                         : '${_fmtTime(run.completedAt)} (${_fmtDuration(run.createdAt, run.completedAt)})'),
@@ -654,7 +673,7 @@ class WorkflowRunDetail extends ConsumerWidget {
           ),
           const SizedBox(height: AppTokens.s16),
 
-          Text('Steps (${run.steps.length})',
+          Text(context.trArgs('Steps ({n})', {'n': run.steps.length}),
               style: TextStyle(
                   color: c.textPrimary,
                   fontSize: 14,
@@ -734,7 +753,8 @@ class _StepCardState extends State<_StepCard> {
                 size: 16,
                 color: c.textMuted),
             const SizedBox(width: 2),
-            _chip(c, step.status, color: _stepStatusColor(step.status, c)),
+            _chip(c, context.tr(step.status),
+                color: _stepStatusColor(step.status, c)),
             const SizedBox(width: AppTokens.s8),
             Text(step.id,
                 style: TextStyle(
@@ -751,7 +771,7 @@ class _StepCardState extends State<_StepCard> {
             const Spacer(),
             if (onDownload != null)
               IconButton(
-                tooltip: 'Download step result (.md)',
+                tooltip: context.tr('Download step result (.md)'),
                 icon: Icon(Icons.download_outlined,
                     size: 15, color: c.textMuted),
                 visualDensity: VisualDensity.compact,
@@ -759,7 +779,7 @@ class _StepCardState extends State<_StepCard> {
               ),
             if (onWiki != null)
               IconButton(
-                tooltip: 'Save step result to wiki',
+                tooltip: context.tr('Save step result to wiki'),
                 icon: Icon(Icons.menu_book_outlined,
                     size: 15, color: c.textMuted),
                 visualDensity: VisualDensity.compact,
@@ -812,7 +832,9 @@ class _StepCardState extends State<_StepCard> {
               child: ExpansionTile(
                 tilePadding: EdgeInsets.zero,
                 childrenPadding: EdgeInsets.zero,
-                title: Text('Result (${step.result.length} chars)',
+                title: Text(
+                    context.trArgs(
+                        'Result ({n} chars)', {'n': step.result.length}),
                     style: TextStyle(color: c.textSecondary, fontSize: 12)),
                 children: [
                   Container(

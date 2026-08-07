@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../models/chat_message.dart';
 import '../../theme/tokens.dart';
@@ -27,7 +28,9 @@ Future<String> ensureVoiceChat(WidgetRef ref) async {
     'type': 'register:group',
     'jid': kVoiceChatJid,
     'folder': 'voice',
-    'name': 'Trợ lý thoại',
+    // Display name of the chat as it appears in the session list — localized,
+    // unlike the jid/folder next to it.
+    'name': L10n.global.t('Voice assistant'),
     'groupType': 'chat',
     'requiresTrigger': false,
   });
@@ -59,7 +62,9 @@ Future<void> showVoiceChat(BuildContext context, String jid, String title) {
 /// to talk to.
 Future<void> showDefaultVoiceChat(BuildContext context, WidgetRef ref) async {
   final jid = await ensureVoiceChat(ref);
-  if (context.mounted) showVoiceChat(context, jid, 'Trợ lý thoại');
+  if (context.mounted) {
+    showVoiceChat(context, jid, context.tr('Voice assistant'));
+  }
 }
 
 /// Where we are in the conversation loop. Drives the orb colour, icon and
@@ -191,7 +196,7 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
     _gen++;
     await _stopCapture(); // clean slate — cancel any prior amp sub/timer
     if (!await _recorder.hasPermission()) {
-      _snack('Không có quyền truy cập micro');
+      _snack(L10n.global.t('Microphone permission denied'));
       if (mounted) setState(() => _phase = _VoicePhase.idle);
       return;
     }
@@ -204,7 +209,7 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
     try {
       await _recorder.start(const RecordConfig(), path: path);
     } catch (e) {
-      _snack('Không thể bắt đầu ghi âm: $e');
+      _snack(L10n.global.tArgs('Could not start recording: {e}', {'e': e}));
       if (mounted) setState(() => _phase = _VoicePhase.idle);
       return;
     }
@@ -304,7 +309,7 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
       _convo.sendText(text);
     } catch (e) {
       if (gen != _gen || _closing) return;
-      _snack('Nhận dạng giọng nói thất bại: $e');
+      _snack(L10n.global.tArgs('Transcription failed: {e}', {'e': e}));
       _startListening();
     }
   }
@@ -394,30 +399,34 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
   ({Color color, IconData icon, String label}) _phaseStyle() {
     switch (_phase) {
       case _VoicePhase.listening:
-        return (color: AppTokens.brand, icon: Icons.mic, label: 'Đang nghe…');
+        return (
+          color: AppTokens.brand,
+          icon: Icons.mic,
+          label: context.tr('Listening…')
+        );
       case _VoicePhase.transcribing:
         return (
           color: AppTokens.brand,
           icon: Icons.graphic_eq,
-          label: 'Đang nhận dạng…'
+          label: context.tr('Transcribing…')
         );
       case _VoicePhase.thinking:
         return (
           color: AppTokens.warning,
           icon: Icons.more_horiz,
-          label: 'Đang suy nghĩ…'
+          label: context.tr('Thinking…')
         );
       case _VoicePhase.speaking:
         return (
           color: AppTokens.success,
           icon: Icons.volume_up_rounded,
-          label: 'Đang trả lời…'
+          label: context.tr('Speaking…')
         );
       case _VoicePhase.idle:
         return (
           color: AppTokens.brand,
           icon: Icons.mic_none,
-          label: _active ? 'Nhấn để nói' : 'Đã tạm dừng'
+          label: _active ? context.tr('Tap to talk') : context.tr('Paused')
         );
     }
   }
@@ -453,7 +462,8 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
                     const SizedBox(width: AppTokens.s8),
                     Expanded(
                       child: Text(
-                        'Trò chuyện thoại · ${widget.title}',
+                        context.trArgs(
+                            'Voice chat · {title}', {'title': widget.title}),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -464,7 +474,7 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
                       ),
                     ),
                     IconButton(
-                      tooltip: 'Kết thúc',
+                      tooltip: context.tr('End'),
                       icon: const Icon(Icons.close, size: 20),
                       onPressed: () => Navigator.of(context).maybePop(),
                     ),
@@ -508,7 +518,8 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
                       icon: Icon(_active
                           ? Icons.pause_rounded
                           : Icons.play_arrow_rounded),
-                      label: Text(_active ? 'Tạm dừng' : 'Tiếp tục'),
+                      label: Text(
+                          _active ? context.tr('Pause') : context.tr('Resume')),
                     ),
                     const SizedBox(width: AppTokens.s8),
                     TextButton.icon(
@@ -516,7 +527,7 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
                       icon: const Icon(Icons.call_end_rounded),
                       style: TextButton.styleFrom(
                           foregroundColor: AppTokens.danger),
-                      label: const Text('Kết thúc'),
+                      label: Text(context.tr('End')),
                     ),
                   ],
                 ),
@@ -607,7 +618,7 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
   Widget _caption(AppColors c) {
     if (_lastUserText.isEmpty && _lastAgentText.isEmpty) {
       return Text(
-        'Hãy nói để bắt đầu. Trợ lý sẽ trả lời bằng giọng nói.',
+        context.tr('Speak to start. The assistant will answer out loud.'),
         textAlign: TextAlign.center,
         style: TextStyle(color: c.textMuted, fontSize: 13),
       );
@@ -617,10 +628,11 @@ class _VoiceChatDialogState extends ConsumerState<_VoiceChatDialog>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (_lastUserText.isNotEmpty)
-            _bubble(c, 'Bạn', _lastUserText, c.surfaceAlt, c.textPrimary),
+            _bubble(c, context.tr('You'), _lastUserText, c.surfaceAlt,
+                c.textPrimary),
           if (_lastAgentText.isNotEmpty) ...[
             const SizedBox(height: AppTokens.s8),
-            _bubble(c, 'Trợ lý', _lastAgentText,
+            _bubble(c, context.tr('Assistant'), _lastAgentText,
                 c.accent.withValues(alpha: 0.14), c.textPrimary),
           ],
         ],

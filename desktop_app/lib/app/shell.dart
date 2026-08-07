@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:window_manager/window_manager.dart';
 import '../core/config/app_config.dart';
+import '../core/i18n/l10n.dart';
 import '../core/transport/connection.dart';
 import '../core/transport/ws_client.dart';
 import '../core/update/update_provider.dart';
@@ -40,10 +41,11 @@ class AppShell extends ConsumerWidget {
       final messenger = ScaffoldMessenger.maybeOf(context);
       if (messenger == null) return;
       messenger.showSnackBar(SnackBar(
-        content: Text('SenClaw ${next.manifest!.version} is available.'),
+        content: Text(context.trArgs(
+            'SenClaw {v} is available.', {'v': next.manifest!.version})),
         duration: const Duration(seconds: 8),
         action: SnackBarAction(
-          label: 'View',
+          label: context.tr('View'),
           onPressed: () => context.go('/settings'),
         ),
       ));
@@ -157,7 +159,7 @@ class _VersionLabel extends ConsumerWidget {
     if (!hasUpdate) return label;
 
     return Tooltip(
-      message: 'Update available',
+      message: context.tr('Update available'),
       child: InkWell(
         onTap: () => context.go('/settings'),
         child: Padding(
@@ -211,7 +213,7 @@ class _RailItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     return Tooltip(
-      message: section.label,
+      message: context.tr(section.label),
       preferBelow: false,
       child: Padding(
         padding: const EdgeInsets.symmetric(
@@ -252,7 +254,8 @@ class _ConnectionDot extends ConsumerWidget {
       WsStatus.disconnected => (AppTokens.danger, 'Offline'),
     };
     return Tooltip(
-      message: 'Daemon: $label · open Diagnostics',
+      message: context.trArgs(
+          'Daemon: {status} · open Diagnostics', {'status': context.tr(label)}),
       child: InkWell(
         onTap: () => context.go('/diagnostics'),
         customBorder: const CircleBorder(),

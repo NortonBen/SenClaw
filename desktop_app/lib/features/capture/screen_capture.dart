@@ -11,6 +11,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/i18n/l10n.dart';
+
 /// A capture that landed on disk.
 class CaptureResult {
   /// Absolute path on disk — what OCR (which is path-based) would take.
@@ -76,7 +78,8 @@ Future<CaptureResult?> captureScreen({String? dir}) async {
     }
     throw ScreenCaptureFailed(e.message ?? e.code);
   } on MissingPluginException {
-    throw const ScreenCaptureFailed('Capture is not supported on this platform');
+    throw ScreenCaptureFailed(
+        L10n.global.t('Capture is not supported on this platform'));
   }
 }
 

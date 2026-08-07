@@ -5,6 +5,7 @@
   "icon": "📰",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./news",
     "healthPath": "/api/status",
     "port": 4660

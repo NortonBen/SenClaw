@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../core/daemon/daemon_provider.dart';
 import '../../core/daemon/daemon_supervisor.dart';
@@ -38,13 +39,13 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
     final sup = ref.watch(daemonSupervisorProvider);
 
     return SectionScaffold(
-      title: 'Diagnostics',
-      subtitle: 'Daemon supervision & ports',
+      title: context.tr('Diagnostics'),
+      subtitle: context.tr('Daemon supervision & ports'),
       actions: [
         OutlinedButton.icon(
           onPressed: _refreshPorts,
           icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('Refresh'),
+          label: Text(context.tr('Refresh')),
         ),
         const SizedBox(width: AppTokens.s8),
         FilledButton.icon(
@@ -53,7 +54,7 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
             _refreshPorts();
           },
           icon: const Icon(Icons.restart_alt, size: 16),
-          label: const Text('Restart daemon'),
+          label: Text(context.tr('Restart daemon')),
         ),
       ],
       body: Padding(
@@ -78,7 +79,7 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
             const SizedBox(height: AppTokens.s16),
             Row(
               children: [
-                Text('Logs',
+                Text(context.tr('Logs'),
                     style: TextStyle(color: c.textSecondary, fontSize: 12)),
                 const Spacer(),
                 TextButton.icon(
@@ -91,14 +92,16 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
-                                content: Text('Copied ${sup.logs.length} log lines'),
+                                content: Text(context.trArgs(
+                                    'Copied {n} log lines',
+                                    {'n': sup.logs.length})),
                                 duration: const Duration(seconds: 2),
                               ),
                             );
                           }
                         },
                   icon: const Icon(Icons.copy_all, size: 14),
-                  label: const Text('Copy all'),
+                  label: Text(context.tr('Copy all')),
                   style: TextButton.styleFrom(
                     foregroundColor: c.textSecondary,
                     textStyle: const TextStyle(fontSize: 12),
@@ -127,12 +130,18 @@ class _StatusRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     final (color, label) = switch (sup.phase) {
-      DaemonPhase.running => (AppTokens.success, 'Running (supervised)'),
-      DaemonPhase.adopted => (AppTokens.success, 'Running (adopted)'),
-      DaemonPhase.external => (AppTokens.cyan, 'External (web)'),
-      DaemonPhase.starting => (AppTokens.warning, 'Starting…'),
-      DaemonPhase.crashed => (AppTokens.danger, 'Crashed'),
-      DaemonPhase.idle => (c.textMuted, 'Idle'),
+      DaemonPhase.running => (
+          AppTokens.success,
+          context.tr('Running (supervised)')
+        ),
+      DaemonPhase.adopted => (
+          AppTokens.success,
+          context.tr('Running (adopted)')
+        ),
+      DaemonPhase.external => (AppTokens.cyan, context.tr('External (web)')),
+      DaemonPhase.starting => (AppTokens.warning, context.tr('Starting…')),
+      DaemonPhase.crashed => (AppTokens.danger, context.tr('Crashed')),
+      DaemonPhase.idle => (c.textMuted, context.tr('Idle')),
     };
     return Container(
       padding: const EdgeInsets.all(AppTokens.s16),
@@ -167,7 +176,9 @@ class _StatusRow extends StatelessWidget {
             const Spacer(),
           if (sup.startedAt != null)
             Text(
-              'since ${sup.startedAt!.toLocal().toString().substring(11, 19)}',
+              context.trArgs('since {t}', {
+                't': sup.startedAt!.toLocal().toString().substring(11, 19),
+              }),
               style: TextStyle(color: c.textMuted, fontSize: 12),
             ),
         ],
@@ -213,7 +224,9 @@ class _PortChip extends StatelessWidget {
           ),
           const SizedBox(width: AppTokens.s8),
           Text(
-            status.free ? 'free' : '${status.process ?? 'pid'} ${status.pid}',
+            status.free
+                ? context.tr('free')
+                : '${status.process ?? 'pid'} ${status.pid}',
             style: TextStyle(color: c.textMuted, fontSize: 12),
           ),
           if (!status.free) ...[
@@ -245,7 +258,7 @@ class _LogView extends StatelessWidget {
       ),
       child: logs.isEmpty
           ? Center(
-              child: Text('No logs yet',
+              child: Text(context.tr('No logs yet'),
                   style: TextStyle(color: c.textMuted, fontSize: 12)),
             )
           // SelectionArea makes the descendant log lines drag-selectable across

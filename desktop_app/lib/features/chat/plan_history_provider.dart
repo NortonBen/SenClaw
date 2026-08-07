@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../core/transport/ws_client.dart';
 
@@ -10,7 +11,7 @@ class PlanSummary {
   const PlanSummary(this.id, this.title, this.status, this.createdAt);
   factory PlanSummary.fromJson(Map<String, dynamic> j) => PlanSummary(
         '${j['id'] ?? ''}',
-        '${j['title'] ?? 'Untitled plan'}',
+        '${j['title'] ?? L10n.global.t('Untitled plan')}',
         '${j['status'] ?? ''}',
         (j['createdAt'] as num?)?.toInt(),
       );

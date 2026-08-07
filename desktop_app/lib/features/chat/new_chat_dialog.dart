@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/prefs.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
@@ -198,7 +199,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Transcription failed: $e')),
+            SnackBar(
+                content: Text(context
+                    .trArgs('Transcription failed: {e}', {'e': e}))),
           );
         }
       } finally {
@@ -209,7 +212,8 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
     if (!await _recorder.hasPermission()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Microphone permission denied')),
+          SnackBar(
+              content: Text(context.tr('Microphone permission denied'))),
         );
       }
       return;
@@ -227,13 +231,15 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   /// Attach + mic buttons shared by the full and mini composer toolbars.
   List<Widget> _micAttachButtons(AppColors c) => [
         IconButton(
-          tooltip: 'Attach images',
+          tooltip: context.tr('Attach images'),
           visualDensity: VisualDensity.compact,
           icon: Icon(Icons.attach_file, size: 18, color: c.textSecondary),
           onPressed: _attach,
         ),
         IconButton(
-          tooltip: _recording ? 'Stop recording' : 'Dictate (Whisper)',
+          tooltip: _recording
+              ? context.tr('Stop recording')
+              : context.tr('Dictate (Whisper)'),
           visualDensity: VisualDensity.compact,
           icon: _transcribing
               ? const SizedBox(
@@ -299,11 +305,11 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                     child: TextField(
                       autofocus: true,
                       onChanged: (v) => setLocal(() => query = v),
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search, size: 16),
-                        hintText: 'Search projects',
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.search, size: 16),
+                        hintText: dctx.tr('Search projects'),
                         isDense: true,
-                        border: OutlineInputBorder(),
+                        border: const OutlineInputBorder(),
                       ),
                     ),
                   ),
@@ -334,7 +340,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(AppTokens.s16,
                         AppTokens.s8, AppTokens.s16, 2),
-                    child: Text('ADD NEW PROJECT',
+                    child: Text(dctx.tr('ADD NEW PROJECT'),
                         style: TextStyle(
                             color: c.textMuted,
                             fontSize: 10,
@@ -344,8 +350,8 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                   ListTile(
                     dense: true,
                     leading: const Icon(Icons.add_box_outlined, size: 18),
-                    title: const Text('Start from scratch'),
-                    subtitle: Text('Create a new folder',
+                    title: Text(dctx.tr('Start from scratch')),
+                    subtitle: Text(dctx.tr('Create a new folder'),
                         style: TextStyle(color: c.textMuted, fontSize: 11)),
                     onTap: () async {
                       final created = await _createProjectFolder(dctx);
@@ -359,7 +365,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                   ListTile(
                     dense: true,
                     leading: const Icon(Icons.folder_open_outlined, size: 18),
-                    title: const Text('Use an existing folder'),
+                    title: Text(dctx.tr('Use an existing folder')),
                     onTap: () async {
                       final dir =
                           await FilePicker.platform.getDirectoryPath();
@@ -375,7 +381,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                     dense: true,
                     leading: Icon(Icons.do_not_disturb_alt_outlined,
                         size: 18, color: c.textMuted),
-                    title: Text("Don't work in a project",
+                    title: Text(dctx.tr("Don't work in a project"),
                         style: TextStyle(color: c.textMuted)),
                     onTap: () => Navigator.of(dctx).pop(''),
                   ),
@@ -412,12 +418,12 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
         });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Schedule created')));
+              SnackBar(content: Text(context.tr('Schedule created'))));
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text('Failed: $e')));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              content: Text(context.trArgs('Failed: {e}', {'e': e}))));
         }
       }
       if (mounted) {
@@ -440,7 +446,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       setState(() => _creating = false);
       if (teamId == null) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Failed to create team')));
+            SnackBar(content: Text(context.tr('Failed to create team'))));
         return;
       }
       final jid = 'cowork:$teamId';
@@ -463,7 +469,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
 
     final jid = ref.read(groupsProvider.notifier).createChat(
           folder: folder,
-          name: name.isEmpty ? 'New chat with $agentName' : name,
+          name: name.isEmpty
+              ? context.trArgs('New chat with {agent}', {'agent': agentName})
+              : name,
           isCode: _isCode,
           workDir: _workDir,
           modelId: _modelId,
@@ -484,16 +492,16 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
     final ok = await showDialog<bool>(
       context: ctx,
       builder: (dctx) => AlertDialog(
-        title: const Text('Start a new project folder'),
+        title: Text(dctx.tr('Start a new project folder')),
         content: SizedBox(
           width: 420,
           child: TextField(
             controller: ctrl,
             autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Folder path',
+            decoration: InputDecoration(
+              labelText: dctx.tr('Folder path'),
               hintText: '~/projects/my-app',
-              border: OutlineInputBorder(),
+              border: const OutlineInputBorder(),
             ),
             onSubmitted: (_) => Navigator.of(dctx).pop(true),
           ),
@@ -501,10 +509,10 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
         actions: [
           TextButton(
               onPressed: () => Navigator.of(dctx).pop(false),
-              child: const Text('Cancel')),
+              child: Text(dctx.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.of(dctx).pop(true),
-              child: const Text('Create')),
+              child: Text(dctx.tr('Create'))),
         ],
       ),
     );
@@ -515,8 +523,8 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
       return (r is Map ? r['path'] as String? : null) ?? ctrl.text.trim();
     } catch (e) {
       if (ctx.mounted) {
-        ScaffoldMessenger.of(ctx)
-            .showSnackBar(SnackBar(content: Text('Create failed: $e')));
+        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+            content: Text(ctx.trArgs('Create failed: {e}', {'e': e}))));
       }
       return null;
     }
@@ -525,40 +533,45 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   ({String heading, String sub}) _greeting(String? agentName) {
     if (_isWorkflow) {
       return (
-        heading: 'Run a workflow',
-        sub: 'Pick a saved routine, or describe a new one and let the agent build it.'
+        heading: context.tr('Run a workflow'),
+        sub: context.tr(
+            'Pick a saved routine, or describe a new one and let the agent build it.')
       );
     }
     if (_isSchedule) {
       return (
-        heading: 'Create a schedule',
-        sub: 'Describe the task and when it should run.'
+        heading: context.tr('Create a schedule'),
+        sub: context.tr('Describe the task and when it should run.')
       );
     }
     if (_isCowork) {
       return (
-        heading: 'Start a Cowork team',
-        sub: 'Pick a template, then describe the goal.'
+        heading: context.tr('Start a Cowork team'),
+        sub: context.tr('Pick a template, then describe the goal.')
       );
     }
     if (_isCode) {
       final base =
           _workDir?.split('/').where((s) => s.isNotEmpty).lastOrNull;
       return base != null
-          ? (heading: 'What should we build in $base?', sub: '')
+          ? (
+              heading: context
+                  .trArgs('What should we build in {folder}?', {'folder': base}),
+              sub: ''
+            )
           : (
-              heading: 'Pick a workspace folder to start',
-              sub: 'Choose your project root below.'
+              heading: context.tr('Pick a workspace folder to start'),
+              sub: context.tr('Choose your project root below.')
             );
     }
     return agentName != null
         ? (
-            heading: 'Chat with $agentName',
-            sub: 'No workspace needed — just a conversation.'
+            heading: context.trArgs('Chat with {agent}', {'agent': agentName}),
+            sub: context.tr('No workspace needed — just a conversation.')
           )
         : (
-            heading: 'How can I help today?',
-            sub: 'No workspace needed — just a conversation.'
+            heading: context.tr('How can I help today?'),
+            sub: context.tr('No workspace needed — just a conversation.')
           );
   }
 
@@ -580,7 +593,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
         hint: Row(children: [
           Icon(Icons.person_outline, size: 13, color: c.textMuted),
           const SizedBox(width: 4),
-          Text(hint,
+          Text(context.tr(hint),
               style: TextStyle(color: c.textSecondary, fontSize: 13)),
         ]),
         style: TextStyle(color: c.textPrimary, fontSize: 13),
@@ -603,13 +616,13 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
           value: _modelId,
           isExpanded: true,
           isDense: true,
-          hint: Text('Model',
+          hint: Text(context.tr('Model'),
               style: TextStyle(color: c.textSecondary, fontSize: 13)),
           style: TextStyle(color: c.textPrimary, fontSize: 13),
           items: [
             DropdownMenuItem(
                 value: null,
-                child: Text('Active default',
+                child: Text(context.tr('Active default'),
                     style: TextStyle(color: c.textSecondary, fontSize: 13))),
             for (final m in d.configs)
               DropdownMenuItem(
@@ -679,13 +692,17 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                 isExpanded: true,
                 isDense: true,
                 style: TextStyle(color: c.textPrimary, fontSize: 13),
-                items: const [
-                  DropdownMenuItem(value: 'daily', child: Text('Daily')),
-                  DropdownMenuItem(value: 'weekly', child: Text('Weekly')),
-                  DropdownMenuItem(value: 'monthly', child: Text('Monthly')),
-                  DropdownMenuItem(value: 'once', child: Text('Once')),
+                items: [
                   DropdownMenuItem(
-                      value: 'advanced', child: Text('Advanced')),
+                      value: 'daily', child: Text(context.tr('Daily'))),
+                  DropdownMenuItem(
+                      value: 'weekly', child: Text(context.tr('Weekly'))),
+                  DropdownMenuItem(
+                      value: 'monthly', child: Text(context.tr('Monthly'))),
+                  DropdownMenuItem(
+                      value: 'once', child: Text(context.tr('Once'))),
+                  DropdownMenuItem(
+                      value: 'advanced', child: Text(context.tr('Advanced'))),
                 ],
                 onChanged: (v) => setState(() => _freq = v ?? 'daily'),
               ),
@@ -834,9 +851,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                         fileScope: mentionScopeForPath(_workDir),
                         autofocus: true,
                         minLines: 3,
-                        decoration: const InputDecoration(
-                          hintText:
-                              'Ask anything, or describe a task…   / # skill · @ file',
+                        decoration: InputDecoration(
+                          hintText: context.tr(
+                              'Ask anything, or describe a task…   / # skill · @ file'),
                           border: InputBorder.none,
                           isCollapsed: true,
                         ),
@@ -852,7 +869,8 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                           children: [
                             for (var i = 0; i < _attachments.length; i++)
                               Chip(
-                                label: Text('image ${i + 1}',
+                                label: Text(
+                                    context.trArgs('image {n}', {'n': i + 1}),
                                     style: const TextStyle(fontSize: 12)),
                                 avatar:
                                     const Icon(Icons.image_outlined, size: 14),
@@ -907,7 +925,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                                       Icon(Icons.groups_outlined,
                                           size: 13, color: c.textMuted),
                                       const SizedBox(width: 4),
-                                      Text('Pick a team template',
+                                      Text(context.tr('Pick a team template'),
                                           style: TextStyle(
                                               color: c.textSecondary,
                                               fontSize: 13)),
@@ -941,7 +959,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                                     Icon(Icons.person_outline,
                                         size: 13, color: c.textMuted),
                                     const SizedBox(width: 4),
-                                    Text('Profile',
+                                    Text(context.tr('Profile'),
                                         style: TextStyle(
                                             color: c.textSecondary,
                                             fontSize: 13)),
@@ -970,7 +988,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                                     value: _modelId,
                                     isExpanded: true,
                                     isDense: true,
-                                    hint: Text('Model',
+                                    hint: Text(context.tr('Model'),
                                         style: TextStyle(
                                             color: c.textSecondary,
                                             fontSize: 13)),
@@ -979,7 +997,7 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                                     items: [
                                       DropdownMenuItem(
                                           value: null,
-                                          child: Text('Default',
+                                          child: Text(context.tr('Default'),
                                               style: TextStyle(
                                                   color: c.textSecondary,
                                                   fontSize: 13))),
@@ -1008,20 +1026,22 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                                   isDense: true,
                                   style: TextStyle(
                                       color: c.textPrimary, fontSize: 13),
-                                  items: const [
+                                  items: [
                                     DropdownMenuItem(
-                                        value: 'daily', child: Text('Daily')),
+                                        value: 'daily',
+                                        child: Text(context.tr('Daily'))),
                                     DropdownMenuItem(
                                         value: 'weekly',
-                                        child: Text('Weekly')),
+                                        child: Text(context.tr('Weekly'))),
                                     DropdownMenuItem(
                                         value: 'monthly',
-                                        child: Text('Monthly')),
+                                        child: Text(context.tr('Monthly'))),
                                     DropdownMenuItem(
-                                        value: 'once', child: Text('Once')),
+                                        value: 'once',
+                                        child: Text(context.tr('Once'))),
                                     DropdownMenuItem(
                                         value: 'advanced',
-                                        child: Text('Advanced')),
+                                        child: Text(context.tr('Advanced'))),
                                   ],
                                   onChanged: (v) =>
                                       setState(() => _freq = v ?? 'daily'),
@@ -1115,8 +1135,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                   children: [
                     for (final s in _suggestions)
                       _SuggestionChip(
-                          text: s,
-                          onTap: () => setState(() => _msg.text = s)),
+                          text: context.tr(s),
+                          onTap: () =>
+                              setState(() => _msg.text = context.tr(s))),
                   ],
                 ),
               ],
@@ -1163,11 +1184,11 @@ class _KindSegmented extends StatelessWidget {
         border: Border.all(color: c.border),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
-        seg('💬 Chat', 'chat'),
-        seg('⌨️ Code', 'code'),
-        seg('👥 Cowork', 'cowork'),
-        seg('🕐 Schedule', 'schedule'),
-        seg('🔁 Workflow', 'workflow'),
+        seg(context.tr('💬 Chat'), 'chat'),
+        seg(context.tr('⌨️ Code'), 'code'),
+        seg(context.tr('👥 Cowork'), 'cowork'),
+        seg(context.tr('🕐 Schedule'), 'schedule'),
+        seg(context.tr('🔁 Workflow'), 'workflow'),
       ]),
     );
   }
@@ -1196,7 +1217,7 @@ class _ModeIcons extends StatelessWidget {
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         for (final (val, icon, tip) in _opts)
           Tooltip(
-            message: tip,
+            message: context.tr(tip),
             child: GestureDetector(
               onTap: () => onChanged(val),
               child: Container(
@@ -1226,7 +1247,7 @@ class _SendButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     return Tooltip(
-      message: 'Start (Enter)',
+      message: context.tr('Start (Enter)'),
       child: GestureDetector(
         onTap: enabled ? onTap : null,
         child: Container(
@@ -1255,8 +1276,8 @@ class _FolderPill extends StatelessWidget {
     final has = workDir != null;
     final name = has
         ? (workDir!.split('/').where((s) => s.isNotEmpty).lastOrNull ??
-            'Folder')
-        : 'Folder';
+            context.tr('Folder'))
+        : context.tr('Folder');
     return GestureDetector(
       onTap: onTap,
       child: Container(

@@ -346,8 +346,15 @@ pub struct Config {
     pub dispatch: DispatchConfig,
     pub background: BackgroundConfig,
     /// Space-App health supervisor interval in seconds (`SENCLAW_SPACE_SUPERVISE_SECS`).
-    /// 0 disables the supervisor. Default 20.
+    /// 0 disables the supervisor. Default 20. Only **background** apps are
+    /// supervised — a session app being down is its resting state.
     pub space_supervise_secs: u64,
+    /// How often the idle reaper looks for session apps to stop
+    /// (`SENCLAW_SPACE_IDLE_SWEEP_SECS`). 0 disables it, which makes every
+    /// session app behave like a background one once first used. Default 10 —
+    /// the sweep is a lock and a subtraction per running app, and a coarser
+    /// tick just makes the per-app `idleTimeoutSecs` less accurate.
+    pub space_idle_sweep_secs: u64,
     pub ws_port: u16,
     /// POSIX shell override for workflow script steps
     /// (`SENCLAW_WORKFLOW_SHELL`). None = auto (`/bin/sh` on POSIX).
@@ -659,6 +666,7 @@ impl Config {
                 backoff_max_secs: env_int("SENCLAW_BACKGROUND_BACKOFF_MAX_SECS", 3600),
             },
             space_supervise_secs: env_int("SENCLAW_SPACE_SUPERVISE_SECS", 20),
+            space_idle_sweep_secs: env_int("SENCLAW_SPACE_IDLE_SWEEP_SECS", 10),
             ws_port: env_int("SENCLAW_WS_PORT", 18789),
             workflow_shell: env::var("SENCLAW_WORKFLOW_SHELL")
                 .ok()

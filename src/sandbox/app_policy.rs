@@ -109,6 +109,11 @@ pub struct AppSandbox {
     /// Other services on this machine the app may dial (a database, another
     /// app). Loopback is closed apart from these.
     pub loopback: Vec<u16>,
+    /// The app's own manifest declares `sandbox.force` — the settings dialog
+    /// may not turn the sandbox off. Set from the manifest on install and on
+    /// boot ([`crate::apps::sandbox_decl`]), never by the user directly; an app
+    /// that drops the declaration drops the lock with it.
+    pub forced: bool,
 }
 
 impl Default for AppSandbox {
@@ -121,6 +126,7 @@ impl Default for AppSandbox {
             hosts: Vec::new(),
             daemon_api: true,
             loopback: Vec::new(),
+            forced: false,
         }
     }
 }

@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/i18n/l10n.dart';
 import '../../../theme/tokens.dart';
 import '../../../widgets/embedded_web.dart';
 import '../flow_defaults.dart';
@@ -75,7 +76,8 @@ class WidgetCard extends StatelessWidget {
         body = _WeatherBody(data: dataMap);
         break;
       default:
-        return _errorChip(context, 'Unknown widget: "$kind"');
+        return _errorChip(
+            context, context.trArgs('Unknown widget: "{kind}"', {'kind': kind}));
     }
 
     final c = context.colors;
@@ -307,7 +309,7 @@ class _ChartBody extends StatelessWidget {
     final chartType = '${data['chartType'] ?? 'bar'}';
     final series = _series;
     if (series.isEmpty || series.every((s) => s.points.isEmpty)) {
-      return Text('No chart data',
+      return Text(context.tr('No chart data'),
           style: TextStyle(color: c.textMuted, fontSize: 12));
     }
 
@@ -774,7 +776,7 @@ class _ImageBody extends StatelessWidget {
         children: [
           Icon(Icons.broken_image_outlined, size: 16, color: c.textMuted),
           const SizedBox(width: AppTokens.s6),
-          Text(alt.isNotEmpty ? alt : 'Image unavailable',
+          Text(alt.isNotEmpty ? alt : context.tr('Image unavailable'),
               style: TextStyle(color: c.textMuted, fontSize: 12)),
         ],
       );
@@ -801,7 +803,7 @@ class _ImageBody extends StatelessWidget {
                       Icon(Icons.broken_image_outlined,
                           size: 16, color: c.textMuted),
                       const SizedBox(width: AppTokens.s6),
-                      Text('Failed to load image',
+                      Text(context.tr('Failed to load image'),
                           style: TextStyle(color: c.textMuted, fontSize: 12)),
                     ],
                   ),
@@ -873,7 +875,7 @@ class _VideoBodyState extends State<_VideoBody> {
           const SizedBox(width: AppTokens.s6),
           Flexible(
             child: Text(
-              'Video cần một URL http(s) phát được (không dùng đường dẫn file).',
+              context.tr('Video needs a playable http(s) URL (not a file path).'),
               style: TextStyle(color: c.textMuted, fontSize: 12),
             ),
           ),
@@ -894,7 +896,7 @@ class _VideoBodyState extends State<_VideoBody> {
             child: _playing
                 ? embeddedWebView(
                     url,
-                    title: caption.isNotEmpty ? caption : 'Video',
+                    title: caption.isNotEmpty ? caption : context.tr('Video'),
                     theme: isDark ? 'dark' : 'light',
                     instanceKey: 'chat-video',
                   )
@@ -919,7 +921,7 @@ class _VideoBodyState extends State<_VideoBody> {
                 onPressed: () => launchUrl(Uri.parse(url),
                     mode: LaunchMode.externalApplication),
                 icon: const Icon(Icons.open_in_new, size: 14),
-                label: const Text('Mở ngoài'),
+                label: Text(context.tr('Open externally')),
                 style: TextButton.styleFrom(
                   foregroundColor: c.textMuted,
                   textStyle: const TextStyle(fontSize: 12),
@@ -1251,7 +1253,7 @@ class _AudioBodyState extends State<_AudioBody> {
         await p.play(UrlSource(url));
       }
     } catch (_) {
-      // Undecodable stream — leave the "Mở ngoài" escape hatch.
+      // Undecodable stream — leave the "Open externally" escape hatch.
     }
   }
 
@@ -1276,7 +1278,7 @@ class _AudioBodyState extends State<_AudioBody> {
           const SizedBox(width: AppTokens.s6),
           Flexible(
             child: Text(
-              'Audio cần một URL http(s) phát được (không dùng đường dẫn file).',
+              context.tr('Audio needs a playable http(s) URL (not a file path).'),
               style: TextStyle(color: c.textMuted, fontSize: 12),
             ),
           ),
@@ -1296,7 +1298,7 @@ class _AudioBodyState extends State<_AudioBody> {
           ),
           padding: EdgeInsets.zero,
           visualDensity: VisualDensity.compact,
-          tooltip: playing ? 'Tạm dừng' : 'Phát',
+          tooltip: playing ? context.tr('Pause') : context.tr('Play'),
         ),
         const SizedBox(width: AppTokens.s8),
         Expanded(
@@ -1311,7 +1313,7 @@ class _AudioBodyState extends State<_AudioBody> {
           onPressed: () =>
               launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
           icon: const Icon(Icons.open_in_new, size: 14),
-          label: const Text('Mở ngoài'),
+          label: Text(context.tr('Open externally')),
           style: TextButton.styleFrom(
             foregroundColor: c.textMuted,
             textStyle: const TextStyle(fontSize: 12),
@@ -1369,7 +1371,9 @@ class _AppWidgetBodyState extends State<_AppWidgetBody> {
       return Text(
         fallback.isNotEmpty
             ? fallback
-            : 'Widget $id không khả dụng — mở app trong mục Apps để xem.',
+            : context.trArgs(
+                'Widget {id} is unavailable — open the app in Apps to view it.',
+                {'id': id}),
         style: TextStyle(color: c.textSecondary, fontSize: 13),
       );
     }
@@ -1410,7 +1414,7 @@ class _AppWidgetBodyState extends State<_AppWidgetBody> {
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600)),
                             const SizedBox(height: AppTokens.s4),
-                            Text('Bấm để tải widget',
+                            Text(context.tr('Click to load widget'),
                                 style: TextStyle(
                                     color: c.textMuted, fontSize: 12)),
                           ],

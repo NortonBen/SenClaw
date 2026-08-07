@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/background_models.dart';
 import '../../theme/tokens.dart';
 import 'background_providers.dart';
@@ -83,7 +84,7 @@ class _Body extends ConsumerWidget {
                       color: bgStatusColor(run.status, c).withValues(alpha: 0.4)),
                 ),
                 child: Text(
-                  run.status,
+                  context.tr(run.status),
                   style: TextStyle(
                     color: bgStatusColor(run.status, c),
                     fontSize: 10,
@@ -97,7 +98,7 @@ class _Body extends ConsumerWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Background session',
+                      context.tr('Background session'),
                       style: TextStyle(
                         color: c.textPrimary,
                         fontSize: 13,
@@ -117,7 +118,8 @@ class _Body extends ConsumerWidget {
               if (run.isRunning)
                 TextButton.icon(
                   icon: const Icon(Icons.stop_circle_outlined, size: 15),
-                  label: const Text('Cancel', style: TextStyle(fontSize: 11)),
+                  label: Text(context.tr('Cancel'),
+                      style: const TextStyle(fontSize: 11)),
                   onPressed: () async {
                     try {
                       await ref.read(backgroundApiProvider).cancelRun(runId);
@@ -140,13 +142,18 @@ class _Body extends ConsumerWidget {
             spacing: AppTokens.s16,
             runSpacing: AppTokens.s4,
             children: [
-              _fact(context, 'Started', fmtBgTime(run.startedAt)),
-              _fact(context, 'Duration', fmtBgDuration(run.durationMs)),
-              _fact(context, 'Trigger', run.triggerKind),
-              if (run.turnCount != null) _fact(context, 'Turns', '${run.turnCount}'),
+              _fact(context, context.tr('Started'), fmtBgTime(run.startedAt)),
+              _fact(context, context.tr('Duration'),
+                  fmtBgDuration(run.durationMs)),
+              _fact(context, context.tr('Trigger'), context.tr(run.triggerKind)),
+              if (run.turnCount != null)
+                _fact(context, context.tr('Turns'), '${run.turnCount}'),
               if ((run.tokensIn ?? 0) + (run.tokensOut ?? 0) > 0)
-                _fact(context, 'Tokens',
-                    '${run.tokensIn ?? 0} in / ${run.tokensOut ?? 0} out'),
+                _fact(
+                    context,
+                    context.tr('Tokens'),
+                    context.trArgs('{i} in / {o} out',
+                        {'i': run.tokensIn ?? 0, 'o': run.tokensOut ?? 0})),
             ],
           ),
         ),
@@ -158,26 +165,28 @@ class _Body extends ConsumerWidget {
               if (run.prompt != null && run.prompt!.isNotEmpty)
                 _block(
                   context,
-                  'Prompt sent',
+                  context.tr('Prompt sent'),
                   run.prompt!,
                   // Worth stating: for a template task this is the *resolved*
                   // text, not the template — which is the thing you need when
                   // a run did something unexpected.
-                  hint: 'after template/generator resolution',
+                  hint: context.tr('after template/generator resolution'),
                 ),
               if (run.error != null && run.error!.isNotEmpty)
-                _block(context, 'Error', run.error!, color: AppTokens.danger),
+                _block(context, context.tr('Error'), run.error!,
+                    color: AppTokens.danger),
               if (run.result != null && run.result!.isNotEmpty)
                 _block(
                   context,
-                  run.status == 'skipped' ? 'Why it skipped' : 'Result',
+                  context.tr(
+                      run.status == 'skipped' ? 'Why it skipped' : 'Result'),
                   run.result!,
                   // A skip is an outcome, not a fault — don't colour it red.
                   color: run.status == 'skipped' ? null : AppTokens.success,
                 ),
               const SizedBox(height: AppTokens.s8),
               Text(
-                'Transcript (${activity.length})',
+                context.trArgs('Transcript ({n})', {'n': activity.length}),
                 style: TextStyle(
                     color: c.textMuted, fontSize: 11, fontWeight: FontWeight.w600),
               ),
@@ -186,9 +195,9 @@ class _Body extends ConsumerWidget {
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: AppTokens.s16),
                   child: Text(
-                    run.status == 'skipped'
+                    context.tr(run.status == 'skipped'
                         ? 'Nothing ran — the task skipped this window.'
-                        : 'No activity recorded.',
+                        : 'No activity recorded.'),
                     style: TextStyle(color: c.textMuted, fontSize: 11),
                   ),
                 )

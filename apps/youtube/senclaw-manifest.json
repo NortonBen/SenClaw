@@ -5,6 +5,7 @@
   "icon": "▶️",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./youtube",
     "healthPath": "/api/status",
     "port": 4491

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../core/i18n/l10n.dart';
 import '../theme/tokens.dart';
 
 /// Standard page chrome: a header bar with title + optional actions, then body.
@@ -89,12 +90,13 @@ class ComingSoon extends StatelessWidget {
           Icon(Icons.construction_outlined, size: 40, color: c.textMuted),
           const SizedBox(height: AppTokens.s12),
           Text(
-            '$feature — migration $phase',
+            context.trArgs('{feature} — migration {phase}',
+                {'feature': feature, 'phase': phase}),
             style: TextStyle(color: c.textSecondary, fontSize: 14),
           ),
           const SizedBox(height: AppTokens.s4),
           Text(
-            'Scaffolded. Implementation tracked in the migration plan.',
+            context.tr('Scaffolded. Implementation tracked in the migration plan.'),
             style: TextStyle(color: c.textMuted, fontSize: 12),
           ),
         ],

@@ -27,11 +27,49 @@ function withOuterQuery(base: string): string {
   return `${base}${base.includes('?') ? '&' : '?'}${outer}`;
 }
 
+type GatePhase = 'checking' | 'starting' | 'ready' | 'failed';
+
 export function SpaceAppFrame({ app }: Props) {
   const { token } = theme.useToken();
   const { isDarkMode } = useAppContext();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [loaded, setLoaded] = useState(false);
+
+  // Don't mount the iframe until the app is answering. A server Space App is
+  // its own process on its own port; pointed at a stopped one, the iframe is a
+  // blank white rectangle with no error in it — and "stopped" is the resting
+  // state for a `session` app, not a fault.
+  const [phase, setPhase] = useState<GatePhase>('checking');
+  const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+
+  const open = React.useCallback(async () => {
+    setPhase('checking');
+    setError('');
+    setLoaded(false);
+    const id = encodeURIComponent(app.id);
+    try {
+      const probe = await fetch(`/api/space/apps/${id}/ready`);
+      if (probe.ok && (await probe.json())?.ready === true) {
+        setPhase('ready');
+        return;
+      }
+    } catch {
+      /* a failed probe is not an answer — try to start it */
+    }
+    setPhase('starting');
+    try {
+      const res = await fetch(`/api/space/apps/${id}/start`, { method: 'POST' });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text || `start failed (HTTP ${res.status})`);
+      setPhase('ready');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setPhase('failed');
+    }
+  }, [app.id]);
+
+  useEffect(() => { void open(); }, [open, attempt]);
 
   const themeMode = isDarkMode ? 'dark' : 'light';
 
@@ -120,39 +158,75 @@ export function SpaceAppFrame({ app }: Props) {
       >
         <AppstoreOutlined />
         <Text strong className="flex-1">{app.name}</Text>
-        <Button size="small" icon={<ReloadOutlined />} onClick={() => {
-          if (iframeRef.current) {
-            setLoaded(false);
-            iframeRef.current.src = withOuterQuery(app.integration.url);
-          }
-        }}>
+        <Button size="small" icon={<ReloadOutlined />} onClick={() => setAttempt(a => a + 1)}>
           Reload
         </Button>
       </div>
       <div className="relative flex-1">
-        {!loaded && (
+        {phase === 'failed' ? (
+          <div className="absolute inset-0 overflow-auto p-6">
+            <Alert
+              type="error"
+              showIcon
+              message={`${app.name} did not start`}
+              description={
+                <>
+                  {/* The daemon appends the tail of the app's own log, which is
+                      nearly always the real answer — missing binary, port in
+                      use, a stack trace on boot. */}
+                  <pre style={{
+                    whiteSpace: 'pre-wrap', margin: '8px 0 12px', maxHeight: 280,
+                    overflow: 'auto', fontSize: 11.5, opacity: 0.85,
+                  }}>{error}</pre>
+                  <Button size="small" icon={<ReloadOutlined />} onClick={() => setAttempt(a => a + 1)}>
+                    Try again
+                  </Button>
+                </>
+              }
+            />
+          </div>
+        ) : (phase !== 'ready' || !loaded) && (
           <div
             className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-10"
             style={{ background: token.colorBgContainer }}
           >
-            <Spin indicator={<LoadingOutlined style={{ fontSize: 32 }} spin />} />
-            <Text type="secondary">Đang tải {app.name}…</Text>
+            {/* The app's own icon inside the spinner, so the wait reads as
+                "this app is opening" rather than a generic loading state. */}
+            <Spin
+              size="large"
+              indicator={<LoadingOutlined style={{ fontSize: 56 }} spin />}
+              style={{ position: 'relative' }}
+            />
+            <div style={{ marginTop: -46, fontSize: 22, lineHeight: 1, pointerEvents: 'none' }}>
+              {app.icon || <AppstoreOutlined style={{ color: token.colorPrimary }} />}
+            </div>
+            <Text strong style={{ marginTop: 22 }}>
+              {phase === 'starting' ? `Đang khởi động ${app.name}…` : `Đang tải ${app.name}…`}
+            </Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {phase === 'ready'
+                ? 'Đang mở giao diện.'
+                : 'Chờ app trả lời health check.'}
+            </Text>
           </div>
         )}
-        <iframe
-          ref={iframeRef}
-          title={app.name}
-          src={withOuterQuery(app.integration.url === '/' ? `/api/space/apps/${app.id}/proxy/` : app.integration.url)}
-          onLoad={() => { setLoaded(true); sendInit(); }}
-          sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
-          style={{
-            width: '100%',
-            height: '100%',
-            border: 0,
-            background: token.colorBgContainer,
-            visibility: loaded ? 'visible' : 'hidden',
-          }}
-        />
+        {phase === 'ready' && (
+          <iframe
+            key={attempt}
+            ref={iframeRef}
+            title={app.name}
+            src={withOuterQuery(app.integration.url === '/' ? `/api/space/apps/${app.id}/proxy/` : app.integration.url)}
+            onLoad={() => { setLoaded(true); sendInit(); }}
+            sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
+            style={{
+              width: '100%',
+              height: '100%',
+              border: 0,
+              background: token.colorBgContainer,
+              visibility: loaded ? 'visible' : 'hidden',
+            }}
+          />
+        )}
       </div>
     </div>
   );

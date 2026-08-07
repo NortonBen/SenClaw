@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../daemon/app_shutdown.dart';
 import '../daemon/daemon_provider.dart';
+import '../i18n/l10n.dart';
 import '../prefs.dart';
 import '../transport/connection.dart';
 import 'update_manifest.dart';
@@ -115,7 +116,7 @@ class UpdateNotifier extends Notifier<UpdateState> {
       if (!silent) {
         state = state.copyWith(
           phase: UpdatePhase.error,
-          error: 'Updates are disabled in a dev build.',
+          error: L10n.global.t('Updates are disabled in a dev build.'),
         );
       }
       return;
@@ -130,7 +131,9 @@ class UpdateNotifier extends Notifier<UpdateState> {
     if (m == null) {
       state = state.copyWith(
         phase: silent ? UpdatePhase.idle : UpdatePhase.error,
-        error: silent ? null : 'Could not reach the update server.',
+        error: silent
+            ? null
+            : L10n.global.t('Could not reach the update server.'),
         lastCheck: now,
       );
       return;
@@ -189,7 +192,9 @@ class UpdateNotifier extends Notifier<UpdateState> {
     } on UpdateUnavailable catch (e) {
       state = state.copyWith(phase: UpdatePhase.available, error: e.message);
     } catch (e) {
-      state = state.copyWith(phase: UpdatePhase.available, error: 'Download failed: $e');
+      state = state.copyWith(
+          phase: UpdatePhase.available,
+          error: L10n.global.tArgs('Download failed: {e}', {'e': e}));
     }
   }
 
@@ -213,7 +218,10 @@ class UpdateNotifier extends Notifier<UpdateState> {
       state = state.copyWith(phase: UpdatePhase.ready, error: e.message);
       return;
     } catch (e) {
-      state = state.copyWith(phase: UpdatePhase.ready, error: 'Could not start the updater: $e');
+      state = state.copyWith(
+          phase: UpdatePhase.ready,
+          error: L10n.global
+              .tArgs('Could not start the updater: {e}', {'e': e}));
       return;
     }
     await shutdownApp(

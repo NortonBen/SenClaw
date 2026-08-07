@@ -22,7 +22,17 @@ export function prefetchFlowDefaults(): Promise<FlowDefaults> {
   if (defaultsCache) return Promise.resolve(defaultsCache);
   if (!defaultsInflight) {
     defaultsInflight = fetch('/api/defaults')
-      .then((r) => (r.ok ? r.json() : FALLBACK))
+      .then((r) => {
+        // 401 = token gate, not a real answer. Caching FALLBACK here would
+        // pin link behavior to the default for the rest of the session even
+        // after the user unlocks; drop the inflight promise so the next
+        // caller retries instead.
+        if (r.status === 401) {
+          defaultsInflight = null;
+          throw new Error('unauthorized');
+        }
+        return r.ok ? r.json() : FALLBACK;
+      })
       .then((d: FlowDefaults) => {
         // An old daemon answers unknown /api routes with the SPA index page —
         // guard on the shape, not just the status code.

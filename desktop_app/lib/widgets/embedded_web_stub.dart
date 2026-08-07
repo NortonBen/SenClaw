@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../core/i18n/l10n.dart';
 import '../theme/tokens.dart';
 
 /// Desktop embed: a real in-app WKWebView/WebView2 on macOS & Windows;
@@ -151,7 +152,7 @@ class _OpenInBrowser extends StatelessWidget {
         children: [
           Icon(Icons.public, size: 40, color: c.textMuted),
           const SizedBox(height: AppTokens.s12),
-          Text(title ?? 'Web content',
+          Text(title ?? context.tr('Web content'),
               style: TextStyle(color: c.textSecondary, fontSize: 14)),
           const SizedBox(height: AppTokens.s4),
           ConstrainedBox(
@@ -165,7 +166,7 @@ class _OpenInBrowser extends StatelessWidget {
             onPressed: () => launchUrl(Uri.parse(url),
                 mode: LaunchMode.externalApplication),
             icon: const Icon(Icons.open_in_new, size: 16),
-            label: const Text('Open in browser'),
+            label: Text(context.tr('Open in browser')),
           ),
         ],
       ),

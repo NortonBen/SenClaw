@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/i18n/l10n.dart';
 import '../../../models/chat_message.dart';
 import '../../../theme/tokens.dart';
 
@@ -100,7 +101,7 @@ class _QuestionCardState extends State<QuestionCard> {
                 Icon(Icons.help_outline, size: 16, color: c.accent),
                 const SizedBox(width: AppTokens.s8),
                 Text(
-                  'Question',
+                  context.tr('Question'),
                   style: TextStyle(
                     color: c.textPrimary,
                     fontWeight: FontWeight.w700,
@@ -113,14 +114,14 @@ class _QuestionCardState extends State<QuestionCard> {
               _buildQuestion(context, qi, _questions[qi], resolved),
             const SizedBox(height: AppTokens.s4),
             if (resolved)
-              Text('Answered',
+              Text(context.tr('Answered'),
                   style: TextStyle(color: c.textMuted, fontSize: 12))
             else
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton(
                   onPressed: _complete ? _submit : null,
-                  child: const Text('Submit'),
+                  child: Text(context.tr('Submit')),
                 ),
               ),
           ],
@@ -175,7 +176,7 @@ class _QuestionCardState extends State<QuestionCard> {
                   onTap: () => _toggle(qi, oi, multi),
                 ),
               _OptionChip(
-                label: 'Other',
+                label: context.tr('Other'),
                 selected: otherSelected,
                 multi: multi,
                 enabled: !resolved,
@@ -187,7 +188,8 @@ class _QuestionCardState extends State<QuestionCard> {
             const SizedBox(height: AppTokens.s8),
             TextField(
               controller: _other.putIfAbsent(qi, () => TextEditingController()),
-              decoration: const InputDecoration(hintText: 'Your answer…'),
+              decoration:
+                  InputDecoration(hintText: context.tr('Your answer…')),
             ),
           ],
         ],

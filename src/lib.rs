@@ -1768,6 +1768,30 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         );
     }
 
+    // Idle reaper: stop session apps that have not been used for their
+    // `runtime.idleTimeoutSecs`. Without this, the first tool call of the day
+    // would start an app that then stays up forever — which is the always-on
+    // behaviour session mode exists to replace.
+    if cfg.space_idle_sweep_secs > 0 {
+        let apps_dir = cfg.paths.workspace_dir.join("space-apps");
+        let launcher = Arc::clone(&space_mcp_launcher);
+        let db_bg = Arc::clone(&db);
+        let mgr_bg = Arc::clone(&mcp_manager);
+        let interval = std::time::Duration::from_secs(cfg.space_idle_sweep_secs.max(5));
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(interval);
+            tick.tick().await; // the first tick fires immediately; nothing is idle yet
+            loop {
+                tick.tick().await;
+                launcher.reap_idle(&db_bg, &mgr_bg, &apps_dir).await;
+            }
+        });
+        tracing::info!(
+            "[space-mcp] idle reaper started ({}s sweep)",
+            cfg.space_idle_sweep_secs
+        );
+    }
+
     // ===== 4. GroupQueue + AgentPool =====
     let group_queue = agent::group_queue::GroupQueue::new(cfg.agent.max_concurrent);
     // Keep a typed Arc<ZenCoreApi> so we can wire late dependencies (workbench bridge).

@@ -1,3 +1,5 @@
+import '../core/i18n/l10n.dart';
+
 /// A chat/group entry shown in the sidebar (mirrors WS `groups` payload).
 class GroupInfo {
   final String jid;
@@ -26,7 +28,8 @@ class GroupInfo {
 
   factory GroupInfo.fromJson(Map<String, dynamic> j) => GroupInfo(
     jid: (j['jid'] ?? j['groupJid'] ?? '').toString(),
-    name: (j['name'] ?? j['title'] ?? j['jid'] ?? 'Untitled').toString(),
+    name: (j['name'] ?? j['title'] ?? j['jid'] ?? L10n.global.t('Untitled'))
+        .toString(),
     folder: j['folder']?.toString(),
     lastMessage: j['lastMessage']?.toString(),
     lastActivity: (j['lastActivity'] as num?)?.toInt(),

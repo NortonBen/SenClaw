@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/i18n/l10n.dart';
 import '../../../models/chat_message.dart';
 import '../../../theme/tokens.dart';
 
@@ -64,7 +65,10 @@ class _FormCardState extends State<FormCard> {
     final c = context.colors;
     final resolved = widget.message.resolved;
     final title = '${widget.message.data['title'] ?? ''}';
-    final submitLabel = '${widget.message.data['submitLabel'] ?? 'Submit'}';
+    // The agent may supply its own submitLabel (data); only the fallback is ours.
+    final rawSubmitLabel = '${widget.message.data['submitLabel'] ?? ''}';
+    final submitLabel =
+        rawSubmitLabel.isNotEmpty ? rawSubmitLabel : context.tr('Submit');
     final missing = _missingCount;
     return Padding(
       padding: const EdgeInsets.symmetric(
@@ -87,7 +91,7 @@ class _FormCardState extends State<FormCard> {
                 const SizedBox(width: AppTokens.s8),
                 Expanded(
                   child: Text(
-                    title.isNotEmpty ? title : 'Form',
+                    title.isNotEmpty ? title : context.tr('Form'),
                     style: TextStyle(
                       color: c.textPrimary,
                       fontWeight: FontWeight.w700,
@@ -100,7 +104,7 @@ class _FormCardState extends State<FormCard> {
             for (final f in _fields) _buildField(f, resolved),
             const SizedBox(height: AppTokens.s4),
             if (resolved)
-              Text('Submitted',
+              Text(context.tr('Submitted'),
                   style: TextStyle(color: c.textMuted, fontSize: 12))
             else
               Row(
@@ -113,14 +117,15 @@ class _FormCardState extends State<FormCard> {
                           : null,
                       child: Text(missing == 0
                           ? submitLabel
-                          : '$missing required field${missing == 1 ? '' : 's'} left'),
+                          : context.trPlural(missing, '{n} required field left',
+                              '{n} required fields left')),
                     ),
                   ),
                   const SizedBox(width: AppTokens.s8),
                   OutlinedButton(
                     onPressed: () => widget.onSubmit(
                         widget.message.requestId, const {}, false),
-                    child: Text('Skip',
+                    child: Text(context.tr('Skip'),
                         style:
                             TextStyle(color: c.textSecondary, fontSize: 12)),
                   ),
@@ -249,7 +254,7 @@ class _FormCardState extends State<FormCard> {
                       style: TextStyle(color: c.textPrimary, fontSize: 13))),
           ],
           onChanged: disabled ? null : (v) => _set(key, v),
-          decoration: _inputDecoration('Select…'),
+          decoration: _inputDecoration(context.tr('Select…')),
           dropdownColor: c.surface,
         );
         break;
@@ -345,7 +350,7 @@ class _FormCardState extends State<FormCard> {
                 Icon(Icons.calendar_today_outlined,
                     size: 14, color: c.textMuted),
                 const SizedBox(width: AppTokens.s6),
-                Text(current.isEmpty ? 'Pick a date…' : current,
+                Text(current.isEmpty ? context.tr('Pick a date…') : current,
                     style: TextStyle(
                         color: current.isEmpty ? c.textMuted : c.textPrimary,
                         fontSize: 13)),
@@ -421,7 +426,7 @@ class _FormCardState extends State<FormCard> {
                     _set(key, list);
                   },
                   icon: Icon(Icons.add, size: 14, color: c.accent),
-                  label: Text('Add row',
+                  label: Text(context.tr('Add row'),
                       style: TextStyle(color: c.accent, fontSize: 12)),
                 ),
             ],
@@ -430,7 +435,8 @@ class _FormCardState extends State<FormCard> {
         break;
       }
       default:
-        control = Text('(unsupported field: $type)',
+        control = Text(
+            context.trArgs('(unsupported field: {type})', {'type': type}),
             style: TextStyle(color: c.textMuted, fontSize: 12));
     }
 

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/prefs.dart';
 import '../../core/transport/connection.dart';
 import 'package:file_picker/file_picker.dart';
@@ -77,23 +78,24 @@ class RightDock extends ConsumerWidget {
             ),
             child: Row(
               children: [
-                _Tab(label: 'Console', active: tab == 0, onTap: () =>
+                _Tab(label: context.tr('Console'), active: tab == 0, onTap: () =>
                     ref.read(dockTabProvider.notifier).state = 0),
                 const SizedBox(width: AppTokens.s8),
-                _Tab(label: 'Workbench', active: tab == 1, onTap: () =>
+                _Tab(label: context.tr('Workbench'), active: tab == 1, onTap: () =>
                     ref.read(dockTabProvider.notifier).state = 1),
                 const SizedBox(width: AppTokens.s8),
-                _Tab(label: 'Files', active: tab == 2, onTap: () =>
+                _Tab(label: context.tr('Files'), active: tab == 2, onTap: () =>
                     ref.read(dockTabProvider.notifier).state = 2),
                 const SizedBox(width: AppTokens.s8),
-                _Tab(label: 'Apps', active: tab == 3, onTap: () =>
+                _Tab(label: context.tr('Apps'), active: tab == 3, onTap: () =>
                     ref.read(dockTabProvider.notifier).state = 3),
                 const SizedBox(width: AppTokens.s8),
-                _Tab(label: 'Terminal', active: tab == 4, onTap: () =>
+                _Tab(label: context.tr('Terminal'), active: tab == 4, onTap: () =>
                     ref.read(dockTabProvider.notifier).state = 4),
                 const Spacer(),
                 IconButton(
-                  tooltip: isWide ? 'Shrink' : 'Expand (70%)',
+                  tooltip:
+                      isWide ? context.tr('Shrink') : context.tr('Expand (70%)'),
                   icon: Icon(
                       isWide
                           ? Icons.close_fullscreen
@@ -107,7 +109,7 @@ class RightDock extends ConsumerWidget {
                   },
                 ),
                 IconButton(
-                  tooltip: 'Close',
+                  tooltip: context.tr('Close'),
                   icon: const Icon(Icons.close, size: 16),
                   onPressed: () =>
                       ref.read(dockVisibleProvider.notifier).state = false,
@@ -170,7 +172,7 @@ class _ConsoleTab extends ConsumerWidget {
     final todos = ref.watch(agentTodosProvider);
     if (d.parents.isEmpty && d.activity.isEmpty && todos.isEmpty) {
       return Center(
-        child: Text('No sub-agent activity',
+        child: Text(context.tr('No sub-agent activity'),
             style: TextStyle(color: c.textMuted, fontSize: 12)),
       );
     }
@@ -190,14 +192,14 @@ class _ConsoleTab extends ConsumerWidget {
         for (final p in d.parents) ...[
           Row(children: [
             Expanded(
-              child: Text(p.goal.isEmpty ? 'Dispatch' : p.goal,
+              child: Text(p.goal.isEmpty ? context.tr('Dispatch') : p.goal,
                   style: TextStyle(
                       color: c.textPrimary, fontWeight: FontWeight.w700)),
             ),
             InkWell(
               onTap: () => _confirmRemove(
                   context,
-                  'Remove this DAG card?',
+                  context.tr('Remove this DAG card?'),
                   () => ref
                       .read(dispatchProvider.notifier)
                       .removeParent(p.id)),
@@ -215,7 +217,7 @@ class _ConsoleTab extends ConsumerWidget {
               status: t.status,
               onDelete: () => _confirmRemove(
                   context,
-                  'Remove task "${t.label}"?',
+                  context.trArgs('Remove task "{label}"?', {'label': t.label}),
                   () => ref
                       .read(dispatchProvider.notifier)
                       .removeTask(p.id, t.id)),
@@ -223,7 +225,7 @@ class _ConsoleTab extends ConsumerWidget {
           const Divider(height: AppTokens.s24),
         ],
         if (d.activity.isNotEmpty)
-          Text('ACTIVITY',
+          Text(context.tr('ACTIVITY'),
               style: TextStyle(
                 color: c.textMuted,
                 fontSize: 11,
@@ -259,11 +261,11 @@ Future<void> _confirmRemove(
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(dctx, false),
-            child: const Text('Cancel')),
+            child: Text(dctx.tr('Cancel'))),
         FilledButton(
           style: FilledButton.styleFrom(backgroundColor: AppTokens.danger),
           onPressed: () => Navigator.pop(dctx, true),
-          child: const Text('Remove'),
+          child: Text(dctx.tr('Remove')),
         ),
       ],
     ),
@@ -339,7 +341,7 @@ class _WorkbenchTabState extends ConsumerState<_WorkbenchTab> {
         ref.watch(workbenchProvider)['_'];
     if (art == null) {
       return Center(
-        child: Text('No artifacts yet',
+        child: Text(context.tr('No artifacts yet'),
             style: TextStyle(color: c.textMuted, fontSize: 12)),
       );
     }
@@ -361,7 +363,7 @@ class _WorkbenchTabState extends ConsumerState<_WorkbenchTab> {
               ),
               Text(art.mode, style: TextStyle(color: c.textMuted, fontSize: 12)),
               IconButton(
-                tooltip: 'Close artifact',
+                tooltip: context.tr('Close artifact'),
                 icon: const Icon(Icons.close, size: 16),
                 onPressed: () => ref
                     .read(workbenchProvider.notifier)
@@ -417,7 +419,7 @@ class _WorkbenchTabState extends ConsumerState<_WorkbenchTab> {
                               _content = null;
                             }),
                             icon: const Icon(Icons.arrow_back, size: 14),
-                            label: const Text('Files'),
+                            label: Text(context.tr('Files')),
                           ),
                           const SizedBox(width: AppTokens.s8),
                           Expanded(
@@ -624,7 +626,7 @@ class _FilesTabState extends ConsumerState<_FilesTab> {
       if (mounted) {
         setState(() {
           _openPath = path;
-          _content = 'Failed to read: $e';
+          _content = context.trArgs('Failed to read: {e}', {'e': e});
           _loading = false;
         });
       }
@@ -686,13 +688,13 @@ class _FilesTabState extends ConsumerState<_FilesTab> {
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.folder_off_outlined, size: 32, color: c.textMuted),
           const SizedBox(height: AppTokens.s8),
-          Text('No workspace for this chat',
+          Text(context.tr('No workspace for this chat'),
               style: TextStyle(color: c.textMuted, fontSize: 12)),
           const SizedBox(height: AppTokens.s8),
           OutlinedButton.icon(
             onPressed: _pickRoot,
             icon: const Icon(Icons.folder_open, size: 16),
-            label: const Text('Open folder'),
+            label: Text(context.tr('Open folder')),
           ),
         ]),
       );
@@ -717,12 +719,12 @@ class _FilesTabState extends ConsumerState<_FilesTab> {
                       fontWeight: FontWeight.w600)),
             ),
             IconButton(
-              tooltip: 'Open folder',
+              tooltip: context.tr('Open folder'),
               icon: const Icon(Icons.drive_folder_upload_outlined, size: 16),
               onPressed: _pickRoot,
             ),
             IconButton(
-              tooltip: 'Reload',
+              tooltip: context.tr('Reload'),
               icon: const Icon(Icons.refresh, size: 16),
               onPressed: () => _list(_root!),
             ),
@@ -784,7 +786,7 @@ class _FilesTabState extends ConsumerState<_FilesTab> {
               AppTokens.s8, AppTokens.s4, AppTokens.s8, AppTokens.s4),
           child: Row(children: [
             IconButton(
-              tooltip: 'Back',
+              tooltip: context.tr('Back'),
               icon: const Icon(Icons.arrow_back, size: 16),
               onPressed: () => setState(() => _openPath = null),
             ),
@@ -804,7 +806,7 @@ class _FilesTabState extends ConsumerState<_FilesTab> {
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(AppTokens.s12),
             child: SelectableText(
-              _content.isEmpty ? '(empty file)' : _content,
+              _content.isEmpty ? context.tr('(empty file)') : _content,
               style: const TextStyle(
                   fontSize: 12, height: 1.4, fontFamily: AppTokens.fontMono),
             ),
@@ -815,7 +817,7 @@ class _FilesTabState extends ConsumerState<_FilesTab> {
             width: double.infinity,
             padding: const EdgeInsets.all(AppTokens.s8),
             color: AppTokens.warning.withValues(alpha: 0.12),
-            child: Text('Truncated to 512 KB',
+            child: Text(context.tr('Truncated to 512 KB'),
                 style: TextStyle(color: c.textMuted, fontSize: 11)),
           ),
       ],
@@ -853,7 +855,7 @@ class _AppsDockTab extends ConsumerWidget {
                     AppTokens.s8, AppTokens.s4, AppTokens.s4, AppTokens.s4),
                 child: Row(children: [
                   IconButton(
-                    tooltip: 'All apps',
+                    tooltip: context.tr('All apps'),
                     icon: const Icon(Icons.grid_view, size: 16),
                     onPressed: () =>
                         ref.read(runningAppsProvider.notifier).background(),
@@ -868,7 +870,7 @@ class _AppsDockTab extends ConsumerWidget {
                             fontWeight: FontWeight.w600)),
                   ),
                   IconButton(
-                    tooltip: 'Close app',
+                    tooltip: context.tr('Close app'),
                     icon: const Icon(Icons.close, size: 16),
                     onPressed: () =>
                         ref.read(runningAppsProvider.notifier).close(active.id),
@@ -887,7 +889,7 @@ class _AppsDockTab extends ConsumerWidget {
         }
         if (apps.isEmpty) {
           return Center(
-              child: Text('No apps installed',
+              child: Text(context.tr('No apps installed'),
                   style: TextStyle(color: c.textMuted, fontSize: 12)));
         }
         return ListView(
@@ -948,8 +950,14 @@ class _TerminalTabState extends ConsumerState<_TerminalTab> {
     final groups = ref.read(groupsProvider);
     final match = groups.where((g) => g.jid == widget.jid);
     final cwd = match.isEmpty ? null : match.first.workDir;
-    final uri = Uri.parse('$wsBase/api/ws/terminal'
-        '${cwd != null ? '?cwd=${Uri.encodeComponent(cwd)}' : ''}');
+    // API token as query param: this is a WS upgrade, so no header slot, and
+    // a LAN-exposed daemon gates /api/ws/terminal like any other /api route.
+    final tok = cfg.apiToken;
+    final query = <String>[
+      if (cwd != null) 'cwd=${Uri.encodeComponent(cwd)}',
+      if (tok != null && tok.isNotEmpty) 'token=${Uri.encodeComponent(tok)}',
+    ].join('&');
+    final uri = Uri.parse('$wsBase/api/ws/terminal${query.isEmpty ? '' : '?$query'}');
     try {
       final ch = WebSocketChannel.connect(uri);
       _channel = ch;

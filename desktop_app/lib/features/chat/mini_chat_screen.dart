@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/group.dart';
 import '../../theme/tokens.dart';
 import 'agents_provider.dart';
@@ -73,7 +74,7 @@ class MiniChatScreen extends ConsumerWidget {
           _MiniHeader(
             groups: groups,
             currentTitle: showNewChat || current == null
-                ? 'New chat'
+                ? context.tr('New chat')
                 : current.name,
           ),
           Container(height: 1, color: c.border),
@@ -144,18 +145,18 @@ class _MiniHeader extends ConsumerWidget {
         children: [
           Expanded(
             child: PopupMenuButton<String>(
-              tooltip: 'Switch session',
+              tooltip: context.tr('Switch session'),
               position: PopupMenuPosition.under,
               color: c.surface,
               onSelected: (v) =>
                   v == '__new__' ? startNewChat() : selectGroup(v),
               itemBuilder: (_) => [
-                const PopupMenuItem(
+                PopupMenuItem(
                   value: '__new__',
                   child: Row(children: [
-                    Icon(Icons.add, size: 16),
-                    SizedBox(width: 8),
-                    Text('New chat'),
+                    const Icon(Icons.add, size: 16),
+                    const SizedBox(width: 8),
+                    Text(context.tr('New chat')),
                   ]),
                 ),
                 if (groups.isNotEmpty) const PopupMenuDivider(),
@@ -211,17 +212,17 @@ class _MiniHeader extends ConsumerWidget {
           ),
           _IconBtn(
             icon: Icons.add,
-            tooltip: 'New chat',
+            tooltip: context.tr('New chat'),
             onTap: startNewChat,
           ),
           _IconBtn(
             icon: Icons.open_in_full,
-            tooltip: 'Open full window',
+            tooltip: context.tr('Open full window'),
             onTap: expand,
           ),
           _IconBtn(
             icon: Icons.close,
-            tooltip: isSubWindow ? 'Close' : 'Hide',
+            tooltip: isSubWindow ? context.tr('Close') : context.tr('Hide'),
             onTap: hide,
           ),
         ],

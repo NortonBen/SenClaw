@@ -8,12 +8,15 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 import '../core/daemon/app_shutdown.dart';
 import '../core/daemon/daemon_provider.dart';
 import '../core/daemon/startup_gate.dart';
+import '../core/i18n/l10n.dart';
+import '../core/i18n/locale_provider.dart';
 import '../core/notifications/system_notifier.dart';
 import '../core/transport/connection.dart';
 import '../core/update/update_provider.dart';
@@ -124,6 +127,10 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
   }
 
   Future<void> _initTray() async {
+    // Reading the provider both resolves the persisted language and keeps
+    // L10n.global current before the labels below are built.
+    ref.read(localeCodeProvider);
+    final t = L10n.global.t;
     await trayManager.setIcon(
       defaultTargetPlatform == TargetPlatform.windows
           ? (await _windowsTaskbarIsLight()
@@ -133,14 +140,14 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
       isTemplate: true, // macOS recolors a template image for the menu bar
     );
     await trayManager.setContextMenu(Menu(items: [
-      MenuItem(key: 'open', label: 'Open SenClaw'),
+      MenuItem(key: 'open', label: t('Open SenClaw')),
       // Only macOS has a native capture bridge — omitted rather than shown
       // disabled, so the menu doesn't advertise what it can't do.
       if (isCaptureSupported)
-        MenuItem(key: 'capture', label: 'Capture Screen…'),
-      MenuItem(key: 'diagnostics', label: 'Diagnostics…'),
+        MenuItem(key: 'capture', label: t('Capture Screen…')),
+      MenuItem(key: 'diagnostics', label: t('Diagnostics…')),
       MenuItem.separator(),
-      MenuItem(key: 'quit', label: 'Quit'),
+      MenuItem(key: 'quit', label: t('Quit')),
     ]));
   }
 
@@ -298,17 +305,28 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
         _showWindow();
         appRouter.go('/chat');
       });
+      // Tray labels are native — rebuild the menu when the language flips.
+      ref.listen(localeCodeProvider, (_, _) => _initTray());
     }
+    final localeCode = ref.watch(localeCodeProvider);
     return MaterialApp.router(
       title: 'SenClaw',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ref.watch(themeModeProvider),
-      // Required by the inline AppFlowyEditor in the Notes screen — it reads
-      // AppFlowyEditorLocalizations.current and throws without this delegate.
+      locale: Locale(localeCode),
+      supportedLocales: const [Locale('en'), Locale('vi')],
+      // L10nDelegate serves the app's own strings (context.tr). The AppFlowy
+      // delegate is required by the inline AppFlowyEditor in the Notes screen —
+      // it reads AppFlowyEditorLocalizations.current and throws without it.
+      // The Global* delegates localize Flutter's built-in widgets.
       localizationsDelegates: const [
+        L10nDelegate(),
         AppFlowyEditorLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
       ],
       routerConfig: appRouter,
       // StartupGate holds a splash until the daemon answers HTTP, so no route

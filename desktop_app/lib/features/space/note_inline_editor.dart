@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:appflowy_editor/appflowy_editor.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/space_models.dart';
 import '../../theme/tokens.dart';
 import 'note_editor_blocks.dart';
@@ -216,7 +217,9 @@ class _NoteInlineEditorState extends State<NoteInlineEditor> {
               toolbarElevation: 6,
             ),
             tooltipBuilder: (context, id, message, child) => Tooltip(
-              message: _viToolbarTooltips[id] ?? message,
+              message: _toolbarTooltips[id] == null
+                  ? message
+                  : context.tr(_toolbarTooltips[id]!),
               waitDuration: const Duration(milliseconds: 400),
               child: child,
             ),
@@ -235,21 +238,22 @@ class _NoteInlineEditorState extends State<NoteInlineEditor> {
     );
   }
 
-  /// Vietnamese tooltips for the floating (selection) toolbar's built-ins.
-  static const Map<String, String> _viToolbarTooltips = {
-    'editor.paragraph': 'Văn bản thường',
-    'editor.h1': 'Tiêu đề 1',
-    'editor.h2': 'Tiêu đề 2',
-    'editor.h3': 'Tiêu đề 3',
-    'editor.bold': 'Đậm (⌘B)',
-    'editor.italic': 'Nghiêng (⌘I)',
-    'editor.underline': 'Gạch chân (⌘U)',
-    'editor.strikethrough': 'Gạch ngang',
-    'editor.code': 'Mã inline (⌘E)',
-    'editor.quote': 'Trích dẫn',
-    'editor.bulleted_list': 'Danh sách chấm',
-    'editor.numbered_list': 'Danh sách số',
-    'editor.link': 'Chèn liên kết (⌘K)',
+  /// Our own tooltips for the floating (selection) toolbar's built-ins, keyed
+  /// by AppFlowy item id. Values are English keys translated at the call site.
+  static const Map<String, String> _toolbarTooltips = {
+    'editor.paragraph': 'Plain text',
+    'editor.h1': 'Heading 1',
+    'editor.h2': 'Heading 2',
+    'editor.h3': 'Heading 3',
+    'editor.bold': 'Bold (⌘B)',
+    'editor.italic': 'Italic (⌘I)',
+    'editor.underline': 'Underline (⌘U)',
+    'editor.strikethrough': 'Strikethrough',
+    'editor.code': 'Inline code (⌘E)',
+    'editor.quote': 'Quote',
+    'editor.bulleted_list': 'Bulleted list',
+    'editor.numbered_list': 'Numbered list',
+    'editor.link': 'Insert link (⌘K)',
   };
 
   /// Clicking the empty space under the note appends/focuses a trailing
@@ -302,7 +306,7 @@ class _NoteInlineEditorState extends State<NoteInlineEditor> {
               enabledBorder: InputBorder.none,
               focusedBorder: InputBorder.none,
               contentPadding: EdgeInsets.zero,
-              hintText: 'Tiêu đề',
+              hintText: context.tr('Title'),
               hintStyle: TextStyle(
                   color: c.textMuted, fontSize: 26, fontWeight: FontWeight.w700),
             ),
@@ -370,7 +374,9 @@ class _NoteInlineEditorState extends State<NoteInlineEditor> {
               prefixIcon: Icon(Icons.label_outline, size: 15, color: c.textMuted),
               prefixIconConstraints:
                   const BoxConstraints(minWidth: 20, minHeight: 0),
-              hintText: _tags.isEmpty ? 'Thêm nhãn…' : 'Thêm…',
+              hintText: _tags.isEmpty
+                  ? context.tr('Add label…')
+                  : context.tr('Add…'),
               hintStyle: TextStyle(color: c.textMuted, fontSize: 12.5),
             ),
             onChanged: (v) {
@@ -548,80 +554,80 @@ class _NoteToolbarState extends State<_NoteToolbar> {
         children: [
           _TbButton(
             icon: Icons.undo,
-            tip: 'Hoàn tác (⌘Z)',
+            tip: context.tr('Undo (⌘Z)'),
             onTap: () => editorState.undoManager.undo(),
           ),
           _TbButton(
             icon: Icons.redo,
-            tip: 'Làm lại (⇧⌘Z)',
+            tip: context.tr('Redo (⇧⌘Z)'),
             onTap: () => editorState.undoManager.redo(),
           ),
           divider(),
           for (final level in [1, 2, 3])
             _TbButton(
               label: 'H$level',
-              tip: 'Tiêu đề $level',
+              tip: context.trArgs('Heading {n}', {'n': level}),
               active: _blockActive(HeadingBlockKeys.type, level: level),
               onTap: () => _toBlock(HeadingBlockKeys.type, level: level),
             ),
           divider(),
           _TbButton(
             icon: Icons.check_box_outlined,
-            tip: 'Việc cần làm',
+            tip: context.tr('To-do'),
             active: _blockActive(TodoListBlockKeys.type),
             onTap: () => _toBlock(TodoListBlockKeys.type),
           ),
           _TbButton(
             icon: Icons.format_list_bulleted,
-            tip: 'Danh sách chấm',
+            tip: context.tr('Bulleted list'),
             active: _blockActive(BulletedListBlockKeys.type),
             onTap: () => _toBlock(BulletedListBlockKeys.type),
           ),
           _TbButton(
             icon: Icons.format_list_numbered,
-            tip: 'Danh sách số',
+            tip: context.tr('Numbered list'),
             active: _blockActive(NumberedListBlockKeys.type),
             onTap: () => _toBlock(NumberedListBlockKeys.type),
           ),
           _TbButton(
             icon: Icons.format_quote,
-            tip: 'Trích dẫn',
+            tip: context.tr('Quote'),
             active: _blockActive(QuoteBlockKeys.type),
             onTap: () => _toBlock(QuoteBlockKeys.type),
           ),
           _TbButton(
             icon: Icons.horizontal_rule,
-            tip: 'Đường kẻ ngang',
+            tip: context.tr('Divider'),
             onTap: _insertDivider,
           ),
           divider(),
           _TbButton(
             icon: Icons.format_bold,
-            tip: 'Đậm (⌘B)',
+            tip: context.tr('Bold (⌘B)'),
             active: _inlineActive(AppFlowyRichTextKeys.bold),
             onTap: () => _toggleInline(AppFlowyRichTextKeys.bold),
           ),
           _TbButton(
             icon: Icons.format_italic,
-            tip: 'Nghiêng (⌘I)',
+            tip: context.tr('Italic (⌘I)'),
             active: _inlineActive(AppFlowyRichTextKeys.italic),
             onTap: () => _toggleInline(AppFlowyRichTextKeys.italic),
           ),
           _TbButton(
             icon: Icons.format_underline,
-            tip: 'Gạch chân (⌘U)',
+            tip: context.tr('Underline (⌘U)'),
             active: _inlineActive(AppFlowyRichTextKeys.underline),
             onTap: () => _toggleInline(AppFlowyRichTextKeys.underline),
           ),
           _TbButton(
             icon: Icons.strikethrough_s,
-            tip: 'Gạch ngang',
+            tip: context.tr('Strikethrough'),
             active: _inlineActive(AppFlowyRichTextKeys.strikethrough),
             onTap: () => _toggleInline(AppFlowyRichTextKeys.strikethrough),
           ),
           _TbButton(
             icon: Icons.code,
-            tip: 'Mã inline (⌘E)',
+            tip: context.tr('Inline code (⌘E)'),
             active: _inlineActive(AppFlowyRichTextKeys.code),
             onTap: () => _toggleInline(AppFlowyRichTextKeys.code),
           ),
@@ -631,14 +637,16 @@ class _NoteToolbarState extends State<_NoteToolbar> {
           if (widget.onPin != null)
             _TbButton(
               icon: widget.pinned ? Icons.push_pin : Icons.push_pin_outlined,
-              tip: widget.pinned ? 'Bỏ ghim' : 'Ghim ghi chú',
+              tip: widget.pinned
+                  ? context.tr('Unpin')
+                  : context.tr('Pin note'),
               active: widget.pinned,
               onTap: widget.onPin!,
             ),
           if (widget.onDelete != null)
             _TbButton(
               icon: Icons.delete_outline,
-              tip: 'Xoá ghi chú',
+              tip: context.tr('Delete note'),
               color: AppTokens.danger,
               onTap: widget.onDelete!,
             ),
@@ -714,8 +722,8 @@ class _StatusChip extends StatelessWidget {
       valueListenable: saveStatus,
       builder: (context, status, _) {
         final (label, color) = switch (status) {
-          _SaveStatus.dirty => ('Đang lưu…', c.textMuted),
-          _SaveStatus.saved => ('Đã lưu', AppTokens.success),
+          _SaveStatus.dirty => (context.tr('Saving…'), c.textMuted),
+          _SaveStatus.saved => (context.tr('Saved'), AppTokens.success),
           _SaveStatus.clean => (null, c.textMuted),
         };
         return Padding(
@@ -734,7 +742,8 @@ class _StatusChip extends StatelessWidget {
                 Text('  ·  ',
                     style: TextStyle(fontSize: 11.5, color: c.textMuted)),
               ],
-              Text('$wordCount từ',
+              Text(
+                  context.trPlural(wordCount, '{n} word', '{n} words'),
                   style: TextStyle(fontSize: 11.5, color: c.textMuted)),
             ],
           ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/prefs.dart';
 import '../../theme/tokens.dart';
 import '../../core/transport/connection.dart';
@@ -31,7 +32,8 @@ class ChatScreen extends ConsumerWidget {
     // Chat links honor the user's "Mở link" default (Plugins → Widget): warm
     // the cached defaults and (re-)register the in-app mini-browser opener
     // with this build's (context, ref) — openEventLink guards on mounted.
-    ChatLinkFlow.prefetch(ref.read(appConfigProvider).httpBase);
+    ChatLinkFlow.prefetch(ref.read(appConfigProvider).httpBase,
+        authHeaders: ref.read(appConfigProvider).authHeaders);
     ChatLinkFlow.openInternal =
         (route) => openEventLink(context, ref, route);
     final groups = ref.watch(groupsProvider);
@@ -65,7 +67,7 @@ class ChatScreen extends ConsumerWidget {
                   AppTokens.s4,
                 ),
                 child: Text(
-                  'Sessions',
+                  context.tr('Sessions'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(

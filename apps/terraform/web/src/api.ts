@@ -103,6 +103,10 @@ export const api = {
     req<{ workspace: Workspace }>(`/api/workspaces/${id}`, { method: 'POST', body: JSON.stringify(body) }),
   subdirs: (id: number) =>
     req<{ root_has_tf: boolean; subdir: string; subdirs: string[] }>(`/api/workspaces/${id}/subdirs`),
+  tfvarsFiles: (id: number) =>
+    req<{ files: { rel: string; display: string; in_work_dir: boolean }[]; current: string }>(
+      `/api/workspaces/${id}/tfvars-files`,
+    ),
   openDir: (id: number) => req<{ dir: string }>(`/api/workspaces/${id}/open-dir`, { method: 'POST', body: '{}' }),
   wsDelete: (id: number) =>
     req<{ ok: boolean }>(`/api/workspaces/${id}/delete`, { method: 'POST', body: JSON.stringify({ confirm: true }) }),

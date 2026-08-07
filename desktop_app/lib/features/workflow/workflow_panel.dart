@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/workflow_models.dart';
 import '../../theme/tokens.dart';
 import 'workflow_providers.dart';
@@ -62,7 +63,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
       try {
         (_, content) = await fetchWorkflowDefinition(ref, name);
       } catch (e) {
-        _snack('Cannot load definition: $e');
+        _snack(L10n.global.tArgs('Cannot load definition: {e}', {'e': e}));
         return;
       }
     }
@@ -71,7 +72,9 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
     final saved = await showDialog<bool>(
       context: context,
       builder: (ctx) => _EditorDialog(
-        title: name == null ? 'New workflow' : 'Edit: $name',
+        title: name == null
+            ? ctx.tr('New workflow')
+            : ctx.trArgs('Edit: {name}', {'name': name}),
         controller: controller,
       ),
     );
@@ -79,13 +82,13 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
     try {
       if (name == null) {
         final created = await createWorkflow(ref, controller.text);
-        _snack('Created workflow "$created"');
+        _snack(L10n.global.tArgs('Created workflow "{name}"', {'name': created}));
       } else {
         await updateWorkflow(ref, name, controller.text);
-        _snack('Saved "$name"');
+        _snack(L10n.global.tArgs('Saved "{name}"', {'name': name}));
       }
     } catch (e) {
-      _snack('Save failed: $e');
+      _snack(L10n.global.tArgs('Save failed: {e}', {'e': e}));
     }
   }
 
@@ -96,7 +99,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
     try {
       (llmParallel, agentRetries) = await fetchWorkflowSettings(ref);
     } catch (e) {
-      _snack('Cannot load settings: $e');
+      _snack(L10n.global.tArgs('Cannot load settings: {e}', {'e': e}));
       return;
     }
     if (!mounted) return;
@@ -106,7 +109,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Execution settings'),
+        title: Text(ctx.tr('Execution settings')),
         content: SizedBox(
           width: 400,
           child: Column(
@@ -116,28 +119,28 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
               TextField(
                 controller: llmCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Parallel LLM requests (1–16)',
-                  helperText:
-                      'Many providers allow only 1 request at a time. Agent steps beyond the budget WAIT as pending — their timeout only starts when they run.',
+                decoration: InputDecoration(
+                  labelText: ctx.tr('Parallel LLM requests (1–16)'),
+                  helperText: ctx.tr(
+                      'Many providers allow only 1 request at a time. Agent steps beyond the budget WAIT as pending — their timeout only starts when they run.'),
                   helperMaxLines: 4,
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: AppTokens.s12),
               TextField(
                 controller: retryCtrl,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Retries when no result (0–5)',
-                  helperText:
-                      'Agent steps that hit a session error or return empty text are retried this many times before failing.',
+                decoration: InputDecoration(
+                  labelText: ctx.tr('Retries when no result (0–5)'),
+                  helperText: ctx.tr(
+                      'Agent steps that hit a session error or return empty text are retried this many times before failing.'),
                   helperMaxLines: 3,
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: AppTokens.s8),
-              Text('Applied live — queued steps pick it up immediately.',
+              Text(ctx.tr('Applied live — queued steps pick it up immediately.'),
                   style: TextStyle(color: c.textMuted, fontSize: 11)),
             ],
           ),
@@ -145,10 +148,10 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(ctx.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Save')),
+              child: Text(ctx.tr('Save'))),
         ],
       ),
     );
@@ -157,9 +160,10 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
       final p = (int.tryParse(llmCtrl.text.trim()) ?? 1).clamp(1, 16);
       final r = (int.tryParse(retryCtrl.text.trim()) ?? 1).clamp(0, 5);
       await saveWorkflowSettings(ref, p, r);
-      _snack('Settings saved: $p parallel, $r retries');
+      _snack(L10n.global
+          .tArgs('Settings saved: {p} parallel, {r} retries', {'p': p, 'r': r}));
     } catch (e) {
-      _snack('Save failed: $e');
+      _snack(L10n.global.tArgs('Save failed: {e}', {'e': e}));
     }
   }
 
@@ -174,7 +178,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
       barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlg) => AlertDialog(
-          title: const Text('✨ Draft with agent'),
+          title: Text(ctx.tr('✨ Draft with agent')),
           content: SizedBox(
             width: 520,
             child: Column(
@@ -182,9 +186,10 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Describe the routine — the agent picks matching personas, '
-                  'builds the steps + guidance, and returns a draft for review. '
-                  'Takes ~30–120s.',
+                  ctx.tr(
+                      'Describe the routine — the agent picks matching personas, '
+                      'builds the steps + guidance, and returns a draft for review. '
+                      'Takes ~30–120s.'),
                   style: TextStyle(
                       color: ctx.colors.textSecondary, fontSize: 12),
                 ),
@@ -193,10 +198,10 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
                   controller: descCtrl,
                   maxLines: 5,
                   enabled: !busy,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    hintText:
-                        'e.g. Weekly: research a topic from 3 angles in parallel, fetch pricing with a script, then summarize into one report.',
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
+                    hintText: ctx.tr(
+                        'e.g. Weekly: research a topic from 3 angles in parallel, fetch pricing with a script, then summarize into one report.'),
                   ),
                 ),
                 if (busy) ...[
@@ -209,7 +214,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
           actions: [
             TextButton(
               onPressed: busy ? null : () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
+              child: Text(ctx.tr('Cancel')),
             ),
             FilledButton(
               onPressed: busy
@@ -224,12 +229,13 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
                       } catch (e) {
                         setDlg(() => busy = false);
                         if (ctx.mounted) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                              SnackBar(content: Text('Draft failed: $e')));
+                          ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                              content: Text(ctx.trArgs(
+                                  'Draft failed: {e}', {'e': e}))));
                         }
                       }
                     },
-              child: Text(busy ? 'Drafting…' : 'Draft'),
+              child: Text(busy ? ctx.tr('Drafting…') : ctx.tr('Draft')),
             ),
           ],
         ),
@@ -256,7 +262,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Tune guidance: ${def.name}'),
+        title: Text(ctx.trArgs('Tune guidance: {name}', {'name': def.name})),
         content: SizedBox(
           width: 620,
           height: 460,
@@ -265,12 +271,13 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Guidance is the RULES layer (persona = identity, prompt = task). '
-                  'Editing here never touches the DAG structure; empty = remove.',
+                  ctx.tr(
+                      'Guidance is the RULES layer (persona = identity, prompt = task). '
+                      'Editing here never touches the DAG structure; empty = remove.'),
                   style: TextStyle(color: c.textSecondary, fontSize: 12),
                 ),
                 const SizedBox(height: AppTokens.s12),
-                Text('Workflow guidance (applies to all agent steps)',
+                Text(ctx.tr('Workflow guidance (applies to all agent steps)'),
                     style: TextStyle(
                         color: c.textPrimary,
                         fontSize: 13,
@@ -283,7 +290,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
                       const InputDecoration(border: OutlineInputBorder()),
                 ),
                 const SizedBox(height: AppTokens.s12),
-                Text('Workspace (cwd of every step, persists across runs)',
+                Text(ctx.tr('Workspace (cwd of every step, persists across runs)'),
                     style: TextStyle(
                         color: c.textPrimary,
                         fontSize: 13,
@@ -291,10 +298,10 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
                 const SizedBox(height: 4),
                 TextField(
                   controller: wsCtrl,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    border: const OutlineInputBorder(),
                     isDense: true,
-                    hintText: 'empty = default per-workflow directory',
+                    hintText: ctx.tr('empty = default per-workflow directory'),
                   ),
                   style: const TextStyle(fontSize: 13),
                 ),
@@ -327,7 +334,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
                                       : AppTokens.cyan,
                                   fontSize: 11)),
                           const Spacer(),
-                          Text('timeout (s): ',
+                          Text('${ctx.tr('timeout (s)')}: ',
                               style: TextStyle(
                                   color: c.textSecondary, fontSize: 11)),
                           SizedBox(
@@ -349,10 +356,10 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
                           TextField(
                             controller: stepGuidance[s.id],
                             maxLines: 3,
-                            decoration: const InputDecoration(
-                              border: OutlineInputBorder(),
-                              hintText:
-                                  'Rules for this step: output format, scope, tone…',
+                            decoration: InputDecoration(
+                              border: const OutlineInputBorder(),
+                              hintText: ctx.tr(
+                                  'Rules for this step: output format, scope, tone…'),
                             ),
                             style: const TextStyle(fontSize: 13),
                           ),
@@ -368,10 +375,10 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(ctx.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Save')),
+              child: Text(ctx.tr('Save'))),
         ],
       ),
     );
@@ -390,9 +397,10 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
         'workspace': wsCtrl.text,
         'steps': steps,
       });
-      _snack('Saved guidance for "${def.name}"');
+      _snack(L10n.global
+          .tArgs('Saved guidance for "{name}"', {'name': def.name}));
     } catch (e) {
-      _snack('Save failed: $e');
+      _snack(L10n.global.tArgs('Save failed: {e}', {'e': e}));
     }
   }
 
@@ -415,7 +423,7 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => _EditorDialog(
-          title: 'Import workflow (paste .md content)',
+          title: ctx.tr('Import workflow (paste .md content)'),
           controller: controller,
           okLabel: 'Import',
         ),
@@ -426,22 +434,23 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
     if (content == null || content.trim().isEmpty) return;
     try {
       final created = await createWorkflow(ref, content);
-      _snack('Imported workflow "$created"');
+      _snack(
+          L10n.global.tArgs('Imported workflow "{name}"', {'name': created}));
     } catch (e) {
       final msg = '$e';
       if (msg.contains('already exists') && mounted) {
         final overwrite = await showDialog<bool>(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('Workflow already exists'),
-            content: const Text('Overwrite the existing definition?'),
+            title: Text(ctx.tr('Workflow already exists')),
+            content: Text(ctx.tr('Overwrite the existing definition?')),
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Cancel')),
+                  child: Text(ctx.tr('Cancel'))),
               FilledButton(
                   onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Overwrite')),
+                  child: Text(ctx.tr('Overwrite'))),
             ],
           ),
         );
@@ -449,13 +458,14 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
           try {
             final created =
                 await createWorkflow(ref, content, overwrite: true);
-            _snack('Imported workflow "$created" (overwritten)');
+            _snack(L10n.global.tArgs(
+                'Imported workflow "{name}" (overwritten)', {'name': created}));
           } catch (e2) {
-            _snack('Import failed: $e2');
+            _snack(L10n.global.tArgs('Import failed: {e}', {'e': e2}));
           }
         }
       } else {
-        _snack('Import failed: $msg');
+        _snack(L10n.global.tArgs('Import failed: {e}', {'e': msg}));
       }
     }
   }
@@ -467,21 +477,21 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
       if (!kIsWeb) {
         // Native: save-file dialog straight to disk.
         final path = await FilePicker.platform.saveFile(
-          dialogTitle: 'Export workflow',
+          dialogTitle: L10n.global.t('Export workflow'),
           fileName: fileName,
           type: FileType.custom,
           allowedExtensions: ['md'],
         );
         if (path == null) return;
         await File(path).writeAsString(content);
-        _snack('Exported to $path');
+        _snack(L10n.global.tArgs('Exported to {path}', {'path': path}));
         return;
       }
       // Web build: show + copy.
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: Text('Export: $fileName'),
+          title: Text(ctx.trArgs('Export: {name}', {'name': fileName})),
           content: SizedBox(
             width: 560,
             child: SingleChildScrollView(
@@ -495,16 +505,16 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
                 await Clipboard.setData(ClipboardData(text: content));
                 if (ctx.mounted) Navigator.pop(ctx);
               },
-              child: const Text('Copy to clipboard'),
+              child: Text(ctx.tr('Copy to clipboard')),
             ),
             FilledButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('Close')),
+                child: Text(ctx.tr('Close'))),
           ],
         ),
       );
     } catch (e) {
-      _snack('Export failed: $e');
+      _snack(L10n.global.tArgs('Export failed: {e}', {'e': e}));
     }
   }
 
@@ -512,17 +522,17 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Delete workflow "$name"?'),
+        title: Text(ctx.trArgs('Delete workflow "{name}"?', {'name': name})),
         content:
-            const Text('Run history and the workspace directory are kept.'),
+            Text(ctx.tr('Run history and the workspace directory are kept.')),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(ctx.tr('Cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: AppTokens.danger),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
+            child: Text(ctx.tr('Delete')),
           ),
         ],
       ),
@@ -530,9 +540,9 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
     if (ok != true) return;
     try {
       await deleteWorkflow(ref, name);
-      _snack('Deleted "$name"');
+      _snack(L10n.global.tArgs('Deleted "{name}"', {'name': name}));
     } catch (e) {
-      _snack('Delete failed: $e');
+      _snack(L10n.global.tArgs('Delete failed: {e}', {'e': e}));
     }
   }
 
@@ -577,50 +587,51 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
             children: [
               Icon(Icons.account_tree_outlined, color: c.accent, size: 20),
               const SizedBox(width: AppTokens.s8),
-              Text('Workflow templates',
+              Text(context.tr('Workflow templates'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,
                       fontWeight: FontWeight.w700)),
               const SizedBox(width: AppTokens.s8),
               Expanded(
-                child: Text('multi-step routine definitions (agent + script)',
+                child: Text(
+                    context.tr('multi-step routine definitions (agent + script)'),
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: c.textSecondary, fontSize: 12)),
               ),
               OutlinedButton.icon(
                 onPressed: () => context.go('/workflow-runs'),
                 icon: const Icon(Icons.history_rounded, size: 16),
-                label: const Text('Run history'),
+                label: Text(context.tr('Run history')),
               ),
               const SizedBox(width: AppTokens.s8),
               OutlinedButton.icon(
                 onPressed: _draft,
                 icon: const Icon(Icons.auto_awesome, size: 16),
-                label: const Text('Draft with agent'),
+                label: Text(context.tr('Draft with agent')),
               ),
               const SizedBox(width: AppTokens.s8),
               OutlinedButton.icon(
                 onPressed: _import,
                 icon: const Icon(Icons.upload_outlined, size: 16),
-                label: const Text('Import'),
+                label: Text(context.tr('Import')),
               ),
               const SizedBox(width: AppTokens.s8),
               FilledButton.icon(
                 onPressed: () => _openEditor(),
                 icon: const Icon(Icons.add_rounded, size: 16),
-                label: const Text('New workflow'),
+                label: Text(context.tr('New workflow')),
               ),
               const SizedBox(width: AppTokens.s8),
               IconButton(
                 onPressed: _openSettings,
                 icon: const Icon(Icons.settings_outlined, size: 18),
-                tooltip: 'Execution settings (LLM parallel, retries)',
+                tooltip: context.tr('Execution settings (LLM parallel, retries)'),
               ),
               IconButton(
                 onPressed: _refreshAll,
                 icon: const Icon(Icons.refresh_rounded, size: 18),
-                tooltip: 'Refresh',
+                tooltip: context.tr('Refresh'),
               ),
             ],
           ),
@@ -635,13 +646,14 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
     return defs.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(
-          child: Text('Cannot load workflows: $e',
+          child: Text(context.trArgs('Cannot load workflows: {e}', {'e': e}),
               style: TextStyle(color: c.textSecondary))),
       data: (list) {
         if (list.isEmpty) {
           return Center(
             child: Text(
-                'No workflows yet — click "New workflow" or "Import" to add one.\nDefinitions live in ~/senclaw/workflows/*.md',
+                context.tr(
+                    'No workflows yet — click "New workflow" or "Import" to add one.\nDefinitions live in ~/senclaw/workflows/*.md'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: c.textSecondary, fontSize: 13)),
           );
@@ -670,7 +682,8 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
                                   color: c.textPrimary,
                                   fontWeight: FontWeight.w600)),
                           const SizedBox(width: AppTokens.s8),
-                          _chip(c, '${d.stepCount} step'),
+                          _chip(c,
+                              context.trArgs('{n} step', {'n': d.stepCount})),
                           for (final inp in d.inputs.take(4)) ...[
                             const SizedBox(width: 4),
                             _chip(c, inp.name,
@@ -690,32 +703,32 @@ class _WorkflowPanelState extends ConsumerState<WorkflowPanel> {
                     ),
                   ),
                   IconButton(
-                      tooltip: 'Run',
+                      tooltip: context.tr('Run'),
                       onPressed: () => _run(d),
                       icon: Icon(Icons.play_arrow_rounded,
                           color: AppTokens.success, size: 20)),
                   IconButton(
-                      tooltip: 'Tune guidance',
+                      tooltip: context.tr('Tune guidance'),
                       onPressed: () => _openTune(d),
                       icon: Icon(Icons.tune_rounded,
                           color: c.textSecondary, size: 18)),
                   IconButton(
-                      tooltip: 'Details',
+                      tooltip: context.tr('Details'),
                       onPressed: () => _showDetail(d),
                       icon: Icon(Icons.visibility_outlined,
                           color: c.textSecondary, size: 18)),
                   IconButton(
-                      tooltip: 'Edit',
+                      tooltip: context.tr('Edit'),
                       onPressed: () => _openEditor(name: d.name),
                       icon: Icon(Icons.edit_outlined,
                           color: c.textSecondary, size: 18)),
                   IconButton(
-                      tooltip: 'Export',
+                      tooltip: context.tr('Export'),
                       onPressed: () => _export(d.name),
                       icon: Icon(Icons.download_outlined,
                           color: c.textSecondary, size: 18)),
                   IconButton(
-                      tooltip: 'Delete',
+                      tooltip: context.tr('Delete'),
                       onPressed: () => _delete(d.name),
                       icon: Icon(Icons.delete_outline,
                           color: AppTokens.danger, size: 18)),
@@ -769,7 +782,7 @@ class _EditorDialog extends StatelessWidget {
           style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
           decoration: InputDecoration(
             border: const OutlineInputBorder(),
-            hintText: 'Markdown with YAML frontmatter…',
+            hintText: context.tr('Markdown with YAML frontmatter…'),
             hintStyle: TextStyle(color: c.textSecondary),
           ),
         ),
@@ -777,10 +790,10 @@ class _EditorDialog extends StatelessWidget {
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel')),
+            child: Text(context.tr('Cancel'))),
         FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(okLabel)),
+            child: Text(context.tr(okLabel))),
       ],
     );
   }
@@ -799,7 +812,7 @@ class _DetailDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.colors;
     return AlertDialog(
-      title: Text('Workflow: ${def.name}'),
+      title: Text(context.trArgs('Workflow: {name}', {'name': def.name})),
       content: SizedBox(
         width: 560,
         child: SingleChildScrollView(
@@ -812,7 +825,9 @@ class _DetailDialog extends StatelessWidget {
                 const SizedBox(height: AppTokens.s12),
               ],
               if ((def.workspace ?? '').isNotEmpty) ...[
-                Text('Workspace: ${def.workspace}',
+                Text(
+                    context.trArgs(
+                        'Workspace: {path}', {'path': def.workspace}),
                     style: TextStyle(
                         color: c.textSecondary,
                         fontSize: 12,
@@ -820,7 +835,7 @@ class _DetailDialog extends StatelessWidget {
                 const SizedBox(height: AppTokens.s12),
               ],
               if (def.inputs.isNotEmpty) ...[
-                Text('Inputs',
+                Text(context.tr('Inputs'),
                     style: TextStyle(
                         color: c.textPrimary, fontWeight: FontWeight.w600)),
                 const SizedBox(height: AppTokens.s6),
@@ -829,15 +844,15 @@ class _DetailDialog extends StatelessWidget {
                     padding: const EdgeInsets.only(bottom: 4),
                     child: Text(
                       '• ${i.name}'
-                      '${i.required ? ' (required)' : ''}'
-                      '${i.defaultValue != null ? ' [default: ${i.defaultValue}]' : ''}'
+                      '${i.required ? ' ${context.tr('(required)')}' : ''}'
+                      '${i.defaultValue != null ? ' [${context.trArgs('default: {v}', {'v': i.defaultValue})}]' : ''}'
                       '${i.description != null ? ' — ${i.description}' : ''}',
                       style: TextStyle(color: c.textSecondary, fontSize: 12),
                     ),
                   ),
                 const SizedBox(height: AppTokens.s12),
               ],
-              Text('Steps (${def.steps.length})',
+              Text(context.trArgs('Steps ({n})', {'n': def.steps.length}),
                   style: TextStyle(
                       color: c.textPrimary, fontWeight: FontWeight.w600)),
               const SizedBox(height: AppTokens.s6),
@@ -876,7 +891,9 @@ class _DetailDialog extends StatelessWidget {
                         ],
                       ]),
                       if (s.dependsOn.isNotEmpty)
-                        Text('← waits for: ${s.dependsOn.join(', ')}',
+                        Text(
+                            context.trArgs('← waits for: {steps}',
+                                {'steps': s.dependsOn.join(', ')}),
                             style: TextStyle(
                                 color: c.textSecondary, fontSize: 11)),
                     ],
@@ -887,11 +904,11 @@ class _DetailDialog extends StatelessWidget {
         ),
       ),
       actions: [
-        TextButton(onPressed: onEdit, child: const Text('Edit')),
+        TextButton(onPressed: onEdit, child: Text(context.tr('Edit'))),
         FilledButton.icon(
           onPressed: onRun,
           icon: const Icon(Icons.play_arrow_rounded, size: 16),
-          label: const Text('Run'),
+          label: Text(context.tr('Run')),
         ),
       ],
     );

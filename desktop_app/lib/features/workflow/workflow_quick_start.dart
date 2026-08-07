@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/workflow_models.dart';
 import '../../theme/tokens.dart';
 import '../chat/agents_provider.dart' show selectedJidProvider;
@@ -64,7 +65,8 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
         .map((i) => i.name)
         .toList();
     if (missing.isNotEmpty) {
-      _snack('Missing required input(s): ${missing.join(', ')}');
+      _snack(L10n.global.tArgs(
+          'Missing required input(s): {names}', {'names': missing.join(', ')}));
       return;
     }
     setState(() => _starting = true);
@@ -74,12 +76,12 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
           if (e.value.text.trim().isNotEmpty) e.key: e.value.text,
       };
       final runId = await startWorkflowRun(ref, def.name, inputs);
-      _snack('Started: $runId');
+      _snack(L10n.global.tArgs('Started: {id}', {'id': runId}));
       // Stay in Chat: the run appears as a "workflow session" whose pane
       // shows the live flow activity (selecting a jid dismisses New Session).
       ref.read(selectedJidProvider.notifier).state = wfRunJid(runId);
     } catch (e) {
-      _snack('Run failed: $e');
+      _snack(L10n.global.tArgs('Run failed: {e}', {'e': e}));
     } finally {
       if (mounted) setState(() => _starting = false);
     }
@@ -87,7 +89,7 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
 
   Future<void> _createWithAi() async {
     if (_desc.text.trim().isEmpty) {
-      _snack('Describe the routine first');
+      _snack(L10n.global.t('Describe the routine first'));
       return;
     }
     setState(() => _drafting = true);
@@ -96,7 +98,7 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
       // Agent authors a validated draft — nothing is saved yet.
       (_, content) = await draftWorkflow(ref, _desc.text);
     } catch (e) {
-      _snack('Draft failed: $e');
+      _snack(L10n.global.tArgs('Draft failed: {e}', {'e': e}));
       if (mounted) setState(() => _drafting = false);
       return;
     }
@@ -117,7 +119,7 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
       barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlg) => AlertDialog(
-          title: const Text('Review draft — edit if needed, then Save'),
+          title: Text(ctx.tr('Review draft — edit if needed, then Save')),
           content: SizedBox(
             width: 640,
             height: 440,
@@ -125,8 +127,9 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'The content is validated (DAG, personas, cycles…) on save. '
-                  'Cancel discards the draft.',
+                  ctx.tr(
+                      'The content is validated (DAG, personas, cycles…) on save. '
+                      'Cancel discards the draft.'),
                   style: TextStyle(color: c.textSecondary, fontSize: 12),
                 ),
                 const SizedBox(height: AppTokens.s8),
@@ -149,7 +152,7 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
           actions: [
             TextButton(
               onPressed: busy ? null : () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
+              child: Text(ctx.tr('Cancel')),
             ),
             FilledButton(
               onPressed: busy
@@ -163,8 +166,9 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
                             await ref.refresh(workflowsProvider.future);
                         _pick(created, defs);
                         _desc.clear();
-                        _snack(
-                            'Saved "$created" — fill the inputs and press Run');
+                        _snack(L10n.global.tArgs(
+                            'Saved "{name}" — fill the inputs and press Run',
+                            {'name': created}));
                         if (ctx.mounted) Navigator.pop(ctx);
                       } catch (e) {
                         setDlg(() => busy = false);
@@ -173,18 +177,18 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
                           final overwrite = await showDialog<bool>(
                             context: ctx,
                             builder: (ctx2) => AlertDialog(
-                              title: const Text('Workflow already exists'),
-                              content: const Text(
-                                  'Overwrite the existing definition?'),
+                              title: Text(ctx2.tr('Workflow already exists')),
+                              content: Text(ctx2
+                                  .tr('Overwrite the existing definition?')),
                               actions: [
                                 TextButton(
                                     onPressed: () =>
                                         Navigator.pop(ctx2, false),
-                                    child: const Text('Cancel')),
+                                    child: Text(ctx2.tr('Cancel'))),
                                 FilledButton(
                                     onPressed: () =>
                                         Navigator.pop(ctx2, true),
-                                    child: const Text('Overwrite')),
+                                    child: Text(ctx2.tr('Overwrite'))),
                               ],
                             ),
                           );
@@ -197,21 +201,25 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
                                   .refresh(workflowsProvider.future);
                               _pick(created, defs);
                               _desc.clear();
-                              _snack(
-                                  'Saved "$created" — fill the inputs and press Run');
+                              _snack(L10n.global.tArgs(
+                                  'Saved "{name}" — fill the inputs and press Run',
+                                  {'name': created}));
                               if (ctx.mounted) Navigator.pop(ctx);
                               return;
                             } catch (e2) {
-                              _snack('Save failed: $e2');
+                              _snack(L10n.global
+                                  .tArgs('Save failed: {e}', {'e': e2}));
                             }
                           }
                         } else {
                           // Validation error — keep the editor open.
-                          _snack('Save failed: $msg');
+                          _snack(
+                              L10n.global.tArgs('Save failed: {e}', {'e': msg}));
                         }
                       }
                     },
-              child: Text(busy ? 'Saving…' : 'Save workflow'),
+              child: Text(
+                  busy ? ctx.tr('Saving…') : ctx.tr('Save workflow')),
             ),
           ],
         ),
@@ -251,7 +259,7 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
               Row(children: [
                 Icon(Icons.account_tree_outlined, size: 16, color: c.accent),
                 const SizedBox(width: AppTokens.s6),
-                Text('Run a saved workflow',
+                Text(context.tr('Run a saved workflow'),
                     style: TextStyle(
                         color: c.textPrimary,
                         fontWeight: FontWeight.w600,
@@ -273,8 +281,8 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
                     isExpanded: true,
                     hint: Text(
                         defs.isEmpty
-                            ? 'No workflows yet — create one below'
-                            : 'Pick a workflow…',
+                            ? context.tr('No workflows yet — create one below')
+                            : context.tr('Pick a workflow…'),
                         style:
                             TextStyle(color: c.textMuted, fontSize: 13)),
                     items: [
@@ -282,7 +290,7 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
                         DropdownMenuItem(
                           value: d.name,
                           child: Text(
-                            '${d.name} · ${d.stepCount} step${(d.description ?? '').isEmpty ? '' : ' — ${d.description}'}',
+                            '${d.name} · ${context.trArgs('{n} step', {'n': d.stepCount})}${(d.description ?? '').isEmpty ? '' : ' — ${d.description}'}',
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                                 color: c.textPrimary, fontSize: 13),
@@ -319,7 +327,9 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
                           height: 14,
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.play_arrow_rounded, size: 18),
-                  label: Text(_starting ? 'Starting…' : 'Run workflow'),
+                  label: Text(_starting
+                      ? context.tr('Starting…')
+                      : context.tr('Run workflow')),
                 ),
               ],
             ],
@@ -327,7 +337,7 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
         ),
         const SizedBox(height: AppTokens.s8),
         Center(
-            child: Text('or',
+            child: Text(context.tr('or'),
                 style: TextStyle(color: c.textMuted, fontSize: 12))),
         const SizedBox(height: AppTokens.s8),
         // ── Create a new one with the agent ──
@@ -340,7 +350,7 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
               Row(children: [
                 Icon(Icons.auto_awesome, size: 16, color: c.accent),
                 const SizedBox(width: AppTokens.s6),
-                Text('Create a new workflow with the AI agent',
+                Text(context.tr('Create a new workflow with the AI agent'),
                     style: TextStyle(
                         color: c.textPrimary,
                         fontWeight: FontWeight.w600,
@@ -351,10 +361,10 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
                 controller: _desc,
                 maxLines: 4,
                 enabled: !_drafting,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  hintText:
-                      'Describe the routine… e.g. Weekly: research a topic from 3 angles in parallel, fetch pricing with a script, then summarize into one report.',
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
+                  hintText: context.tr(
+                      'Describe the routine… e.g. Weekly: research a topic from 3 angles in parallel, fetch pricing with a script, then summarize into one report.'),
                 ),
               ),
               const SizedBox(height: AppTokens.s8),
@@ -367,12 +377,13 @@ class _WorkflowQuickStartState extends ConsumerState<WorkflowQuickStart> {
                         child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.auto_awesome, size: 16),
                 label: Text(_drafting
-                    ? 'Agent is drafting (30–120s)…'
-                    : 'Create workflow'),
+                    ? context.tr('Agent is drafting (30–120s)…')
+                    : context.tr('Create workflow')),
               ),
               const SizedBox(height: AppTokens.s6),
               Text(
-                'The draft opens in an editor for review — Save to keep it, Cancel to discard.',
+                context.tr(
+                    'The draft opens in an editor for review — Save to keep it, Cancel to discard.'),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: c.textMuted, fontSize: 11),
               ),

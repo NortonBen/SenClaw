@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../i18n/l10n.dart';
 import '../transport/connection.dart';
 import 'daemon_provider.dart';
 import 'daemon_supervisor.dart';
@@ -148,7 +149,7 @@ class _DaemonStartingSplash extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2.4),
             ),
             const SizedBox(height: 16),
-            Text('Starting SenClaw daemon…',
+            Text(context.tr('Starting SenClaw daemon…'),
                 style: Theme.of(context).textTheme.bodyMedium),
             if (lastLog != null) ...[
               const SizedBox(height: 10),
@@ -190,7 +191,7 @@ class _DaemonStartedSplash extends StatelessWidget {
             Icon(Icons.check_circle_rounded,
                 size: 52, color: Colors.green.shade500),
             const SizedBox(height: 16),
-            Text('Daemon started',
+            Text(context.tr('Daemon started'),
                 style: Theme.of(context).textTheme.titleMedium),
           ],
         ),
@@ -222,7 +223,7 @@ class _StartupError extends ConsumerWidget {
               Icon(Icons.error_outline_rounded,
                   size: 44, color: scheme.error),
               const SizedBox(height: 16),
-              Text('Cannot reach the SenClaw daemon',
+              Text(context.tr('Cannot reach the SenClaw daemon'),
                   style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
               Text(
@@ -257,7 +258,7 @@ class _StartupError extends ConsumerWidget {
               FilledButton.icon(
                 onPressed: onRetry,
                 icon: const Icon(Icons.refresh_rounded, size: 18),
-                label: const Text('Retry'),
+                label: Text(context.tr('Retry')),
               ),
             ],
           ),

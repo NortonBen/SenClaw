@@ -179,8 +179,16 @@ pub fn validate_tfvars_name(name: &str) -> Result<()> {
 /// Đọc giá trị từ một file tfvars → map JSON (form điền theo map này).
 pub fn read_tfvars(dir: &Path, name: &str) -> Result<Map<String, Value>> {
     validate_tfvars_name(name)?;
-    let path = dir.join(name);
-    let src = std::fs::read_to_string(&path)
+    read_tfvars_at(&dir.join(name))
+}
+
+/// Bản nhận path đã được caller kiểm soát (var-file tương đối trong workspace).
+pub fn read_tfvars_at(path: &Path) -> Result<Map<String, Value>> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let src = std::fs::read_to_string(path)
         .map_err(|e| anyhow!("không đọc được {name}: {e}"))?;
     if name.ends_with(".json") {
         let v: Value = serde_json::from_str(&src)?;
@@ -266,10 +274,18 @@ pub fn json_to_hcl(v: &Value, indent: usize) -> String {
 /// Ghi map giá trị thành file tfvars (`key = value` mỗi biến).
 pub fn write_tfvars(dir: &Path, name: &str, values: &Map<String, Value>) -> Result<()> {
     validate_tfvars_name(name)?;
-    let path = dir.join(name);
+    write_tfvars_at(&dir.join(name), values)
+}
+
+/// Bản nhận path đã được caller kiểm soát (var-file tương đối trong workspace).
+pub fn write_tfvars_at(path: &Path, values: &Map<String, Value>) -> Result<()> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     if name.ends_with(".json") {
         let text = serde_json::to_string_pretty(&Value::Object(values.clone()))?;
-        std::fs::write(&path, text + "\n")?;
+        std::fs::write(path, text + "\n")?;
         return Ok(());
     }
     let mut out = String::new();
@@ -277,7 +293,7 @@ pub fn write_tfvars(dir: &Path, name: &str, values: &Map<String, Value>) -> Resu
         let key = if ident_ok(k) { k.clone() } else { hcl_quote(k) };
         out.push_str(&format!("{key} = {}\n", json_to_hcl(v, 0)));
     }
-    std::fs::write(&path, out)?;
+    std::fs::write(path, out)?;
     Ok(())
 }
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../core/transport/ws_client.dart';
 
@@ -39,10 +40,10 @@ class PlanExitNotifier extends StateNotifier<PlanExitRequest?> {
           groupJid: '${e['groupJid'] ?? ''}',
           agentId: '${e['agentId'] ?? 'main'}',
           planContent: '${e['planContent'] ?? ''}',
-          startEditingLabel:
-              '${opts['startEditing'] ?? 'Approve plan and start editing'}',
-          clearContextLabel:
-              '${opts['clearContextAndStart'] ?? 'Clear context and start fresh'}',
+          // Button labels: the daemon usually supplies them, so only the
+          // fallbacks are ours to localize.
+          startEditingLabel: '${opts['startEditing'] ?? L10n.global.t('Approve plan and start editing')}',
+          clearContextLabel: '${opts['clearContextAndStart'] ?? L10n.global.t('Clear context and start fresh')}',
         );
       case 'plan:exit:response':
       case 'plan:implement':

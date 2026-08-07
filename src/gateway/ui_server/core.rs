@@ -68,10 +68,12 @@ use super::spa::spa_fallback;
 use super::space::{
     space_app_config_delete, space_app_config_get, space_app_config_list, space_app_config_set,
     space_app_env, space_app_logs_clear, space_app_logs_get, space_app_mcp_info,
-    space_app_mcp_register, space_app_sandbox_get, space_app_sandbox_put, space_app_sqlite_query,
-    space_apps_bridge, space_apps_delete,
+    space_app_mcp_register, space_app_requirements, space_app_sandbox_get, space_app_sandbox_put,
+    space_app_sqlite_query, space_apps_bridge, space_apps_delete,
     space_apps_install_zip, space_apps_list, space_apps_proxy, space_apps_proxy_root,
-    space_apps_register, space_apps_register_local, space_apps_restart, space_apps_static,
+    space_apps_ready, space_apps_register, space_apps_register_local, space_apps_restart,
+    space_apps_start,
+    space_apps_static, space_apps_stop,
     space_apps_update, space_apps_updates, space_events_create, space_events_delete,
     space_events_get, space_events_list, space_events_search, space_events_set_reminder,
     space_events_update, space_notes_create, space_notes_delete, space_notes_list,
@@ -804,6 +806,13 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/space/apps/:id", delete(space_apps_delete))
         .route("/api/space/apps/:id/update", post(space_apps_update))
         .route("/api/space/apps/:id/restart", post(space_apps_restart))
+        .route("/api/space/apps/:id/stop", post(space_apps_stop))
+        .route("/api/space/apps/:id/start", post(space_apps_start))
+        .route("/api/space/apps/:id/ready", get(space_apps_ready))
+        .route(
+            "/api/space/apps/:id/requirements",
+            get(space_app_requirements),
+        )
         // External sync
         .route(
             "/api/space/sync/google-calendar",

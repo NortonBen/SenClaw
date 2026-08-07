@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../models/space_models.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../core/transport/ws_client.dart';
 import '../../models/group.dart';
@@ -76,18 +77,18 @@ class DashboardScreen extends ConsumerWidget {
     }
 
     return SectionScaffold(
-      title: 'Dashboard',
-      subtitle: 'Overview of your SenClaw agents and activity',
+      title: context.tr('Dashboard'),
+      subtitle: context.tr('Overview of your SenClaw agents and activity'),
       actions: [
         FilledButton.icon(
           onPressed: () => showDefaultVoiceChat(context, ref),
           icon: const Icon(Icons.graphic_eq, size: 16),
-          label: const Text('Trò chuyện thoại'),
+          label: Text(context.tr('Voice chat')),
         ),
         OutlinedButton.icon(
           onPressed: refreshAll,
           icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('Refresh'),
+          label: Text(context.tr('Refresh')),
         ),
       ],
       body: ListView(
@@ -107,17 +108,19 @@ class DashboardScreen extends ConsumerWidget {
           const SizedBox(height: AppTokens.s24),
           _StatsGrid(
             cards: [
-              _StatData('Active agents', '$agents', Icons.badge_outlined,
-                  AppTokens.brand, '/chat'),
-              _StatData('Total chats', '${groups.length}',
+              _StatData(context.tr('Active agents'), '$agents',
+                  Icons.badge_outlined, AppTokens.brand, '/chat'),
+              _StatData(context.tr('Total chats'), '${groups.length}',
                   Icons.forum_outlined, AppTokens.brandAlt, '/chat'),
-              _StatData('Wiki documents', wikiDocs?.toString() ?? '…',
+              _StatData(context.tr('Wiki documents'),
+                  wikiDocs?.toString() ?? '…',
                   Icons.menu_book_outlined, AppTokens.cyan, '/wiki'),
-              _StatData('Knowledge nodes', memNodes?.toString() ?? '…',
+              _StatData(context.tr('Knowledge nodes'),
+                  memNodes?.toString() ?? '…',
                   Icons.hub_outlined, AppTokens.success, '/cognitive'),
-              _StatData('Skills', skills?.toString() ?? '…',
+              _StatData(context.tr('Skills'), skills?.toString() ?? '…',
                   Icons.bolt_outlined, AppTokens.warning, '/plugins'),
-              _StatData('MCP servers', mcp?.toString() ?? '…',
+              _StatData(context.tr('MCP servers'), mcp?.toString() ?? '…',
                   Icons.dns_outlined, AppTokens.brand, '/plugins'),
             ],
           ),
@@ -231,7 +234,7 @@ class _HeroBanner extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '$_greeting 👋',
+                  '${context.tr(_greeting)} 👋',
                   style: TextStyle(
                     color: c.textPrimary,
                     fontSize: 22,
@@ -241,8 +244,11 @@ class _HeroBanner extends StatelessWidget {
                 const SizedBox(height: AppTokens.s4),
                 Text(
                   activeChats > 0
-                      ? '$activeChats agent${activeChats == 1 ? '' : 's'} working right now'
-                      : 'Your agents are standing by',
+                      ? context.trPlural(
+                          activeChats,
+                          '{n} agent working right now',
+                          '{n} agents working right now')
+                      : context.tr('Your agents are standing by'),
                   style: TextStyle(color: c.textSecondary, fontSize: 13),
                 ),
                 const SizedBox(height: AppTokens.s16),
@@ -251,19 +257,19 @@ class _HeroBanner extends StatelessWidget {
                     FilledButton.icon(
                       onPressed: () => context.go('/chat'),
                       icon: const Icon(Icons.add_comment_outlined, size: 16),
-                      label: const Text('New chat'),
+                      label: Text(context.tr('New chat')),
                     ),
                     const SizedBox(width: AppTokens.s8),
                     OutlinedButton.icon(
                       onPressed: () => showCreateNoteDialog(context),
                       icon: const Icon(Icons.note_add_outlined, size: 16),
-                      label: const Text('New note'),
+                      label: Text(context.tr('New note')),
                     ),
                     const SizedBox(width: AppTokens.s8),
                     OutlinedButton.icon(
                       onPressed: () => context.go('/wiki'),
                       icon: const Icon(Icons.menu_book_outlined, size: 16),
-                      label: const Text('Open wiki'),
+                      label: Text(context.tr('Open wiki')),
                     ),
                   ],
                 ),
@@ -300,7 +306,7 @@ class _StatusPill extends StatelessWidget {
           _PulseDot(color: color),
           const SizedBox(width: AppTokens.s8),
           Text(
-            online ? 'Online' : 'Offline',
+            context.tr(online ? 'Online' : 'Offline'),
             style:
                 TextStyle(color: c.textPrimary, fontWeight: FontWeight.w600),
           ),
@@ -360,7 +366,8 @@ class _NotificationsAlert extends ConsumerWidget {
                     size: 16, color: accent),
                 const SizedBox(width: AppTokens.s8),
                 Text(
-                  '$total unread notification${total == 1 ? '' : 's'}',
+                  context.trPlural(total, '{n} unread notification',
+                      '{n} unread notifications'),
                   style: TextStyle(
                     color: c.textPrimary,
                     fontSize: 13,
@@ -372,7 +379,7 @@ class _NotificationsAlert extends ConsumerWidget {
                   TextButton(
                     onPressed: () =>
                         ref.read(notificationsProvider.notifier).clearAll(),
-                    child: const Text('Mark all read'),
+                    child: Text(context.tr('Mark all read')),
                   ),
               ],
             ),
@@ -380,9 +387,9 @@ class _NotificationsAlert extends ConsumerWidget {
           if (unreadChats > 0)
             _AlertRow(
               icon: Icons.forum_outlined,
-              title: '$unreadChats unread chat message'
-                  '${unreadChats == 1 ? '' : 's'}',
-              detail: 'Across your conversations',
+              title: context.trPlural(unreadChats, '{n} unread chat message',
+                  '{n} unread chat messages'),
+              detail: context.tr('Across your conversations'),
               onTap: () => context.go('/chat'),
             ),
           for (final n in notifs.take(5))
@@ -398,7 +405,7 @@ class _NotificationsAlert extends ConsumerWidget {
               padding: const EdgeInsets.fromLTRB(AppTokens.s20, 0,
                   AppTokens.s20, AppTokens.s12),
               child: Text(
-                '+${notifs.length - 5} more',
+                context.trArgs('+{n} more', {'n': notifs.length - 5}),
                 style: TextStyle(color: c.textMuted, fontSize: 12),
               ),
             ),
@@ -659,10 +666,11 @@ class _PinnedApps extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return _Panel(
-      title: 'Pinned apps',
+      title: context.tr('Pinned apps'),
       icon: Icons.push_pin_outlined,
       child: apps.isEmpty
-          ? const _EmptyHint('No pinned apps — right-click an app to pin it.')
+          ? _EmptyHint(
+              context.tr('No pinned apps — right-click an app to pin it.'))
           : Padding(
               padding: const EdgeInsets.all(AppTokens.s16),
               child: Wrap(
@@ -694,10 +702,11 @@ String _embedTheme(BuildContext context) =>
 
 const _kWidgetSizes = ['small', 'medium', 'large'];
 
+/// English label for a widget size id (`context.tr` it at the usage site).
 String _sizeLabel(String s) => switch (s) {
-      'small' => 'Nhỏ',
-      'medium' => 'Vừa',
-      'large' => 'Lớn',
+      'small' => 'Small',
+      'medium' => 'Medium',
+      'large' => 'Large',
       _ => s,
     };
 
@@ -740,7 +749,7 @@ class _DashboardWidgetsState extends ConsumerState<_DashboardWidgets> {
 
     Widget body;
     if (placed.isEmpty) {
-      body = const _EmptyHint('Chưa có widget — bấm "Thêm" để thêm.');
+      body = _EmptyHint(context.tr('No widgets yet — press "Add" to place one.'));
     } else {
       // ONE grid for both view + edit. In edit mode each tile gains in-place
       // remove/resize controls and becomes drag-to-reorder.
@@ -781,7 +790,7 @@ class _DashboardWidgetsState extends ConsumerState<_DashboardWidgets> {
                 Icon(Icons.widgets_outlined, size: 16, color: c.textSecondary),
                 const SizedBox(width: AppTokens.s8),
                 Text(
-                  'Widgets',
+                  context.tr('Widgets'),
                   style: TextStyle(
                     color: c.textPrimary,
                     fontSize: 13,
@@ -792,7 +801,7 @@ class _DashboardWidgetsState extends ConsumerState<_DashboardWidgets> {
                 TextButton.icon(
                   onPressed: () => _showAddWidgetDialog(context),
                   icon: const Icon(Icons.add, size: 15),
-                  label: const Text('Thêm'),
+                  label: Text(context.tr('Add')),
                   style: TextButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
                         horizontal: AppTokens.s8, vertical: 2),
@@ -803,7 +812,7 @@ class _DashboardWidgetsState extends ConsumerState<_DashboardWidgets> {
                   TextButton.icon(
                     onPressed: () => setState(() => _edit = !_edit),
                     icon: Icon(_edit ? Icons.check : Icons.tune, size: 15),
-                    label: Text(_edit ? 'Xong' : 'Sửa'),
+                    label: Text(context.tr(_edit ? 'Done' : 'Edit')),
                     style: TextButton.styleFrom(
                       foregroundColor: _edit ? AppTokens.brand : null,
                       padding: const EdgeInsets.symmetric(
@@ -966,7 +975,7 @@ class _DashboardWidgetsState extends ConsumerState<_DashboardWidgets> {
               children: [
                 const Icon(Icons.aspect_ratio, size: 12, color: Colors.white70),
                 const SizedBox(width: 4),
-                Text(_sizeLabel(size),
+                Text(context.tr(_sizeLabel(size)),
                     style: const TextStyle(fontSize: 11, color: Colors.white)),
               ],
             ),
@@ -1013,14 +1022,15 @@ class _DashboardWidgetsState extends ConsumerState<_DashboardWidgets> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Thêm Widget'),
+        title: Text(ctx.tr('Add widget')),
         content: SizedBox(
           width: 400,
           child: appsWithWidgets.isEmpty
-              ? const Center(
+              ? Center(
                   child: Padding(
-                    padding: EdgeInsets.all(AppTokens.s24),
-                    child: Text('Không có widget khả dụng.\nCài app hỗ trợ widget để bắt đầu.'),
+                    padding: const EdgeInsets.all(AppTokens.s24),
+                    child: Text(ctx.tr('No widgets available.\n'
+                        'Install an app that ships widgets to get started.')),
                   ),
                 )
               : SingleChildScrollView(
@@ -1071,7 +1081,7 @@ class _DashboardWidgetsState extends ConsumerState<_DashboardWidgets> {
                                 borderRadius:
                                     BorderRadius.circular(AppTokens.rSm),
                               ),
-                              child: Text(w.size,
+                              child: Text(ctx.tr(_sizeLabel(w.size)),
                                   style: TextStyle(
                                       fontSize: 10, color: c.textMuted)),
                             ),
@@ -1090,7 +1100,7 @@ class _DashboardWidgetsState extends ConsumerState<_DashboardWidgets> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Đóng'),
+            child: Text(ctx.tr('Close')),
           ),
         ],
       ),
@@ -1326,7 +1336,7 @@ class _EventsPanel extends ConsumerWidget {
         ..sort((a, b) => a.startAt.compareTo(b.startAt));
       final top = upcoming.take(6).toList();
       if (top.isEmpty) {
-        body = const _EmptyHint('No upcoming events.');
+        body = _EmptyHint(context.tr('No upcoming events.'));
       } else {
         body = Column(
           children: [
@@ -1340,7 +1350,7 @@ class _EventsPanel extends ConsumerWidget {
     }
 
     return _Panel(
-      title: 'Upcoming events',
+      title: context.tr('Upcoming events'),
       icon: Icons.event_outlined,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1355,13 +1365,13 @@ class _EventsPanel extends ConsumerWidget {
                 TextButton.icon(
                   onPressed: () => context.go('/calendar'),
                   icon: const Icon(Icons.calendar_month_outlined, size: 14),
-                  label: const Text('Open calendar'),
+                  label: Text(context.tr('Open calendar')),
                 ),
                 const Spacer(),
                 TextButton.icon(
                   onPressed: () => showCreateEventDialog(context),
                   icon: const Icon(Icons.add, size: 14),
-                  label: const Text('New event'),
+                  label: Text(context.tr('New event')),
                 ),
               ],
             ),
@@ -1405,7 +1415,9 @@ class _EventRow extends StatelessWidget {
                 ),
                 Text(
                   event.allDay
-                      ? '${DateFormat('EEE d MMM').format(event.start)} · All day'
+                      ? context.trArgs('{date} · All day', {
+                          'date': DateFormat('EEE d MMM').format(event.start)
+                        })
                       : DateFormat('EEE d MMM · HH:mm').format(event.start),
                   style: TextStyle(color: c.textMuted, fontSize: 12),
                 ),
@@ -1421,7 +1433,7 @@ class _EventRow extends StatelessWidget {
               borderRadius: BorderRadius.circular(AppTokens.rFull),
             ),
             child: Text(
-              _untilLabel(event.start),
+              _untilLabel(context, event.start),
               style: TextStyle(
                   color: accent,
                   fontSize: 11,
@@ -1466,7 +1478,8 @@ class _SchedulesPanel extends ConsumerWidget {
         });
       final top = sorted.take(6).toList();
       if (top.isEmpty) {
-        body = const _EmptyHint('No schedules — create one in Space › Schedules.');
+        body = _EmptyHint(
+            context.tr('No schedules — create one in Space › Schedules.'));
       } else {
         body = Column(
           children: [
@@ -1480,7 +1493,7 @@ class _SchedulesPanel extends ConsumerWidget {
     }
 
     return _Panel(
-      title: 'Upcoming schedules',
+      title: context.tr('Upcoming schedules'),
       icon: Icons.schedule_outlined,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1497,7 +1510,7 @@ class _SchedulesPanel extends ConsumerWidget {
                   context.go('/plugins');
                 },
                 icon: const Icon(Icons.open_in_new, size: 14),
-                label: const Text('Manage schedules'),
+                label: Text(context.tr('Manage schedules')),
               ),
             ),
           ),
@@ -1542,7 +1555,7 @@ class _ScheduleRow extends StatelessWidget {
                 ),
                 Text(
                   next == null
-                      ? (schedule.nextRun ?? 'no upcoming run')
+                      ? (schedule.nextRun ?? context.tr('no upcoming run'))
                       : DateFormat('EEE d MMM · HH:mm').format(next),
                   style: TextStyle(color: c.textMuted, fontSize: 12),
                 ),
@@ -1559,7 +1572,7 @@ class _ScheduleRow extends StatelessWidget {
                 borderRadius: BorderRadius.circular(AppTokens.rFull),
               ),
               child: Text(
-                _untilLabel(next),
+                _untilLabel(context, next),
                 style: TextStyle(
                     color: accent,
                     fontSize: 11,
@@ -1583,13 +1596,13 @@ DateTime? _parseTs(String? s) {
 }
 
 /// "in 5m" / "in 3h" / "in 2d" / "due" for the time until [t].
-String _untilLabel(DateTime t) {
+String _untilLabel(BuildContext context, DateTime t) {
   final d = t.difference(DateTime.now());
-  if (d.isNegative) return 'due';
-  if (d.inMinutes < 1) return 'now';
-  if (d.inMinutes < 60) return 'in ${d.inMinutes}m';
-  if (d.inHours < 24) return 'in ${d.inHours}h';
-  return 'in ${d.inDays}d';
+  if (d.isNegative) return context.tr('due');
+  if (d.inMinutes < 1) return context.tr('now');
+  if (d.inMinutes < 60) return context.trArgs('in {n}m', {'n': d.inMinutes});
+  if (d.inHours < 24) return context.trArgs('in {n}h', {'n': d.inHours});
+  return context.trArgs('in {n}d', {'n': d.inDays});
 }
 
 // ── Recent chats ───────────────────────────────────────────────────────────
@@ -1606,10 +1619,11 @@ class _RecentChats extends ConsumerWidget {
     final top = recent.take(6).toList();
 
     return _Panel(
-      title: 'Recent chats',
+      title: context.tr('Recent chats'),
       icon: Icons.forum_outlined,
       child: top.isEmpty
-          ? const _EmptyHint('No chats yet — start one from the Chat tab.')
+          ? _EmptyHint(
+              context.tr('No chats yet — start one from the Chat tab.'))
           : Column(
               children: [
                 for (var i = 0; i < top.length; i++) ...[
@@ -1703,7 +1717,7 @@ class _ChatRow extends StatelessWidget {
               )
             else
               Text(
-                _relativeTime(group.lastActivity),
+                _relativeTime(context, group.lastActivity),
                 style: TextStyle(color: c.textMuted, fontSize: 11),
               ),
           ],
@@ -1713,13 +1727,13 @@ class _ChatRow extends StatelessWidget {
   }
 }
 
-String _relativeTime(int? ms) {
+String _relativeTime(BuildContext context, int? ms) {
   if (ms == null || ms == 0) return '';
   final d = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(ms));
-  if (d.inMinutes < 1) return 'now';
-  if (d.inMinutes < 60) return '${d.inMinutes}m';
-  if (d.inHours < 24) return '${d.inHours}h';
-  return '${d.inDays}d';
+  if (d.inMinutes < 1) return context.tr('now');
+  if (d.inMinutes < 60) return context.trArgs('{n}m', {'n': d.inMinutes});
+  if (d.inHours < 24) return context.trArgs('{n}h', {'n': d.inHours});
+  return context.trArgs('{n}d', {'n': d.inDays});
 }
 
 // ── Activity panel ─────────────────────────────────────────────────────────
@@ -1747,26 +1761,28 @@ class _ActivityPanel extends StatelessWidget {
             orElse: () => GroupInfo(jid: jid, name: jid)).name;
 
     return _Panel(
-      title: 'Live activity',
+      title: context.tr('Live activity'),
       icon: Icons.bolt_outlined,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (active.isEmpty && runningDispatch == 0)
-            const _EmptyHint('All agents idle.')
+            _EmptyHint(context.tr('All agents idle.'))
           else ...[
             for (final e in active.take(6))
               _ActivityRow(
                 color: AppTokens.success,
                 label: nameFor(e.key),
-                state: _prettyState(e.value),
+                state: context.tr(_prettyState(e.value)),
               ),
             if (runningDispatch > 0)
               _ActivityRow(
                 color: AppTokens.brandAlt,
-                label: '$runningDispatch dispatch run'
-                    '${runningDispatch == 1 ? '' : 's'} in progress',
-                state: 'running',
+                label: context.trPlural(
+                    runningDispatch,
+                    '{n} dispatch run in progress',
+                    '{n} dispatch runs in progress'),
+                state: context.tr('running'),
               ),
           ],
           Divider(height: 1, color: c.border),
@@ -1777,7 +1793,7 @@ class _ActivityPanel extends StatelessWidget {
               child: TextButton.icon(
                 onPressed: () => context.go('/cowork'),
                 icon: const Icon(Icons.dashboard_customize_outlined, size: 14),
-                label: const Text('Open agent console'),
+                label: Text(context.tr('Open agent console')),
               ),
             ),
           ),
@@ -1823,6 +1839,7 @@ class _ActivityRow extends StatelessWidget {
   }
 }
 
+/// English label for a raw agent state (`context.tr` it at the usage site).
 String _prettyState(String s) => switch (s) {
       'waiting_permission' => 'needs approval',
       'waiting_question' => 'needs input',

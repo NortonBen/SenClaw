@@ -34,6 +34,7 @@ class AudioService {
   Future<String> transcribe(Uint8List bytes, String filename) async {
     final req = http.MultipartRequest(
         'POST', Uri.parse('$_base/api/whisper/transcribe'));
+    req.headers.addAll(_ref.read(appConfigProvider).authHeaders);
     req.files.add(http.MultipartFile.fromBytes('audio', bytes, filename: filename));
     final res = await http.Response.fromStream(await req.send());
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -143,7 +144,10 @@ class AudioService {
     try {
       final res = await http.post(
         Uri.parse('$_base/api/tts/synthesize'),
-        headers: {'content-type': 'application/json'},
+        headers: {
+          'content-type': 'application/json',
+          ..._ref.read(appConfigProvider).authHeaders,
+        },
         body: jsonEncode({'text': text}),
       );
       if (res.statusCode < 200 || res.statusCode >= 300) return null;

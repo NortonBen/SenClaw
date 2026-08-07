@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/kanban_models.dart';
 import '../../theme/tokens.dart';
 import 'kanban_providers.dart';
@@ -24,17 +25,17 @@ class KanbanTemplatesPanel extends ConsumerWidget {
             AppTokens.s24, AppTokens.s16, AppTokens.s24, AppTokens.s12),
         child: Row(children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Kanban templates',
+            Text(context.tr('Kanban templates'),
                 style: TextStyle(
                     color: c.textPrimary,
                     fontSize: 16,
                     fontWeight: FontWeight.w700)),
-            Text('Reusable column workflows for new boards',
+            Text(context.tr('Reusable column workflows for new boards'),
                 style: TextStyle(color: c.textMuted, fontSize: 12)),
           ]),
           const Spacer(),
           IconButton(
-            tooltip: 'Reload',
+            tooltip: context.tr('Reload'),
             icon: const Icon(Icons.refresh, size: 18),
             onPressed: () => ref.invalidate(kanbanTemplatesProvider),
           ),
@@ -42,13 +43,13 @@ class KanbanTemplatesPanel extends ConsumerWidget {
           OutlinedButton.icon(
             onPressed: () => _showImportDialog(context, ref),
             icon: const Icon(Icons.file_download_outlined, size: 16),
-            label: const Text('Import'),
+            label: Text(context.tr('Import')),
           ),
           const SizedBox(width: AppTokens.s8),
           FilledButton.icon(
             onPressed: () => _showEditor(context, ref, null),
             icon: const Icon(Icons.add, size: 16),
-            label: const Text('New template'),
+            label: Text(context.tr('New template')),
           ),
         ]),
       ),
@@ -87,39 +88,41 @@ class _TemplateCard extends ConsumerWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Text(template.name,
+          // Builtin names/descriptions are authored English from the daemon;
+          // custom ones are user data and stay verbatim.
+          Text(template.builtin ? context.tr(template.name) : template.name,
               style: TextStyle(
                   color: c.textPrimary,
                   fontSize: 14,
                   fontWeight: FontWeight.w600)),
           const SizedBox(width: AppTokens.s8),
           if (template.builtin)
-            _pill(context, 'builtin', c.textMuted)
+            _pill(context, context.tr('builtin'), c.textMuted)
           else
-            _pill(context, 'custom', AppTokens.brand),
+            _pill(context, context.tr('custom'), AppTokens.brand),
           const Spacer(),
           IconButton(
-            tooltip: 'Export (copy JSON)',
+            tooltip: context.tr('Export (copy JSON)'),
             iconSize: 16,
             onPressed: () => _export(context, template),
             icon: const Icon(Icons.file_upload_outlined),
           ),
           if (!template.builtin) ...[
             IconButton(
-              tooltip: 'Edit',
+              tooltip: context.tr('Edit'),
               iconSize: 16,
               onPressed: () => _showEditor(context, ref, template),
               icon: const Icon(Icons.edit_outlined),
             ),
             IconButton(
-              tooltip: 'Delete',
+              tooltip: context.tr('Delete'),
               iconSize: 16,
               onPressed: () => _confirmDelete(context, ref, template),
               icon: const Icon(Icons.delete_outline),
             ),
           ] else
             IconButton(
-              tooltip: 'Duplicate as custom',
+              tooltip: context.tr('Duplicate as custom'),
               iconSize: 16,
               onPressed: () => _showEditor(context, ref, template, clone: true),
               icon: const Icon(Icons.copy_outlined),
@@ -128,7 +131,10 @@ class _TemplateCard extends ConsumerWidget {
         if (template.description.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 2),
-            child: Text(template.description,
+            child: Text(
+                template.builtin
+                    ? context.tr(template.description)
+                    : template.description,
                 style: TextStyle(color: c.textMuted, fontSize: 12)),
           ),
         const SizedBox(height: AppTokens.s12),
@@ -210,8 +216,9 @@ Color? _parseColor(String? hex) {
 void _export(BuildContext context, KanbanTemplate t) {
   final json = const JsonEncoder.withIndent('  ').convert(t.toJson());
   Clipboard.setData(ClipboardData(text: json));
-  ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Copied "${t.name}" template JSON to clipboard')));
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(context.trArgs(
+          'Copied "{name}" template JSON to clipboard', {'name': t.name}))));
 }
 
 Future<void> _showImportDialog(BuildContext context, WidgetRef ref) async {
@@ -221,7 +228,7 @@ Future<void> _showImportDialog(BuildContext context, WidgetRef ref) async {
     context: context,
     builder: (dctx) => AlertDialog(
       backgroundColor: dctx.colors.surface,
-      title: const Text('Import template'),
+      title: Text(dctx.tr('Import template')),
       content: SizedBox(
         width: 480,
         child: TextField(
@@ -229,18 +236,18 @@ Future<void> _showImportDialog(BuildContext context, WidgetRef ref) async {
           autofocus: true,
           maxLines: 12,
           style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-          decoration: const InputDecoration(
-              hintText: 'Paste exported template JSON…',
-              border: OutlineInputBorder()),
+          decoration: InputDecoration(
+              hintText: dctx.tr('Paste exported template JSON…'),
+              border: const OutlineInputBorder()),
         ),
       ),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(dctx, false),
-            child: const Text('Cancel')),
+            child: Text(dctx.tr('Cancel'))),
         FilledButton(
             onPressed: () => Navigator.pop(dctx, true),
-            child: const Text('Import')),
+            child: Text(dctx.tr('Import'))),
       ],
     ),
   );
@@ -249,14 +256,17 @@ Future<void> _showImportDialog(BuildContext context, WidgetRef ref) async {
     final j = json.decode(ctl.text) as Map<String, dynamic>;
     final t = KanbanTemplate.fromJson(j);
     if (t.name.trim().isEmpty || t.columns.isEmpty) {
-      throw 'Template needs a name and at least one column';
+      throw L10n.global.t('Template needs a name and at least one column');
     }
     await ref
         .read(kanbanApiProvider)
         .saveTemplate(t.name, t.description, t.columns);
-    messenger.showSnackBar(SnackBar(content: Text('Imported "${t.name}"')));
+    messenger.showSnackBar(SnackBar(
+        content:
+            Text(L10n.global.tArgs('Imported "{name}"', {'name': t.name}))));
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text('Import failed: $e')));
+    messenger.showSnackBar(SnackBar(
+        content: Text(L10n.global.tArgs('Import failed: {e}', {'e': e}))));
   }
 }
 
@@ -266,17 +276,17 @@ Future<void> _confirmDelete(
     context: context,
     builder: (dctx) => AlertDialog(
       backgroundColor: dctx.colors.surface,
-      title: Text('Delete "${t.name}"?'),
-      content: const Text('This custom template will be removed. Boards already '
-          'created from it are not affected.'),
+      title: Text(dctx.trArgs('Delete "{name}"?', {'name': t.name})),
+      content: Text(dctx.tr('This custom template will be removed. Boards '
+          'already created from it are not affected.')),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(dctx, false),
-            child: const Text('Cancel')),
+            child: Text(dctx.tr('Cancel'))),
         FilledButton(
             style: FilledButton.styleFrom(backgroundColor: AppTokens.danger),
             onPressed: () => Navigator.pop(dctx, true),
-            child: const Text('Delete')),
+            child: Text(dctx.tr('Delete'))),
       ],
     ),
   );
@@ -363,8 +373,9 @@ class _TemplateEditorDialogState extends ConsumerState<_TemplateEditorDialog> {
           KanbanTemplateColumn(c.title.trim(), c.role, c.color, c.wip),
     ];
     if (_name.text.trim().isEmpty || columns.isEmpty) {
-      messenger.showSnackBar(const SnackBar(
-          content: Text('A name and at least one column are required')));
+      messenger.showSnackBar(SnackBar(
+          content: Text(
+              context.tr('A name and at least one column are required'))));
       return;
     }
     try {
@@ -373,7 +384,8 @@ class _TemplateEditorDialogState extends ConsumerState<_TemplateEditorDialog> {
           .saveTemplate(_name.text.trim(), _desc.text.trim(), columns);
       if (mounted) Navigator.pop(context);
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      messenger.showSnackBar(SnackBar(
+          content: Text(L10n.global.tArgs('Save failed: {e}', {'e': e}))));
     }
   }
 
@@ -381,8 +393,8 @@ class _TemplateEditorDialogState extends ConsumerState<_TemplateEditorDialog> {
   Widget build(BuildContext context) {
     final c = context.colors;
     final title = widget.existing == null || widget.clone
-        ? 'New template'
-        : 'Edit template';
+        ? context.tr('New template')
+        : context.tr('Edit template');
     return AlertDialog(
       backgroundColor: c.surface,
       title: Text(title),
@@ -392,18 +404,20 @@ class _TemplateEditorDialogState extends ConsumerState<_TemplateEditorDialog> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             TextField(
               controller: _name,
-              decoration: const InputDecoration(
-                  labelText: 'Name', hintText: 'e.g. Marketing sprint'),
+              decoration: InputDecoration(
+                  labelText: context.tr('Name'),
+                  hintText: context.tr('e.g. Marketing sprint')),
             ),
             const SizedBox(height: AppTokens.s8),
             TextField(
               controller: _desc,
-              decoration: const InputDecoration(labelText: 'Description'),
+              decoration:
+                  InputDecoration(labelText: context.tr('Description')),
             ),
             const SizedBox(height: AppTokens.s16),
             Align(
               alignment: Alignment.centerLeft,
-              child: Text('COLUMNS',
+              child: Text(context.tr('COLUMNS'),
                   style: TextStyle(
                       color: c.textMuted,
                       fontSize: 10,
@@ -419,7 +433,7 @@ class _TemplateEditorDialogState extends ConsumerState<_TemplateEditorDialog> {
                 onPressed: () => setState(() => _cols.add(
                     _EditableColumn('New column', 'custom', '#94a3b8', null))),
                 icon: const Icon(Icons.add, size: 16),
-                label: const Text('Add column'),
+                label: Text(context.tr('Add column')),
               ),
             ),
           ]),
@@ -428,8 +442,8 @@ class _TemplateEditorDialogState extends ConsumerState<_TemplateEditorDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel')),
-        FilledButton(onPressed: _save, child: const Text('Save')),
+            child: Text(context.tr('Cancel'))),
+        FilledButton(onPressed: _save, child: Text(context.tr('Save'))),
       ],
     );
   }
@@ -451,7 +465,8 @@ class _TemplateEditorDialogState extends ConsumerState<_TemplateEditorDialog> {
             controller: TextEditingController(text: col.title)
               ..selection =
                   TextSelection.collapsed(offset: col.title.length),
-            decoration: const InputDecoration(isDense: true, hintText: 'Title'),
+            decoration: InputDecoration(
+                isDense: true, hintText: context.tr('Title')),
             onChanged: (v) => col.title = v,
           ),
         ),
@@ -481,7 +496,7 @@ class _TemplateEditorDialogState extends ConsumerState<_TemplateEditorDialog> {
           ),
         ),
         IconButton(
-          tooltip: 'Remove',
+          tooltip: context.tr('Remove'),
           iconSize: 16,
           onPressed: _cols.length <= 1
               ? null

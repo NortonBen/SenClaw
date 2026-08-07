@@ -14,6 +14,32 @@
 //! The launched process is tracked per app and killed (whole process group) on
 //! daemon shutdown. Legacy apps that declare only an `mcp` block with an
 //! absolute `url` (no server runtime) are still auto-registered without launch.
+//!
+//! # Two lifecycles
+//!
+//! Every server app is one of two things, declared as `runtime.mode`
+//! ([`crate::apps::RunMode`]):
+//!
+//! - **background** — started with SenClaw, supervised, restarted when it dies.
+//!   For apps that do work nobody asked for at that moment: polling a channel
+//!   for inbound messages, running a schedule, holding the WebSocket a browser
+//!   extension dials into. Stopping one of these loses messages.
+//! - **session** (the default) — started when it is *used* and stopped once it
+//!   has been idle for `runtime.idleTimeoutSecs` (60s by default). "Used" means
+//!   a request reached it through the daemon's app proxy: the user opened its
+//!   screen, or an agent called one of its MCP tools.
+//!
+//! Session was made the default because the previous behaviour was to launch
+//! every installed app at boot and keep it forever — on a machine with fifty
+//! installed apps, fifty resident servers, nearly all of them idle.
+//!
+//! The trick that makes on-demand MCP work is where a session app's MCP server
+//! is *pointed*: not at the app's own port (nothing is listening there), but at
+//! `/api/space/apps/<id>/proxy<mcp.path>` on the daemon, which starts the app
+//! before forwarding. Its tool list comes from a cache written at the last
+//! successful connection, so the tools are in the agent's roster while the app
+//! is stopped — otherwise nothing would ever call one, and it would never
+//! start.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -26,8 +52,9 @@ use serde_json::Value;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+use crate::apps::manifest::{Requires, RunMode, RuntimeSpec};
 use crate::db::Db;
-use crate::mcp::config::{ExternalMcpServerConfig, McpScopeType, McpTransportType};
+use crate::mcp::config::{ExternalMcpServerConfig, McpScopeType, McpToolDef, McpTransportType};
 use crate::mcp::manager::McpManager;
 
 struct ChildProc {
@@ -48,6 +75,15 @@ struct ChildProc {
     /// stored settings can be edited afterwards, and what is *running* is what
     /// the monitor must report.
     isolation: String,
+    /// Background or session — recorded at spawn for the same reason as
+    /// `isolation`: the manifest can change while the process runs.
+    mode: RunMode,
+    /// How long this app may sit unused before the reaper stops it. Session
+    /// apps only.
+    idle_timeout: Duration,
+    /// Last time a request reached this app through the daemon's proxy — the
+    /// user's screen, or an agent's MCP call. What the idle reaper measures.
+    last_activity: std::time::Instant,
 }
 
 /// What the monitor knows about one app's process, taken under the lock and
@@ -60,6 +96,13 @@ pub struct RuntimeInfo {
     pub started_at: std::time::SystemTime,
     pub isolation: String,
     pub proxy: Option<(u16, crate::sandbox::proxy::ProxyStats)>,
+    /// `background` or `session`.
+    pub mode: &'static str,
+    /// Seconds since the last request reached this app. For a session app,
+    /// this counting past `idle_timeout_secs` is what stops it.
+    pub idle_secs: u64,
+    /// 0 for a background app — it is never stopped for being idle.
+    pub idle_timeout_secs: u64,
 }
 
 /// Tracks server-app processes launched on behalf of Space Apps, keyed by app id.
@@ -76,6 +119,11 @@ pub struct SpaceMcpLauncher {
     /// back. Remembered so the supervisor attempts the reclaim once per daemon
     /// run instead of once every tick — the answer will not change by itself.
     adopted: Mutex<std::collections::HashSet<String>>,
+    /// Apps the user explicitly stopped. The supervisor leaves these alone —
+    /// otherwise pressing Stop on a background app would put it straight back
+    /// up within one supervisor tick, which reads as the button not working.
+    /// Cleared by an explicit start, and by anything that uses the app.
+    user_stopped: Mutex<std::collections::HashSet<String>>,
     http: reqwest::Client,
 }
 
@@ -96,7 +144,77 @@ impl SpaceMcpLauncher {
             launches: Mutex::new(HashMap::new()),
             start_locks: Mutex::new(HashMap::new()),
             adopted: Mutex::new(std::collections::HashSet::new()),
+            user_stopped: Mutex::new(std::collections::HashSet::new()),
             http,
+        }
+    }
+
+    /// Record that something just used this app, so the idle reaper starts
+    /// counting again from now. Called by the app proxy — which is the one path
+    /// every use travels: the UI iframe, the app's own REST calls, and (for a
+    /// session app) every MCP tool call.
+    pub async fn touch(&self, app_id: &str) {
+        if let Some(proc) = self.children.lock().await.get_mut(app_id) {
+            proc.last_activity = std::time::Instant::now();
+        }
+        self.user_stopped.lock().await.remove(app_id);
+    }
+
+    /// Is this app's process tracked and alive?
+    pub async fn is_running(&self, app_id: &str) -> bool {
+        self.children
+            .lock()
+            .await
+            .get_mut(app_id)
+            .map(|p| matches!(p.child.try_wait(), Ok(None)))
+            .unwrap_or(false)
+    }
+
+    /// Is this app **answering** on `port`, right now?
+    ///
+    /// Distinct from [`is_running`], which only says a process is tracked and
+    /// has not exited. A UI that loads an app's page on "tracked" renders white
+    /// for as long as the process takes to bind and serve — and renders white
+    /// forever if the port is held by an orphan from a previous daemon run
+    /// rather than by the process we think it is.
+    pub async fn is_answering(&self, port: u16, health_path: &str) -> bool {
+        self.is_healthy(&health_url(port, health_path)).await
+    }
+
+    /// Wait until the app answers, or give up. Returns whether it answered.
+    ///
+    /// Same cadence as the post-spawn wait, so a caller that starts an app and
+    /// a caller that merely probes one agree on what "up" means.
+    pub async fn wait_answering(&self, port: u16, health_path: &str, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if self.is_answering(port, health_path).await {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    /// Did the user stop this app by hand?
+    pub async fn is_user_stopped(&self, app_id: &str) -> bool {
+        self.user_stopped.lock().await.contains(app_id)
+    }
+
+    /// Stop an app at the user's request: kill the process group, drop its MCP
+    /// connection, and remember the decision so the supervisor does not undo it.
+    ///
+    /// The MCP registration itself stays. Its tools remain in every agent's
+    /// roster from the cached list, and a call reconnects through the proxy —
+    /// which starts the app again. Un-registering instead would make "stop"
+    /// mean "this app's tools vanish until you restart the daemon".
+    pub async fn stop_by_user(&self, app_id: &str, manager: Option<&McpManager>, mcp_name: Option<&str>) {
+        self.user_stopped.lock().await.insert(app_id.to_string());
+        self.stop_app(app_id).await;
+        if let (Some(mgr), Some(name)) = (manager, mcp_name) {
+            let _ = mgr.disconnect_server(name).await;
         }
     }
 
@@ -184,16 +302,19 @@ impl SpaceMcpLauncher {
         manifest: &Value,
         base_url: &str,
     ) -> Result<u16> {
-        if !is_server_runtime(manifest) {
+        let spec = RuntimeSpec::parse(manifest);
+        if !spec.is_server {
             return Err(anyhow!("app '{app_id}' has no server runtime to start"));
         }
         let lock = self.start_lock(app_id).await;
         let _guard = lock.lock().await;
 
-        let runtime = manifest.get("runtime").cloned().unwrap_or(Value::Null);
+        let requires = Requires::parse(manifest);
         let port = self
-            .ensure_server_running(app_id, app_dir, &runtime, base_url)
+            .ensure_server_running(app_id, app_dir, &spec, &requires, base_url)
             .await?;
+        // Whoever asked for this is about to use it.
+        self.touch(app_id).await;
         // Persist current origin/port so subsequent proxy hits go to this process.
         let mut m = manifest.clone();
         if let Some(rt) = m.get_mut("runtime").and_then(|v| v.as_object_mut()) {
@@ -207,8 +328,14 @@ impl SpaceMcpLauncher {
         Ok(port)
     }
 
-    /// Scan every enabled installed Space App and launch + auto-register the
-    /// ones that declare a server runtime and/or `mcp.autoRegister`. Best-effort.
+    /// Boot pass over every enabled installed Space App.
+    ///
+    /// Background apps are launched and their MCP registered against the live
+    /// process, as before. Session apps are **not** launched: their MCP is
+    /// registered against the daemon's app proxy with the tool list cached from
+    /// the last time they ran, so their tools are available to agents while
+    /// they sit stopped. Best-effort throughout — one broken app must not stop
+    /// the pass.
     pub async fn autoregister_installed(
         &self,
         db: &Db,
@@ -216,26 +343,45 @@ impl SpaceMcpLauncher {
         apps_dir: &Path,
         base_url: &str,
     ) {
-        let apps: Vec<(String, Value)> = match db.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT id, manifest FROM space_apps WHERE enabled = 1")?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .filter_map(|r| r.ok())
-                .filter_map(|(id, m)| serde_json::from_str::<Value>(&m).ok().map(|v| (id, v)))
-                .collect::<Vec<_>>();
-            Ok(rows)
-        }) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("[space-mcp] could not list space apps: {e}");
-                return;
-            }
-        };
+        let apps = enabled_apps(db);
+        let (mut bg, mut session) = (0usize, 0usize);
 
         for (app_id, manifest) in apps {
             let app_dir = app_install_dir(&manifest, apps_dir, &app_id);
+            // The app's own sandbox declaration is re-applied on every boot, so
+            // a `force`d confinement survives someone editing the engine DB and
+            // an app update that tightens it takes effect without a reinstall.
+            crate::apps::sandbox_decl::apply(&app_id, &manifest);
+
+            let spec = RuntimeSpec::parse(&manifest);
+            if spec.is_server && !spec.mode.is_background() {
+                session += 1;
+                // An app whose tools we already know is registered without ever
+                // being started. One we have never run has to be started once,
+                // to learn them — a roster entry with no tools is the same as
+                // no entry, and nothing would ever call it. The reaper stops it
+                // a minute later, so this costs one launch per app, ever.
+                match self
+                    .register_session_mcp(manager, &app_id, &app_dir, &manifest, base_url)
+                    .await
+                {
+                    Ok(Some(name)) => {
+                        tracing::info!(
+                            "[space-mcp] '{app_id}' is a session app — registered '{name}' on \
+                             demand, not launched"
+                        );
+                        continue;
+                    }
+                    // Not an MCP app at all: nothing to register, nothing to start.
+                    Ok(None) => continue,
+                    Err(e) => tracing::info!(
+                        "[space-mcp] session app '{app_id}': {e} — starting it once to learn its \
+                         tools"
+                    ),
+                }
+            } else if spec.is_server {
+                bg += 1;
+            }
             match self
                 .run_and_register(db, manager, &app_id, &app_dir, &manifest, base_url)
                 .await
@@ -249,38 +395,138 @@ impl SpaceMcpLauncher {
                 }
             }
         }
+        tracing::info!(
+            "[space-mcp] boot pass: {bg} background app(s) launched, {session} session app(s) \
+             registered on demand"
+        );
     }
 
-    /// Health-check every enabled server app and respawn any that is down or
-    /// stopped responding. Called on an interval by the daemon's Space-App
-    /// supervisor loop — this is what keeps a crashed/killed app (or one that
-    /// served a broken deploy) automatically coming back.
-    pub async fn supervise(&self, db: &Db, manager: &McpManager, apps_dir: &Path, base_url: &str) {
-        let apps: Vec<(String, Value)> = match db.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT id, manifest FROM space_apps WHERE enabled = 1")?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
-                .filter_map(|r| r.ok())
-                .filter_map(|(id, m)| serde_json::from_str::<Value>(&m).ok().map(|v| (id, v)))
-                .collect::<Vec<_>>();
-            Ok(rows)
-        }) {
-            Ok(v) => v,
-            Err(_) => return,
+    /// Register a session app's MCP without starting it.
+    ///
+    /// The URL points at the daemon's own app proxy rather than the app's port,
+    /// because the app's port has nothing behind it: the proxy is what starts
+    /// the process on the first request. The tools come from the cache written
+    /// at the last successful connection — an app that has never run has none,
+    /// and is launched instead, once, to learn them.
+    async fn register_session_mcp(
+        &self,
+        manager: &McpManager,
+        app_id: &str,
+        app_dir: &Path,
+        manifest: &Value,
+        base_url: &str,
+    ) -> Result<Option<String>> {
+        let mcp = match manifest.get("mcp") {
+            Some(v) if v.is_object() => v.clone(),
+            _ => return Ok(None),
         };
+        if !mcp
+            .get("autoRegister")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(None);
+        }
+        let name = mcp_server_name(&mcp, app_id);
+        let cached = read_tool_cache(app_dir);
+        if cached.is_empty() {
+            // Nothing is known about this app's tools, and a roster entry with
+            // no tools is the same as no entry at all. Start it once, learn
+            // them, cache them; the idle reaper stops it a minute later.
+            return Err(anyhow!(
+                "no cached tool list yet — it will be learned the first time the app runs"
+            ));
+        }
+        let origin = session_mcp_origin(base_url, app_id);
+        let config = build_mcp_config(&name, &mcp, app_id, base_url, Some(&origin), true)?;
+        manager
+            .add_or_update_offline(config, McpScopeType::Project, cached)
+            .await
+            .with_context(|| format!("register MCP '{name}' on demand"))?;
+        Ok(Some(name))
+    }
 
-        for (app_id, manifest) in apps {
-            if !is_server_runtime(&manifest) {
+    /// Stop every session app that has been idle longer than its timeout.
+    ///
+    /// This is the other half of on-demand: without it, the first MCP call of
+    /// the day would start an app that then stays up forever, which is the
+    /// behaviour we replaced. Background apps are never touched.
+    pub async fn reap_idle(&self, db: &Db, manager: &McpManager, apps_dir: &Path) {
+        let now = std::time::Instant::now();
+        let expired: Vec<(String, Duration)> = {
+            let mut children = self.children.lock().await;
+            let mut out = Vec::new();
+            for (id, proc) in children.iter_mut() {
+                let idle = now.duration_since(proc.last_activity);
+                // A process that has already exited is the supervisor's problem,
+                // not the reaper's.
+                if !proc.mode.is_background()
+                    && idle >= proc.idle_timeout
+                    && matches!(proc.child.try_wait(), Ok(None))
+                {
+                    out.push((id.clone(), idle));
+                }
+            }
+            out
+        };
+        if expired.is_empty() {
+            return;
+        }
+        let manifests: HashMap<String, Value> = enabled_apps(db).into_iter().collect();
+        for (app_id, idle) in expired {
+            // Serialize against a spawn racing us — otherwise a request that
+            // arrives in this instant starts an app we are about to kill.
+            let lock = self.start_lock(&app_id).await;
+            let _guard = lock.lock().await;
+            let still_idle = {
+                let children = self.children.lock().await;
+                children
+                    .get(&app_id)
+                    .map(|p| std::time::Instant::now().duration_since(p.last_activity) >= p.idle_timeout)
+                    .unwrap_or(false)
+            };
+            if !still_idle {
                 continue;
             }
-            let runtime = manifest.get("runtime").cloned().unwrap_or(Value::Null);
-            let port = runtime.get("port").and_then(Value::as_u64).unwrap_or(0) as u16;
-            let health_path = runtime
-                .get("healthPath")
-                .and_then(Value::as_str)
-                .unwrap_or("/health");
+            tracing::info!(
+                "[space-mcp] '{app_id}' idle for {}s → stopping (session app)",
+                idle.as_secs()
+            );
+            self.stop_app(&app_id).await;
+            // Drop the MCP connection. The registration stays — it already
+            // points at the daemon's app proxy (a session app's always does),
+            // so the next tool call reconnects through it and starts the app.
+            if let Some(manifest) = manifests.get(&app_id) {
+                if let Some(mcp) = manifest.get("mcp").filter(|v| v.is_object()) {
+                    let _ = manager.disconnect_server(&mcp_server_name(mcp, &app_id)).await;
+                }
+            }
+        }
+        let _ = apps_dir;
+    }
+
+    /// Health-check every enabled **background** server app and respawn any
+    /// that is down or stopped responding. Called on an interval by the
+    /// daemon's Space-App supervisor loop — this is what keeps a crashed/killed
+    /// app (or one that served a broken deploy) automatically coming back.
+    ///
+    /// Session apps are skipped entirely. For them "not running" is the resting
+    /// state, not a fault: respawning one would undo both the idle reaper and
+    /// the user's own Stop, and would put every installed app back to
+    /// always-on within one tick.
+    pub async fn supervise(&self, db: &Db, manager: &McpManager, apps_dir: &Path, base_url: &str) {
+        let apps = enabled_apps(db);
+
+        for (app_id, manifest) in apps {
+            let spec = RuntimeSpec::parse(&manifest);
+            if !spec.is_server || !spec.mode.is_background() {
+                continue;
+            }
+            if self.user_stopped.lock().await.contains(&app_id) {
+                continue;
+            }
+            let port = spec.port;
+            let health_path = spec.health_path.as_str();
 
             let tracked = {
                 let mut children = self.children.lock().await;
@@ -346,12 +592,12 @@ impl SpaceMcpLauncher {
         base_url: &str,
     ) -> Result<Option<String>> {
         let mut manifest = manifest.clone();
+        let spec = RuntimeSpec::parse(&manifest);
 
         // Launch a server runtime, if declared, and record the running origin.
-        let origin = if is_server_runtime(&manifest) {
-            let runtime = manifest.get("runtime").cloned().unwrap_or(Value::Null);
+        let origin = if spec.is_server {
             let port = self
-                .ensure_server_running(app_id, app_dir, &runtime, base_url)
+                .ensure_server_running(app_id, app_dir, &spec, &Requires::parse(&manifest), base_url)
                 .await
                 .with_context(|| format!("launch server app '{app_id}'"))?;
             let origin = format!("http://127.0.0.1:{port}");
@@ -364,6 +610,16 @@ impl SpaceMcpLauncher {
             Some(origin)
         } else {
             None
+        };
+        // A session app's MCP is addressed through the daemon's app proxy, not
+        // its own port: the port is empty whenever the app is stopped, which is
+        // most of the time, and the proxy is what starts it. Registering the
+        // live port instead would work exactly until the first idle timeout.
+        let session = spec.is_server && !spec.mode.is_background();
+        let mcp_origin = if session {
+            Some(session_mcp_origin(base_url, app_id))
+        } else {
+            origin.clone()
         };
 
         // Auto-register the MCP server, if declared.
@@ -378,16 +634,20 @@ impl SpaceMcpLauncher {
         {
             return Ok(None);
         }
-        let name = mcp
-            .get("name")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{app_id}-mcp"));
-        let config = build_mcp_config(&name, &mcp, app_id, base_url, origin.as_deref())?;
+        let name = mcp_server_name(&mcp, app_id);
+        let config = build_mcp_config(&name, &mcp, app_id, base_url, mcp_origin.as_deref(), session)?;
         manager
             .add_or_update(config, McpScopeType::Project)
             .await
             .with_context(|| format!("register MCP '{name}'"))?;
+        // Remember what this app's tools are, so the next boot can put them in
+        // the agent roster without starting the app to ask.
+        let tools = manager
+            .get_server_info(&name)
+            .await
+            .tools
+            .unwrap_or_default();
+        write_tool_cache(app_dir, &tools);
         // Import tool aliases declared in the manifest (`mcp.toolAliases`).
         // They land DISABLED — the user must approve each one in
         // Plugins → Alias before it takes effect.
@@ -402,31 +662,65 @@ impl SpaceMcpLauncher {
         &self,
         app_id: &str,
         app_dir: &Path,
-        runtime: &Value,
+        spec: &RuntimeSpec,
+        requires: &Requires,
         base_url: &str,
     ) -> Result<u16> {
-        let start = runtime
-            .get("start")
-            .and_then(Value::as_str)
+        let start = spec
+            .start
+            .as_deref()
             .ok_or_else(|| anyhow!("runtime.start is required for a server app"))?;
-        let health_path = runtime
-            .get("healthPath")
-            .and_then(Value::as_str)
-            .unwrap_or("/health");
-        let fixed_port = runtime.get("port").and_then(Value::as_u64).unwrap_or(0) as u16;
+        let health_path = spec.health_path.as_str();
+        let fixed_port = spec.port;
 
-        // Reuse a tracked, still-alive child.
-        {
+        // Reuse a tracked, still-alive child — or get rid of it.
+        //
+        // The third case is the one that used to leak. A child that is alive but
+        // *not answering* fell through to the spawn below, and the insert at the
+        // end overwrote the map entry — dropping the only handle to the first
+        // process without killing it. It kept running, kept its port, and became
+        // invisible: an orphan the launch counter dutifully counted past while
+        // the user watched the same app start "6×".
+        //
+        // We can kill it without ceremony because this whole function is
+        // serialized per app by `start_lock`: nobody else is mid-spawn, so an
+        // alive-but-unhealthy child here is one whose own 30s health wait
+        // already gave up, or one that wedged after it.
+        let tracked_port = {
             let mut children = self.children.lock().await;
-            if let Some(proc) = children.get_mut(app_id) {
-                if matches!(proc.child.try_wait(), Ok(None)) {
-                    let port = proc.port;
-                    if self.is_healthy(&health_url(port, health_path)).await {
-                        return Ok(port);
+            match children.get_mut(app_id) {
+                Some(proc) => {
+                    if matches!(proc.child.try_wait(), Ok(None)) {
+                        Some(proc.port)
+                    } else {
+                        // Exited on its own: drop the entry and spawn a fresh one.
+                        children.remove(app_id);
+                        None
                     }
-                } else {
-                    children.remove(app_id);
                 }
+                None => None,
+            }
+        };
+        // Probed outside the lock: an HTTP request holding the mutex that every
+        // other app's bookkeeping needs is a stall waiting to happen.
+        if let Some(port) = tracked_port {
+            if self.is_healthy(&health_url(port, health_path)).await {
+                return Ok(port);
+            }
+            tracing::warn!(
+                "[space-mcp] '{app_id}' is running but not answering on :{port} — \
+                 replacing it rather than starting a second copy"
+            );
+            if let Some(proc) = self.children.lock().await.remove(app_id) {
+                kill_child_group(proc).await;
+            }
+            // Its port may outlive it by a moment (grandchildren, TIME_WAIT).
+            kill_port_listeners(port).await;
+            for _ in 0..20 {
+                if port_is_free(port) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
 
@@ -462,6 +756,35 @@ impl SpaceMcpLauncher {
                 }
             }
         }
+
+        // What the app said this machine must have. Checked here rather than at
+        // install alone, because an install-time check answers for the machine
+        // as it was that day: Homebrew uninstalls happen, and `nvm` changes
+        // which node is on PATH. A refusal with a reason beats `exit 127` in a
+        // log file.
+        if !requires.is_empty() {
+            let report = crate::apps::requirements::check(requires).await;
+            if !report.satisfied {
+                let hints: Vec<String> = report
+                    .blocking()
+                    .iter()
+                    .map(|c| c.hint.clone())
+                    .filter(|h| !h.is_empty())
+                    .collect();
+                return Err(anyhow!(
+                    "'{app_id}' cannot start — {}. {}",
+                    report.summary,
+                    hints.join(" ")
+                ));
+            }
+        }
+
+        // Install the app's dependencies if it ships source rather than a
+        // binary (`npm ci`, `pip install` into its own venv). A no-op after the
+        // first launch, and for the native apps that are the majority.
+        let prepared = crate::apps::prepare::prepare(app_id, app_dir, spec)
+            .await
+            .with_context(|| format!("prepare runtime for app '{app_id}'"))?;
 
         let port = if fixed_port > 0 {
             fixed_port
@@ -508,6 +831,9 @@ impl SpaceMcpLauncher {
         .await
         .with_context(|| format!("prepare the sandbox for app '{app_id}'"))?;
         let _ = writeln!(log_file, "{}", launch.summary());
+        for note in &prepared.notes {
+            let _ = writeln!(log_file, "{note}");
+        }
         if let Some(note) = &launch.note {
             tracing::warn!("[space-mcp] '{app_id}' sandbox: {note}");
         }
@@ -530,6 +856,17 @@ impl SpaceMcpLauncher {
         for (k, v) in &launch.env {
             cmd.env(k, v);
         }
+        // The interpreter environment the prepare step produced (a Python
+        // venv's `PATH` / `VIRTUAL_ENV`). Applied after the sandbox's own env so
+        // an app that needs its venv gets it either way; an empty value means
+        // "unset", which is how a stray `PYTHONHOME` is cleared.
+        for (k, v) in &prepared.env {
+            if v.is_empty() {
+                cmd.env_remove(k);
+            } else {
+                cmd.env(k, v);
+            }
+        }
         #[cfg(unix)]
         cmd.process_group(0);
         let child = cmd
@@ -544,6 +881,20 @@ impl SpaceMcpLauncher {
             .await
             .entry(app_id.to_string())
             .or_insert(0) += 1;
+        // Never overwrite a tracked child: the map holds the only handle to a
+        // process, so replacing an entry silently orphans whatever it pointed
+        // at. Nothing should reach here with one still tracked — every path
+        // above removes or kills first — but "should" is how the orphans got
+        // here in the first place, and one running app per app is the invariant
+        // worth enforcing at the point it can actually be broken.
+        if let Some(stale) = self.children.lock().await.remove(app_id) {
+            tracing::warn!(
+                "[space-mcp] '{app_id}': a previous process (pid {:?}) was still tracked at \
+                 spawn time — killing it so only one copy runs",
+                stale.child.id()
+            );
+            kill_child_group(stale).await;
+        }
         self.children.lock().await.insert(
             app_id.to_string(),
             ChildProc {
@@ -558,10 +909,17 @@ impl SpaceMcpLauncher {
                 } else {
                     "none".to_string()
                 },
+                mode: spec.mode,
+                idle_timeout: Duration::from_secs(spec.idle_timeout_secs),
+                // Starting counts as using it: an app launched by a tool call
+                // must not be reaped before that call has finished.
+                last_activity: std::time::Instant::now(),
             },
         );
+        self.user_stopped.lock().await.remove(app_id);
         tracing::info!(
-            "[space-mcp] launched '{app_id}': {start} (PORT={port}, log={})",
+            "[space-mcp] launched '{app_id}' [{}]: {start} (PORT={port}, log={})",
+            spec.mode.as_str(),
             log_path.display()
         );
 
@@ -605,6 +963,15 @@ impl SpaceMcpLauncher {
             started_at: proc.started_at,
             isolation: proc.isolation.clone(),
             proxy: proc.proxy.as_ref().map(|p| (p.port, p.stats())),
+            mode: proc.mode.as_str(),
+            idle_secs: std::time::Instant::now()
+                .duration_since(proc.last_activity)
+                .as_secs(),
+            idle_timeout_secs: if proc.mode.is_background() {
+                0
+            } else {
+                proc.idle_timeout.as_secs()
+            },
         })
     }
 
@@ -898,14 +1265,59 @@ mod tests {
     }
 
     #[test]
-    fn is_server_runtime_requires_kind_and_start() {
-        let ok = serde_json::json!({"runtime": {"kind": "server", "start": "npm start"}});
-        assert!(is_server_runtime(&ok));
-        let no_start = serde_json::json!({"runtime": {"kind": "server"}});
-        assert!(!is_server_runtime(&no_start));
-        let static_app = serde_json::json!({"runtime": {"kind": "static"}});
-        assert!(!is_server_runtime(&static_app));
-        assert!(!is_server_runtime(&serde_json::json!({})));
+    fn a_session_apps_mcp_is_addressed_through_the_daemon_not_its_own_port() {
+        // The whole on-demand mechanism rests on this URL: the app's own port
+        // has nothing behind it while it is stopped, and the proxy is what
+        // starts it. Pointing at `127.0.0.1:<app port>` instead would work
+        // exactly until the first idle timeout.
+        let origin = session_mcp_origin("http://127.0.0.1:18788/", "crm");
+        assert_eq!(origin, "http://127.0.0.1:18788/api/space/apps/crm/proxy");
+        let mcp = serde_json::json!({"path": "/api/mcp/sse", "url": "http://127.0.0.1:4390/api/mcp/sse"});
+        let cfg = build_mcp_config("crm-mcp", &mcp, "crm", "http://127.0.0.1:18788", Some(&origin), true)
+            .unwrap();
+        assert_eq!(
+            cfg.url.as_deref(),
+            Some("http://127.0.0.1:18788/api/space/apps/crm/proxy/api/mcp/sse"),
+            "a declared absolute url must not win for a session app"
+        );
+        // A background app keeps talking straight to its own port.
+        let cfg = build_mcp_config(
+            "crm-mcp",
+            &mcp,
+            "crm",
+            "http://127.0.0.1:18788",
+            Some("http://127.0.0.1:4390"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(cfg.url.as_deref(), Some("http://127.0.0.1:4390/api/mcp/sse"));
+    }
+
+    #[test]
+    fn the_mcp_server_name_is_the_manifests_not_a_guess() {
+        // luna-calendar registers `luna-mcp`; deriving `<id>-mcp` would look up
+        // a server that does not exist and silently do nothing.
+        let named = serde_json::json!({"name": "luna-mcp"});
+        assert_eq!(mcp_server_name(&named, "luna-calendar"), "luna-mcp");
+        assert_eq!(mcp_server_name(&serde_json::json!({}), "crm"), "crm-mcp");
+    }
+
+    #[test]
+    fn a_failed_connect_never_erases_the_cached_tool_list() {
+        // The cache is what puts a stopped app's tools in the agent roster. If
+        // an empty list could overwrite it, one failed connect would make the
+        // app uncallable — and therefore unstartable — until a manual restart.
+        let dir = tempfile::tempdir().unwrap();
+        let tools = vec![McpToolDef {
+            name: "crm_search".into(),
+            description: Some("find".into()),
+            input_schema: None,
+        }];
+        write_tool_cache(dir.path(), &tools);
+        assert_eq!(read_tool_cache(dir.path()).len(), 1);
+        write_tool_cache(dir.path(), &[]);
+        assert_eq!(read_tool_cache(dir.path()).len(), 1, "empty must not clobber");
+        assert!(read_tool_cache(tempfile::tempdir().unwrap().path()).is_empty());
     }
 
     /// A real listener holding a real port, with a working directory we choose —
@@ -1037,17 +1449,76 @@ time.sleep(60)"
     }
 }
 
-fn is_server_runtime(manifest: &Value) -> bool {
-    manifest
-        .get("runtime")
-        .and_then(|r| r.get("kind"))
+/// Every enabled installed app, id + manifest. The three loops that walk the
+/// app list (boot, supervise, reap) all want exactly this.
+fn enabled_apps(db: &Db) -> Vec<(String, Value)> {
+    match db.with_conn(|conn| {
+        let mut stmt = conn.prepare("SELECT id, manifest FROM space_apps WHERE enabled = 1")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(|(id, m)| serde_json::from_str::<Value>(&m).ok().map(|v| (id, v)))
+            .collect::<Vec<_>>();
+        Ok(rows)
+    }) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("[space-mcp] could not list space apps: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// The MCP server name for an app: `mcp.name`, else `<id>-mcp`. Derived in one
+/// place because the name is what every later lookup keys on, and an app whose
+/// manifest names it something else (luna-calendar → `luna-mcp`) must not be
+/// found under a guessed name.
+pub(crate) fn mcp_server_name(mcp: &Value, app_id: &str) -> String {
+    mcp.get("name")
         .and_then(Value::as_str)
-        == Some("server")
-        && manifest
-            .get("runtime")
-            .and_then(|r| r.get("start"))
-            .and_then(Value::as_str)
-            .is_some()
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{app_id}-mcp"))
+}
+
+/// Where a session app's MCP is addressed: the daemon's own app proxy, which
+/// starts the app before forwarding. `mcp.path` is appended to this.
+pub(crate) fn session_mcp_origin(base_url: &str, app_id: &str) -> String {
+    format!(
+        "{}/api/space/apps/{app_id}/proxy",
+        base_url.trim_end_matches('/')
+    )
+}
+
+/// Where an app's last-known tool list is kept.
+fn tool_cache_path(app_dir: &Path) -> PathBuf {
+    app_dir.join(".senclaw").join("mcp-tools.json")
+}
+
+/// The tools this app reported the last time it was connected to. This is what
+/// lets a stopped session app still have tools in the agent roster — without
+/// it, nothing would ever call one and it would never start.
+pub(crate) fn read_tool_cache(app_dir: &Path) -> Vec<McpToolDef> {
+    std::fs::read_to_string(tool_cache_path(app_dir))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<McpToolDef>>(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_tool_cache(app_dir: &Path, tools: &[McpToolDef]) {
+    if tools.is_empty() {
+        // Never overwrite a good cache with an empty one: a connect that failed
+        // would otherwise erase the roster the next boot depends on.
+        return;
+    }
+    let path = tool_cache_path(app_dir);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(tools) {
+        let _ = std::fs::write(path, json);
+    }
 }
 
 /// Where the app's files live: an explicit `install.localPath`, else
@@ -1144,6 +1615,10 @@ fn build_mcp_config(
     app_id: &str,
     base_url: &str,
     origin: Option<&str>,
+    // A session app must be addressed through the proxy even if it declared an
+    // absolute `mcp.url` — that URL names its own port, which is empty whenever
+    // the app is stopped, and dialling it would never start anything.
+    force_origin: bool,
 ) -> Result<ExternalMcpServerConfig> {
     let transport_str = mcp
         .get("transport")
@@ -1176,7 +1651,8 @@ fn build_mcp_config(
     };
 
     // Resolve the URL: absolute mcp.url wins; else origin + mcp.path.
-    let url = match (str_field("url"), origin) {
+    let declared_url = str_field("url").filter(|_| !force_origin);
+    let url = match (declared_url, origin) {
         (Some(u), _) if u.starts_with("http") => Some(u),
         (_, Some(origin)) => {
             let path = mcp.get("path").and_then(Value::as_str).unwrap_or("/mcp");

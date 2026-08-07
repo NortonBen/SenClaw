@@ -38,7 +38,15 @@ class WsClient {
     if (_disposed) return;
     _setStatus(WsStatus.connecting);
     try {
-      final ch = WebSocketChannel.connect(Uri.parse(_config.wsUrl));
+      // A daemon bound beyond loopback gates the WS upgrade itself; the API
+      // token rides as a query param because WebSocketChannel.connect cannot
+      // set headers on all platforms. Loopback daemons ignore it.
+      var uri = Uri.parse(_config.wsUrl);
+      final apiToken = _config.apiToken;
+      if (apiToken != null && apiToken.isNotEmpty) {
+        uri = uri.replace(queryParameters: {'token': apiToken});
+      }
+      final ch = WebSocketChannel.connect(uri);
       _channel = ch;
       _sub = ch.stream.listen(
         _onMessage,
@@ -46,8 +54,11 @@ class WsClient {
         onError: (_) => _onDisconnect(),
         cancelOnError: true,
       );
-      // Auth handshake — token is optional on localhost.
-      send({'type': 'connect', if (_config.wsToken != null) 'token': _config.wsToken});
+      // Auth handshake — token is optional on localhost. Fall back to the
+      // API token so a gateway configured with SENCLAW_WS_TOKEN=<api token>
+      // still authenticates.
+      final tok = (_config.wsToken?.isNotEmpty ?? false) ? _config.wsToken : apiToken;
+      send({'type': 'connect', if (tok != null && tok.isNotEmpty) 'token': tok});
     } catch (_) {
       _scheduleReconnect();
     }

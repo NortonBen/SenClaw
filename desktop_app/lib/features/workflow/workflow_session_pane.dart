@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../models/workflow_models.dart';
 import '../../theme/tokens.dart';
 import '../chat/agents_provider.dart' show selectedJidProvider;
@@ -90,7 +91,7 @@ class _WorkflowSessionSectionState
           child: Row(
             children: [
               Expanded(
-                child: Text('WORKFLOWS',
+                child: Text(context.tr('WORKFLOWS'),
                     style: TextStyle(
                       color: c.textMuted,
                       fontSize: 11,
@@ -125,7 +126,8 @@ class _WorkflowSessionSectionState
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   child: Text(
-                    'More ${runs.length - visible.length} workflows →',
+                    context.trArgs('More {n} workflows →',
+                        {'n': runs.length - visible.length}),
                     style: TextStyle(color: c.accent, fontSize: 11),
                   ),
                 ),
@@ -173,7 +175,12 @@ class _WorkflowSessionSectionState
                           color: active ? c.accent : c.textPrimary,
                           fontSize: 12.5)),
                   Text(
-                    '${r.status} · ${r.steps.where((s) => s.status == 'done').length}/${r.steps.length} steps',
+                    context.trArgs('{status} · {done}/{total} steps', {
+                      'status': context.tr(r.status),
+                      'done':
+                          r.steps.where((s) => s.status == 'done').length,
+                      'total': r.steps.length,
+                    }),
                     style: TextStyle(color: c.textMuted, fontSize: 10.5),
                   ),
                 ],
@@ -210,12 +217,12 @@ class _WorkflowSessionSectionState
                 }
               },
               itemBuilder: (ctx) => [
-                const PopupMenuItem(value: 'rename', child: Text('Rename')),
+                PopupMenuItem(value: 'rename', child: Text(ctx.tr('Rename'))),
                 if (r.isActive)
-                  const PopupMenuItem(
-                      value: 'cancel', child: Text('Cancel run'))
+                  PopupMenuItem(
+                      value: 'cancel', child: Text(ctx.tr('Cancel run')))
                 else
-                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  PopupMenuItem(value: 'delete', child: Text(ctx.tr('Delete'))),
               ],
             ),
           ],
@@ -298,7 +305,8 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
     return InkWell(
       onTap: () => setState(() => _feedOpen = true),
       child: Tooltip(
-        message: 'Activity (${_activity.length}) — click to expand',
+        message: context.trArgs('Activity ({n}) — click to expand',
+            {'n': _activity.length}),
         child: Column(
           children: [
             const SizedBox(height: AppTokens.s12),
@@ -358,7 +366,7 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
                       strokeWidth: 1.6, color: AppTokens.brand),
                 ),
               if (active) const SizedBox(width: AppTokens.s6),
-              Text('ACTIVITY',
+              Text(context.tr('ACTIVITY'),
                   style: TextStyle(
                       color: c.textMuted,
                       fontSize: 10,
@@ -374,7 +382,9 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
           child: _activity.isEmpty
               ? Center(
                   child: Text(
-                      active ? 'Waiting for the agent…' : 'No activity recorded',
+                      active
+                          ? context.tr('Waiting for the agent…')
+                          : context.tr('No activity recorded'),
                       style: TextStyle(color: c.textMuted, fontSize: 11)))
               : ListView.builder(
                   controller: _feedScroll,
@@ -409,8 +419,10 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
                           : (firstLine.length > 48
                               ? '${firstLine.substring(0, 48)}…'
                               : firstLine),
-                      'think' => 'Thinking… (${text.length} chars)',
-                      'text' => 'Writing… (${text.length} chars)',
+                      'think' => ctx.trArgs(
+                          'Thinking… ({n} chars)', {'n': text.length}),
+                      'text' => ctx.trArgs(
+                          'Writing… ({n} chars)', {'n': text.length}),
                       _ => firstLine.length > 48
                           ? '${firstLine.substring(0, 48)}…'
                           : firstLine,
@@ -514,7 +526,9 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
 
     if (run == null) {
       return Center(
-        child: Text('Run "${widget.runId}" not found (history may have rotated)',
+        child: Text(
+            context.trArgs('Run "{id}" not found (history may have rotated)',
+                {'id': widget.runId}),
             style: TextStyle(color: c.textSecondary, fontSize: 13)),
       );
     }
@@ -541,11 +555,11 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
                         fontSize: 14,
                         fontWeight: FontWeight.w600)),
               ),
-              Text('workflow session',
+              Text(context.tr('workflow session'),
                   style: TextStyle(color: c.textMuted, fontSize: 11)),
               const SizedBox(width: AppTokens.s8),
               IconButton(
-                tooltip: 'Open in run monitor',
+                tooltip: context.tr('Open in run monitor'),
                 icon: const Icon(Icons.open_in_new_rounded, size: 16),
                 onPressed: () {
                   ref.read(openWorkflowRunProvider.notifier).state = run.id;
@@ -581,9 +595,10 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
             onCancel: () async {
               try {
                 await cancelWorkflowRun(ref, run.id);
-                _snack('Cancel requested: ${run.id}');
+                _snack(L10n.global
+                    .tArgs('Cancel requested: {id}', {'id': run.id}));
               } catch (e) {
-                _snack('Cancel failed: $e');
+                _snack(L10n.global.tArgs('Cancel failed: {e}', {'e': e}));
               }
             },
             onRerun: () {
@@ -596,7 +611,8 @@ class _WorkflowSessionPaneState extends ConsumerState<WorkflowSessionPane> {
                 }
               }
               if (def == null) {
-                _snack('Definition "${run.workflowName}" no longer exists');
+                _snack(context.trArgs('Definition "{name}" no longer exists',
+                    {'name': run.workflowName}));
                 return;
               }
               showWorkflowRunDialog(context, ref, def, preset: run.inputs,

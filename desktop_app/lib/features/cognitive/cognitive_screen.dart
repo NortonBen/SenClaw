@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'dart:io' show File;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
 import 'cognitive_graph.dart';
@@ -119,10 +120,11 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
           child: Row(
             children: [
               Tooltip(
-                message: 'User info aggregated from chats · extended with '
+                message: context.tr(
+                    'User info aggregated from chats · extended with '
                     'uploaded documents · Recall researches it for detailed, '
-                    'grounded answers',
-                child: Text('Knowledge',
+                    'grounded answers'),
+                child: Text(context.tr('Knowledge'),
                     style: TextStyle(
                         color: c.textPrimary,
                         fontSize: 16,
@@ -133,9 +135,11 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                 loading: () => const SizedBox.shrink(),
                 error: (e, st) => const SizedBox.shrink(),
                 data: (s) => Row(children: [
-                  _stat('${s['nodes_total'] ?? 0}', 'nodes', AppTokens.brand),
+                  _stat('${s['nodes_total'] ?? 0}', context.tr('nodes'),
+                      AppTokens.brand),
                   const SizedBox(width: AppTokens.s16),
-                  _stat('${s['edges'] ?? 0}', 'edges', AppTokens.brandAlt),
+                  _stat('${s['edges'] ?? 0}', context.tr('edges'),
+                      AppTokens.brandAlt),
                   const SizedBox(width: AppTokens.s16),
                   for (final kv in (s['nodes_by_kind'] as List? ?? const []))
                     if (kv is List && kv.length == 2)
@@ -149,15 +153,15 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
               SegmentedButton<String>(
                 style:
                     const ButtonStyle(visualDensity: VisualDensity.compact),
-                segments: const [
+                segments: [
                   ButtonSegment(
                       value: 'graph',
-                      icon: Icon(Icons.hub_outlined, size: 15),
-                      label: Text('Graph')),
+                      icon: const Icon(Icons.hub_outlined, size: 15),
+                      label: Text(context.tr('Graph'))),
                   ButtonSegment(
                       value: 'data',
-                      icon: Icon(Icons.list_alt_outlined, size: 15),
-                      label: Text('Data')),
+                      icon: const Icon(Icons.list_alt_outlined, size: 15),
+                      label: Text(context.tr('Data'))),
                 ],
                 selected: {_tab},
                 onSelectionChanged: (s) => setState(() => _tab = s.first),
@@ -175,9 +179,10 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                             style: TextStyle(
                                 color: c.textPrimary, fontSize: 12.5),
                             items: [
-                              const DropdownMenuItem<String?>(
+                              DropdownMenuItem<String?>(
                                   value: null,
-                                  child: Text('🌐 Toàn bộ knowledge')),
+                                  child:
+                                      Text(context.tr('🌐 All knowledge'))),
                               for (final s in spaces)
                                 DropdownMenuItem<String?>(
                                     value: s.scopeId,
@@ -203,65 +208,66 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                 onPressed: () => showDialog(
                     context: context, builder: (_) => const _AddMemoryDialog()),
                 icon: const Icon(Icons.cloud_upload_outlined, size: 16),
-                label: const Text('Add knowledge'),
+                label: Text(context.tr('Add knowledge')),
               ),
               const SizedBox(width: AppTokens.s4),
               PopupMenuButton<String>(
-                tooltip: 'Maintenance',
+                tooltip: context.tr('Maintenance'),
                 icon: Icon(Icons.more_horiz, color: c.textMuted),
                 position: PopupMenuPosition.under,
                 onSelected: (v) {
                   switch (v) {
                     case 'maintenance':
-                      _runOp(context, ref, 'maintenance', 'Maintenance run');
+                      _runOp(context, ref, 'maintenance',
+                          context.tr('Maintenance run'));
                     case 'cleanup':
-                      _runOp(context, ref, 'cleanup', 'Cleanup done');
+                      _runOp(context, ref, 'cleanup', context.tr('Cleanup done'));
                     case 'backfill':
                       _runOp(context, ref, 're-extract-pending',
-                          'Backfill started');
+                          context.tr('Backfill started'));
                     case 'decay':
                       showDialog(
                           context: context,
                           builder: (_) => const _DecayLogDialog());
                   }
                 },
-                itemBuilder: (_) => const [
+                itemBuilder: (_) => [
                   PopupMenuItem(
                     value: 'maintenance',
                     child: Row(children: [
-                      Icon(Icons.cleaning_services_outlined, size: 16),
-                      SizedBox(width: AppTokens.s8),
-                      Text('Maintain'),
+                      const Icon(Icons.cleaning_services_outlined, size: 16),
+                      const SizedBox(width: AppTokens.s8),
+                      Text(context.tr('Maintain')),
                     ]),
                   ),
                   PopupMenuItem(
                     value: 'backfill',
                     child: Row(children: [
-                      Icon(Icons.replay_outlined, size: 16),
-                      SizedBox(width: AppTokens.s8),
-                      Text('Re-extract pending'),
+                      const Icon(Icons.replay_outlined, size: 16),
+                      const SizedBox(width: AppTokens.s8),
+                      Text(context.tr('Re-extract pending')),
                     ]),
                   ),
                   PopupMenuItem(
                     value: 'cleanup',
                     child: Row(children: [
-                      Icon(Icons.auto_delete_outlined, size: 16),
-                      SizedBox(width: AppTokens.s8),
-                      Text('Cleanup'),
+                      const Icon(Icons.auto_delete_outlined, size: 16),
+                      const SizedBox(width: AppTokens.s8),
+                      Text(context.tr('Cleanup')),
                     ]),
                   ),
                   PopupMenuItem(
                     value: 'decay',
                     child: Row(children: [
-                      Icon(Icons.history, size: 16),
-                      SizedBox(width: AppTokens.s8),
-                      Text('Decay log'),
+                      const Icon(Icons.history, size: 16),
+                      const SizedBox(width: AppTokens.s8),
+                      Text(context.tr('Decay log')),
                     ]),
                   ),
                 ],
               ),
               IconButton(
-                tooltip: 'Reload',
+                tooltip: context.tr('Reload'),
                 icon: const Icon(Icons.refresh, size: 18),
                 onPressed: () {
                   ref.invalidate(cogStatsProvider);
@@ -291,9 +297,9 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                       Padding(
                         padding: const EdgeInsets.all(AppTokens.s12),
                         child: TextField(
-                          decoration: const InputDecoration(
-                            hintText: 'Search knowledge…',
-                            prefixIcon: Icon(Icons.search, size: 16),
+                          decoration: InputDecoration(
+                            hintText: context.tr('Search knowledge…'),
+                            prefixIcon: const Icon(Icons.search, size: 16),
                           ),
                           onSubmitted: (v) => ref
                               .read(cogQueryProvider.notifier)
@@ -307,7 +313,7 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                           error: (e, _) => Center(child: Text('$e')),
                           data: (list) => list.isEmpty
                               ? Center(
-                                  child: Text('No nodes',
+                                  child: Text(context.tr('No nodes'),
                                       style:
                                           TextStyle(color: c.textMuted)))
                               : ListView.builder(
@@ -362,7 +368,7 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
               Expanded(
                 child: _selected == null
                     ? Center(
-                        child: Text('Select a node',
+                        child: Text(context.tr('Select a node'),
                             style: TextStyle(color: c.textMuted)))
                     : SingleChildScrollView(
                         padding: const EdgeInsets.all(AppTokens.s24),
@@ -396,14 +402,14 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                                 const SizedBox(width: AppTokens.s8),
                                 _NodeAction(
                                   icon: Icons.hub_outlined,
-                                  label: 'Graph',
+                                  label: context.tr('Graph'),
                                   color: _showGraph ? c.accent : null,
                                   onTap: () => setState(
                                       () => _showGraph = !_showGraph),
                                 ),
                                 _NodeAction(
                                   icon: Icons.refresh,
-                                  label: 'Re-extract',
+                                  label: context.tr('Re-extract'),
                                   onTap: () async {
                                     await ref.read(apiClientProvider).post(
                                         '/api/cognitive/node/${_selected!.id}/re-extract');
@@ -412,7 +418,7 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                                 ),
                                 _NodeAction(
                                   icon: Icons.delete_outline,
-                                  label: 'Forget',
+                                  label: context.tr('Forget'),
                                   color: AppTokens.danger,
                                   onTap: () async {
                                     await ref.read(apiClientProvider).delete(
@@ -432,7 +438,7 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
                               _selected!.summary.trim().isNotEmpty
                                   ? _selected!.summary
                                   : (_selected!.label.trim().isEmpty
-                                      ? '(no content)'
+                                      ? context.tr('(no content)')
                                       : _selected!.label),
                               style: TextStyle(
                                   color: c.textSecondary,
@@ -485,18 +491,18 @@ class _CognitiveScreenState extends ConsumerState<CognitiveScreen> {
     final r = await ref.read(apiClientProvider).post('/api/cognitive/$op');
     ref.invalidate(cogStatsProvider);
     ref.invalidate(cogNodesProvider);
+    if (!context.mounted) return;
     // Cleanup reports how much junk it swept; backfill how many chunks it
     // queued — surface whichever count came back.
     var text = msg;
     if (r is Map && r['total_removed'] is num) {
-      text = '$msg — removed ${r['total_removed']} node(s)';
+      text = '$msg — '
+          '${context.trArgs('removed {n} node(s)', {'n': r['total_removed']})}';
     } else if (r is Map && r['queued'] is num) {
-      text = '$msg — ${r['queued']} chunk(s) queued';
+      text = '$msg — '
+          '${context.trArgs('{n} chunk(s) queued', {'n': r['queued']})}';
     }
-    if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(text)));
-    }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
   Widget _kindChip(String kind) {
@@ -568,6 +574,7 @@ class _AddMemoryDialogState extends ConsumerState<_AddMemoryDialog> {
       final uri =
           Uri.parse('http://${cfg.host}:${cfg.uiPort}/api/cognitive/upload');
       final req = http.MultipartRequest('POST', uri);
+      req.headers.addAll(cfg.authHeaders);
       if (kIsWeb && f.bytes != null) {
         req.files.add(
             http.MultipartFile.fromBytes('file', f.bytes!, filename: f.name));
@@ -587,12 +594,14 @@ class _AddMemoryDialogState extends ConsumerState<_AddMemoryDialog> {
       Navigator.of(context).pop();
       final ok = resp.statusCode >= 200 && resp.statusCode < 300;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(ok ? '${f.name}: added to knowledge' : 'Upload failed: $body')));
+          content: Text(ok
+              ? context.trArgs('{name}: added to knowledge', {'name': f.name})
+              : context.trArgs('Upload failed: {err}', {'err': body}))));
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Upload failed: {err}', {'err': e}))));
       }
     }
   }
@@ -602,7 +611,7 @@ class _AddMemoryDialogState extends ConsumerState<_AddMemoryDialog> {
     final c = context.colors;
     return AlertDialog(
       backgroundColor: c.surface,
-      title: const Text('Add knowledge'),
+      title: Text(context.tr('Add knowledge')),
       content: SizedBox(
         width: 460,
         child: Column(
@@ -614,20 +623,21 @@ class _AddMemoryDialogState extends ConsumerState<_AddMemoryDialog> {
               autofocus: true,
               minLines: 3,
               maxLines: 8,
-              decoration: const InputDecoration(hintText: 'What to remember…'),
+              decoration:
+                  InputDecoration(hintText: context.tr('What to remember…')),
             ),
             const SizedBox(height: AppTokens.s8),
             TextField(
                 controller: _tags,
-                decoration:
-                    const InputDecoration(hintText: 'tags, comma, separated')),
+                decoration: InputDecoration(
+                    hintText: context.tr('tags, comma, separated'))),
             const SizedBox(height: AppTokens.s12),
             Row(children: [
               Expanded(child: Divider(color: c.border)),
               Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: AppTokens.s8),
-                child: Text('or',
+                child: Text(context.tr('or'),
                     style: TextStyle(color: c.textMuted, fontSize: 12)),
               ),
               Expanded(child: Divider(color: c.border)),
@@ -636,7 +646,7 @@ class _AddMemoryDialogState extends ConsumerState<_AddMemoryDialog> {
             OutlinedButton.icon(
               onPressed: _busy ? null : _uploadFile,
               icon: const Icon(Icons.upload_file_outlined, size: 16),
-              label: const Text('Upload a file'),
+              label: Text(context.tr('Upload a file')),
             ),
           ],
         ),
@@ -644,9 +654,10 @@ class _AddMemoryDialogState extends ConsumerState<_AddMemoryDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
+            child: Text(context.tr('Cancel'))),
         FilledButton(
-            onPressed: _busy ? null : _save, child: const Text('Add')),
+            onPressed: _busy ? null : _save,
+            child: Text(context.tr('Add'))),
       ],
     );
   }
@@ -668,7 +679,7 @@ class _DecayLogDialog extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('Decay log',
+              Text(context.tr('Decay log'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,
@@ -687,7 +698,7 @@ class _DecayLogDialog extends ConsumerWidget {
                         .toList();
                     if (runs.isEmpty) {
                       return Center(
-                          child: Text('No runs yet',
+                          child: Text(context.tr('No runs yet'),
                               style: TextStyle(color: c.textMuted)));
                     }
                     return ListView.builder(
@@ -711,9 +722,14 @@ class _DecayLogDialog extends ConsumerWidget {
                                         color: c.textSecondary, fontSize: 12)),
                               ),
                               Text(
-                                  'scanned ${run['edges_scanned'] ?? 0} · '
-                                  'pruned ${run['edges_pruned'] ?? 0} · '
-                                  'promoted ${run['edges_promoted'] ?? 0}',
+                                  context.trArgs(
+                                      'scanned {scanned} · pruned {pruned} · '
+                                      'promoted {promoted}',
+                                      {
+                                        'scanned': run['edges_scanned'] ?? 0,
+                                        'pruned': run['edges_pruned'] ?? 0,
+                                        'promoted': run['edges_promoted'] ?? 0,
+                                      }),
                                   style: TextStyle(
                                       color: c.textMuted,
                                       fontSize: 12,
@@ -730,7 +746,7 @@ class _DecayLogDialog extends ConsumerWidget {
                 alignment: Alignment.centerRight,
                 child: TextButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Close')),
+                    child: Text(context.tr('Close'))),
               ),
             ],
           ),
@@ -829,10 +845,10 @@ class _RecallDialogState extends ConsumerState<_RecallDialog> {
     final c = context.colors;
     return AlertDialog(
       backgroundColor: c.surface,
-      title: Row(children: const [
-        Icon(Icons.lightbulb_outline, size: 20),
-        SizedBox(width: AppTokens.s8),
-        Text('Recall — grounded answer'),
+      title: Row(children: [
+        const Icon(Icons.lightbulb_outline, size: 20),
+        const SizedBox(width: AppTokens.s8),
+        Text(context.tr('Recall — grounded answer')),
       ]),
       content: SizedBox(
         width: 540,
@@ -847,28 +863,30 @@ class _RecallDialogState extends ConsumerState<_RecallDialog> {
                     controller: _query,
                     autofocus: true,
                     onSubmitted: (_) => _run(),
-                    decoration: const InputDecoration(
-                        hintText: 'Ask a question…',
-                        border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                        hintText: context.tr('Ask a question…'),
+                        border: const OutlineInputBorder(),
                         isDense: true),
                   ),
                 ),
                 const SizedBox(width: AppTokens.s8),
                 DropdownButton<String>(
                   value: _mode,
-                  items: const [
+                  items: [
                     DropdownMenuItem(
-                        value: 'hybrid', child: Text('Hybrid (vec+FTS)')),
-                    DropdownMenuItem(
+                        value: 'hybrid',
+                        child: Text(context.tr('Hybrid (vec+FTS)'))),
+                    const DropdownMenuItem(
                         value: 'graph', child: Text('GraphCompletion')),
-                    DropdownMenuItem(value: 'fts', child: Text('Keyword (FTS)')),
+                    DropdownMenuItem(
+                        value: 'fts', child: Text(context.tr('Keyword (FTS)'))),
                   ],
                   onChanged: (v) => setState(() => _mode = v ?? 'hybrid'),
                 ),
                 const SizedBox(width: AppTokens.s8),
                 FilledButton(
                     onPressed: _loading ? null : _run,
-                    child: const Text('Ask')),
+                    child: Text(context.tr('Ask'))),
               ]),
               if (_loading) ...[
                 const SizedBox(height: AppTokens.s12),
@@ -895,7 +913,9 @@ class _RecallDialogState extends ConsumerState<_RecallDialog> {
               ],
               if (_sources.isNotEmpty) ...[
                 const SizedBox(height: AppTokens.s12),
-                Text('SOURCES (${_sources.length})',
+                Text(
+                    context
+                        .trArgs('SOURCES ({n})', {'n': _sources.length}),
                     style: TextStyle(
                         color: c.textMuted,
                         fontSize: 11,
@@ -932,7 +952,7 @@ class _RecallDialogState extends ConsumerState<_RecallDialog> {
       actions: [
         TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Close')),
+            child: Text(context.tr('Close'))),
       ],
     );
   }

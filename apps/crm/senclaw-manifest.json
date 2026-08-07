@@ -5,6 +5,7 @@
   "icon": "👥",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./crm",
     "healthPath": "/api/status",
     "port": 4390

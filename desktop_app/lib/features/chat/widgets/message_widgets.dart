@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/i18n/l10n.dart';
 import '../../../core/transport/connection.dart';
 import '../../../models/chat_message.dart';
 import '../../../theme/tokens.dart';
@@ -144,7 +145,7 @@ class _TextBubble extends StatelessWidget {
                     .where((p) => !p.isThink)
                     .map((p) => p.text)
                     .join('\n\n');
-                final time = hasContent ? _fmtTime(message.ts) : '';
+                final time = hasContent ? _fmtTime(context, message.ts) : '';
                 if (!showTokens && !showActions && time.isEmpty) {
                   return const SizedBox.shrink();
                 }
@@ -161,7 +162,10 @@ class _TextBubble extends StatelessWidget {
                         Padding(
                           padding: const EdgeInsets.only(right: AppTokens.s8),
                           child: Text(
-                            message.streaming ? '…' : '${message.tokens} tok',
+                            message.streaming
+                                ? '…'
+                                : context.trArgs(
+                                    '{n} tok', {'n': message.tokens}),
                             style:
                                 TextStyle(color: c.textMuted, fontSize: 12),
                           ),
@@ -194,7 +198,7 @@ class _TextBubble extends StatelessWidget {
 
 /// Format a message timestamp (ISO or "YYYY-MM-DD HH:MM:SS"). Within 30 minutes
 /// it's relative ("now" / "Nm"); same-day → HH:mm; another day → "dd/MM HH:mm".
-String _fmtTime(String? s) {
+String _fmtTime(BuildContext context, String? s) {
   if (s == null || s.isEmpty) return '';
   final dt = DateTime.tryParse(s) ??
       (s.contains(' ') ? DateTime.tryParse(s.replaceFirst(' ', 'T')) : null);
@@ -202,8 +206,10 @@ String _fmtTime(String? s) {
   final l = dt.toLocal();
   final now = DateTime.now();
   final diff = now.difference(l);
-  if (diff.inSeconds >= 0 && diff.inSeconds < 60) return 'now';
-  if (diff.inMinutes >= 0 && diff.inMinutes < 30) return '${diff.inMinutes}m';
+  if (diff.inSeconds >= 0 && diff.inSeconds < 60) return context.tr('now');
+  if (diff.inMinutes >= 0 && diff.inMinutes < 30) {
+    return context.trArgs('{n}m', {'n': diff.inMinutes});
+  }
   final hm =
       '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
   final sameDay = l.year == now.year && l.month == now.month && l.day == now.day;
@@ -245,20 +251,24 @@ class _MessageActionsState extends ConsumerState<_MessageActions> {
       padding: const EdgeInsets.only(top: AppTokens.s6),
       child: Row(
         children: [
-          _act(Icons.copy_outlined, 'Copy', () async {
+          _act(Icons.copy_outlined, context.tr('Copy'), () async {
+            // Resolve before the await — no BuildContext across async gaps.
+            final copied = context.tr('Copied');
             await Clipboard.setData(ClipboardData(text: widget.text));
-            _flashMsg('Copied');
+            _flashMsg(copied);
           }),
           if (widget.showSave) ...[
             const SizedBox(width: AppTokens.s4),
-            _act(Icons.bookmark_add_outlined, 'Save note', () async {
+            _act(Icons.bookmark_add_outlined, context.tr('Save note'), () async {
+              final saved = context.tr('Saved');
+              final failed = context.tr('Failed');
               try {
                 await ref
                     .read(apiClientProvider)
                     .post('/api/quicknotes', body: {'text': widget.text});
-                _flashMsg('Saved');
+                _flashMsg(saved);
               } catch (_) {
-                _flashMsg('Failed');
+                _flashMsg(failed);
               }
             }),
           ],
@@ -272,16 +282,19 @@ class _MessageActionsState extends ConsumerState<_MessageActions> {
               builder: (_, speakingText, child) {
                 final active = speakingText == widget.text;
                 if (active) {
-                  return _act(Icons.stop_circle_outlined, 'Stop', () {
+                  return _act(Icons.stop_circle_outlined, context.tr('Stop'),
+                      () {
                     ref.read(audioServiceProvider).stop();
                   });
                 }
-                return _act(Icons.volume_up_outlined, 'Play (TTS)', () async {
+                return _act(Icons.volume_up_outlined, context.tr('Play (TTS)'),
+                    () async {
+                  final ttsFailed = context.tr('TTS failed');
                   try {
-                    _flashMsg('Speaking…');
+                    _flashMsg(context.tr('Speaking…'));
                     await ref.read(audioServiceProvider).speak(widget.text);
                   } catch (_) {
-                    _flashMsg('TTS failed');
+                    _flashMsg(ttsFailed);
                   }
                 });
               },
@@ -402,7 +415,7 @@ class _ReasoningTileState extends State<_ReasoningTile> {
                 // Filled bulb in the info accent — matches web BulbFilled.
                 Icon(Icons.lightbulb, size: 13, color: c.accent),
                 const SizedBox(width: AppTokens.s8),
-                Text('think',
+                Text(context.tr('think'),
                     style: TextStyle(color: c.textSecondary, fontSize: 13)),
                 const SizedBox(width: AppTokens.s6),
                 Text(_open ? '▾' : '›',
@@ -535,7 +548,7 @@ class _PermissionCard extends StatelessWidget {
                 Text(
                   message.permTitle.isNotEmpty
                       ? message.permTitle
-                      : 'Permission required',
+                      : context.tr('Permission required'),
                   style: TextStyle(
                     color: c.textPrimary,
                     fontWeight: FontWeight.w700,
@@ -553,7 +566,8 @@ class _PermissionCard extends StatelessWidget {
             const SizedBox(height: AppTokens.s12),
             if (message.resolved)
               Text(
-                'Resolved: ${resolvedKey ?? 'answered'}',
+                context.trArgs('Resolved: {key}',
+                    {'key': resolvedKey ?? context.tr('answered')}),
                 style: TextStyle(color: c.textMuted, fontSize: 12),
               )
             else
@@ -661,10 +675,10 @@ class _ToolGroupCardState extends State<ToolGroupCard> {
   bool _open = false;
 
   String get _summary {
-    // Count by verb, preserving first-seen order.
+    // Count by verb (translated), preserving first-seen order.
     final counts = <String, int>{};
     for (final t in widget.tools) {
-      final v = toolVerb(t.toolName);
+      final v = context.tr(toolVerb(t.toolName));
       counts[v] = (counts[v] ?? 0) + 1;
     }
     return counts.entries
@@ -946,7 +960,7 @@ class _DiffView extends StatelessWidget {
                         fontSize: 11, fontFamily: AppTokens.fontMono)),
               ),
             if (newFile)
-              Text('New file',
+              Text(context.tr('New file'),
                   style: TextStyle(fontSize: 11, color: c.textMuted)),
             if (plus != null)
               Text('+$plus',
@@ -961,7 +975,7 @@ class _DiffView extends StatelessWidget {
                       color: AppTokens.danger,
                       fontWeight: FontWeight.w600)),
             if (size != null)
-              Text('$size bytes',
+              Text(context.trArgs('{size} bytes', {'size': size}),
                   style: TextStyle(fontSize: 11, color: c.textMuted)),
           ],
         ),
@@ -971,7 +985,7 @@ class _DiffView extends StatelessWidget {
         if (extra > 0)
           Padding(
             padding: const EdgeInsets.only(top: 4),
-            child: Text('… $extra more lines',
+            child: Text(context.trArgs('… {n} more lines', {'n': extra}),
                 style: TextStyle(fontSize: 11, color: c.textMuted)),
           ),
       ],
@@ -1140,7 +1154,7 @@ class InlineDispatchCard extends ConsumerWidget {
                   const SizedBox(width: AppTokens.s8),
                   Expanded(
                     child: Text(
-                      parent.goal.isEmpty ? 'Dispatch' : parent.goal,
+                      parent.goal.isEmpty ? context.tr('Dispatch') : parent.goal,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

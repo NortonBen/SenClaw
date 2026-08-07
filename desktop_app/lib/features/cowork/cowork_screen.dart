@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../models/cowork_models.dart';
 import '../../theme/tokens.dart';
@@ -21,19 +22,19 @@ class CoworkScreen extends ConsumerWidget {
     final teams = ref.watch(teamsProvider);
     return SectionScaffold(
       title: 'Cowork',
-      subtitle: 'Multi-agent teams',
+      subtitle: context.tr('Multi-agent teams'),
       actions: [
         OutlinedButton.icon(
           onPressed: () => ref.invalidate(teamsProvider),
           icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('Refresh'),
+          label: Text(context.tr('Refresh')),
         ),
         const SizedBox(width: AppTokens.s8),
         FilledButton.icon(
           onPressed: () => showDialog(
               context: context, builder: (_) => const _TemplatePicker()),
           icon: const Icon(Icons.add_rounded, size: 18),
-          label: const Text('New team'),
+          label: Text(context.tr('New team')),
           style: FilledButton.styleFrom(
             backgroundColor: context.colors.accent,
             foregroundColor: Colors.white,
@@ -53,7 +54,7 @@ class CoworkScreen extends ConsumerWidget {
         data: (list) {
           if (list.isEmpty) {
             return Center(
-              child: Text('No teams yet',
+              child: Text(context.tr('No teams yet'),
                   style: TextStyle(color: context.colors.textMuted)),
             );
           }
@@ -88,7 +89,7 @@ class _TemplatePicker extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('New team from template',
+              Text(context.tr('New team from template'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 16,
@@ -146,7 +147,9 @@ class _TemplatePicker extends ConsumerWidget {
                                       ],
                                     ),
                                   ),
-                                  Text('${t.memberCount} members',
+                                  Text(
+                                      context.trPlural(t.memberCount,
+                                          '{n} member', '{n} members'),
                                       style: TextStyle(
                                           color: c.textMuted, fontSize: 12)),
                                 ],
@@ -163,7 +166,7 @@ class _TemplatePicker extends ConsumerWidget {
                 alignment: Alignment.centerRight,
                 child: TextButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Cancel')),
+                    child: Text(context.tr('Cancel'))),
               ),
             ],
           ),
@@ -219,7 +222,9 @@ class _TeamCard extends ConsumerWidget {
                             style: TextStyle(
                                 color: c.textPrimary,
                                 fontWeight: FontWeight.w700)),
-                        Text('manager · ${team.managerFolder}',
+                        Text(
+                            context.trArgs('manager · {folder}',
+                                {'folder': team.managerFolder}),
                             style: TextStyle(color: c.textMuted, fontSize: 12)),
                       ],
                     ),
@@ -279,21 +284,21 @@ class _TeamDetail extends ConsumerWidget {
                 icon: const Icon(Icons.arrow_back, size: 18),
               ),
               const SizedBox(width: AppTokens.s8),
-              Text(team?.name ?? 'Team',
+              Text(team?.name ?? context.tr('Team'),
                   style: TextStyle(
                       color: c.textPrimary,
                       fontSize: 14,
                       fontWeight: FontWeight.w700)),
               const Spacer(),
               IconButton(
-                tooltip: 'Workspace files',
+                tooltip: context.tr('Workspace files'),
                 onPressed: () => showDialog(
                     context: context,
                     builder: (_) => _WorkspaceBrowser(teamId: teamId)),
                 icon: const Icon(Icons.folder_open_outlined, size: 18),
               ),
               IconButton(
-                tooltip: 'Refresh tasks',
+                tooltip: context.tr('Refresh tasks'),
                 onPressed: () => ref.invalidate(teamTasksProvider(teamId)),
                 icon: const Icon(Icons.refresh, size: 18),
               ),
@@ -491,7 +496,7 @@ class _MemberEditorState extends ConsumerState<_MemberEditor> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(children: [
-            Text('Triggers',
+            Text(context.tr('Triggers'),
                 style: TextStyle(
                     color: c.textMuted,
                     fontSize: 12,
@@ -501,11 +506,11 @@ class _MemberEditorState extends ConsumerState<_MemberEditor> {
               onPressed: () => setState(
                   () => _triggerRules.add({'type': 'message_received'})),
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Add'),
+              label: Text(context.tr('Add')),
             ),
           ]),
           if (_triggerRules.isEmpty)
-            Text('No triggers',
+            Text(context.tr('No triggers'),
                 style: TextStyle(color: c.textMuted, fontSize: 12)),
           for (int i = 0; i < _triggerRules.length; i++)
             _triggerCard(c, field, i),
@@ -540,29 +545,30 @@ class _MemberEditorState extends ConsumerState<_MemberEditor> {
                 decoration: const InputDecoration(isDense: true),
                 items: [
                   for (final t in _triggerTypes)
-                    DropdownMenuItem(value: t, child: Text(_triggerLabels[t]!)),
+                    DropdownMenuItem(
+                        value: t, child: Text(context.tr(_triggerLabels[t]!))),
                 ],
                 onChanged: (v) => setState(
                     () => _triggerRules[i] = {'type': v ?? 'message_received'}),
               ),
             ),
             IconButton(
-              tooltip: 'Remove',
+              tooltip: context.tr('Remove'),
               icon: const Icon(Icons.close, size: 16),
               onPressed: () => setState(() => _triggerRules.removeAt(i)),
             ),
           ]),
           if (type == 'message_received') ...[
-            field(rule, 'from', 'From (sender, optional)'),
-            field(rule, 'messageType', 'Message type (optional)'),
+            field(rule, 'from', context.tr('From (sender, optional)')),
+            field(rule, 'messageType', context.tr('Message type (optional)')),
           ] else if (type == 'on_mention')
-            field(rule, 'from', 'From (sender, optional)')
+            field(rule, 'from', context.tr('From (sender, optional)'))
           else if (type == 'task_status_changed') ...[
-            field(rule, 'status', 'Status (optional)'),
-            field(rule, 'assignee', 'Assignee (optional)'),
-            field(rule, 'to', 'To status (optional)'),
+            field(rule, 'status', context.tr('Status (optional)')),
+            field(rule, 'assignee', context.tr('Assignee (optional)')),
+            field(rule, 'to', context.tr('To status (optional)')),
           ] else if (type == 'cron')
-            field(rule, 'cron', 'Cron expression (e.g. 0 9 * * 1)'),
+            field(rule, 'cron', context.tr('Cron expression (e.g. 0 9 * * 1)')),
         ],
       ),
     );
@@ -583,7 +589,8 @@ class _MemberEditorState extends ConsumerState<_MemberEditor> {
         );
     return AlertDialog(
       backgroundColor: context.colors.surface,
-      title: Text('Edit ${widget.member.folder}'),
+      title: Text(context
+          .trArgs('Edit {folder}', {'folder': widget.member.folder})),
       content: SizedBox(
         width: 480,
         height: 520,
@@ -594,14 +601,15 @@ class _MemberEditorState extends ConsumerState<_MemberEditor> {
             children: [
               TextField(
                   controller: _role,
-                  decoration: const InputDecoration(labelText: 'Role')),
-              area('Responsibilities', _resp, min: 3, max: 5),
+                  decoration:
+                      InputDecoration(labelText: context.tr('Role'))),
+              area(context.tr('Responsibilities'), _resp, min: 3, max: 5),
               _buildTriggers(),
-              area('Handoff rules', _handoff),
-              area('Acceptance criteria', _acceptance),
-              area('Output format', _output),
-              area('SLA', _sla, min: 1, max: 2),
-              area('Limits', _limits, min: 1, max: 2),
+              area(context.tr('Handoff rules'), _handoff),
+              area(context.tr('Acceptance criteria'), _acceptance),
+              area(context.tr('Output format'), _output),
+              area(context.tr('SLA'), _sla, min: 1, max: 2),
+              area(context.tr('Limits'), _limits, min: 1, max: 2),
             ],
           ),
         ),
@@ -614,12 +622,12 @@ class _MemberEditorState extends ConsumerState<_MemberEditor> {
             ref.invalidate(teamsProvider);
             if (context.mounted) Navigator.of(context).pop();
           },
-          child: const Text('Remove',
-              style: TextStyle(color: AppTokens.danger)),
+          child: Text(context.tr('Remove'),
+              style: const TextStyle(color: AppTokens.danger)),
         ),
         TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
+            child: Text(context.tr('Cancel'))),
         FilledButton(
           onPressed: () async {
             await ref
@@ -638,7 +646,7 @@ class _MemberEditorState extends ConsumerState<_MemberEditor> {
             ref.invalidate(teamsProvider);
             if (context.mounted) Navigator.of(context).pop();
           },
-          child: const Text('Save'),
+          child: Text(context.tr('Save')),
         ),
       ],
     );
@@ -661,7 +669,7 @@ class _Kanban extends StatelessWidget {
           for (final (key, label) in kCoworkColumns)
             _Column(
               teamId: teamId,
-              label: label,
+              label: context.tr(label),
               tasks: tasks.where((t) => t.status == key).toList(),
             ),
         ],
@@ -779,7 +787,7 @@ class _TaskCard extends ConsumerWidget {
                 width: 24,
                 height: 24,
                 child: PopupMenuButton<String>(
-                  tooltip: 'Task actions',
+                  tooltip: context.tr('Task actions'),
                   padding: EdgeInsets.zero,
                   iconSize: 16,
                   icon: Icon(Icons.more_vert, color: c.textMuted),
@@ -798,18 +806,19 @@ class _TaskCard extends ConsumerWidget {
                           child: Row(children: [
                             Icon(Icons.arrow_forward, size: 14, color: c.textMuted),
                             const SizedBox(width: AppTokens.s8),
-                            Text('Move to $label'),
+                            Text(context.trArgs(
+                                'Move to {label}', {'label': context.tr(label)})),
                           ]),
                         ),
                     const PopupMenuDivider(),
                     PopupMenuItem(
                       value: '__delete__',
-                      child: Row(children: const [
-                        Icon(Icons.delete_outline,
+                      child: Row(children: [
+                        const Icon(Icons.delete_outline,
                             size: 14, color: AppTokens.danger),
-                        SizedBox(width: AppTokens.s8),
-                        Text('Delete',
-                            style: TextStyle(color: AppTokens.danger)),
+                        const SizedBox(width: AppTokens.s8),
+                        Text(context.tr('Delete'),
+                            style: const TextStyle(color: AppTokens.danger)),
                       ]),
                     ),
                   ],
@@ -834,13 +843,15 @@ class _TaskCard extends ConsumerWidget {
               const Icon(Icons.check_circle_outline,
                   size: 12, color: AppTokens.success),
               const SizedBox(width: AppTokens.s4),
-              const Text('Result',
-                  style: TextStyle(
+              Text(context.tr('Result'),
+                  style: const TextStyle(
                       color: AppTokens.success,
                       fontSize: 11,
                       fontWeight: FontWeight.w600)),
               const Spacer(),
-              Text('${task.resultOutput!.trim().length} chars',
+              Text(
+                  context.trArgs('{n} chars',
+                      {'n': task.resultOutput!.trim().length}),
                   style: TextStyle(color: c.textMuted, fontSize: 11)),
             ]),
           ],
@@ -886,12 +897,12 @@ class _TaskCard extends ConsumerWidget {
                   ),
                   if (result.isNotEmpty)
                     IconButton(
-                      tooltip: 'Copy result',
+                      tooltip: dctx.tr('Copy result'),
                       icon: const Icon(Icons.copy, size: 16),
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: result));
                         ScaffoldMessenger.of(dctx).showSnackBar(
-                            const SnackBar(content: Text('Copied')));
+                            SnackBar(content: Text(dctx.tr('Copied'))));
                       },
                     ),
                   IconButton(
@@ -916,7 +927,7 @@ class _TaskCard extends ConsumerWidget {
                       if (task.description != null &&
                           task.description!.trim().isNotEmpty) ...[
                         const SizedBox(height: AppTokens.s12),
-                        Text('DESCRIPTION',
+                        Text(dctx.tr('DESCRIPTION'),
                             style: TextStyle(
                                 color: c.textMuted,
                                 fontSize: 11,
@@ -926,7 +937,7 @@ class _TaskCard extends ConsumerWidget {
                         AppMarkdown(task.description!),
                       ],
                       const SizedBox(height: AppTokens.s12),
-                      Text('RESULT',
+                      Text(dctx.tr('RESULT'),
                           style: TextStyle(
                               color: c.textMuted,
                               fontSize: 11,
@@ -934,7 +945,7 @@ class _TaskCard extends ConsumerWidget {
                               letterSpacing: 0.5)),
                       const SizedBox(height: AppTokens.s4),
                       if (result.isEmpty)
-                        Text('No result yet',
+                        Text(dctx.tr('No result yet'),
                             style:
                                 TextStyle(color: c.textMuted, fontSize: 13))
                       else
@@ -1052,7 +1063,10 @@ class _WorkspaceBrowserState extends ConsumerState<_WorkspaceBrowser> {
                   const SizedBox(width: AppTokens.s8),
                   Expanded(
                     child: Text(
-                        _rel.isEmpty ? 'Workspace' : 'Workspace / $_rel',
+                        _rel.isEmpty
+                            ? context.tr('Workspace')
+                            : context.trArgs(
+                                'Workspace / {path}', {'path': _rel}),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -1060,7 +1074,7 @@ class _WorkspaceBrowserState extends ConsumerState<_WorkspaceBrowser> {
                             fontWeight: FontWeight.w700)),
                   ),
                   IconButton(
-                    tooltip: 'Reload',
+                    tooltip: context.tr('Reload'),
                     icon: const Icon(Icons.refresh, size: 16),
                     onPressed: _load,
                   ),
@@ -1129,7 +1143,7 @@ class _WorkspaceBrowserState extends ConsumerState<_WorkspaceBrowser> {
                               Padding(
                                 padding: const EdgeInsets.all(AppTokens.s24),
                                 child: Center(
-                                  child: Text('Empty folder',
+                                  child: Text(context.tr('Empty folder'),
                                       style: TextStyle(
                                           color: c.textMuted, fontSize: 12)),
                                 ),
@@ -1157,7 +1171,7 @@ class _AddMemberChip extends ConsumerWidget {
       context: context,
       builder: (dctx) => AlertDialog(
         backgroundColor: dctx.colors.surface,
-        title: const Text('Add member'),
+        title: Text(dctx.tr('Add member')),
         content: SizedBox(
           width: 420,
           child: Column(
@@ -1167,18 +1181,18 @@ class _AddMemberChip extends ConsumerWidget {
               TextField(
                 controller: folder,
                 autofocus: true,
-                decoration: const InputDecoration(
-                    labelText: 'Profile folder (slug)',
+                decoration: InputDecoration(
+                    labelText: dctx.tr('Profile folder (slug)'),
                     hintText: 'web-scout',
-                    border: OutlineInputBorder()),
+                    border: const OutlineInputBorder()),
               ),
               const SizedBox(height: AppTokens.s12),
               TextField(
                 controller: role,
-                decoration: const InputDecoration(
-                    labelText: 'Role',
+                decoration: InputDecoration(
+                    labelText: dctx.tr('Role'),
                     hintText: 'scout / reviewer / lead',
-                    border: OutlineInputBorder()),
+                    border: const OutlineInputBorder()),
               ),
             ],
           ),
@@ -1186,10 +1200,10 @@ class _AddMemberChip extends ConsumerWidget {
         actions: [
           TextButton(
               onPressed: () => Navigator.of(dctx).pop(false),
-              child: const Text('Cancel')),
+              child: Text(dctx.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.of(dctx).pop(true),
-              child: const Text('Add')),
+              child: Text(dctx.tr('Add'))),
         ],
       ),
     );
@@ -1217,7 +1231,7 @@ class _AddMemberChip extends ConsumerWidget {
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.add, size: 15, color: c.textMuted),
           const SizedBox(width: 4),
-          Text('Add member',
+          Text(context.tr('Add member'),
               style: TextStyle(color: c.textMuted, fontSize: 13)),
         ]),
       ),

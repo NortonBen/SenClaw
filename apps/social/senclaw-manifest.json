@@ -5,6 +5,7 @@
   "icon": "📣",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./social",
     "healthPath": "/api/status",
     "port": 4520

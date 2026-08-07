@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../core/i18n/l10n.dart';
+
 /// Parse tags that may arrive as a JSON array OR a JSON-encoded string
 /// (the daemon returns both shapes across endpoints).
 List<String> _parseTags(dynamic raw) {
@@ -134,7 +136,9 @@ class SpaceSchedule {
 
   factory SpaceSchedule.fromJson(Map<String, dynamic> j) => SpaceSchedule(
     id: '${j['id'] ?? ''}',
-    label: '${j['label'] ?? j['prompt'] ?? '(schedule)'}',
+    // Display-only fallback for a schedule the daemon stored with neither a
+    // label nor a prompt.
+    label: '${j['label'] ?? j['prompt'] ?? L10n.global.t('(schedule)')}',
     prompt: '${j['prompt'] ?? j['label'] ?? ''}',
     groupFolder: '${j['group_folder'] ?? ''}',
     agentMode: '${j['agent_mode'] ?? ''}',

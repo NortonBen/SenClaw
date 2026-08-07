@@ -4,6 +4,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/i18n/l10n.dart';
 import '../../core/transport/connection.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/section_scaffold.dart';
@@ -185,14 +186,14 @@ class UsageScreen extends ConsumerWidget {
         : 0;
 
     return SectionScaffold(
-      title: 'Token Usage',
-      subtitle:
-          'Token in/out và chi phí ước tính — agent, Space Apps, cognitive, embeddings',
+      title: context.tr('Token Usage'),
+      subtitle: context.tr('Token in/out and estimated cost — agents, '
+          'Space Apps, cognitive, embeddings'),
       actions: [
         OutlinedButton.icon(
           onPressed: () => _refresh(ref),
           icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('Refresh'),
+          label: Text(context.tr('Refresh')),
         ),
       ],
       body: ListView(
@@ -208,30 +209,30 @@ class UsageScreen extends ConsumerWidget {
                 children: [
                   _StatGrid(children: [
                     _UsageStat(
-                      label: 'Tokens in (hôm nay)',
+                      label: context.tr('Tokens in (today)'),
                       value: today == null ? '—' : _fmtTokens(today.totalIn),
                       icon: Icons.south_west,
                       accent: _cIn,
                     ),
                     _UsageStat(
-                      label: 'Tokens out (hôm nay)',
+                      label: context.tr('Tokens out (today)'),
                       value:
                           today == null ? '—' : _fmtTokens(today.outputTokens),
                       icon: Icons.north_east,
                       accent: _cOut,
                     ),
                     _UsageStat(
-                      label: 'Chi phí ước tính (hôm nay)',
+                      label: context.tr('Est. cost (today)'),
                       value: _fmtCost(today),
                       icon: Icons.attach_money,
                       accent: AppTokens.brand,
                       footnote: (today != null && today.unpricedTokens > 0)
-                          ? '+${_fmtTokens(today.unpricedTokens)} tokens '
-                              'chưa có giá'
+                          ? context.trArgs('+{n} tokens unpriced',
+                              {'n': _fmtTokens(today.unpricedTokens)})
                           : null,
                     ),
                     _UsageStat(
-                      label: 'Cache-read (hôm nay)',
+                      label: context.tr('Cache-read (today)'),
                       value: '$cacheShare%',
                       icon: Icons.storage_outlined,
                       accent: AppTokens.cyan,
@@ -244,14 +245,14 @@ class UsageScreen extends ConsumerWidget {
                     const gap =
                         SizedBox(width: AppTokens.s16, height: AppTokens.s16);
                     final model = _BreakdownCard(
-                        title: 'Theo model — 7 ngày',
+                        title: context.tr('By model — 7 days'),
                         by: 'model',
-                        keyLabel: 'Model',
+                        keyLabel: context.tr('Model'),
                         mono: true);
                     final app = _BreakdownCard(
-                        title: 'Theo Space App — 7 ngày',
+                        title: context.tr('By Space App — 7 days'),
                         by: 'app',
-                        keyLabel: 'App');
+                        keyLabel: context.tr('App'));
                     if (cns.maxWidth < 760) {
                       return Column(children: [model, gap, app]);
                     }
@@ -419,9 +420,10 @@ class _DailyChartCard extends ConsumerWidget {
     if (async.isLoading && rows.isEmpty) {
       child = const _PanelPlaceholder(height: 220, spinner: true);
     } else if (rows.isEmpty) {
-      child = const _PanelPlaceholder(
+      child = _PanelPlaceholder(
         height: 220,
-        message: 'Chưa có dữ liệu — số liệu xuất hiện sau các LLM call đầu tiên.',
+        message: context.tr(
+            'No data yet — numbers appear after the first LLM calls.'),
       );
     } else {
       final inSpots = <FlSpot>[];
@@ -549,7 +551,8 @@ class _DailyChartCard extends ConsumerWidget {
                           fontWeight: FontWeight.w400),
                       children: [
                         TextSpan(
-                          text: '${spots[k].barIndex == 0 ? 'In' : 'Out'} '
+                          text:
+                              '${context.tr(spots[k].barIndex == 0 ? 'In' : 'Out')} '
                               '${_fmtTokens(spots[k].y)}',
                           style: TextStyle(
                               color: spots[k].barIndex == 0 ? _cIn : _cOut,
@@ -567,11 +570,11 @@ class _DailyChartCard extends ConsumerWidget {
     }
 
     return _Panel(
-      title: 'Tokens mỗi ngày — 30 ngày',
+      title: context.tr('Tokens per day — 30 days'),
       trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-        _legendDot(_cIn, 'Tokens in', c.textMuted),
+        _legendDot(_cIn, context.tr('Tokens in'), c.textMuted),
         const SizedBox(width: AppTokens.s12),
-        _legendDot(_cOut, 'Tokens out', c.textMuted),
+        _legendDot(_cOut, context.tr('Tokens out'), c.textMuted),
       ]),
       child: child,
     );
@@ -632,7 +635,8 @@ class _BreakdownCard extends ConsumerWidget {
     if (async.isLoading && visible.isEmpty) {
       body = const _PanelPlaceholder(height: 132, spinner: true);
     } else if (visible.isEmpty) {
-      body = const _PanelPlaceholder(height: 132, message: 'Chưa có dữ liệu');
+      body = _PanelPlaceholder(
+          height: 132, message: context.tr('No data yet'));
     } else {
       body = Table(
         columnWidths: const {
@@ -648,10 +652,10 @@ class _BreakdownCard extends ConsumerWidget {
         children: [
           TableRow(children: [
             _pad(Text(keyLabel, style: head)),
-            _num('Calls', head),
-            _num('In', head),
-            _num('Out', head),
-            _num('Cost', head),
+            _num(context.tr('Calls'), head),
+            _num(context.tr('In'), head),
+            _num(context.tr('Out'), head),
+            _num(context.tr('Cost'), head),
           ]),
           for (final r in visible)
             TableRow(children: [
@@ -717,16 +721,18 @@ class _PricingCard extends ConsumerWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Xoá giá model'),
-        content: Text('Bỏ bảng giá cho "${row.model}"? Token của model này sẽ '
-            'được tính là "chưa có giá" (không phải \$0).'),
+        title: Text(ctx.tr('Delete model pricing')),
+        content: Text(ctx.trArgs(
+            'Drop the price list for "{model}"? Tokens for this model are '
+            'then counted as "unpriced" (not \$0).',
+            {'model': row.model})),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Huỷ')),
+              child: Text(ctx.tr('Cancel'))),
           FilledButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Xoá')),
+              child: Text(ctx.tr('Delete'))),
         ],
       ),
     );
@@ -739,8 +745,8 @@ class _PricingCard extends ConsumerWidget {
       ref.invalidate(usageOverviewProvider);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Xoá thất bại: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(context.trArgs('Delete failed: {e}', {'e': e}))));
       }
     }
   }
@@ -768,19 +774,19 @@ class _PricingCard extends ConsumerWidget {
     }
 
     return _Panel(
-      title: 'Bảng giá model (USD / 1M tokens)',
-      subtitle: 'Khớp id chính xác trước, rồi theo prefix. Model không có '
-          'giá được báo là "chưa có giá", không bao giờ tính \$0.',
+      title: context.tr('Model pricing (USD / 1M tokens)'),
+      subtitle: context.tr('Exact id match first, then prefix. A model with '
+          'no price is reported as "unpriced", never billed as \$0.'),
       trailing: OutlinedButton.icon(
         onPressed: () => showPricingDialog(context, ref),
         icon: const Icon(Icons.add, size: 14),
-        label: const Text('Thêm model'),
+        label: Text(context.tr('Add model')),
       ),
       child: async.isLoading && rows.isEmpty
           ? const _PanelPlaceholder(height: 120, spinner: true)
           : rows.isEmpty
-              ? const _PanelPlaceholder(
-                  height: 120, message: 'Chưa có dòng giá nào')
+              ? _PanelPlaceholder(
+                  height: 120, message: context.tr('No pricing rows yet'))
               : Table(
                   columnWidths: const {
                     0: FlexColumnWidth(),
@@ -795,11 +801,12 @@ class _PricingCard extends ConsumerWidget {
                   defaultVerticalAlignment: TableCellVerticalAlignment.middle,
                   children: [
                     TableRow(children: [
-                      _pad(Text('Model (prefix match)', style: head)),
-                      _num('In', head),
-                      _num('Out', head),
-                      _num('Cache R', head),
-                      _num('Cache W', head),
+                      _pad(Text(context.tr('Model (prefix match)'),
+                          style: head)),
+                      _num(context.tr('In'), head),
+                      _num(context.tr('Out'), head),
+                      _num(context.tr('Cache R'), head),
+                      _num(context.tr('Cache W'), head),
                       const SizedBox(),
                     ]),
                     for (final r in rows)
@@ -818,7 +825,7 @@ class _PricingCard extends ConsumerWidget {
                           child: Row(mainAxisSize: MainAxisSize.min, children: [
                             _RowAction(
                               icon: Icons.edit_outlined,
-                              tooltip: 'Sửa',
+                              tooltip: context.tr('Edit'),
                               color: c.textMuted,
                               onPressed: () =>
                                   showPricingDialog(context, ref, existing: r),
@@ -826,7 +833,7 @@ class _PricingCard extends ConsumerWidget {
                             const SizedBox(width: AppTokens.s4),
                             _RowAction(
                               icon: Icons.delete_outline,
-                              tooltip: 'Xoá',
+                              tooltip: context.tr('Delete'),
                               color: AppTokens.danger,
                               onPressed: () => _delete(context, ref, r),
                             ),
@@ -939,28 +946,29 @@ Future<void> showPricingDialog(BuildContext context, WidgetRef ref,
         InputDecoration dec(String label, {String? hint}) =>
             InputDecoration(labelText: label, hintText: hint, isDense: true);
         return AlertDialog(
-          title: Text(existing == null ? 'Thêm giá model' : 'Sửa giá model'),
+          title: Text(ctx.tr(
+              existing == null ? 'Add model pricing' : 'Edit model pricing')),
           content: SizedBox(
             width: 380,
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               TextField(
                 controller: model,
                 enabled: existing == null,
-                decoration:
-                    dec('Model id (prefix match)', hint: 'vd: gpt-5.2'),
+                decoration: dec(ctx.tr('Model id (prefix match)'),
+                    hint: ctx.tr('e.g. gpt-5.2')),
               ),
               const SizedBox(height: AppTokens.s12),
               Row(children: [
                 Expanded(
                     child: TextField(
                         controller: input,
-                        decoration: dec('In \$/1M'),
+                        decoration: dec(ctx.tr('In \$/1M')),
                         keyboardType: TextInputType.number)),
                 const SizedBox(width: AppTokens.s12),
                 Expanded(
                     child: TextField(
                         controller: output,
-                        decoration: dec('Out \$/1M'),
+                        decoration: dec(ctx.tr('Out \$/1M')),
                         keyboardType: TextInputType.number)),
               ]),
               const SizedBox(height: AppTokens.s12),
@@ -968,13 +976,13 @@ Future<void> showPricingDialog(BuildContext context, WidgetRef ref,
                 Expanded(
                     child: TextField(
                         controller: cacheR,
-                        decoration: dec('Cache read \$/1M (tuỳ chọn)'),
+                        decoration: dec(ctx.tr('Cache read \$/1M (optional)')),
                         keyboardType: TextInputType.number)),
                 const SizedBox(width: AppTokens.s12),
                 Expanded(
                     child: TextField(
                         controller: cacheW,
-                        decoration: dec('Cache write \$/1M (tuỳ chọn)'),
+                        decoration: dec(ctx.tr('Cache write \$/1M (optional)')),
                         keyboardType: TextInputType.number)),
               ]),
               if (error != null) ...[
@@ -988,15 +996,16 @@ Future<void> showPricingDialog(BuildContext context, WidgetRef ref,
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
-                child: const Text('Huỷ')),
+                child: Text(ctx.tr('Cancel'))),
             FilledButton(
               onPressed: () async {
                 final m = model.text.trim();
                 final inP = numOf(input);
                 final outP = numOf(output);
                 if (m.isEmpty || inP == null || outP == null) {
-                  setState(() =>
-                      error = 'Cần model id + giá In và Out (số).');
+                  setState(() => error = ctx
+                      .tr('Model id plus In and Out prices (numbers) are '
+                          'required.'));
                   return;
                 }
                 try {
@@ -1009,10 +1018,11 @@ Future<void> showPricingDialog(BuildContext context, WidgetRef ref,
                   });
                   if (ctx.mounted) Navigator.pop(ctx, true);
                 } catch (e) {
-                  setState(() => error = 'Lưu thất bại: $e');
+                  setState(() =>
+                      error = ctx.trArgs('Save failed: {e}', {'e': e}));
                 }
               },
-              child: const Text('Lưu'),
+              child: Text(ctx.tr('Save')),
             ),
           ],
         );
