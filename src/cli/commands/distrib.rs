@@ -321,17 +321,35 @@ pub(crate) fn swap_bundle(staged: &Path, target: &Path) -> Result<()> {
     // Past this point the live bundle is in motion — keep the window tight.
     let had_old = target.exists();
     if had_old {
-        if let Err(e) = std::fs::rename(target, &old) {
-            // Don't strand a fully-extracted `.new` next to the install — on
-            // Windows this rename fails whenever something inside the bundle
-            // is still running, and the leftover reads as "the update went to
-            // a different folder".
-            let _ = remove_path(&new);
-            return Err(anyhow::Error::new(e).context(format!(
-                "cannot move {} aside — a file inside it is locked by a running \
-                 process, or the directory is not writable",
-                target.display()
-            )));
+        if let Err(dir_err) = std::fs::rename(target, &old) {
+            // Windows refuses to rename a DIRECTORY that holds an open file
+            // (os error 32), which is every update where an orphaned child
+            // process still has the bundle's exe mapped. Renaming those files
+            // one by one is still allowed — the loader opens images with
+            // FILE_SHARE_DELETE — so fall back to an entry-level swap before
+            // giving up. On unix the directory rename only fails for reasons
+            // (permissions) that would fail the entry moves too, so the
+            // fallback simply reports the same problem.
+            match swap_entries(&new, target, &old) {
+                Ok(()) => {
+                    let _ = remove_path(&old);
+                    let _ = remove_path(&new);
+                    return Ok(());
+                }
+                Err(entry_err) => {
+                    // Don't strand a fully-extracted `.new` next to the
+                    // install — the leftover reads as "the update went to a
+                    // different folder".
+                    let _ = remove_path(&new);
+                    let _ = remove_path(&old);
+                    return Err(entry_err.context(format!(
+                        "cannot move {} aside — a file inside it is locked by a \
+                         running process, or the directory is not writable \
+                         ({dir_err})",
+                        target.display()
+                    )));
+                }
+            }
         }
     }
 
@@ -350,6 +368,74 @@ pub(crate) fn swap_bundle(staged: &Path, target: &Path) -> Result<()> {
         let _ = remove_path(&old);
     }
     Ok(())
+}
+
+/// Swap `new` into `target` one directory entry at a time, parking the old
+/// entries in `quarantine`.
+///
+/// The fallback for when the whole-directory rename is refused. Windows lets
+/// you rename a file that is mapped as a running image but not the directory
+/// containing it, so this succeeds in exactly the case that matters: an
+/// orphaned `senclaw.exe` (or a WebView2 helper) still holding the old bundle.
+///
+/// Ordering is chosen so a failure is always recoverable: every old entry is
+/// evacuated first, and only then are the new ones moved in. A failure in
+/// either phase restores what was moved, so the caller still has a working
+/// install to relaunch.
+fn swap_entries(new: &Path, target: &Path, quarantine: &Path) -> Result<()> {
+    std::fs::create_dir_all(quarantine)
+        .with_context(|| format!("cannot create {}", quarantine.display()))?;
+
+    // Phase 1 — evacuate the live install.
+    let mut evacuated: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut stuck: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(target)
+        .with_context(|| format!("cannot read {}", target.display()))?
+    {
+        let entry = entry?;
+        let from = entry.path();
+        let to = quarantine.join(entry.file_name());
+        match std::fs::rename(&from, &to) {
+            Ok(()) => evacuated.push((from, to)),
+            // Keep going: naming EVERY stuck file is what makes the error
+            // report actionable ("close X"), rather than just the first one.
+            Err(e) => stuck.push(format!("{} ({e})", entry.file_name().to_string_lossy())),
+        }
+    }
+    if !stuck.is_empty() {
+        restore_evacuated(&evacuated);
+        bail!("these files are still in use: {}", stuck.join(", "));
+    }
+
+    // Phase 2 — move the new bundle in.
+    let mut placed: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(new)
+        .with_context(|| format!("cannot read {}", new.display()))?
+    {
+        let entry = entry?;
+        let to = target.join(entry.file_name());
+        if let Err(e) = std::fs::rename(entry.path(), &to) {
+            for p in &placed {
+                let _ = remove_path(p);
+            }
+            restore_evacuated(&evacuated);
+            return Err(anyhow::Error::new(e).context(format!(
+                "cannot install {} (rolled back)",
+                entry.file_name().to_string_lossy()
+            )));
+        }
+        placed.push(to);
+    }
+    Ok(())
+}
+
+/// Put evacuated entries back where they came from. Best-effort by nature —
+/// it runs on a path that has already failed, and a partial restore still
+/// leaves more of the old install than giving up would.
+fn restore_evacuated(evacuated: &[(PathBuf, PathBuf)]) {
+    for (from, to) in evacuated {
+        let _ = std::fs::rename(to, from);
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -452,9 +538,19 @@ pub fn run_apply_update(
         // can find it, and start the OLD app back up — the swap is atomic, so
         // the previous install is still intact.
         if let Ok(tmp) = tmp_dir() {
+            let lockers = describe_target_lockers(&target);
+            let lockers = if lockers.is_empty() {
+                "(nothing found still running from the bundle)".to_string()
+            } else {
+                lockers
+            };
             let _ = std::fs::write(
                 tmp.join("apply-update-error.log"),
-                format!("apply-update failed for {}:\n{e:#}\n", target.display()),
+                format!(
+                    "apply-update failed for {}:\n{e:#}\n\n\
+                     Processes holding the bundle:\n{lockers}\n",
+                    target.display()
+                ),
             );
         }
         if relaunch {
@@ -485,28 +581,63 @@ const SWAP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 // ===== Windows: release bundle locks + shortcuts =====
 
-/// PowerShell that force-stops everything holding `dir` open. Two sweeps:
+/// The `Where-Object` filter selecting every process that can be holding the
+/// bundle at `$t` open. Shared by the kill and the diagnostic script so the
+/// report can never disagree with what was actually killed.
+///
+/// Two sweeps:
 ///
 /// 1. Any process whose IMAGE lives inside the bundle. Quitting the app kills
 ///    the daemon it spawned, but TerminateProcess does not cascade — the
 ///    daemon's MCP-server children (more `senclaw.exe` from the same file)
 ///    survive as orphans with the exe mapped, which blocks renaming the
-///    folder forever. This was why updates stalled at `<target>.new`.
+///    folder forever. `Win32_Process.ExecutablePath` rather than
+///    `Get-Process().Path`: the latter is null for any process PowerShell
+///    cannot open, which is exactly the orphan we are hunting.
 /// 2. WebView2 helpers. They run from Program Files (so sweep 1 misses them)
 ///    but keep their user-data folder — which lives INSIDE the bundle by
-///    default — locked; match them by command line instead.
+///    default — locked; match those by command line.
 ///
-/// A pure function over the path so the quoting is testable on every OS.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn locker_kill_script(dir: &str) -> String {
+/// The command-line sweep is deliberately limited to `msedgewebview2.exe`:
+/// matching every process whose command line mentions the path would also
+/// match the updater itself (it is invoked with `--target <path>`) and any
+/// terminal the user happened to type the path into.
+fn locker_filter(dir: &str) -> String {
     let dir = dir.replace('\'', "''");
     format!(
         "$t='{dir}'; \
-         Get-Process | Where-Object {{ $_.Path -like ($t + '\\*') }} | \
-           Stop-Process -Force -ErrorAction SilentlyContinue; \
-         Get-CimInstance Win32_Process -Filter \"Name='msedgewebview2.exe'\" | \
-           Where-Object {{ $_.CommandLine -like ('*' + $t + '*') }} | \
-           ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+         $sel = {{ ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($t,'OrdinalIgnoreCase')) \
+                   -or ($_.Name -eq 'msedgewebview2.exe' -and $_.CommandLine \
+                        -and $_.CommandLine.ToLower().Contains($t.ToLower())) }}; "
+    )
+}
+
+/// PowerShell that force-stops everything holding `dir` open.
+///
+/// `self_pid` is the updater's own pid — excluded along with its process tree,
+/// because `taskkill /T` kills children and the updater is the one process
+/// that must survive this sweep.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn locker_kill_script(dir: &str, self_pid: u32) -> String {
+    format!(
+        "{}$self={self_pid}; \
+         Get-CimInstance Win32_Process | Where-Object $sel | ForEach-Object {{ \
+           if ($_.ProcessId -ne $self -and $_.ProcessId -ne $PID) {{ \
+             taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null \
+           }} }}",
+        locker_filter(dir)
+    )
+}
+
+/// PowerShell listing what is still holding `dir` — one `pid name path` per
+/// line. Written into the error log so a failed update names the culprit
+/// instead of leaving the user to guess.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn locker_list_script(dir: &str) -> String {
+    format!(
+        "{}Get-CimInstance Win32_Process | Where-Object $sel | ForEach-Object {{ \
+           \"$($_.ProcessId) $($_.Name) $($_.ExecutablePath)\" }}",
+        locker_filter(dir)
     )
 }
 
@@ -543,17 +674,39 @@ fn kill_target_lockers(target: &Path) {
     if !target.exists() {
         return;
     }
-    println!(
-        "Closing processes still running from {}…",
-        target.display()
-    );
-    let _ = run_powershell(&locker_kill_script(&target.to_string_lossy()));
+    println!("Closing processes still running from {}…", target.display());
+    let _ = run_powershell(&locker_kill_script(
+        &target.to_string_lossy(),
+        std::process::id(),
+    ));
     // Handles release asynchronously after TerminateProcess.
     std::thread::sleep(std::time::Duration::from_millis(500));
 }
 
 #[cfg(not(windows))]
 fn kill_target_lockers(_target: &Path) {}
+
+/// Who is still holding `target`, for the failure report. Empty when nothing
+/// is (or when the query itself failed — this must never mask the real error).
+#[cfg(windows)]
+fn describe_target_lockers(target: &Path) -> String {
+    std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &locker_list_script(&target.to_string_lossy()),
+        ])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(not(windows))]
+fn describe_target_lockers(_target: &Path) -> String {
+    String::new()
+}
 
 /// Best-effort Desktop + Start Menu shortcuts (Windows only).
 #[cfg(windows)]
@@ -594,6 +747,11 @@ fn swap_bundle_with_retry(
                         delay.as_secs()
                     );
                     std::thread::sleep(delay);
+                    // Re-sweep every attempt, not just once before the first:
+                    // a process can be spawned (or finish dying) between
+                    // attempts, and the sweep is what makes the retry more
+                    // than a wait.
+                    kill_target_lockers(target);
                 }
                 last = Some(e);
             }
@@ -1119,7 +1277,7 @@ mod tests {
     /// PowerShell string — quotes are doubled, the PS escape for `'`.
     #[test]
     fn powershell_scripts_escape_single_quotes_in_paths() {
-        let kill = locker_kill_script(r"C:\Users\O'Brien\AppData\Local\SenClaw");
+        let kill = locker_kill_script(r"C:\Users\O'Brien\AppData\Local\SenClaw", 1234);
         assert!(kill.contains(r"$t='C:\Users\O''Brien\AppData\Local\SenClaw'"));
 
         let sc = shortcut_script(
@@ -1131,10 +1289,128 @@ mod tests {
 
     #[test]
     fn locker_script_sweeps_both_image_paths_and_webview2_helpers() {
-        let s = locker_kill_script(r"C:\x\SenClaw");
-        assert!(s.contains("Get-Process"), "image-path sweep missing");
+        let s = locker_kill_script(r"C:\x\SenClaw", 4242);
+        // ExecutablePath, not Get-Process().Path — the latter reads null for
+        // any process PowerShell cannot open, i.e. the orphan we are after.
+        assert!(s.contains("ExecutablePath"), "image-path sweep missing");
+        assert!(!s.contains("Get-Process"), "must not use the null-prone API");
         assert!(s.contains("msedgewebview2.exe"), "WebView2 sweep missing");
-        assert!(s.contains("Stop-Process"), "must actually stop processes");
+        assert!(s.contains("/T /F"), "must kill the whole process tree");
+    }
+
+    /// The updater is invoked with `--target <bundle>`, so a command-line
+    /// sweep that is not scoped would match the updater itself — and
+    /// `taskkill /T` would take it down mid-update. Its pid must be excluded,
+    /// and the command-line match must stay limited to WebView2.
+    #[test]
+    fn locker_script_never_kills_the_updater_itself() {
+        let s = locker_kill_script(r"C:\x\SenClaw", 4242);
+        assert!(s.contains("$self=4242"), "updater pid not pinned");
+        assert!(
+            s.contains("$_.ProcessId -ne $self"),
+            "updater pid not excluded from the sweep"
+        );
+        // CommandLine is only consulted for WebView2 helpers.
+        let cmdline_uses = s.matches("CommandLine").count();
+        assert_eq!(
+            cmdline_uses, 2,
+            "command-line matching must be scoped to msedgewebview2 only: {s}"
+        );
+    }
+
+    #[test]
+    fn locker_list_script_reports_pid_name_and_path() {
+        let s = locker_list_script(r"C:\x\SenClaw");
+        assert!(s.contains("$_.ProcessId"));
+        assert!(s.contains("$_.Name"));
+        assert!(s.contains("$_.ExecutablePath"));
+        // Same selector as the kill sweep — a report that disagreed with what
+        // gets killed would send the user chasing the wrong process.
+        assert!(s.contains("$sel"));
+    }
+
+    // ===== swap_entries (the Windows locked-directory fallback) =====
+
+    fn write(path: &Path, body: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn swap_entries_replaces_every_entry_and_parks_the_old_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("app");
+        let new = tmp.path().join("app.new");
+        let quarantine = tmp.path().join("app.old");
+
+        write(&target.join("senclaw.exe"), "v1");
+        write(&target.join("data/marker"), "v1");
+        write(&new.join("senclaw.exe"), "v2");
+        write(&new.join("data/marker"), "v2");
+        write(&new.join("added.dll"), "v2");
+
+        swap_entries(&new, &target, &quarantine).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("senclaw.exe")).unwrap(),
+            "v2"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("data/marker")).unwrap(),
+            "v2"
+        );
+        assert!(target.join("added.dll").exists(), "new file not installed");
+        // The old copies are parked, not destroyed — the caller deletes them
+        // once the swap is known to have worked.
+        assert_eq!(
+            std::fs::read_to_string(quarantine.join("senclaw.exe")).unwrap(),
+            "v1"
+        );
+    }
+
+    /// The property that matters on Windows: when a file cannot be moved
+    /// (locked), the user must be left with the OLD install intact — a
+    /// half-swapped bundle would not start at all.
+    #[test]
+    fn swap_entries_restores_the_old_install_when_one_entry_is_stuck() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("app");
+        let new = tmp.path().join("app.new");
+        let quarantine = tmp.path().join("app.old");
+
+        write(&target.join("a.txt"), "v1");
+        write(&target.join("locked/inner"), "v1");
+        write(&new.join("a.txt"), "v2");
+        write(&new.join("locked/inner"), "v2");
+
+        // Stand in for a locked entry: renaming a directory onto a non-empty
+        // directory fails, which is the same "this one entry will not move"
+        // shape as a mapped exe on Windows.
+        write(&quarantine.join("locked/occupied"), "squatter");
+
+        let err = swap_entries(&new, &target, &quarantine).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("locked"),
+            "the stuck entry must be named: {err:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("a.txt")).unwrap(),
+            "v1",
+            "the evacuated entry was not put back"
+        );
+        assert!(target.join("locked/inner").exists());
+    }
+
+    #[test]
+    fn swap_entries_creates_the_quarantine_directory_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("app");
+        let new = tmp.path().join("app.new");
+        write(&target.join("a.txt"), "v1");
+        write(&new.join("a.txt"), "v2");
+
+        swap_entries(&new, &target, &tmp.path().join("nested/app.old")).unwrap();
+        assert_eq!(std::fs::read_to_string(target.join("a.txt")).unwrap(), "v2");
     }
 
     #[test]
