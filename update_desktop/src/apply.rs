@@ -158,13 +158,30 @@ fn swap_bundle(staged: &Path, target: &Path) -> Result<()> {
     // Past this point the live bundle is in motion — keep the window tight.
     let had_old = target.exists();
     if had_old {
-        if let Err(e) = std::fs::rename(target, &old) {
-            let _ = remove_path(&new);
-            return Err(anyhow::Error::new(e).context(format!(
-                "cannot move {} aside — a file inside it is locked by a running \
-                 process, or the directory is not writable",
-                target.display()
-            )));
+        if let Err(dir_err) = std::fs::rename(target, &old) {
+            // Windows refuses to rename a DIRECTORY that holds an open file
+            // (os error 32) — one surviving handle anywhere in the bundle is
+            // enough, and killing processes cannot be made airtight. Renaming
+            // the files one by one is still allowed even while they are mapped
+            // as running images (the loader opens them with FILE_SHARE_DELETE),
+            // so fall back to that before giving up.
+            match swap_entries(&new, target, &old) {
+                Ok(()) => {
+                    let _ = remove_path(&old);
+                    let _ = remove_path(&new);
+                    return Ok(());
+                }
+                Err(entry_err) => {
+                    let _ = remove_path(&new);
+                    let _ = remove_path(&old);
+                    return Err(entry_err.context(format!(
+                        "cannot move {} aside — a file inside it is locked by a \
+                         running process, or the directory is not writable \
+                         ({dir_err})",
+                        target.display()
+                    )));
+                }
+            }
         }
     }
 
@@ -183,6 +200,69 @@ fn swap_bundle(staged: &Path, target: &Path) -> Result<()> {
         let _ = remove_path(&old);
     }
     Ok(())
+}
+
+/// Swap `new` into `target` one directory entry at a time, parking the old
+/// entries in `quarantine`.
+///
+/// The fallback for a refused whole-directory rename. Ordering is chosen so a
+/// failure is always recoverable: every old entry is evacuated first, and only
+/// then are the new ones moved in — so a bundle that cannot be fully replaced
+/// is fully restored instead of left half-swapped and unstartable.
+fn swap_entries(new: &Path, target: &Path, quarantine: &Path) -> Result<()> {
+    std::fs::create_dir_all(quarantine)
+        .with_context(|| format!("cannot create {}", quarantine.display()))?;
+
+    // Phase 1 — evacuate the live install.
+    let mut evacuated: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut stuck: Vec<String> = Vec::new();
+    for entry in
+        std::fs::read_dir(target).with_context(|| format!("cannot read {}", target.display()))?
+    {
+        let entry = entry?;
+        let from = entry.path();
+        let to = quarantine.join(entry.file_name());
+        match std::fs::rename(&from, &to) {
+            Ok(()) => evacuated.push((from, to)),
+            // Keep going: naming EVERY stuck file is what makes the report
+            // actionable ("close X"), rather than just the first one.
+            Err(e) => stuck.push(format!("{} ({e})", entry.file_name().to_string_lossy())),
+        }
+    }
+    if !stuck.is_empty() {
+        restore_evacuated(&evacuated);
+        anyhow::bail!("these files are still in use: {}", stuck.join(", "));
+    }
+
+    // Phase 2 — move the new bundle in.
+    let mut placed: Vec<PathBuf> = Vec::new();
+    for entry in
+        std::fs::read_dir(new).with_context(|| format!("cannot read {}", new.display()))?
+    {
+        let entry = entry?;
+        let to = target.join(entry.file_name());
+        if let Err(e) = std::fs::rename(entry.path(), &to) {
+            for p in &placed {
+                let _ = remove_path(p);
+            }
+            restore_evacuated(&evacuated);
+            return Err(anyhow::Error::new(e).context(format!(
+                "cannot install {} (rolled back)",
+                entry.file_name().to_string_lossy()
+            )));
+        }
+        placed.push(to);
+    }
+    Ok(())
+}
+
+/// Put evacuated entries back. Best-effort by nature — it runs on a path that
+/// has already failed, and a partial restore still leaves more of the old
+/// install than giving up would.
+fn restore_evacuated(evacuated: &[(PathBuf, PathBuf)]) {
+    for (from, to) in evacuated {
+        let _ = std::fs::rename(to, from);
+    }
 }
 
 pub fn swap_bundle_with_retry(
@@ -209,6 +289,15 @@ pub fn swap_bundle_with_retry(
                         ),
                     );
                     std::thread::sleep(SWAP_RETRY_DELAY);
+                    // Re-sweep every attempt, not just once before the first:
+                    // a process can finish dying (or be spawned) between
+                    // attempts, and the sweep is what makes a retry more than
+                    // a wait.
+                    #[cfg(windows)]
+                    {
+                        let killed = crate::win::kill_target_lockers(target);
+                        log.line(&format!("re-swept {killed} locker process(es)"));
+                    }
                 }
                 last = Some(e);
             }
@@ -353,5 +442,95 @@ mod tests {
         // Our own pid is definitionally alive.
         let err = wait_for_pid_exit(std::process::id(), std::time::Duration::ZERO).unwrap_err();
         assert!(err.to_string().contains("still running"));
+    }
+
+    // ── swap_entries: the locked-directory fallback ──────────────────────────
+
+    fn write(path: &Path, body: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn swap_entries_replaces_every_entry_and_parks_the_old_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("app");
+        let new = tmp.path().join("app.new");
+        let quarantine = tmp.path().join("app.old");
+
+        write(&target.join("senclaw.exe"), "v1");
+        write(&target.join("data/marker"), "v1");
+        write(&new.join("senclaw.exe"), "v2");
+        write(&new.join("data/marker"), "v2");
+        write(&new.join("added.dll"), "v2");
+
+        swap_entries(&new, &target, &quarantine).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("senclaw.exe")).unwrap(),
+            "v2"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("data/marker")).unwrap(),
+            "v2"
+        );
+        assert!(target.join("added.dll").exists(), "new file not installed");
+        assert_eq!(
+            std::fs::read_to_string(quarantine.join("senclaw.exe")).unwrap(),
+            "v1",
+            "the old copy must be parked, not destroyed"
+        );
+    }
+
+    /// The property that matters on Windows: when one file cannot be moved,
+    /// the user keeps the OLD install intact — a half-swapped bundle would
+    /// not start at all.
+    #[test]
+    fn swap_entries_restores_the_old_install_when_one_entry_is_stuck() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("app");
+        let new = tmp.path().join("app.new");
+        let quarantine = tmp.path().join("app.old");
+
+        write(&target.join("a.txt"), "v1");
+        write(&target.join("locked/inner"), "v1");
+        write(&new.join("a.txt"), "v2");
+        write(&new.join("locked/inner"), "v2");
+        // Stands in for a locked entry: renaming a directory onto a non-empty
+        // one fails, the same "this entry will not move" shape as a mapped exe.
+        write(&quarantine.join("locked/occupied"), "squatter");
+
+        let err = swap_entries(&new, &target, &quarantine).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("locked"),
+            "the stuck entry must be named: {err:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(target.join("a.txt")).unwrap(),
+            "v1",
+            "the evacuated entry was not put back"
+        );
+        assert!(target.join("locked/inner").exists());
+    }
+
+    /// A whole-directory rename is impossible while a file inside is open, so
+    /// the fallback must work on a target the caller could not move.
+    #[test]
+    fn swap_entries_works_where_a_directory_rename_would_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("app");
+        let new = tmp.path().join("app.new");
+        write(&target.join("senclaw.exe"), "v1");
+        write(&new.join("senclaw.exe"), "v2");
+
+        // Hold the file open for the duration, the closest portable stand-in
+        // for a running image.
+        let _held = std::fs::File::open(target.join("senclaw.exe")).unwrap();
+        swap_entries(&new, &target, &tmp.path().join("app.old")).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.join("senclaw.exe")).unwrap(),
+            "v2"
+        );
     }
 }
