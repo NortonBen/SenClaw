@@ -174,6 +174,75 @@ Project-level [`.mcp.json`](.mcp.json) template (one entry per server needed):
 
 The `<domain>-server` subcommand list is in `src/main.rs` (e.g. `browser-server`, `memory-server`, `schedule-server`, ...). After editing `.mcp.json`, the user must restart Claude Code and approve the server in the prompt.
 
+## Space App lifecycle: background vs session
+
+Every server Space App is one of two things, declared as `runtime.mode`:
+**`background`** (started with the daemon, supervised, restarted when it dies)
+or **`session`** — the **default** — started when the app is opened or one of
+its MCP tools is called, and stopped once idle for `runtime.idleTimeoutSecs`
+(60s default, 15s floor). Session is the default because the old behaviour
+launched all ~50 installed apps at boot and kept them forever.
+
+The mechanism that makes on-demand MCP work: a session app's MCP server is
+registered against **the daemon's app proxy**
+(`/api/space/apps/<id>/proxy<mcp.path>`), not the app's own port, and its tool
+list comes from `<app>/.senclaw/mcp-tools.json` cached at the last successful
+connection. So its tools stay in every agent's roster while it is stopped, and
+the first call connects → proxy → spawn → answer. Without both halves nothing
+would ever call a stopped app and it would never start.
+
+Rules for Claude:
+
+- **Never assume "not running" is a fault.** For a session app it is the resting
+  state; only background apps are supervised.
+- **A misspelled `mode` is silent** — it falls back to `session`, so an app that
+  must poll a channel quietly stops.
+  [`tests/space_app_lifecycle_manifests.rs`](tests/space_app_lifecycle_manifests.rs)
+  enforces the spelling *and* scans each app's Rust for autonomous-startup
+  markers (`extbridge::serve_ws`, `spawn_heartbeat`, `spawn_scheduler`,
+  `spawn_poller`, `run_supervisor`, `spawn_janitor`); an app that gains one must
+  be declared `background` or `cargo test` goes red.
+- **Adding a background loop to an app means editing its manifest too.**
+
+Manifest also carries `requires` (what the machine must have: `node`, `python`,
+`bin`, `env`, `os` — checked at install *and* before every launch, a hard miss
+refuses the launch with the reason) and `sandbox` (the confinement the app asks
+for itself; `force: true` means the settings dialog cannot turn it off, and a
+non-forced declaration never overrides a choice the user already saved).
+
+`runtime.runner` (`binary` | `node` | `python` | `shell`, inferred from `start`)
+drives a one-off prepare step: `npm ci`/`npm install` for Node, and for Python a
+**virtualenv at `<app>/.venv`** plus `pip install -r requirements.txt` into it —
+never the user's system Python. The stamp hashes file *content*, not mtimes, so
+extracting an update does not reinstall.
+
+Model in [`src/apps/`](src/apps/) (`manifest.rs`, `requirements.rs`,
+`prepare.rs`, `sandbox_decl.rs`); process lifecycle in
+[`src/gateway/ui_server/space_mcp.rs`](src/gateway/ui_server/space_mcp.rs).
+Endpoints: `POST /api/space/apps/:id/{stop,start}`,
+`GET /api/space/apps/:id/requirements`, plus `lifecycle` + `requirements` blocks
+on `/runtime`. Knobs: `SENCLAW_SPACE_SUPERVISE_SECS` (20),
+`SENCLAW_SPACE_IDLE_SWEEP_SECS` (10). Full guide:
+[docs/space-app-lifecycle.md](docs/space-app-lifecycle.md).
+
+### Space App SDKs
+
+Three, one per language an app can be written in — all documented against the
+same manifest:
+
+| | |
+|---|---|
+| Rust | [`app-space-sdk/`](app-space-sdk/) |
+| Node / TypeScript | [`senclaw-sdk/senclaw-app-sdk/`](senclaw-sdk/senclaw-app-sdk/) — `@senclaw/space-sdk` on npm, subpaths `/mcp` and `/lifecycle` |
+| Python | [`senclaw-sdk/senclaw-app-sdk-python/`](senclaw-sdk/senclaw-app-sdk-python/) — `senclaw-space-sdk` on PyPI, `senclaw_space`, standard library only |
+
+Each SDK carries its own runnable minimal app under `examples/` —
+[`senclaw-sdk/senclaw-app-sdk/examples/`](senclaw-sdk/senclaw-app-sdk/examples/) and
+[`senclaw-sdk/senclaw-app-sdk-python/examples/`](senclaw-sdk/senclaw-app-sdk-python/examples/).
+Both SDKs
+expose a manifest validator that catches the silent-failure spellings
+(`python -m senclaw_space.manifest <file>` / `validateManifest()`).
+
 ## Per-app Space App sandbox
 
 Each Space App can be run inside the OS sandbox from Plugins → Space Apps → the

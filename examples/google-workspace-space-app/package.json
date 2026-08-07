@@ -11,7 +11,7 @@
   "dependencies": {
     "@ant-design/icons": "^5.5.2",
     "@modelcontextprotocol/sdk": "^1.6.1",
-    "@senclaw/space-sdk": "file:../senclaw-space-sdk",
+    "@senclaw/space-sdk": "file:../../senclaw-sdk/senclaw-app-sdk",
     "antd": "^5.22.7",
     "next": "^15.0.0",
     "react": "^18.3.1",
