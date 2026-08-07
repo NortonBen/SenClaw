@@ -303,6 +303,125 @@ pub(crate) fn record_completion(
 
 /// One-shot completion. `profile` selects a specific LLM config by id or label;
 /// `None` uses the daemon's active model.
+/// Build a [`ModelProfile`](crate::zen_core::ModelProfile) from a stored config
+/// so a brokered completion can run through the same adapter dispatcher the
+/// agent loop uses.
+///
+/// An OAuth config keeps only an account id in `config.json` — the bearer token
+/// lives in the OAuth store. Unlike the engine's synchronous resolver this can
+/// await, so it refreshes an expiring token up front rather than leaning on the
+/// transport's 401 retry.
+async fn profile_from_config(cfg: &LlmConfig, cap: u32) -> crate::zen_core::ModelProfile {
+    let provider = if cfg.provider.trim().is_empty() {
+        if cfg.adapt.trim().eq_ignore_ascii_case("anthropic") {
+            "anthropic".to_string()
+        } else {
+            "openai".to_string()
+        }
+    } else {
+        cfg.provider.clone()
+    };
+
+    let (api_key, oauth_provider, oauth_account_id) = if cfg.is_oauth() {
+        let account_id = cfg.oauth_account_id.clone().unwrap_or_default();
+        let manager = crate::providers::oauth::global();
+        let token = match manager.as_ref() {
+            Some(m) => m.ensure_fresh(&account_id).await.unwrap_or_else(|_| {
+                // A refresh that fails still leaves whatever the background
+                // refresher cached; the 401 retry gets the last word.
+                crate::providers::oauth::access_token_for(&account_id).unwrap_or_default()
+            }),
+            None => String::new(),
+        };
+        let provider_id = manager
+            .and_then(|m| m.account(&account_id))
+            .map(|a| a.provider);
+        (token, provider_id, Some(account_id))
+    } else {
+        (cfg.api_key.clone(), None, None)
+    };
+
+    crate::zen_core::ModelProfile {
+        name: cfg.label.clone(),
+        provider,
+        model_name: cfg.model_name.clone(),
+        base_url: cfg.base_url.clone(),
+        api_key,
+        max_tokens: cap,
+        context_length: cfg.context_length,
+        adapt: if cfg.adapt.trim().is_empty() {
+            None
+        } else {
+            Some(cfg.adapt.clone())
+        },
+        vision: cfg.vision,
+        oauth_provider,
+        oauth_account_id,
+    }
+}
+
+/// True when this profile's wire format is not `POST {base}/chat/completions`.
+///
+/// `codex` speaks the OpenAI Responses API, `antigravity` speaks Google Code
+/// Assist, and the `local-*` adapters run in-process with no endpoint at all.
+/// The hand-rolled requests below can only build two body shapes, and would
+/// POST an OpenAI one at whatever `baseURL` holds — for an Antigravity profile
+/// that is `daily-cloudcode-pa.googleapis.com/chat/completions`, which answers
+/// with Google's HTML 404 page instead of JSON. Everything outside those two
+/// shapes goes to the agent loop's dispatcher, which knows every adapter.
+fn needs_adapter_dispatch(profile: &crate::zen_core::ModelProfile) -> bool {
+    !matches!(
+        crate::zen_core::query_llm::effective_adapter(profile),
+        "openai" | "anthropic"
+    )
+}
+
+/// Run a one-shot completion through [`query_llm`](crate::zen_core::query_llm),
+/// the same path the agent loop takes.
+///
+/// No tools are passed: this is a single completion, and every adapter omits
+/// the tool field for an empty slice.
+async fn dispatch_completion(
+    client: &reqwest::Client,
+    cfg: &LlmConfig,
+    profile: &crate::zen_core::ModelProfile,
+    system: &str,
+    blocks: Vec<crate::zen_core::ContentBlock>,
+    started: std::time::Instant,
+) -> Result<ChatCompletionResult, String> {
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let messages = vec![crate::zen_core::create_user_message(blocks)];
+
+    let msg = crate::zen_core::query_llm::query_llm(
+        client, &messages, system, &[], &cancel, profile, false, false,
+    )
+    .await
+    .map_err(|e| format!("LLM request failed: {e}"))?;
+
+    let mut text = String::new();
+    for block in &msg.message.content {
+        if let crate::zen_core::ContentBlock::Text { text: t } = block {
+            text.push_str(t);
+        }
+    }
+    if text.trim().is_empty() {
+        return Err("LLM returned an empty response".into());
+    }
+
+    Ok(ChatCompletionResult {
+        text,
+        model: cfg.model_name.clone(),
+        // The dispatcher hands back an assembled message, not the raw stop
+        // reason, so truncation can't be detected here. "" is the same
+        // "unknown" callers already get from providers that omit it.
+        finish: String::new(),
+        usage: msg.usage.clone(),
+        latency_ms: started.elapsed().as_millis() as u64,
+        profile: cfg.label.clone(),
+        provider: cfg.provider.clone(),
+    })
+}
+
 pub(crate) async fn chat_completion(
     config_path: &std::path::Path,
     profile: Option<&str>,
@@ -321,6 +440,21 @@ pub(crate) async fn chat_completion(
     } else {
         max_tokens
     };
+
+    let model_profile = profile_from_config(&cfg, cap).await;
+    if needs_adapter_dispatch(&model_profile) {
+        return dispatch_completion(
+            &client,
+            &cfg,
+            &model_profile,
+            system,
+            vec![crate::zen_core::ContentBlock::Text {
+                text: user.to_string(),
+            }],
+            started,
+        )
+        .await;
+    }
 
     let (url, body, req) = if is_anthropic {
         let base = cfg.base_url.trim_end_matches('/').trim_end_matches("/v1");
@@ -450,6 +584,30 @@ pub(crate) async fn chat_completion_vision(
     } else {
         max_tokens
     };
+
+    let model_profile = profile_from_config(&cfg, cap).await;
+    if needs_adapter_dispatch(&model_profile) {
+        return dispatch_completion(
+            &client,
+            &cfg,
+            &model_profile,
+            system,
+            vec![
+                crate::zen_core::ContentBlock::Text {
+                    text: user.to_string(),
+                },
+                crate::zen_core::ContentBlock::Image {
+                    source: crate::zen_core::ImageSource {
+                        source_type: "base64".to_string(),
+                        media_type: media_type.to_string(),
+                        data: image_b64.to_string(),
+                    },
+                },
+            ],
+            started,
+        )
+        .await;
+    }
 
     let (url, body, req) = if is_anthropic {
         let base = cfg.base_url.trim_end_matches('/').trim_end_matches("/v1");
@@ -686,5 +844,95 @@ mod tests {
     #[test]
     fn empty_config_list_errors() {
         assert!(pick_config(&[], None, None).is_err());
+    }
+
+    fn profile(provider: &str, adapt: &str, base_url: &str) -> crate::zen_core::ModelProfile {
+        crate::zen_core::ModelProfile {
+            name: "p".into(),
+            provider: provider.into(),
+            model_name: "m".into(),
+            base_url: base_url.into(),
+            api_key: "k".into(),
+            max_tokens: 1024,
+            context_length: 8192,
+            adapt: Some(adapt.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Regression: an Antigravity profile used to fall through to the OpenAI
+    /// branch, which POSTed a chat/completions body at
+    /// `daily-cloudcode-pa.googleapis.com` and got Google's HTML 404 page back.
+    /// Bridge callers surfaced that page as "LLM HTTP 404 Not Found: <!DOCTYPE
+    /// html>…".
+    #[test]
+    fn oauth_and_in_process_adapters_route_to_the_dispatcher() {
+        for (provider, adapt, base) in [
+            (
+                "antigravity",
+                "antigravity",
+                "https://daily-cloudcode-pa.googleapis.com",
+            ),
+            ("codex", "codex", "https://chatgpt.com/backend-api/codex"),
+            ("local-mlx", "local-mlx", ""),
+            ("local-candle", "local-candle", ""),
+        ] {
+            assert!(
+                needs_adapter_dispatch(&profile(provider, adapt, base)),
+                "{adapt} does not speak chat/completions and must be dispatched"
+            );
+        }
+    }
+
+    /// End-to-end against this machine's real `~/.senclaw/config.json` and
+    /// OAuth store — the same inputs the bridge's `llm.request` uses. Ignored
+    /// by default: it makes a real, billed call on whatever profile is active.
+    ///
+    /// Run with `cargo test --lib live_active_profile -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_active_profile_completes_through_the_bridge_path() {
+        let config_path = dirs::home_dir()
+            .expect("home dir")
+            .join(".senclaw")
+            .join("config.json");
+        // The daemon installs this at boot; a test process has to do it itself
+        // or every OAuth profile resolves to an empty bearer token.
+        crate::providers::oauth::init(crate::providers::oauth::store::default_path(&config_path));
+
+        let r = chat_completion(
+            &config_path,
+            None,
+            "You are terse.",
+            "Reply with the single word: ok",
+            // Not a token or two: a reasoning model spends the cap on hidden
+            // thinking first, and a cap that small comes back with no text at
+            // all — which reads as a failure of the path under test.
+            512,
+        )
+        .await
+        .expect("the active profile must complete");
+
+        println!(
+            "profile={} provider={} model={} latency={}ms text={:?}",
+            r.profile, r.provider, r.model, r.latency_ms, r.text
+        );
+        assert!(!r.text.trim().is_empty());
+    }
+
+    /// The two shapes the hand-rolled requests can actually build stay on the
+    /// direct path — this fix must not reroute profiles that already worked.
+    #[test]
+    fn plain_http_adapters_keep_the_direct_path() {
+        assert!(!needs_adapter_dispatch(&profile(
+            "custom",
+            "openai",
+            "https://api.deepseek.com"
+        )));
+        assert!(!needs_adapter_dispatch(&profile(
+            "anthropic",
+            "anthropic",
+            "https://api.anthropic.com"
+        )));
     }
 }

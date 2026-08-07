@@ -334,7 +334,10 @@ fn uses_max_completion_tokens(model_name: &str) -> bool {
 }
 
 /// Prefer routing implied by `provider`; otherwise use explicit `adapt`.
-fn effective_adapter(profile: &ModelProfile) -> &str {
+///
+/// Visible to the gateway so brokered one-shot completions decide routing the
+/// same way [`query_llm`] does, instead of re-deriving it and disagreeing.
+pub(crate) fn effective_adapter(profile: &ModelProfile) -> &str {
     let p = profile.provider.to_lowercase();
     if is_local_candle_provider(&p) {
         return "local-candle-native";
