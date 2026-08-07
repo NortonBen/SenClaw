@@ -101,6 +101,29 @@ pub struct MarketplacePlugin {
     /// Hub plugins start out listed-but-absent; git/local plugins are always
     /// installed by virtue of being on disk.
     pub installed: bool,
+    /// `plugin` (git clone) or `app`/`skill`/`workflow` (registry artifact).
+    /// Absent means plugin. The two install routes are different endpoints, so
+    /// a client that ignores this will try to git-clone an app and fail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// `scope/name`, present only for registry entries — the coordinate
+    /// `POST /api/marketplace/hub/install` takes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    /// 30-day downloads, when the hub reports them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<u64>,
+    /// For a registry `app` already present as a Space App: the version on
+    /// disk. `None` while the app was installed before origins were stamped —
+    /// which is why `update_available` is a separate field and not something a
+    /// client can derive by comparing this to `version`.
+    #[serde(rename = "installedVersion", skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
+    /// The catalog's version is worth offering over what is installed. Computed
+    /// here so both UIs agree, and so an unstamped install still offers the
+    /// update rather than looking current.
+    #[serde(rename = "updateAvailable", default)]
+    pub update_available: bool,
     /// Catalog metadata, only ever set for hub sources.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,

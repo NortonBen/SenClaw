@@ -33,6 +33,18 @@ interface MarketplacePlugin {
   enabled: boolean;
   /** Hub plugins are catalog entries until installed; git/local are always true. */
   installed: boolean;
+  /**
+   * `plugin` (or absent) installs by git clone; `app` / `skill` / `workflow`
+   * come from the hub registry and install as a verified artifact by slug.
+   * Two different endpoints — see `install` below.
+   */
+  kind?: string;
+  /** `scope/name`. Present only on registry entries; the install coordinate. */
+  slug?: string;
+  downloads?: number;
+  /** Version on disk for an installed app; absent when never stamped. */
+  installedVersion?: string;
+  updateAvailable?: boolean;
   skillCount: number;
   subagentCount: number;
   mcpServerCount: number;
@@ -40,6 +52,14 @@ interface MarketplacePlugin {
 }
 
 const TYPE_COLOR: Record<SourceType, string> = { hub: 'purple', git: 'blue', local: 'green' };
+
+/**
+ * Whether an entry came from the hub registry rather than `marketplace.json`.
+ *
+ * A missing `kind` means plugin: that is what every pre-registry catalog entry
+ * and every static hub still serves.
+ */
+const isRegistryEntry = (p: MarketplacePlugin) => !!p.kind && p.kind !== 'plugin';
 
 export default function MarketplacePanel() {
   const [sources, setSources] = useState<MarketplaceSource[]>([]);
@@ -382,14 +402,29 @@ function SourcePlugins({ source }: { source: MarketplaceSource }) {
    * Install, routing a scan verdict to the review dialog. A blocked install
    * (422) opens the dialog with an override; a successful install that still
    * produced findings opens it read-only.
+   *
+   * Two endpoints, picked by kind. A catalog entry from `marketplace.json` is a
+   * git-hosted plugin and installs by name into this source. An entry from the
+   * hub registry (app/skill/workflow) is a signed artifact fetched by slug —
+   * cloning it would fail, since there is no repository to clone. Both answer
+   * 422 with the same `{blocked, error, scan}` body, so the dialog is shared.
    */
   const install = async (p: MarketplacePlugin, force = false) => {
-    const path =
-      `/api/marketplace/sources/${source.id}/plugins/${encodeURIComponent(p.name)}/install` +
-      (force ? '?force=true' : '');
+    const isRegistry = isRegistryEntry(p);
+    const path = isRegistry
+      ? '/api/marketplace/hub/install'
+      : `/api/marketplace/sources/${source.id}/plugins/${encodeURIComponent(p.name)}/install` +
+        (force ? '?force=true' : '');
+    const init: RequestInit = isRegistry
+      ? {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slug: p.slug ?? p.name, force }),
+        }
+      : { method: 'POST' };
     try {
       setBusy(p.name);
-      const res = await fetch(path, { method: 'POST' });
+      const res = await fetch(path, init);
       if (!res.ok) {
         const { blocked, error, scan } = await readScanError(res);
         if (blocked && scan) {
@@ -436,9 +471,20 @@ function SourcePlugins({ source }: { source: MarketplaceSource }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <Space size={6} wrap>
               <Text strong>{p.name}</Text>
-              {p.version && <Tag>{p.version}</Tag>}
+              {p.version &&
+                (p.updateAvailable ? (
+                  <Tag color="warning">{`${p.installedVersion ?? '?'} → ${p.version}`}</Tag>
+                ) : (
+                  <Tag>{p.version}</Tag>
+                ))}
+              {p.kind && p.kind !== 'plugin' && <Tag color="purple">{p.kind}</Tag>}
               {p.category && <Tag color="geekblue">{p.category}</Tag>}
-              {!p.installed && <Tag color="default">not installed</Tag>}
+              {/*
+                Only claimed for plugins. A registry app installs into Space
+                Apps, which this source knows nothing about — so "not installed"
+                would be asserting something we cannot see.
+              */}
+              {!p.installed && !isRegistryEntry(p) && <Tag color="default">not installed</Tag>}
             </Space>
             <div>
               <Text type="secondary" style={{ fontSize: 12 }}>
@@ -453,7 +499,26 @@ function SourcePlugins({ source }: { source: MarketplaceSource }) {
             )}
           </div>
           <Space size="small">
-            {p.installed ? (
+            {/*
+              A registry package is not a plugin: the enable switch and the
+              plugin uninstall route do not apply. An app is managed from Space
+              Apps, so this card only offers getting it — or moving it forward.
+            */}
+            {isRegistryEntry(p) ? (
+              p.installed && !p.updateAvailable ? (
+                <Tag color="success">Installed</Tag>
+              ) : (
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<DownloadOutlined />}
+                  loading={busy === p.name}
+                  onClick={() => install(p)}
+                >
+                  {p.updateAvailable ? 'Update' : 'Install'}
+                </Button>
+              )
+            ) : p.installed ? (
               <>
                 <Switch
                   size="small"

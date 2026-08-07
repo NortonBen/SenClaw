@@ -18,6 +18,70 @@ fn internal(e: impl std::fmt::Display) -> AppError {
     AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
+/// Mark registry entries that are already installed as Space Apps.
+///
+/// A catalog lists what the hub *offers*; `installed` on a hub source means
+/// "installed as a plugin", which an app never is — so without this every app
+/// in the store reads "not installed" no matter how many are running. The link
+/// is the app's stamped [`HubOrigin`], falling back to a derived `senclaw/<id>`
+/// for apps installed before stamping existed; that fallback is why an
+/// unstamped app resolves as installed-with-unknown-version rather than absent.
+///
+/// Best-effort by design: a database that will not open leaves the list exactly
+/// as the catalog described it, which is the pre-existing behaviour.
+fn stamp_installed_apps(s: &Arc<UiState>, plugins: &mut [crate::marketplace::types::MarketplacePlugin]) {
+    use crate::marketplace::app_update;
+
+    if !plugins.iter().any(|p| p.kind.as_deref() == Some("app")) {
+        return;
+    }
+    let Some(db) = s.db.as_deref() else { return };
+    let rows: Vec<(String, serde_json::Value)> = db
+        .with_conn(|conn: &rusqlite::Connection| {
+            let mut stmt = conn.prepare("SELECT id, manifest FROM space_apps")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    let id: String = row.get(0)?;
+                    let m: String = row.get(1)?;
+                    Ok((id, serde_json::from_str(&m).unwrap_or_default()))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .unwrap_or_default();
+
+    // slug → installed version (None when the origin was never stamped).
+    let installed: std::collections::HashMap<String, Option<String>> = rows
+        .iter()
+        .filter_map(|(id, manifest)| {
+            app_update::origin_from_manifest(manifest, id).map(|o| (o.slug(), o.version))
+        })
+        .collect();
+
+    apply_installed_apps(plugins, &installed);
+}
+
+/// The decision half of [`stamp_installed_apps`], split from the database read
+/// so it can be tested without one.
+fn apply_installed_apps(
+    plugins: &mut [crate::marketplace::types::MarketplacePlugin],
+    installed: &std::collections::HashMap<String, Option<String>>,
+) {
+    use crate::marketplace::app_update;
+
+    for p in plugins.iter_mut().filter(|p| p.kind.as_deref() == Some("app")) {
+        let Some(slug) = p.slug.as_deref() else { continue };
+        let Some(version) = installed.get(slug) else { continue };
+        p.installed = true;
+        p.installed_version = version.clone();
+        p.update_available = p
+            .version
+            .as_deref()
+            .is_some_and(|latest| app_update::is_newer(latest, version.as_deref()));
+    }
+}
+
 // ─── Install straight from the hub package registry ──────────────────────────
 
 /// Body of `POST /api/marketplace/hub/install`.
@@ -341,9 +405,11 @@ pub(crate) async fn marketplace_source_get(
     let source_info =
         source_info.ok_or_else(|| AppError(StatusCode::NOT_FOUND, "Source not found".into()))?;
 
+    let mut plugins = source_info.plugins;
+    stamp_installed_apps(&s, &mut plugins);
+
     // Convert plugins to JSON
-    let plugins_json: Vec<serde_json::Value> = source_info
-        .plugins
+    let plugins_json: Vec<serde_json::Value> = plugins
         .into_iter()
         .map(|p| serde_json::to_value(p).unwrap_or(serde_json::Value::Null))
         .collect();
@@ -670,6 +736,100 @@ pub(crate) async fn plugin_widget_static(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ─── installed-app stamping ──────────────────────────────────────────────
+
+    fn entry(name: &str, kind: Option<&str>, slug: Option<&str>, version: Option<&str>) -> crate::marketplace::types::MarketplacePlugin {
+        crate::marketplace::types::MarketplacePlugin {
+            name: name.into(),
+            description: String::new(),
+            version: version.map(Into::into),
+            author: None,
+            keywords: None,
+            dir: String::new(),
+            source_id: "s".into(),
+            source_name: "hub".into(),
+            priority: 0,
+            enabled: false,
+            installed: false,
+            kind: kind.map(Into::into),
+            slug: slug.map(Into::into),
+            downloads: None,
+            installed_version: None,
+            update_available: false,
+            category: None,
+            license: None,
+            repository: None,
+            skill_count: 0,
+            subagent_count: 0,
+            has_hooks: false,
+            mcp_server_count: 0,
+            skills: Vec::new(),
+            subagents: Vec::new(),
+            mcp_servers: Vec::new(),
+        }
+    }
+
+    fn installed(pairs: &[(&str, Option<&str>)]) -> std::collections::HashMap<String, Option<String>> {
+        pairs
+            .iter()
+            .map(|(s, v)| ((*s).to_string(), v.map(Into::into)))
+            .collect()
+    }
+
+    /// An app on disk at the catalog's version is done — offering "Install"
+    /// again is the bug this whole path exists to fix.
+    #[test]
+    fn an_app_at_the_catalog_version_reads_installed_and_current() {
+        let mut p = vec![entry("ai-office", Some("app"), Some("senclaw/ai-office"), Some("1.0.1"))];
+        apply_installed_apps(&mut p, &installed(&[("senclaw/ai-office", Some("1.0.1"))]));
+        assert!(p[0].installed);
+        assert_eq!(p[0].installed_version.as_deref(), Some("1.0.1"));
+        assert!(!p[0].update_available, "same version is not an update");
+    }
+
+    #[test]
+    fn an_older_installed_version_offers_the_update() {
+        let mut p = vec![entry("ai-office", Some("app"), Some("senclaw/ai-office"), Some("1.0.1"))];
+        apply_installed_apps(&mut p, &installed(&[("senclaw/ai-office", Some("1.0.0"))]));
+        assert!(p[0].installed && p[0].update_available);
+    }
+
+    /// Apps installed before origins were stamped have no recorded version.
+    /// Treating that as "current" would strand them on an old build forever,
+    /// so the update is offered — matching `is_newer(_, None)`.
+    #[test]
+    fn an_unstamped_install_still_offers_the_update() {
+        let mut p = vec![entry("ai-office", Some("app"), Some("senclaw/ai-office"), Some("1.0.1"))];
+        apply_installed_apps(&mut p, &installed(&[("senclaw/ai-office", None)]));
+        assert!(p[0].installed);
+        assert!(p[0].installed_version.is_none());
+        assert!(p[0].update_available);
+    }
+
+    #[test]
+    fn an_app_that_is_not_installed_is_left_alone() {
+        let mut p = vec![entry("clock", Some("app"), Some("senclaw/clock"), Some("1.0.0"))];
+        apply_installed_apps(&mut p, &installed(&[("senclaw/ai-office", Some("1.0.1"))]));
+        assert!(!p[0].installed && !p[0].update_available);
+    }
+
+    /// A plugin's `installed` means "cloned into this source" and is decided by
+    /// the marketplace manager. A Space App with a colliding slug must not flip
+    /// it, or a plugin would show as installed because an app shares its name.
+    #[test]
+    fn a_plugin_entry_is_never_touched() {
+        let mut p = vec![
+            entry("code-modernization", None, None, Some("1.2.0")),
+            entry("shared-name", Some("plugin"), Some("senclaw/shared-name"), Some("1.0.0")),
+        ];
+        apply_installed_apps(
+            &mut p,
+            &installed(&[("senclaw/shared-name", Some("0.9.0")), ("senclaw/code-modernization", None)]),
+        );
+        assert!(!p[0].installed, "a marketplace.json plugin is not a registry app");
+        assert!(!p[1].installed, "kind=plugin is not an app either");
+    }
 
     // ─── hub install body ────────────────────────────────────────────────────
 

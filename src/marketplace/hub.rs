@@ -33,6 +33,16 @@ pub const LEGACY_HUB_URL: &str = "https://hub-store.bacnd.com";
 /// Filename a hub URL is assumed to serve when it points at a directory.
 const CATALOG_FILE: &str = "marketplace.json";
 
+/// SenClaw's own catalog endpoint, relative to a hub's home.
+///
+/// `marketplace.json` is a third-party plugin index by format: the hub filters
+/// it to `kind = "plugin"`, so a hub whose packages are apps serves an empty
+/// document there and the store browses as empty even though every package is
+/// installable. This endpoint is the same catalogue without that filter. A hub
+/// that does not implement it just keeps its `marketplace.json` entries — see
+/// [`fetch_catalog`].
+const REGISTRY_CATALOG_PATH: &str = "/api/v1/packages";
+
 const CATALOG_CACHE: &str = "catalog.json";
 const INSTALLED_MANIFEST: &str = "installed.json";
 const REPOS_DIR: &str = "repos";
@@ -165,7 +175,22 @@ fn github_url(repo: &str) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HubPlugin {
     pub name: String,
-    pub source: HubPluginSource,
+    /// Absent for registry entries: an app is fetched as a signed artifact by
+    /// slug, not cloned from git, so there is no repository to point at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<HubPluginSource>,
+    /// `plugin` (the default, for a `marketplace.json` entry), or `app` /
+    /// `skill` / `workflow` for a registry entry. What the installing client
+    /// must dispatch on — the two install paths are not interchangeable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// `scope/name` — the registry coordinate `POST /api/marketplace/hub/install`
+    /// takes. Absent for `marketplace.json` entries, which are keyed by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    /// 30-day download count, when the hub reports one. Browse-order signal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<u64>,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
@@ -196,9 +221,92 @@ pub struct HubCatalog {
     pub plugins: Vec<HubPlugin>,
 }
 
+impl HubPlugin {
+    /// Whether this entry installs by cloning a git repo (the `/plugin install`
+    /// path) rather than by pulling a signed artifact from the registry.
+    pub fn is_git_plugin(&self) -> bool {
+        self.source.is_some() && self.kind.as_deref().unwrap_or("plugin") == "plugin"
+    }
+
+    /// The clone to perform, or an error naming the right path when this entry
+    /// is a registry package.
+    ///
+    /// Worth an explicit message: the two install routes look identical from the
+    /// UI, and the failure would otherwise surface as "missing field `source`"
+    /// deep in a deserializer.
+    pub fn git_target(&self) -> Result<GitTarget> {
+        match &self.source {
+            Some(src) => src.git_target(),
+            None => {
+                let kind = self.kind.as_deref().unwrap_or("package");
+                let slug = self.slug.as_deref().unwrap_or(&self.name);
+                bail!(
+                    "{} is a {kind} in the hub registry, not a git-hosted plugin — \
+                     install it with POST /api/marketplace/hub/install {{\"slug\":\"{slug}\"}}",
+                    self.name
+                )
+            }
+        }
+    }
+}
+
 impl HubCatalog {
     pub fn find(&self, name: &str) -> Option<&HubPlugin> {
-        self.plugins.iter().find(|p| p.name == name)
+        self.plugins
+            .iter()
+            .find(|p| p.name == name || p.slug.as_deref() == Some(name))
+    }
+}
+
+/// One row of the hub's own `/api/v1/packages` listing.
+#[derive(Debug, Clone, Deserialize)]
+struct RegistryPackage {
+    /// `scope/name`.
+    slug: String,
+    kind: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default, rename = "latestVersion")]
+    latest_version: Option<String>,
+    #[serde(default, rename = "downloads30d")]
+    downloads30d: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RegistryCatalog {
+    #[serde(default)]
+    packages: Vec<RegistryPackage>,
+}
+
+impl From<RegistryPackage> for HubPlugin {
+    fn from(p: RegistryPackage) -> Self {
+        // Display by bare name; the scope is carried in `slug`, which is what
+        // installs are keyed on. Showing "senclaw/email" in a grid of names is
+        // noise when every package shares one scope.
+        let name = p
+            .slug
+            .rsplit_once('/')
+            .map(|(_, n)| n.to_string())
+            .unwrap_or_else(|| p.slug.clone());
+        HubPlugin {
+            name,
+            source: None,
+            kind: Some(p.kind),
+            slug: Some(p.slug),
+            downloads: p.downloads30d,
+            description: p.description,
+            version: p.latest_version,
+            author: p.owner.map(serde_json::Value::String),
+            keywords: None,
+            repository: None,
+            license: None,
+            category: p.category,
+            homepage: None,
+        }
     }
 }
 
@@ -224,28 +332,96 @@ pub fn catalog_home(url: &str) -> String {
         .to_string()
 }
 
-/// Blocking HTTP GET of a catalog. Call from a blocking context
-/// (`spawn_blocking`) — reqwest's blocking client cannot run on a reactor thread.
-pub fn fetch_catalog(url: &str) -> Result<HubCatalog> {
-    let url = normalize_catalog_url(url);
-    let client = reqwest::blocking::Client::builder()
+fn http_client() -> Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent(concat!("senclaw/", env!("CARGO_PKG_VERSION")))
         .build()
-        .context("failed to build HTTP client")?;
+        .context("failed to build HTTP client")
+}
+
+/// Blocking HTTP GET of a catalog. Call from a blocking context
+/// (`spawn_blocking`) — reqwest's blocking client cannot run on a reactor thread.
+///
+/// Two documents, merged. `marketplace.json` is the interop index and is
+/// required; the hub's own `/api/v1/packages` carries the kinds that index
+/// filters out (apps, skills, workflows) and is best-effort, because a plain
+/// static hub serves only the former. Without the merge a hub that publishes
+/// apps browses as an empty catalog while every one of its packages installs
+/// fine — which is exactly what the shipped hub does.
+pub fn fetch_catalog(url: &str) -> Result<HubCatalog> {
+    let catalog_url = normalize_catalog_url(url);
+    let client = http_client()?;
 
     let res = client
-        .get(&url)
+        .get(&catalog_url)
         .send()
-        .with_context(|| format!("failed to fetch hub catalog {url}"))?;
+        .with_context(|| format!("failed to fetch hub catalog {catalog_url}"))?;
     let status = res.status();
     if !status.is_success() {
-        bail!("hub catalog {url} returned HTTP {status}");
+        bail!("hub catalog {catalog_url} returned HTTP {status}");
     }
     let body = res
         .text()
-        .with_context(|| format!("failed to read hub catalog {url}"))?;
-    serde_json::from_str(&body).with_context(|| format!("failed to parse hub catalog {url}"))
+        .with_context(|| format!("failed to read hub catalog {catalog_url}"))?;
+    let mut catalog: HubCatalog = serde_json::from_str(&body)
+        .with_context(|| format!("failed to parse hub catalog {catalog_url}"))?;
+
+    let home = catalog_home(&catalog_url);
+    match fetch_registry_catalog(&client, &home) {
+        Ok(extra) => merge_registry(&mut catalog, extra),
+        // A 404 here is the normal answer from a hub that only serves a static
+        // marketplace.json. Downgrading it to a warning keeps those working
+        // rather than failing the whole sync over an optional document.
+        Err(e) => tracing::debug!("[Marketplace] no registry catalog at {home}: {e:#}"),
+    }
+
+    Ok(catalog)
+}
+
+/// GET `<home>/api/v1/packages`. Errors are the caller's to downgrade.
+fn fetch_registry_catalog(
+    client: &reqwest::blocking::Client,
+    home: &str,
+) -> Result<Vec<HubPlugin>> {
+    let url = format!("{home}{REGISTRY_CATALOG_PATH}?limit=200");
+    let res = client
+        .get(&url)
+        .send()
+        .with_context(|| format!("failed to fetch {url}"))?;
+    let status = res.status();
+    if !status.is_success() {
+        bail!("{url} returned HTTP {status}");
+    }
+    let body = res.text().with_context(|| format!("failed to read {url}"))?;
+    let parsed: RegistryCatalog =
+        serde_json::from_str(&body).with_context(|| format!("failed to parse {url}"))?;
+    Ok(parsed.packages.into_iter().map(HubPlugin::from).collect())
+}
+
+/// Append registry entries the interop index did not already cover.
+///
+/// `marketplace.json` wins on a collision: its entry carries a git source, so it
+/// is installable by both paths, while the registry row is installable only by
+/// slug. Dropping the richer of the two would be a regression.
+fn merge_registry(catalog: &mut HubCatalog, extra: Vec<HubPlugin>) {
+    for pkg in extra {
+        let seen = catalog
+            .plugins
+            .iter()
+            .any(|p| p.name == pkg.name || (p.slug.is_some() && p.slug == pkg.slug));
+        if !seen {
+            catalog.plugins.push(pkg);
+        }
+    }
+    // Most-installed first, then by name so the order is stable across syncs
+    // when downloads tie (or when no hub reports them at all).
+    catalog.plugins.sort_by(|a, b| {
+        b.downloads
+            .unwrap_or(0)
+            .cmp(&a.downloads.unwrap_or(0))
+            .then_with(|| a.name.cmp(&b.name))
+    });
 }
 
 // ── On-disk state ────────────────────────────────────────────────────────────
@@ -449,12 +625,7 @@ mod tests {
         }"#;
         let catalog: HubCatalog = serde_json::from_str(raw).unwrap();
         assert_eq!(catalog.plugins.len(), 1);
-        let target = catalog
-            .find("qodo-skills")
-            .unwrap()
-            .source
-            .git_target()
-            .unwrap();
+        let target = catalog.find("qodo-skills").unwrap().git_target().unwrap();
         assert_eq!(
             target,
             GitTarget {
@@ -493,6 +664,115 @@ mod tests {
     fn rejects_repo_relative_sources() {
         let rel: HubPluginSource = serde_json::from_str(r#""./plugins/local""#).unwrap();
         assert!(rel.git_target().is_err());
+    }
+
+    /// The exact document the shipped hub serves: 8 apps published, and an
+    /// index that filters to `kind = "plugin"` — so it lists nothing. This is
+    /// what made the store browse as empty.
+    #[test]
+    fn merges_registry_packages_into_an_empty_plugin_index() {
+        let mut catalog: HubCatalog = serde_json::from_str(
+            r#"{"name":"senclaw","description":"...","plugins":[]}"#,
+        )
+        .unwrap();
+        let registry: RegistryCatalog = serde_json::from_str(
+            r#"{"packages":[
+                {"slug":"senclaw/email","kind":"app","description":"Mail",
+                 "latestVersion":"1.0.0","owner":"senclaw","downloads30d":12},
+                {"slug":"senclaw/mindmap","kind":"app","latestVersion":"0.2.0",
+                 "owner":"senclaw","downloads30d":40}
+            ],"count":2,"limit":200}"#,
+        )
+        .unwrap();
+
+        merge_registry(
+            &mut catalog,
+            registry.packages.into_iter().map(HubPlugin::from).collect(),
+        );
+
+        // Most-downloaded first, and displayed by bare name rather than slug.
+        let names: Vec<&str> = catalog.plugins.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["mindmap", "email"]);
+
+        let email = catalog.find("email").unwrap();
+        assert_eq!(email.kind.as_deref(), Some("app"));
+        assert_eq!(email.slug.as_deref(), Some("senclaw/email"));
+        assert_eq!(email.version.as_deref(), Some("1.0.0"));
+        // Findable by slug too — that is the coordinate an install carries.
+        assert_eq!(catalog.find("senclaw/email").unwrap().name, "email");
+    }
+
+    /// A registry row cannot be git-cloned, and the error has to say where to
+    /// go instead — otherwise the UI shows a bare "missing field `source`".
+    #[test]
+    fn registry_entries_refuse_the_git_install_path() {
+        let mut catalog = HubCatalog {
+            name: None,
+            owner: None,
+            description: None,
+            plugins: vec![],
+        };
+        merge_registry(
+            &mut catalog,
+            vec![HubPlugin::from(
+                serde_json::from_str::<RegistryPackage>(
+                    r#"{"slug":"senclaw/email","kind":"app"}"#,
+                )
+                .unwrap(),
+            )],
+        );
+
+        let err = catalog.find("email").unwrap().git_target().unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("hub/install"), "{msg}");
+        assert!(msg.contains("senclaw/email"), "{msg}");
+        assert!(!catalog.find("email").unwrap().is_git_plugin());
+    }
+
+    /// marketplace.json wins a name collision: its entry carries a git source,
+    /// so it installs by either route while the registry row installs by one.
+    #[test]
+    fn a_marketplace_entry_is_not_replaced_by_its_registry_row() {
+        let mut catalog: HubCatalog = serde_json::from_str(
+            r#"{"plugins":[{"name":"qodo-skills","source":"qodo-ai/qodo-skills","version":"0.6.1"}]}"#,
+        )
+        .unwrap();
+        merge_registry(
+            &mut catalog,
+            vec![HubPlugin::from(
+                serde_json::from_str::<RegistryPackage>(
+                    r#"{"slug":"qodo/qodo-skills","kind":"plugin","latestVersion":"9.9.9"}"#,
+                )
+                .unwrap(),
+            )],
+        );
+
+        assert_eq!(catalog.plugins.len(), 1);
+        let kept = catalog.find("qodo-skills").unwrap();
+        assert_eq!(kept.version.as_deref(), Some("0.6.1"));
+        assert!(kept.is_git_plugin());
+        assert_eq!(
+            kept.git_target().unwrap().url,
+            "https://github.com/qodo-ai/qodo-skills"
+        );
+    }
+
+    /// A cached catalog written before this change has no `kind`/`slug`, and a
+    /// plain static hub still serves entries in that shape.
+    #[test]
+    fn plugin_entries_stay_readable_without_the_new_fields() {
+        let entry: HubPlugin =
+            serde_json::from_str(r#"{"name":"p","source":"owner/repo"}"#).unwrap();
+        assert!(entry.is_git_plugin());
+        assert_eq!(entry.kind, None);
+        assert_eq!(entry.slug, None);
+        assert_eq!(entry.git_target().unwrap().branch, "main");
+
+        // …and the new fields stay out of the serialized form, so a cache round
+        // trip does not rewrite every entry.
+        let round = serde_json::to_string(&entry).unwrap();
+        assert!(!round.contains("kind"), "{round}");
+        assert!(!round.contains("slug"), "{round}");
     }
 
     #[test]

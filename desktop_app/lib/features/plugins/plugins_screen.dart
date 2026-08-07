@@ -3199,17 +3199,25 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
     ('skills', 'Skills'),
     ('subagents', 'Subagents'),
     ('mcp', 'MCP'),
+    ('apps', 'Apps'),
     ('installed', 'Installed'),
   ];
 
   bool _matches(Map<String, dynamic> p) {
     switch (_kind) {
+      // A plugin matches by what it *contains*; a registry package matches by
+      // what it *is*. A published skill carries no skillCount — it is not a
+      // plugin with skills inside it — so counting alone would hide it here.
       case 'skills':
-        if ((p['skillCount'] as num? ?? 0) == 0) return false;
+        if ((p['skillCount'] as num? ?? 0) == 0 && p['kind'] != 'skill') {
+          return false;
+        }
       case 'subagents':
         if ((p['subagentCount'] as num? ?? 0) == 0) return false;
       case 'mcp':
         if ((p['mcpServerCount'] as num? ?? 0) == 0) return false;
+      case 'apps':
+        if (p['kind'] != 'app') return false;
       case 'installed':
         if (p['installed'] == false) return false;
     }
@@ -4411,6 +4419,30 @@ class _MarketplaceCatalogCardState
   String get _pluginPath =>
       '/api/marketplace/sources/${widget.source.id}/plugins/${Uri.encodeComponent('${widget.plugin['name']}')}';
 
+  /// Whether this entry came from the hub registry rather than
+  /// `marketplace.json`. A missing `kind` means plugin — that is what every
+  /// static hub and every pre-registry cached catalog still serves.
+  bool get _isRegistry {
+    final kind = widget.plugin['kind'];
+    return kind != null && kind != 'plugin';
+  }
+
+  /// Install, picking the endpoint the entry can actually be installed by.
+  ///
+  /// A `marketplace.json` entry is a git-hosted plugin, cloned by name into
+  /// this source. A registry entry (app/skill/workflow) is a signed artifact
+  /// fetched by slug and handed to the Space App installer — there is no
+  /// repository to clone, so the plugin route would just fail.
+  Future<void> _install() => _run(() async {
+        final api = ref.read(apiClientProvider);
+        if (_isRegistry) {
+          await api.post('/api/marketplace/hub/install',
+              body: {'slug': '${widget.plugin['slug'] ?? widget.plugin['name']}'});
+        } else {
+          await api.post('$_pluginPath/install');
+        }
+      });
+
   Future<void> _run(Future<void> Function() action) async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -4478,7 +4510,19 @@ class _MarketplaceCatalogCardState
               ),
               if (p['version'] != null) ...[
                 const SizedBox(width: AppTokens.s6),
-                _MiniTag('${p['version']}', c.accent),
+                // Mirrors the Space Apps panel: "? → 1.0.1" when the installed
+                // version was never stamped, so the jump is legible either way.
+                _MiniTag(
+                    p['updateAvailable'] == true
+                        ? '${p['installedVersion'] ?? '?'} → ${p['version']}'
+                        : '${p['version']}',
+                    p['updateAvailable'] == true
+                        ? AppTokens.warning
+                        : c.accent),
+              ],
+              if (_isRegistry) ...[
+                const SizedBox(width: AppTokens.s6),
+                _MiniTag('${p['kind']}', AppTokens.brand),
               ],
               if (p['category'] != null) ...[
                 const SizedBox(width: AppTokens.s6),
@@ -4487,7 +4531,10 @@ class _MarketplaceCatalogCardState
               const SizedBox(width: AppTokens.s6),
               _MiniTag(widget.source.name,
                   widget.source.isHub ? AppTokens.brand : c.accent),
-              if (!installed) ...[
+              // Only claimed for plugins. A registry app installs into Space
+              // Apps, which this source cannot see — "not installed" there
+              // would assert something we do not know.
+              if (!installed && !_isRegistry) ...[
                 const SizedBox(width: AppTokens.s6),
                 _MiniTag(
                     context.tr('not installed'), const Color(0xFF8A8A99)),
@@ -4515,7 +4562,36 @@ class _MarketplaceCatalogCardState
               : Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (installed) ...[
+                    // A registry package is not a plugin: the enable switch and
+                    // the plugin uninstall route do not apply to it. An app is
+                    // managed from Space Apps, so all this card offers is
+                    // getting it — or moving it forward a version.
+                    if (_isRegistry) ...[
+                      if (!installed)
+                        TextButton.icon(
+                          onPressed: _install,
+                          icon: const Icon(Icons.download_outlined, size: 14),
+                          label: Text(context.tr('Install')),
+                        )
+                      else if (p['updateAvailable'] == true)
+                        FilledButton.icon(
+                          onPressed: _install,
+                          icon: const Icon(Icons.upgrade, size: 14),
+                          label: Text(context.tr('Update')),
+                        )
+                      else
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.check_circle,
+                                size: 14, color: AppTokens.success),
+                            const SizedBox(width: AppTokens.s4),
+                            Text(context.tr('Installed'),
+                                style: TextStyle(
+                                    color: c.textSecondary, fontSize: 12)),
+                          ],
+                        ),
+                    ] else if (installed) ...[
                       Transform.scale(
                         scale: 0.8,
                         child: Switch(
@@ -4535,8 +4611,7 @@ class _MarketplaceCatalogCardState
                         ),
                     ] else
                       TextButton.icon(
-                        onPressed: () =>
-                            _run(() => api.post('$_pluginPath/install')),
+                        onPressed: _install,
                         icon: const Icon(Icons.download_outlined, size: 14),
                         label: Text(context.tr('Install')),
                       ),

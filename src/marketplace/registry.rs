@@ -109,6 +109,38 @@ pub fn parse_slug(slug: &str) -> Result<(String, String)> {
     }
 }
 
+/// Identifies this process to the hub as a SenClaw client, not a browser.
+///
+/// The hub does not serve *unsigned* app artifacts to anonymous link-following
+/// requests — its remediation after Google's Safe Browsing crawler fetched
+/// unsigned macOS binaries and flagged the domain
+/// (`apps/web/src/app/dl/…/route.ts`). A crawler sends no custom headers, so
+/// this header is what separates an install from a sweep. Without it every app
+/// in the store 404s on download.
+///
+/// This is not a credential and grants nothing: private packages still require
+/// a real token below.
+const CLIENT_HEADER: &str = "x-senclaw-client";
+
+/// The publish token, when the machine has one, reused as a *read* credential
+/// so that a private package the user may reach installs without a second
+/// login. Absence is normal — a public install needs no token.
+fn hub_auth() -> Option<String> {
+    super::publish::read_token().ok()
+}
+
+/// Identify the client, and authenticate when we can.
+fn with_auth(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    let req = req.header(
+        CLIENT_HEADER,
+        concat!("senclaw/", env!("CARGO_PKG_VERSION")),
+    );
+    match hub_auth() {
+        Some(t) => req.bearer_auth(t),
+        None => req,
+    }
+}
+
 /// Fetch a package document. A 404 is reported as "not found" rather than a
 /// bare HTTP code, because that is the one failure users hit by typo.
 pub async fn fetch_package(hub: &str, scope: &str, name: &str) -> Result<PackageDoc> {
@@ -119,9 +151,7 @@ pub async fn fetch_package(hub: &str, scope: &str, name: &str) -> Result<Package
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?;
-    let resp = client
-        .get(&url)
-        .header("accept", INSTALL_ACCEPT)
+    let resp = with_auth(client.get(&url).header("accept", INSTALL_ACCEPT))
         .send()
         .await
         .with_context(|| format!("không gọi được {url}"))?;
@@ -180,11 +210,24 @@ pub async fn download_verified(dist: &DistEntry) -> Result<Vec<u8>> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
         .build()?;
-    let resp = client
-        .get(&dist.tarball)
+    let resp = with_auth(client.get(&dist.tarball))
         .send()
         .await
         .with_context(|| format!("không tải được {}", dist.tarball))?;
+    // A 404 on an artifact the catalog just advertised is almost never a missing
+    // file — the hub answers 404 rather than 403 so that a package the requester
+    // cannot reach is indistinguishable from one that does not exist. Say that,
+    // instead of echoing a status code that reads as "the file is gone".
+    if resp.status() == reqwest::StatusCode::NOT_FOUND && hub_auth().is_none() {
+        bail!(
+            "hub không cho tải {} (404).\n\
+             Với gói riêng tư thì 404 nghĩa là chưa có quyền — chạy `senclaw hub login` \
+             (dán token snc_pat_… lấy ở trang hub → Settings → Tokens) hoặc đặt \
+             SENCLAW_HUB_TOKEN, rồi cài lại. Gói công khai thì kiểm tra lại phiên bản \
+             và nền tảng có thật trên hub không.",
+            dist.tarball
+        );
+    }
     if !resp.status().is_success() {
         bail!("{} trả về HTTP {}", dist.tarball, resp.status());
     }

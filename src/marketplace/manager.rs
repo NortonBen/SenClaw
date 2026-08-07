@@ -791,6 +791,11 @@ impl MarketplaceManager {
                 priority: source.priority,
                 enabled,
                 installed: true,
+                kind: entry.and_then(|e| e.kind.clone()),
+                slug: entry.and_then(|e| e.slug.clone()),
+                downloads: entry.and_then(|e| e.downloads),
+                installed_version: None,
+                update_available: false,
                 category: entry.and_then(|e| e.category.clone()),
                 license: entry.and_then(|e| e.license.clone()),
                 repository: entry.and_then(|e| e.repository.clone()),
@@ -822,12 +827,19 @@ impl MarketplaceManager {
                     priority: source.priority,
                     enabled: false,
                     installed: false,
+                    kind: entry.kind.clone(),
+                    slug: entry.slug.clone(),
+                    downloads: entry.downloads,
+                    // Stamped by the UI layer, which is the only place that can
+                    // see the Space Apps table. A plugin source cannot.
+                    installed_version: None,
+                    update_available: false,
                     category: entry.category.clone(),
                     license: entry.license.clone(),
                     repository: entry
                         .repository
                         .clone()
-                        .or_else(|| entry.source.git_target().ok().map(|t| t.url)),
+                        .or_else(|| entry.git_target().ok().map(|t| t.url)),
                     skill_count: 0,
                     subagent_count: 0,
                     has_hooks: false,
@@ -924,7 +936,9 @@ impl MarketplaceManager {
         let entry = catalog
             .find(plugin_name)
             .ok_or_else(|| anyhow::anyhow!("Plugin not in catalog: {}", plugin_name))?;
-        let target = entry.source.git_target()?;
+        // Errors with the registry route named when the entry is an app/skill:
+        // those install as signed artifacts by slug, not as a git clone.
+        let target = entry.git_target()?;
 
         let local_path = PathBuf::from(&source.local_path);
         let repo = hub::repo_path(&local_path, plugin_name);
