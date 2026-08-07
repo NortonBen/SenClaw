@@ -98,9 +98,16 @@ pub fn bump(version: &str, part: &str) -> Result<String> {
 }
 
 /// Detect the current host triple, used as the artifact platform default.
+///
+/// The hub's canonical id is Node's `${process.platform}-${process.arch}`, so
+/// every name Rust spells differently is translated here — including `windows`,
+/// which Node calls `win32`. Getting that one wrong is not cosmetic: the hub
+/// stores `win32-x64`, so a client asking for `windows-x64` finds no artifact
+/// and every Windows install 404s.
 pub fn host_platform() -> String {
     let os = match std::env::consts::OS {
         "macos" => "darwin",
+        "windows" => "win32",
         other => other,
     };
     let arch = match std::env::consts::ARCH {
@@ -109,6 +116,57 @@ pub fn host_platform() -> String {
         other => other,
     };
     format!("{os}-{arch}")
+}
+
+/// Any reasonable spelling of a platform → the hub's canonical id.
+///
+/// Mirrors `normalizePlatform` in the hub's packages/schemas: a build script
+/// naming its target `windows-x64` (electron-builder), `darwin-aarch64` (Tauri)
+/// or `x86_64-pc-windows-msvc` (cargo) means the same binary we call
+/// `win32-x64`. The hub normalises on publish, so stored values are canonical —
+/// this exists so a *client* comparison never fails on spelling alone, whatever
+/// an older hub or a hand-written manifest happens to contain.
+///
+/// Unrecognised input comes back trimmed and lowercased rather than empty: an
+/// exact match on an unknown-but-identical spelling still beats no match.
+pub fn canonical_platform(input: &str) -> String {
+    let s = input.trim().to_lowercase();
+    if s.is_empty() {
+        return s;
+    }
+    if s == "any" || s == "all" || s == "universal" || s == "na" {
+        return "any".to_string();
+    }
+
+    // Longest first: `x86_64` must win over `x64`, and `win32` over `win`.
+    const OS_ALIASES: &[(&str, &str)] = &[
+        ("darwin", "darwin"),
+        ("macos", "darwin"),
+        ("osx", "darwin"),
+        ("apple", "darwin"),
+        ("mac", "darwin"),
+        ("windows", "win32"),
+        ("win32", "win32"),
+        ("win64", "win32"),
+        ("win", "win32"),
+        ("linux", "linux"),
+    ];
+    const ARCH_ALIASES: &[(&str, &str)] = &[
+        ("aarch64", "arm64"),
+        ("x86_64", "x64"),
+        ("x86-64", "x64"),
+        ("amd64", "x64"),
+        ("arm64", "arm64"),
+        ("x64", "x64"),
+        ("arm", "arm64"),
+    ];
+
+    let os = OS_ALIASES.iter().find(|(a, _)| s.contains(a)).map(|(_, c)| *c);
+    let arch = ARCH_ALIASES.iter().find(|(a, _)| s.contains(a)).map(|(_, c)| *c);
+    match (os, arch) {
+        (Some(os), Some(arch)) => format!("{os}-{arch}"),
+        _ => s,
+    }
 }
 
 /// Where the publish token lives. Never passed on the command line — an
@@ -381,6 +439,31 @@ mod tests {
         assert!(p.contains('-'), "{p}");
         assert!(!p.contains("macos"), "must be darwin-*, got {p}");
         assert!(!p.contains("aarch64"), "must be *-arm64, got {p}");
+        // Rust's `windows` is the hub's `win32`; leaving it untranslated 404s
+        // every Windows install against a correctly published package.
+        assert!(!p.contains("windows"), "must be win32-*, got {p}");
+        // Whatever this machine is, the hub must recognise the id verbatim.
+        assert_eq!(canonical_platform(&p), p);
+    }
+
+    #[test]
+    fn every_build_tool_spelling_canonicalises_to_the_hub_id() {
+        for s in [
+            "windows-x64",
+            "win32-x64",
+            "x86_64-pc-windows-msvc",
+            "Windows x86_64",
+            "win-amd64",
+        ] {
+            assert_eq!(canonical_platform(s), "win32-x64", "{s}");
+        }
+        assert_eq!(canonical_platform("darwin-aarch64"), "darwin-arm64");
+        assert_eq!(canonical_platform("macos-arm64"), "darwin-arm64");
+        assert_eq!(canonical_platform("aarch64-unknown-linux-gnu"), "linux-arm64");
+        assert_eq!(canonical_platform("na"), "any");
+        // Unrecognised input keeps its own spelling rather than collapsing to
+        // something that would match the wrong artifact.
+        assert_eq!(canonical_platform("Plan9-Sparc"), "plan9-sparc");
     }
 
     #[test]

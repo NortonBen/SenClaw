@@ -170,9 +170,15 @@ pub async fn fetch_package(hub: &str, scope: &str, name: &str) -> Result<Package
 /// Pick the artifact for this machine.
 ///
 /// A platform-less entry (`na`/`any`) is portable and matches anything; anything
-/// else must match exactly, because installing a darwin-arm64 binary on Linux
+/// else must match the host, because installing a darwin-arm64 binary on Linux
 /// fails later and more confusingly than failing here.
+///
+/// The match is on canonical ids, not raw strings: `windows-x64` and `win32-x64`
+/// name the same binary, and a spelling difference between what the host reports
+/// and what the registry stored must not read as "no build for your machine".
 pub fn select_dist<'a>(version: &'a VersionDoc, host: &str) -> Result<&'a DistEntry> {
+    use super::publish::canonical_platform;
+
     let portable = |p: &Option<String>| {
         matches!(
             p.as_deref().map(str::trim),
@@ -180,10 +186,11 @@ pub fn select_dist<'a>(version: &'a VersionDoc, host: &str) -> Result<&'a DistEn
         )
     };
 
+    let want = canonical_platform(host);
     if let Some(exact) = version
         .dist
         .iter()
-        .find(|d| d.platform.as_deref() == Some(host))
+        .find(|d| d.platform.as_deref().map(canonical_platform).as_deref() == Some(want.as_str()))
     {
         return Ok(exact);
     }
@@ -194,7 +201,7 @@ pub fn select_dist<'a>(version: &'a VersionDoc, host: &str) -> Result<&'a DistEn
         bail!("phiên bản {} không có artifact nào", version.version);
     }
     bail!(
-        "phiên bản {} không có bản cho `{host}` (đang có: {})",
+        "phiên bản {} không có bản cho `{want}` (đang có: {})",
         version.version,
         version
             .dist
@@ -361,6 +368,19 @@ mod tests {
 
         let err = select_dist(v, "linux-x64").unwrap_err().to_string();
         assert!(err.contains("darwin-arm64"), "{err}");
+    }
+
+    #[test]
+    fn a_windows_host_matches_the_hubs_win32_artifact() {
+        // The hub stores `win32-x64`; a Rust host that reports `windows-x64`
+        // must still resolve to it instead of "no build for your machine".
+        let v: VersionDoc = serde_json::from_str(
+            r#"{"version":"1.0.0","dist":[{"platform":"win32-x64","tarball":"http://x/a.zip"}]}"#,
+        )
+        .unwrap();
+        assert!(select_dist(&v, "windows-x64").is_ok());
+        assert!(select_dist(&v, "x86_64-pc-windows-msvc").is_ok());
+        assert!(select_dist(&v, "linux-x64").is_err());
     }
 
     #[test]
