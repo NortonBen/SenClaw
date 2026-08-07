@@ -18,6 +18,83 @@ fn internal(e: impl std::fmt::Display) -> AppError {
     AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
+// ─── Install straight from the hub package registry ──────────────────────────
+
+/// Body of `POST /api/marketplace/hub/install`.
+#[derive(Deserialize)]
+pub struct HubInstallBody {
+    /// `scope/name`, `@scope/name`, or a bare `name` (scope defaults to
+    /// `senclaw`).
+    slug: String,
+    /// Exact version; the `latest` dist-tag when omitted.
+    #[serde(default)]
+    version: Option<String>,
+    /// Hub base URL. Defaults to the built-in hub.
+    #[serde(default)]
+    hub: Option<String>,
+    /// Artifact platform; this machine's when omitted.
+    #[serde(default)]
+    platform: Option<String>,
+    /// Install even if the pre-install security scan blocks it.
+    #[serde(default)]
+    force: bool,
+}
+
+/// POST /api/marketplace/hub/install — fetch a package from the hub REGISTRY
+/// and install it.
+///
+/// The Marketplace browser reads `/marketplace.json`, which by format is a
+/// plugin index — a hub that publishes apps therefore browses as an empty
+/// catalog while its packages are perfectly installable. The registry
+/// (`/api/v1/packages/{scope}/{name}`) is the surface that serves those, and
+/// this is the same path `senclaw hub install` takes: resolve → download →
+/// verify the SHA-512 the hub published → hand the bytes to the Space App
+/// installer. The digest check is why this is worth an endpoint rather than
+/// pointing the UI at a download URL.
+pub async fn marketplace_hub_install(
+    State(s): State<Arc<UiState>>,
+    Json(body): Json<HubInstallBody>,
+) -> Result<axum::response::Response, AppError> {
+    use crate::marketplace::{publish, registry};
+
+    let hub = body
+        .hub
+        .filter(|h| !h.trim().is_empty())
+        .unwrap_or_else(|| publish::DEFAULT_HUB.to_string());
+    let (scope, name) = registry::parse_slug(&body.slug)
+        .map_err(|e| AppError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    let host = body
+        .platform
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(publish::host_platform);
+
+    let pkg = registry::fetch_package(&hub, &scope, &name)
+        .await
+        // A typo and an unpublished package look the same from here, and both
+        // are the caller's problem rather than a server fault.
+        .map_err(|e| AppError(StatusCode::NOT_FOUND, e.to_string()))?;
+    let ver = registry::resolve_version(&pkg, body.version.as_deref())
+        .map_err(|e| AppError(StatusCode::NOT_FOUND, e.to_string()))?;
+    let dist = registry::select_dist(ver, &host)
+        .map_err(|e| AppError(StatusCode::NOT_FOUND, e.to_string()))?;
+
+    let bytes = registry::download_verified(dist)
+        .await
+        .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+    let origin = crate::marketplace::app_update::HubOrigin {
+        scope,
+        name,
+        version: Some(ver.version.clone()),
+        hub: Some(hub),
+        integrity: dist.integrity.clone(),
+        installed_at: Some(chrono::Utc::now().timestamp_millis()),
+    };
+
+    let out = super::space::install_app_from_zip(s, bytes, Some(origin), body.force).await?;
+    Ok(out.into_response())
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -588,4 +665,64 @@ pub(crate) async fn plugin_widget_static(
         )
         .body(Body::from(bytes))
         .unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── hub install body ────────────────────────────────────────────────────
+
+    /// The UI sends just a slug for the common case; everything else has to
+    /// default, or "install senclaw/clock" would need four fields the user
+    /// does not have.
+    #[test]
+    fn hub_install_body_needs_only_a_slug() {
+        let b: HubInstallBody = serde_json::from_str(r#"{"slug":"senclaw/clock"}"#).unwrap();
+        assert_eq!(b.slug, "senclaw/clock");
+        assert!(b.version.is_none(), "version must default to latest");
+        assert!(b.hub.is_none(), "hub must default to the built-in one");
+        assert!(b.platform.is_none(), "platform must default to this host");
+        assert!(!b.force, "the security scan must not be bypassed by default");
+    }
+
+    #[test]
+    fn hub_install_body_accepts_every_optional_field() {
+        let b: HubInstallBody = serde_json::from_str(
+            r#"{"slug":"@acme/thing","version":"1.2.3","hub":"https://h.example",
+                "platform":"darwin-arm64","force":true}"#,
+        )
+        .unwrap();
+        assert_eq!(b.version.as_deref(), Some("1.2.3"));
+        assert_eq!(b.hub.as_deref(), Some("https://h.example"));
+        assert_eq!(b.platform.as_deref(), Some("darwin-arm64"));
+        assert!(b.force);
+    }
+
+    /// A bare name is the shape package pages show; it must resolve under the
+    /// default scope rather than being rejected.
+    #[test]
+    fn a_bare_name_resolves_under_the_default_scope() {
+        let (scope, name) = crate::marketplace::registry::parse_slug("clock").unwrap();
+        assert_eq!(scope, crate::marketplace::registry::DEFAULT_SCOPE);
+        assert_eq!(name, "clock");
+    }
+
+    /// Blank strings are what an empty text field posts; they must fall back
+    /// to the defaults instead of becoming an empty hub URL or platform.
+    #[test]
+    fn blank_optional_strings_fall_back_to_defaults() {
+        let b: HubInstallBody =
+            serde_json::from_str(r#"{"slug":"clock","hub":"  ","platform":""}"#).unwrap();
+        let hub = b
+            .hub
+            .filter(|h| !h.trim().is_empty())
+            .unwrap_or_else(|| crate::marketplace::publish::DEFAULT_HUB.to_string());
+        let host = b
+            .platform
+            .filter(|p| !p.trim().is_empty())
+            .unwrap_or_else(crate::marketplace::publish::host_platform);
+        assert_eq!(hub, crate::marketplace::publish::DEFAULT_HUB);
+        assert!(!host.is_empty());
+    }
 }

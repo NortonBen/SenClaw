@@ -3328,16 +3328,36 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
                 ..sort((a, b) =>
                     '${a.$2['name']}'.compareTo('${b.$2['name']}'));
               if (list.isEmpty) {
+                if (all.isNotEmpty) {
+                  return Center(
+                      child: Text(context.tr('Nothing matches your filter'),
+                          style: TextStyle(color: c.textMuted)));
+                }
+                // An empty catalog is usually not a fault: `marketplace.json`
+                // is a PLUGIN index, so a hub that publishes apps browses as
+                // empty while its packages install perfectly by slug. Say so,
+                // and offer the install that actually works.
                 return Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                          context.tr(all.isEmpty
-                              ? 'Catalog is empty'
-                              : 'Nothing matches your filter'),
-                          style: TextStyle(color: c.textMuted)),
-                      if (all.isEmpty) ...[
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 460),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(context.tr('Catalog is empty'),
+                            style: TextStyle(color: c.textMuted)),
+                        const SizedBox(height: AppTokens.s8),
+                        Text(
+                          context.tr(
+                              'A hub catalog only lists plugins. Apps, skills '
+                              'and workflows are installed by name from the '
+                              'same hub.'),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: c.textMuted, fontSize: 12),
+                        ),
+                        const SizedBox(height: AppTokens.s16),
+                        _HubSlugInstaller(onInstalled: () {
+                          ref.invalidate(marketplaceCatalogProvider);
+                        }),
                         const SizedBox(height: AppTokens.s8),
                         TextButton.icon(
                           onPressed: () => _syncAll(),
@@ -3345,7 +3365,7 @@ class _MarketplaceTabState extends ConsumerState<_MarketplaceTab> {
                           label: Text(context.tr('Sync all sources')),
                         ),
                       ],
-                    ],
+                    ),
                   ),
                 );
               }
@@ -4280,6 +4300,89 @@ class _ClawHubDialogState extends ConsumerState<_ClawHubDialog> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Install a hub package by `scope/name`.
+///
+/// The browsable catalog (`marketplace.json`) carries plugins only, so apps,
+/// skills and workflows published to a hub are invisible there no matter how
+/// many times the user syncs. This posts to the registry install endpoint,
+/// which resolves the version, verifies the published SHA-512 and hands the
+/// bytes to the Space App installer — the same path `senclaw hub install`
+/// takes.
+class _HubSlugInstaller extends ConsumerStatefulWidget {
+  const _HubSlugInstaller({this.onInstalled});
+  final VoidCallback? onInstalled;
+
+  @override
+  ConsumerState<_HubSlugInstaller> createState() => _HubSlugInstallerState();
+}
+
+class _HubSlugInstallerState extends ConsumerState<_HubSlugInstaller> {
+  final _controller = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _install() async {
+    final slug = _controller.text.trim();
+    if (slug.isEmpty || _busy) return;
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(apiClientProvider)
+          .post('/api/marketplace/hub/install', body: {'slug': slug});
+      if (!mounted) return;
+      _controller.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${context.tr('Installed')} $slug')));
+      widget.onInstalled?.call();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$slug: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _controller,
+            enabled: !_busy,
+            onSubmitted: (_) => _install(),
+            style: TextStyle(color: c.textPrimary, fontSize: 13),
+            decoration: InputDecoration(
+              isDense: true,
+              border: const OutlineInputBorder(),
+              hintText: context.tr('Install by name, e.g. senclaw/clock'),
+              hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
+            ),
+          ),
+        ),
+        const SizedBox(width: AppTokens.s8),
+        FilledButton(
+          onPressed: _busy ? null : _install,
+          child: _busy
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : Text(context.tr('Install')),
+        ),
+      ],
     );
   }
 }

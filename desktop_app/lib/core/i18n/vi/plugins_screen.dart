@@ -176,6 +176,13 @@ const Map<String, String> viPluginsScreen = {
   'No marketplace sources — add one to browse':
       'Chưa có nguồn Marketplace — thêm một nguồn để duyệt',
   'Catalog is empty': 'Danh mục trống',
+  'A hub catalog only lists plugins. Apps, skills and workflows are installed '
+          'by name from the same hub.':
+      'Danh mục hub chỉ liệt kê plugin. App, skill và workflow được cài theo '
+          'tên từ chính hub đó.',
+  'Install by name, e.g. senclaw/clock':
+      'Cài theo tên, ví dụ senclaw/clock',
+  'Install': 'Cài',
   'Nothing matches your filter': 'Không có gì khớp bộ lọc',
   'Sync all sources': 'Đồng bộ tất cả nguồn',
   'Previous page': 'Trang trước',

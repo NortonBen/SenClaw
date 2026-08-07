@@ -39,7 +39,8 @@ use super::local_models::{
     local_models_unload_all, local_models_use_as_llm,
 };
 use super::marketplace::{
-    marketplace_mcp_status, marketplace_mcp_use_tools, marketplace_plugin_install,
+    marketplace_hub_install, marketplace_mcp_status, marketplace_mcp_use_tools,
+    marketplace_plugin_install,
     marketplace_plugin_toggle, marketplace_plugin_uninstall, marketplace_source_catalog,
     marketplace_source_disable_all, marketplace_source_enable_all, marketplace_source_get,
     marketplace_sources_add, marketplace_sources_delete, marketplace_sources_list,
@@ -277,6 +278,7 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/marketplace/sources/reorder",
             post(marketplace_sources_reorder),
         )
+        .route("/api/marketplace/hub/install", post(marketplace_hub_install))
         .route(
             "/api/marketplace/sources/:id",
             get(marketplace_source_get).delete(marketplace_sources_delete),
