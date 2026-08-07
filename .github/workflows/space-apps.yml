@@ -165,11 +165,23 @@ jobs:
           path: apps/${{ matrix.app.dir }}/${{ matrix.app.zip }}
           if-no-files-found: error
 
-  # Attach every built zip to the GitHub Release on tag pushes. `always()`
-  # because either family may have been legitimately skipped (unchanged).
+  # Attach every built zip to the GitHub Release on tag pushes.
+  #
+  # `always()` because either family may legitimately be *skipped* — a run
+  # where nothing in it changed produces no matrix. What must not happen is a
+  # *failure* reaching the release: without the result guards a tag where some
+  # apps failed to compile would still attach the zips that did build and
+  # report success, shipping a release that is quietly missing installers.
+  # A published release asset cannot be corrected in place, only superseded.
+  #
+  # The job ids contain a hyphen, so these have to be bracket-indexed —
+  # `needs.rust-apps.result` parses the `-` as subtraction.
   release:
     name: Attach zips to release
-    if: always() && startsWith(github.ref, 'refs/tags/v')
+    if: |
+      always() && startsWith(github.ref, 'refs/tags/v')
+      && needs['rust-apps'].result != 'failure' && needs['rust-apps'].result != 'cancelled'
+      && needs['node-apps'].result != 'failure' && needs['node-apps'].result != 'cancelled'
     needs: [changes, rust-apps, node-apps]
     runs-on: ubuntu-22.04
     permissions:
