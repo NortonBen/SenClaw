@@ -5,6 +5,7 @@
   "icon": "S",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./ssh-manager",
     "healthPath": "/"
   },

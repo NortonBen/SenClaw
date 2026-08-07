@@ -5,6 +5,7 @@
   "icon": "📧",
   "runtime": {
     "kind": "server",
+    "mode": "background",
     "start": "./email",
     "healthPath": "/",
     "port": 8082
