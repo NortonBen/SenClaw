@@ -21,6 +21,7 @@ that closes the listener and runs your ``on_shutdown``.
 
 from __future__ import annotations
 
+import hmac
 import json
 import mimetypes
 import os
@@ -31,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 
-from .client import bind_host, port as env_port
+from .client import HEADER_APP_TOKEN, app_token_from_env, bind_host, port as env_port
 
 Handler = Callable[["Request"], Any]
 
@@ -75,6 +76,30 @@ class Response:
             self.body = body
 
 
+def _authorized(req: "Request", path: str, token: str, skip: list[str]) -> bool:
+    """Whether this request carries the app's access token, or is exempt."""
+    for pattern in skip:
+        if not pattern:
+            continue
+        if pattern.endswith("/*"):
+            if path.startswith(pattern[:-1]):
+                return True
+        elif path == pattern:
+            return True
+    # Header names are case-insensitive on the wire; http.server hands them
+    # back as sent, so compare folded rather than by exact key.
+    presented = ""
+    wanted = HEADER_APP_TOKEN.lower()
+    for name, value in req.headers.items():
+        if name.lower() == wanted:
+            presented = value.strip()
+            break
+    if not presented:
+        presented = (req.param("app_token") or "").strip()
+    # Constant time: a plain `==` on a secret leaks the matched prefix length.
+    return hmac.compare_digest(presented, token)
+
+
 def serve(
     routes: dict[tuple[str, str], Handler] | None = None,
     *,
@@ -85,16 +110,35 @@ def serve(
     on_shutdown: Callable[[], None] | None = None,
     default_port: int = 0,
     log: Callable[[str], None] = print,
+    require_app_token: bool = False,
+    auth_skip_paths: list[str] | None = None,
 ) -> None:
     """Run the app's HTTP server until it is stopped. Blocks.
 
     ``routes`` maps ``(method, path)`` to a handler; a path ending in ``/*``
     matches by prefix, and the handler gets the full path.
+
+    ``require_app_token`` closes the app's own API to everything except the
+    daemon. An app's REST and MCP endpoints have no authentication of their own:
+    the port is open to every process on the machine. With this on, the only
+    caller that gets through is the daemon — its proxy stamps the app's access
+    token on every request it forwards (the UI iframe, the app's own fetches,
+    MCP tool calls) — and a direct hit on the port answers 401.
+
+    Off by default, because it breaks two real patterns that talk to the port
+    directly: a browser extension dialling ``ws://127.0.0.1:<port>``, and a
+    developer's curl. Both are served by ``auth_skip_paths`` (exact paths, or a
+    trailing ``/*`` prefix). ``health_path`` is always exempt — the daemon's
+    health check decides whether the app started, and it runs before anything is
+    proxied. With no token in the environment the guard is inert, so a bare
+    ``python app.py`` still works.
     """
     routes = dict(routes or {})
     listen_host = bind_host()
     listen_port = env_port(default_port)
     static_root = Path(static_dir).resolve() if static_dir else None
+    guard_token = app_token_from_env() if require_app_token else ""
+    skip_paths = [health_path, *(auth_skip_paths or [])]
 
     class App(BaseHTTPRequestHandler):
         # The daemon's log file is the app's log file. Per-request lines from
@@ -122,6 +166,17 @@ def serve(
             req = Request(
                 self.command, path, parse_qs(split.query), body, dict(self.headers.items())
             )
+
+            if guard_token and not _authorized(req, path, guard_token, skip_paths):
+                return self._send(
+                    Response(
+                        {
+                            "error": "this app only answers requests from the SenClaw daemon",
+                            "code": "app_token_required",
+                        },
+                        status=401,
+                    )
+                )
 
             if mcp_path and path == mcp_path and mcp_handler:
                 try:

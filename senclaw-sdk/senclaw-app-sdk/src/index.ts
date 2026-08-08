@@ -7,7 +7,56 @@ export type SenclawSpaceEnv = {
   configEndpoint?: string;
   sqliteEndpoint?: string;
   mcpRegisterEndpoint?: string;
+  /**
+   * This app's access token, from `SENCLAW_TOKEN_ACCESS_APP`.
+   *
+   * The daemon mints one per installed app and puts it in the launched
+   * process's environment. Presenting it on `/api/space/apps/<id>/…` is what
+   * tells the daemon *which* app is calling: a token is bound to one app id,
+   * and using it against another is refused. Without it, any local process that
+   * knows an app's id — which is public — could read that app's settings, query
+   * its database and drive its AI bridge.
+   *
+   * Empty in the browser by design: the app's own page is trusted same-origin
+   * and a secret handed to page JS is a secret in every extension the user has
+   * installed. Only the app's server process gets one.
+   */
+  appToken?: string;
+  /** Space-App API contract version, from `SENCLAW_API_VERSION`. */
+  apiVersion?: number;
 };
+
+/** Env var carrying this app's access token into its process. */
+export const ENV_APP_TOKEN = 'SENCLAW_TOKEN_ACCESS_APP';
+
+/** Env var carrying the Space-App API contract version. */
+export const ENV_API_VERSION = 'SENCLAW_API_VERSION';
+
+/** Header the access token travels in. */
+export const HEADER_APP_TOKEN = 'X-SenClaw-App-Token';
+
+/** Header the contract version travels in, both directions. */
+export const HEADER_API_VERSION = 'X-SenClaw-Api-Version';
+
+/**
+ * The Space-App API contract this SDK is written against. Sent on every daemon
+ * call; a daemon serving an older contract answers 426 rather than
+ * half-answering.
+ */
+export const API_VERSION = 2;
+
+/** The access token the daemon issued this app, or `''` outside SenClaw. */
+export function appTokenFromEnv(): string {
+  if (typeof process === 'undefined') return '';
+  return (process.env[ENV_APP_TOKEN] ?? '').trim();
+}
+
+/** The contract version the daemon launched this app under. */
+export function apiVersionFromEnv(): number {
+  if (typeof process === 'undefined') return API_VERSION;
+  const n = Number.parseInt((process.env[ENV_API_VERSION] ?? '').trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : API_VERSION;
+}
 
 export type SqliteQueryResult<T = Record<string, unknown>> = {
   rows?: T[];
@@ -79,6 +128,8 @@ function fromProcessEnv(): Partial<SenclawSpaceEnv> {
     appId: process.env.SENCLAW_SPACE_APP_ID,
     apiBase: process.env.SENCLAW_SPACE_API_BASE,
     coreBase: process.env.SENCLAW_SPACE_CORE_BASE,
+    appToken: appTokenFromEnv() || undefined,
+    apiVersion: apiVersionFromEnv(),
   };
 }
 
@@ -127,7 +178,24 @@ export class SenclawSpace {
       configEndpoint: merged.configEndpoint ?? joinUrl(apiBase, `${appId}/config`),
       sqliteEndpoint: merged.sqliteEndpoint ?? joinUrl(apiBase, `${appId}/sqlite/query`),
       mcpRegisterEndpoint: merged.mcpRegisterEndpoint ?? joinUrl(apiBase, `${appId}/mcp/register`),
+      appToken: merged.appToken,
+      apiVersion: merged.apiVersion ?? API_VERSION,
     };
+  }
+
+  /**
+   * Every daemon call goes through here, so the app's identity is attached in
+   * one place rather than at nine call sites.
+   *
+   * An absent token is omitted rather than sent blank: the daemon would try to
+   * resolve `''`, refusing a call its default mode would have served. That is
+   * the normal state in the browser and when running the app by hand.
+   */
+  private req(url: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    if (this.env.appToken) headers.set(HEADER_APP_TOKEN, this.env.appToken);
+    if (this.env.apiVersion) headers.set(HEADER_API_VERSION, String(this.env.apiVersion));
+    return fetch(url, { ...init, headers });
   }
 
   /**
@@ -192,14 +260,14 @@ export class SenclawSpace {
   }
 
   async getConfig<T = unknown>(key: string): Promise<T | null> {
-    const response = await fetch(`${this.env.configEndpoint}/${encodeURIComponent(key)}`);
+    const response = await this.req(`${this.env.configEndpoint}/${encodeURIComponent(key)}`);
     if (response.status === 404) return null;
     const payload = await parseResponse<{ value: T }>(response);
     return payload.value;
   }
 
   async setConfig<T = unknown>(key: string, value: T): Promise<T> {
-    const response = await fetch(`${this.env.configEndpoint}/${encodeURIComponent(key)}`, {
+    const response = await this.req(`${this.env.configEndpoint}/${encodeURIComponent(key)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value }),
@@ -209,18 +277,18 @@ export class SenclawSpace {
   }
 
   async deleteConfig(key: string): Promise<void> {
-    await parseResponse(await fetch(`${this.env.configEndpoint}/${encodeURIComponent(key)}`, { method: 'DELETE' }));
+    await parseResponse(await this.req(`${this.env.configEndpoint}/${encodeURIComponent(key)}`, { method: 'DELETE' }));
   }
 
   async listConfig(): Promise<Array<{ key: string; value: unknown; updated_at: number }>> {
     const payload = await parseResponse<{ items: Array<{ key: string; value: unknown; updated_at: number }> }>(
-      await fetch(this.env.configEndpoint ?? '')
+      await this.req(this.env.configEndpoint ?? '')
     );
     return payload.items;
   }
 
   async sqlite<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<SqliteQueryResult<T>> {
-    return parseResponse<SqliteQueryResult<T>>(await fetch(this.env.sqliteEndpoint ?? '', {
+    return parseResponse<SqliteQueryResult<T>>(await this.req(this.env.sqliteEndpoint ?? '', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sql, params }),
@@ -228,7 +296,7 @@ export class SenclawSpace {
   }
 
   async registerMcp(registration: McpRegistration): Promise<unknown> {
-    return parseResponse(await fetch(this.env.mcpRegisterEndpoint ?? '', {
+    return parseResponse(await this.req(this.env.mcpRegisterEndpoint ?? '', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(registration),
@@ -236,7 +304,7 @@ export class SenclawSpace {
   }
 
   async core<T = unknown>(path: string, init?: RequestInit): Promise<T> {
-    return parseResponse<T>(await fetch(joinUrl(this.env.coreBase ?? '/api', path), init));
+    return parseResponse<T>(await this.req(joinUrl(this.env.coreBase ?? '/api', path), init));
   }
 
   /**
@@ -251,7 +319,7 @@ export class SenclawSpace {
    * wrong key".
    */
   async bridge<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T> {
-    const result = await parseResponse<T>(await fetch(this.env.bridgeEndpoint ?? '', {
+    const result = await parseResponse<T>(await this.req(this.env.bridgeEndpoint ?? '', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, payload }),

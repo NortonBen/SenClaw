@@ -23,6 +23,7 @@ package senclaw
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,6 +76,27 @@ type Config struct {
 	// Middleware wraps the whole handler, outermost first. Use it for request
 	// logging or auth of your own; the daemon adds none.
 	Middleware []func(http.Handler) http.Handler
+
+	// RequireAppToken refuses any request that does not carry this app's access
+	// token, closing the app's own API to everything except the daemon.
+	//
+	// An app's REST and MCP endpoints have no authentication of their own: the
+	// port is open to every process on the machine, and the app id in a URL is
+	// public. With this on, the only caller that gets through is the daemon —
+	// its proxy stamps the token on every request it forwards (the UI iframe,
+	// the app's own fetches, MCP tool calls), and a direct hit on the port by
+	// anything else answers 401.
+	//
+	// Off by default, because turning it on breaks two real patterns that talk
+	// to the port directly: a browser extension dialling ws://127.0.0.1:<port>,
+	// and a developer's curl. Both are served by AuthSkipPaths.
+	RequireAppToken bool
+
+	// AuthSkipPaths are exempt from RequireAppToken, matched exactly or by a
+	// trailing /* prefix. The health path is always exempt — the daemon's
+	// health check is what decides the app started, and it runs before the app
+	// is ever proxied to.
+	AuthSkipPaths []string
 }
 
 // Handler builds the app's http.Handler without listening, which is what tests
@@ -140,10 +162,60 @@ func Handler(cfg Config) http.Handler {
 		JSON(w, http.StatusNotFound, map[string]any{"error": "not found", "path": urlPath})
 	})
 
+	if cfg.RequireAppToken {
+		h = RequireAppToken(AppTokenFromEnv(), append([]string{healthPath}, cfg.AuthSkipPaths...))(h)
+	}
 	for i := len(cfg.Middleware) - 1; i >= 0; i-- {
 		h = cfg.Middleware[i](h)
 	}
 	return h
+}
+
+// RequireAppToken is the middleware behind [Config.RequireAppToken], exported
+// for apps that build their own handler chain.
+//
+// token is what the request must present in HeaderAppToken — normally
+// [AppTokenFromEnv]. An empty token disables the check rather than locking the
+// app out of itself: that is what an app running outside SenClaw sees, and
+// answering 401 to every request including the daemon's health check would turn
+// "no token issued" into "app permanently down".
+func RequireAppToken(token string, skip []string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if strings.TrimSpace(token) == "" {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			urlPath := path.Clean("/" + r.URL.Path)
+			for _, s := range skip {
+				if s == "" {
+					continue
+				}
+				if strings.HasSuffix(s, "/*") {
+					if strings.HasPrefix(urlPath, strings.TrimSuffix(s, "*")) {
+						next.ServeHTTP(w, r)
+						return
+					}
+				} else if urlPath == s {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			presented := strings.TrimSpace(r.Header.Get(HeaderAppToken))
+			if presented == "" {
+				presented = strings.TrimSpace(r.URL.Query().Get("app_token"))
+			}
+			// Constant time: a byte-by-byte compare on a secret leaks the
+			// length of the matched prefix through timing.
+			if subtle.ConstantTimeCompare([]byte(presented), []byte(token)) != 1 {
+				JSON(w, http.StatusUnauthorized, map[string]any{
+					"error": "this app only answers requests from the SenClaw daemon",
+					"code":  "app_token_required",
+				})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // Serve runs the app's HTTP server until the daemon stops it. It blocks, and

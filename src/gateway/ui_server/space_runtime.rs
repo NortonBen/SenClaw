@@ -392,7 +392,7 @@ pub(crate) async fn space_app_runtime(
         "launch": {
             "cwd": app_dir.to_string_lossy(),
             "command": manifest.get("runtime").and_then(|r| r.get("start")).and_then(Value::as_str),
-            "env": launch_env(&info, s.config.ui_server.port),
+            "env": launch_env(&info, s.config.ui_server.port, s.config.space_api_version),
         },
     })))
 }
@@ -561,6 +561,7 @@ pub(crate) async fn space_apps_sandbox_overview(
 fn launch_env(
     info: &Option<super::space_mcp::RuntimeInfo>,
     daemon_port: u16,
+    api_version: u32,
 ) -> Vec<(String, String)> {
     let mut env = vec![(
         "SENCLAW_BASE_URL".to_string(),
@@ -572,6 +573,16 @@ fn launch_env(
             env.push(("HTTPS_PROXY".to_string(), format!("http://127.0.0.1:{p}")));
         }
     }
+    env.push((crate::apps::token::ENV_API_VERSION.to_string(), api_version.to_string()));
+    // Named but not shown. This panel polls every three seconds and ends up in
+    // screenshots; the access token is fetched deliberately from
+    // `GET /api/space/apps/<id>/token` when someone actually needs it to run the
+    // app by hand. Listing the variable still answers "does this app have an
+    // identity", which is the question the panel is for.
+    env.push((
+        crate::apps::token::ENV_APP_TOKEN.to_string(),
+        "sca_… (GET /api/space/apps/<id>/token)".to_string(),
+    ));
     env
 }
 

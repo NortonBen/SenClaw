@@ -355,6 +355,18 @@ pub struct Config {
     /// the sweep is a lock and a subtraction per running app, and a coarser
     /// tick just makes the per-app `idleTimeoutSecs` less accurate.
     pub space_idle_sweep_secs: u64,
+    /// Space-App API contract version this daemon advertises
+    /// (`SENCLAW_API_VERSION`). Injected into every app process, sent back on
+    /// every app-scoped response, and compared against the version an app
+    /// declares. Override only to pin an older contract while debugging — the
+    /// default is the compiled [`crate::apps::token::API_VERSION`].
+    pub space_api_version: u32,
+    /// What happens to an app-scoped request that carries no access token
+    /// (`SENCLAW_APP_TOKEN_MODE`: `off` | `warn` | `strict`). Default `off`,
+    /// so apps built before per-app tokens keep working; a token that *is*
+    /// present is verified and scoped in every mode. See
+    /// [`crate::apps::token::TokenMode`] and docs/space-app-api-token.md.
+    pub space_app_token_mode: crate::apps::token::TokenMode,
     pub ws_port: u16,
     /// POSIX shell override for workflow script steps
     /// (`SENCLAW_WORKFLOW_SHELL`). None = auto (`/bin/sh` on POSIX).
@@ -667,6 +679,14 @@ impl Config {
             },
             space_supervise_secs: env_int("SENCLAW_SPACE_SUPERVISE_SECS", 20),
             space_idle_sweep_secs: env_int("SENCLAW_SPACE_IDLE_SWEEP_SECS", 10),
+            space_api_version: env_int(
+                "SENCLAW_API_VERSION",
+                crate::apps::token::API_VERSION,
+            )
+            .max(crate::apps::token::MIN_API_VERSION),
+            space_app_token_mode: crate::apps::token::TokenMode::parse(
+                &env::var("SENCLAW_APP_TOKEN_MODE").unwrap_or_default(),
+            ),
             ws_port: env_int("SENCLAW_WS_PORT", 18789),
             workflow_shell: env::var("SENCLAW_WORKFLOW_SHELL")
                 .ok()

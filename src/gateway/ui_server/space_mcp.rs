@@ -125,6 +125,10 @@ pub struct SpaceMcpLauncher {
     /// Cleared by an explicit start, and by anything that uses the app.
     user_stopped: Mutex<std::collections::HashSet<String>>,
     http: reqwest::Client,
+    /// Space-App API contract version stamped into every app's environment
+    /// (`SENCLAW_API_VERSION`). Carried here because the launcher is the one
+    /// place that builds an app's environment and it holds no `Config`.
+    api_version: u32,
 }
 
 impl Default for SpaceMcpLauncher {
@@ -135,6 +139,13 @@ impl Default for SpaceMcpLauncher {
 
 impl SpaceMcpLauncher {
     pub fn new() -> Self {
+        Self::with_api_version(crate::apps::token::API_VERSION)
+    }
+
+    /// The daemon passes `config.space_api_version`, which an operator may pin
+    /// with `SENCLAW_API_VERSION` while debugging an app against an older
+    /// contract.
+    pub fn with_api_version(api_version: u32) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
@@ -146,6 +157,7 @@ impl SpaceMcpLauncher {
             adopted: Mutex::new(std::collections::HashSet::new()),
             user_stopped: Mutex::new(std::collections::HashSet::new()),
             http,
+            api_version,
         }
     }
 
@@ -311,7 +323,7 @@ impl SpaceMcpLauncher {
 
         let requires = Requires::parse(manifest);
         let port = self
-            .ensure_server_running(app_id, app_dir, &spec, &requires, base_url)
+            .ensure_server_running(db, app_id, app_dir, &spec, &requires, base_url)
             .await?;
         // Whoever asked for this is about to use it.
         self.touch(app_id).await;
@@ -362,7 +374,7 @@ impl SpaceMcpLauncher {
                 // no entry, and nothing would ever call it. The reaper stops it
                 // a minute later, so this costs one launch per app, ever.
                 match self
-                    .register_session_mcp(manager, &app_id, &app_dir, &manifest, base_url)
+                    .register_session_mcp(db, manager, &app_id, &app_dir, &manifest, base_url)
                     .await
                 {
                     Ok(Some(name)) => {
@@ -410,6 +422,7 @@ impl SpaceMcpLauncher {
     /// and is launched instead, once, to learn them.
     async fn register_session_mcp(
         &self,
+        db: &Db,
         manager: &McpManager,
         app_id: &str,
         app_dir: &Path,
@@ -438,7 +451,8 @@ impl SpaceMcpLauncher {
             ));
         }
         let origin = session_mcp_origin(base_url, app_id);
-        let config = build_mcp_config(&name, &mcp, app_id, base_url, Some(&origin), true)?;
+        let mut config = build_mcp_config(&name, &mcp, app_id, base_url, Some(&origin), true)?;
+        stamp_app_identity(&mut config, db, app_id, self.api_version);
         manager
             .add_or_update_offline(config, McpScopeType::Project, cached)
             .await
@@ -597,7 +611,14 @@ impl SpaceMcpLauncher {
         // Launch a server runtime, if declared, and record the running origin.
         let origin = if spec.is_server {
             let port = self
-                .ensure_server_running(app_id, app_dir, &spec, &Requires::parse(&manifest), base_url)
+                .ensure_server_running(
+                    db,
+                    app_id,
+                    app_dir,
+                    &spec,
+                    &Requires::parse(&manifest),
+                    base_url,
+                )
                 .await
                 .with_context(|| format!("launch server app '{app_id}'"))?;
             let origin = format!("http://127.0.0.1:{port}");
@@ -635,7 +656,9 @@ impl SpaceMcpLauncher {
             return Ok(None);
         }
         let name = mcp_server_name(&mcp, app_id);
-        let config = build_mcp_config(&name, &mcp, app_id, base_url, mcp_origin.as_deref(), session)?;
+        let mut config =
+            build_mcp_config(&name, &mcp, app_id, base_url, mcp_origin.as_deref(), session)?;
+        stamp_app_identity(&mut config, db, app_id, self.api_version);
         manager
             .add_or_update(config, McpScopeType::Project)
             .await
@@ -660,6 +683,7 @@ impl SpaceMcpLauncher {
     /// fixed port) is reused rather than double-spawned.
     async fn ensure_server_running(
         &self,
+        db: &Db,
         app_id: &str,
         app_dir: &Path,
         spec: &RuntimeSpec,
@@ -850,10 +874,22 @@ impl SpaceMcpLauncher {
             .env("SENCLAW_SPACE_APP_ID", app_id)
             .env("SENCLAW_SPACE_LOG_FILE", &log_path)
             .stdin(Stdio::null())
+            // Placeholder so the two SenClaw identity variables are always set
+            // in the child, even on the error path below — an app that reads
+            // an *inherited* SENCLAW_TOKEN_ACCESS_APP from the daemon's own
+            // environment would authenticate as whatever the operator exported.
+            .env_remove(crate::apps::token::ENV_APP_TOKEN)
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr))
             .kill_on_drop(true);
         for (k, v) in &launch.env {
+            cmd.env(k, v);
+        }
+        // This app's identity to the daemon: the access token it presents on
+        // /api/space/apps/<id>/… and the API contract it was launched under.
+        // Minted on first launch, so an app installed before the feature gets
+        // one without a migration. See src/apps/token.rs.
+        for (k, v) in crate::apps::token::launch_env(db, app_id, self.api_version) {
             cmd.env(k, v);
         }
         // The interpreter environment the prepare step produced (a Python
@@ -1604,6 +1640,40 @@ fn update_app_manifest(db: &Db, app_id: &str, manifest: &Value) {
         )?;
         Ok(())
     });
+}
+
+/// Stamp the app's identity onto its registered MCP server config.
+///
+/// Two transports, two carriers, one reason: whatever dials this server must be
+/// able to prove which app it is addressing.
+///
+/// - **stdio** — the child process is the app, so the token goes in its
+///   environment exactly as it does for a server app.
+/// - **http / sse** — the token travels as a header on every call. This is what
+///   keeps a *background* app reachable once it enforces the guard: the agent's
+///   MCP client dials the app's own port directly, never passing through the
+///   daemon's proxy, and would otherwise arrive with nothing to show.
+fn stamp_app_identity(
+    config: &mut ExternalMcpServerConfig,
+    db: &Db,
+    app_id: &str,
+    api_version: u32,
+) {
+    for (k, v) in crate::apps::token::launch_env(db, app_id, api_version) {
+        match config.transport {
+            McpTransportType::Stdio => {
+                config.env.insert(k, v);
+            }
+            _ => {
+                let header = if k == crate::apps::token::ENV_APP_TOKEN {
+                    crate::apps::token::HEADER_APP_TOKEN
+                } else {
+                    crate::apps::token::HEADER_API_VERSION
+                };
+                config.headers.insert(header.to_string(), v);
+            }
+        }
+    }
 }
 
 /// Map a manifest `mcp` block onto an `ExternalMcpServerConfig`. For a server

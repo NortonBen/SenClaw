@@ -1420,6 +1420,13 @@ pub(crate) async fn space_apps_delete(
             .await;
     }
 
+    // Drop the access token with the app. Ids are reusable — reinstalling
+    // `kanban`, or installing someone else's app under that id, must not
+    // inherit a secret an earlier install handed out.
+    if let Err(e) = crate::apps::token::revoke(&db, &id) {
+        tracing::warn!("[space] '{id}': access token was not revoked on uninstall: {e}");
+    }
+
     db.with_conn(|conn| {
         conn.execute("DELETE FROM space_apps WHERE id=?1", params![id])?;
         Ok(())
@@ -1977,6 +1984,11 @@ pub(crate) async fn space_apps_bridge(
                 "usage.report",
             ],
             "status": "available",
+            // What contract this daemon serves and whether it will start
+            // refusing tokenless calls — the one probe an SDK needs to know
+            // whether it is talking to a daemon older than its own features.
+            "apiVersion": s.config.space_api_version,
+            "appTokenMode": s.config.space_app_token_mode.as_str(),
         }))),
         // Run a FULL tool-enabled agent (default tools + the app's own MCP +
         // browser/web-search) headless and return its final text.
@@ -2360,12 +2372,19 @@ pub(crate) async fn space_app_env(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let app_dir = space_app_dir(&s, &id)?;
+    // Deliberately no access token: this endpoint feeds the app's *browser* UI,
+    // and a secret handed to page JS is a secret in every extension and
+    // devtools console the user has open. The browser reaches the daemon
+    // same-origin and is trusted for that; only the app's own process gets a
+    // token, in its environment. See src/apps/token.rs.
     Ok(Json(serde_json::json!({
         "appId": id,
         "apiBase": "/api/space/apps",
         "coreBase": "/api",
         "staticBase": format!("/api/space/apps/{id}/static"),
         "appDir": app_dir.to_string_lossy(),
+        "apiVersion": s.config.space_api_version,
+        "appTokenMode": s.config.space_app_token_mode.as_str(),
         "sqlite": {
             "endpoint": format!("/api/space/apps/{id}/sqlite/query"),
         },
@@ -2375,6 +2394,69 @@ pub(crate) async fn space_app_env(
         "mcp": {
             "registerEndpoint": format!("/api/space/apps/{id}/mcp/register"),
         },
+    })))
+}
+
+/// `GET /api/space/apps/:id/token` — the app's access token, for the operator.
+///
+/// Two audiences: the Web UI, which shows it so a developer can run the app by
+/// hand outside the daemon (`SENCLAW_TOKEN_ACCESS_APP=… npm start`), and the
+/// app itself, which already has the token and can use it to check that the
+/// daemon still agrees. Minting on read is deliberate — an app installed before
+/// this feature has no row until something asks.
+///
+/// Under `SENCLAW_APP_TOKEN_MODE=strict` an app presenting *another* app's
+/// token is already refused by the middleware; what is left is the operator's
+/// own UI, which is trusted to see it.
+pub(crate) async fn space_app_token_get(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    let token = crate::apps::token::ensure(db(&s)?, &id).map_err(internal)?;
+    Ok(Json(serde_json::json!({
+        "appId": id,
+        "token": token,
+        "envVar": crate::apps::token::ENV_APP_TOKEN,
+        "header": crate::apps::token::HEADER_APP_TOKEN,
+        "apiVersion": s.config.space_api_version,
+        "mode": s.config.space_app_token_mode.as_str(),
+    })))
+}
+
+/// `POST /api/space/apps/:id/token` — mint a new one and drop the old.
+///
+/// The running process still holds the previous token in its environment, so
+/// the app is restarted here: leaving it running would leave it authenticating
+/// with a secret the daemon no longer accepts, which reads as "rotation broke
+/// my app" rather than "rotation worked".
+pub(crate) async fn space_app_token_rotate(
+    State(s): State<Arc<UiState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !valid_space_app_id(&id) {
+        return Err(AppError(StatusCode::BAD_REQUEST, "Invalid app id".into()));
+    }
+    let token = crate::apps::token::rotate(db(&s)?, &id).map_err(internal)?;
+    let restarted = match s.space_mcp_launcher.as_ref() {
+        Some(l) => {
+            let was_running = l.is_running(&id).await;
+            l.stop_app(&id).await;
+            was_running
+        }
+        None => false,
+    };
+    Ok(Json(serde_json::json!({
+        "appId": id,
+        "token": token,
+        "rotated": true,
+        // The app is stopped rather than restarted: a session app starts again
+        // on its next use, and a background app is brought back by the
+        // supervisor — both paths re-read the environment.
+        "stopped": restarted,
+        "apiVersion": s.config.space_api_version,
     })))
 }
 
@@ -3192,19 +3274,44 @@ pub(crate) async fn space_apps_proxy(
         _ => ensure_port().await?,
     };
 
+    // The app's own access token, so the app can tell a request that came
+    // through the daemon from one that arrived directly on its port. An app
+    // that opts into checking it (every SDK ships the guard) is then reachable
+    // only via this proxy, which is the only caller that can prove which app it
+    // is addressing.
+    let app_token = s
+        .db
+        .as_deref()
+        .and_then(|db| crate::apps::token::ensure(db, &id).ok());
+    let api_version = s.config.space_api_version.to_string();
+
     let forward = |port: u16| {
         let method = parts.method.clone();
         let headers = parts.headers.clone();
         let url = format!("http://127.0.0.1:{}{}{}", port, path_str, query_string);
         let body = body_bytes.clone();
+        let app_token = app_token.clone();
+        let api_version = api_version.clone();
         async move {
             let client = reqwest::Client::new();
             let mut builder = client.request(method, &url);
             for (name, value) in headers.iter() {
-                if name != axum::http::header::HOST {
-                    builder = builder.header(name, value);
+                // HOST would name the daemon, not the app. The two SenClaw
+                // headers are re-stamped below from what the *daemon* knows —
+                // forwarding a client's copy would let any page that can reach
+                // this route hand the app a token of its choosing.
+                if name == axum::http::header::HOST
+                    || name.as_str() == crate::apps::token::HEADER_APP_TOKEN
+                    || name.as_str() == crate::apps::token::HEADER_API_VERSION
+                {
+                    continue;
                 }
+                builder = builder.header(name, value);
             }
+            if let Some(t) = app_token.as_deref() {
+                builder = builder.header(crate::apps::token::HEADER_APP_TOKEN, t);
+            }
+            builder = builder.header(crate::apps::token::HEADER_API_VERSION, &api_version);
             builder.body(body).send().await
         }
     };

@@ -22,6 +22,30 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 
+#: Env var carrying this app's access token into its process, set by the daemon
+#: on every launch.
+#:
+#: The daemon mints one token per installed app. Presenting it on
+#: ``/api/space/apps/<id>/…`` is what tells the daemon *which* app is calling: a
+#: token is bound to one app id, and using it against another is refused.
+#: Without it, any local process that knows an app's id — which is public —
+#: could read that app's settings, query its database and drive its AI bridge.
+ENV_APP_TOKEN = "SENCLAW_TOKEN_ACCESS_APP"
+
+#: Env var carrying the Space-App API contract version.
+ENV_API_VERSION = "SENCLAW_API_VERSION"
+
+#: Header the token travels in.
+HEADER_APP_TOKEN = "X-SenClaw-App-Token"
+
+#: Header the contract version travels in, both directions.
+HEADER_API_VERSION = "X-SenClaw-Api-Version"
+
+#: The Space-App API contract this SDK is written against. Sent on every call;
+#: a daemon serving an older contract answers 426 rather than half-answering.
+API_VERSION = 2
+
+
 class SenclawError(RuntimeError):
     """The daemon answered, and the answer was no."""
 
@@ -102,6 +126,24 @@ def bind_host() -> str:
     return os.environ.get("SENCLAW_BIND_HOST", "127.0.0.1")
 
 
+def app_token_from_env(default: str = "") -> str:
+    """The access token the daemon issued this app, or ``""`` outside SenClaw.
+
+    Empty is not an error: a daemon on the default ``SENCLAW_APP_TOKEN_MODE=off``
+    serves tokenless calls exactly as it always did. Under ``strict`` they are
+    refused — which is the point.
+    """
+    return os.environ.get(ENV_APP_TOKEN, default).strip()
+
+
+def api_version_from_env() -> int:
+    """The contract version the daemon launched this app under."""
+    raw = os.environ.get(ENV_API_VERSION, "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return API_VERSION
+
+
 def port(default: int = 0) -> int:
     """The port the daemon assigned, from ``PORT``."""
     raw = os.environ.get("PORT", "").strip()
@@ -120,12 +162,19 @@ class SenclawSpace:
         app_id: str | None = None,
         base_url: str | None = None,
         timeout: float = 60.0,
+        app_token: str | None = None,
+        api_version: int | None = None,
     ) -> None:
         self.app_id = app_id or app_id_from_env()
         self.base_url = (
             base_url or os.environ.get("SENCLAW_BASE_URL") or "http://127.0.0.1:18788"
         ).rstrip("/")
         self.timeout = timeout
+        #: Sent on every call. Pass it explicitly when running the app by hand
+        #: against a live daemon — Plugins → Space Apps shows the token, as does
+        #: ``GET /api/space/apps/<id>/token``.
+        self.app_token = (app_token or app_token_from_env()).strip()
+        self.api_version = api_version or api_version_from_env()
 
     # -- plumbing ---------------------------------------------------------
 
@@ -143,6 +192,13 @@ class SenclawSpace:
         if body is not None:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
+        # Who is calling, and under which contract. An empty token is omitted
+        # rather than sent blank: the daemon would try to resolve "" and refuse
+        # a call that its default mode would have served.
+        if self.app_token:
+            headers[HEADER_APP_TOKEN] = self.app_token
+        if self.api_version:
+            headers[HEADER_API_VERSION] = str(self.api_version)
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:

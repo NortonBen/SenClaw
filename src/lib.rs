@@ -1739,7 +1739,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // stall daemon boot (the desktop startup gate waits on the UI port, which
     // is only opened after this section used to complete). Agents that start
     // before an app finishes registering simply see its MCP tools appear late.
-    let space_mcp_launcher = Arc::new(gateway::ui_server::space_mcp::SpaceMcpLauncher::new());
+    let space_mcp_launcher = Arc::new(
+        gateway::ui_server::space_mcp::SpaceMcpLauncher::with_api_version(cfg.space_api_version),
+    );
     {
         let apps_dir = cfg.paths.workspace_dir.join("space-apps");
         let base_url = format!("http://127.0.0.1:{}", cfg.ui_server.port);

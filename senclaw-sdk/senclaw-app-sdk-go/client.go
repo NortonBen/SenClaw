@@ -53,6 +53,58 @@ import (
 // SENCLAW_BASE_URL, which the daemon sets on every launch.
 const DefaultBaseURL = "http://127.0.0.1:18788"
 
+// The app's identity to the daemon.
+//
+// The daemon mints one access token per installed app and puts it in the
+// launched process's environment as EnvAppToken. Presenting it on
+// /api/space/apps/<id>/… is what tells the daemon *which* app is calling: a
+// token is bound to exactly one app id, and using it against another id is
+// refused. Without it, every local process that knows an app's id — which is
+// public — could read that app's settings, query its database and drive its AI
+// bridge.
+//
+// [Space] sends it on every call automatically. Nothing to do beyond running
+// the app through SenClaw.
+const (
+	// EnvAppToken carries the access token into the app process.
+	EnvAppToken = "SENCLAW_TOKEN_ACCESS_APP"
+	// EnvAPIVersion carries the Space-App API contract version.
+	EnvAPIVersion = "SENCLAW_API_VERSION"
+	// HeaderAppToken is where the token travels on a request.
+	HeaderAppToken = "X-SenClaw-App-Token"
+	// HeaderAPIVersion is where the contract version travels, both directions.
+	HeaderAPIVersion = "X-SenClaw-Api-Version"
+)
+
+// APIVersion is the Space-App API contract this SDK is written against.
+//
+// It is sent on every daemon call. A daemon that serves an older contract
+// answers 426 rather than half-answering, so an app pinned to a newer SDK than
+// its daemon fails at the first call with a message that says which is which.
+const APIVersion = 2
+
+// AppTokenFromEnv is the access token the daemon issued this app, or "" when
+// the app is running outside SenClaw (a bare `go run .`).
+//
+// Empty is not an error: a daemon running the default
+// SENCLAW_APP_TOKEN_MODE=off serves tokenless calls exactly as it always did.
+// Under `strict` those calls are refused, which is the point — see the daemon's
+// docs/space-app-api-token.md.
+func AppTokenFromEnv() string {
+	return strings.TrimSpace(os.Getenv(EnvAppToken))
+}
+
+// APIVersionFromEnv is the contract version the daemon launched this app under,
+// falling back to [APIVersion] when the app runs outside SenClaw.
+func APIVersionFromEnv() int {
+	if raw := strings.TrimSpace(os.Getenv(EnvAPIVersion)); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	return APIVersion
+}
+
 // Per-call ceilings, applied only when the caller's context carries no
 // deadline of its own. A model call is not a 60-second REST call and an agent
 // turn is not a model call.
@@ -150,6 +202,12 @@ type Space struct {
 	BaseURL string
 	HTTP    *http.Client
 	Timeout time.Duration
+	// AppToken is this app's access token, from EnvAppToken. Sent on every
+	// call; empty when the app runs outside SenClaw.
+	AppToken string
+	// APIVersion is the contract this client declares. Defaults to the version
+	// the daemon launched the app under, else [APIVersion].
+	APIVersion int
 }
 
 // Option configures a [Space].
@@ -171,14 +229,30 @@ func WithTimeout(d time.Duration) Option { return func(s *Space) { s.Timeout = d
 // timeout would cut a long model call short.
 func WithHTTPClient(c *http.Client) Option { return func(s *Space) { s.HTTP = c } }
 
+// WithAppToken overrides the access token from the environment. Pass it when
+// running the app by hand against a live daemon — Plugins → Space Apps shows
+// the token, or `GET /api/space/apps/<id>/token` returns it.
+func WithAppToken(token string) Option {
+	return func(s *Space) { s.AppToken = strings.TrimSpace(token) }
+}
+
+// WithAPIVersion pins the contract this client declares. Only useful when
+// deliberately testing against an older daemon; the default is right.
+func WithAPIVersion(v int) Option { return func(s *Space) { s.APIVersion = v } }
+
 // New builds a client from the environment the daemon sets, plus overrides.
 func New(opts ...Option) (*Space, error) {
 	s := &Space{
-		BaseURL: strings.TrimSpace(os.Getenv("SENCLAW_BASE_URL")),
-		Timeout: DefaultTimeout,
+		BaseURL:    strings.TrimSpace(os.Getenv("SENCLAW_BASE_URL")),
+		Timeout:    DefaultTimeout,
+		AppToken:   AppTokenFromEnv(),
+		APIVersion: APIVersionFromEnv(),
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	if s.APIVersion <= 0 {
+		s.APIVersion = APIVersion
 	}
 	if s.AppID == "" {
 		id, err := AppIDFromEnv("")
@@ -243,6 +317,16 @@ func (s *Space) do(ctx context.Context, method, path string, body any, timeout t
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	// Who is calling, and under which contract. The token is what lets the
+	// daemon scope this call to this app; sending nothing is allowed (and is
+	// what happens outside SenClaw) right up until the daemon is set to
+	// SENCLAW_APP_TOKEN_MODE=strict.
+	if s.AppToken != "" {
+		req.Header.Set(HeaderAppToken, s.AppToken)
+	}
+	if s.APIVersion > 0 {
+		req.Header.Set(HeaderAPIVersion, strconv.Itoa(s.APIVersion))
 	}
 
 	resp, err := s.HTTP.Do(req)

@@ -20,6 +20,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { timingSafeEqual } from 'node:crypto';
 import express, { type Request, type Response } from 'express';
 import { z, type ZodRawShape } from 'zod';
 
@@ -85,6 +86,18 @@ export interface ServeSpaceMcpOptions<T extends Record<string, unknown> = Record
   autoRegister?: boolean;
   /** Human-readable description used in the self-registration. */
   description?: string;
+  /**
+   * Refuse any request that does not carry this app's access token — see
+   * {@link requireAppToken}. `/health` is exempt automatically; add anything
+   * else a client dials directly with `authSkipPaths`.
+   *
+   * Off by default: turning it on breaks callers that talk to the port without
+   * going through the daemon, and that is a decision per app rather than a
+   * silent upgrade.
+   */
+  requireAppToken?: boolean;
+  /** Extra paths exempt from `requireAppToken` (exact, or a `/*` prefix). */
+  authSkipPaths?: string[];
 }
 
 /** Running server handle. */
@@ -124,6 +137,59 @@ function settingsMarkdown(settings: Record<string, unknown>, heading: string): s
     lines.push(`- **${key}**: ${Array.isArray(value) ? value.join(', ') : String(value)}`);
   }
   return lines.join('\n');
+}
+
+/**
+ * Express middleware that refuses any request not carrying this app's access
+ * token, closing the app's own API to everything except the SenClaw daemon.
+ *
+ * An app's REST and MCP endpoints have no authentication of their own: the port
+ * is open to every process on the machine, and the app id in a URL is public.
+ * With this mounted, the only caller that gets through is the daemon — its
+ * proxy stamps the token on every request it forwards (the UI iframe, the app's
+ * own fetches, MCP tool calls) — and a direct hit on the port answers 401.
+ *
+ * Two things are deliberately not refused:
+ *
+ * - **No token in the environment.** That is what a bare `npm start` outside
+ *   SenClaw looks like, and 401ing every request including the daemon's health
+ *   check would turn "no token issued" into "app permanently down".
+ * - **`skip` paths** (exact, or a trailing `/*` prefix). Pass the health path
+ *   and anything a browser extension dials directly — the daemon's health check
+ *   decides whether the app started, and it runs before anything is proxied.
+ *
+ * ```ts
+ * app.use(requireAppToken({ skip: ['/health', '/public/*'] }));
+ * ```
+ */
+export function requireAppToken(opts: { token?: string; skip?: string[] } = {}) {
+  const token = (opts.token ?? process.env.SENCLAW_TOKEN_ACCESS_APP ?? '').trim();
+  const skip = opts.skip ?? [];
+  return (req: Request, res: Response, next: () => void): void => {
+    if (!token) return next();
+    const path = req.path || req.url.split('?')[0];
+    for (const pattern of skip) {
+      if (!pattern) continue;
+      if (pattern.endsWith('/*') ? path.startsWith(pattern.slice(0, -1)) : path === pattern) {
+        return next();
+      }
+    }
+    const presented =
+      String(req.headers['x-senclaw-app-token'] ?? '').trim() ||
+      String((req.query as Record<string, unknown>)?.app_token ?? '').trim();
+    // Constant time: comparing secrets with === leaks the matched prefix
+    // length through timing.
+    const a = Buffer.from(presented);
+    const b = Buffer.from(token);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      res.status(401).json({
+        error: 'this app only answers requests from the SenClaw daemon',
+        code: 'app_token_required',
+      });
+      return;
+    }
+    next();
+  };
 }
 
 /**
@@ -261,6 +327,8 @@ export async function serveSpaceMcp<T extends Record<string, unknown> = Record<s
     registerTools,
     autoRegister = false,
     description,
+    requireAppToken: guard = false,
+    authSkipPaths = [],
   } = options;
 
   const space = SenclawSpace.forDaemon(appId, baseUrl);
@@ -278,6 +346,13 @@ export async function serveSpaceMcp<T extends Record<string, unknown> = Record<s
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
+
+  // Before anything else: only the daemon gets to talk to this port. Mounted
+  // ahead of the transport shim so an unauthorised caller never reaches the
+  // MCP machinery at all.
+  if (guard) {
+    app.use(requireAppToken({ skip: ['/health', ...authSkipPaths] }));
+  }
 
   // Compatibility shim: the SenClaw Rust MCP client sends no `Accept` header,
   // which the strict Streamable HTTP transport rejects with HTTP 406. The

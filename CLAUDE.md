@@ -328,12 +328,55 @@ Rules:
 [`tests/space_app_bind_loopback.rs`](tests/space_app_bind_loopback.rs) enforces all
 of the above on every `cargo test`.
 
+## Space App access token & API version
+
+Loopback is a boundary around the *machine*, not around an *app*: knowing an
+app's id (public) used to be enough for any local process — including another
+Space App — to drive its `/bridge` (a full tool-enabled agent), read its
+`/config` (API keys) and query its SQLite. So the daemon now mints **one access
+token per installed app** (`sca_<64 hex>`, table `space_app_tokens`), hands it to
+the app's process in **`SENCLAW_TOKEN_ACCESS_APP`**, and treats it as the app's
+name: a token presented against another id is **403 in every mode**.
+
+- **`SENCLAW_APP_TOKEN_MODE`** = `off` (default — tokenless calls served exactly
+  as before, so the installed fleet keeps working) | `warn` (served + one log
+  line per app) | `strict` (refused unless the caller is the daemon's own UI).
+  Strict only gates the app's *data* routes (`/bridge`, `/config`, `/sqlite/query`,
+  `/mcp/register`, `/env`, `/token`) — never management routes or `/proxy`,
+  `/static`.
+- **`SENCLAW_API_VERSION`** — Space-App contract version (now **2**). Injected
+  into every app, stamped on every app-scoped response, sent by every SDK. Older
+  contracts are served; a newer one gets **426**.
+- **Inbound**: the proxy stamps the token on everything it forwards (and strips
+  a client's copy), and MCP configs carry it in `headers`/`env` so a *background*
+  app — whose MCP client dials its port directly — still authenticates. Each SDK
+  ships an opt-in guard (`RequireAppToken` / `require_app_token` /
+  `requireAppToken`) that closes the app's own port to everything but the daemon.
+
+Rules for Claude:
+
+- **Strict mode is not a boundary against local malware.** Anything that can read
+  `~/.senclaw/senclaw.db` reads every token in it. The feature is app-vs-app
+  isolation, and it is only a real boundary combined with the per-app sandbox.
+- **Never turn the relay's `TrustedOperator` marker into a header.** It is a
+  request extension precisely because nothing on the network can forge one.
+- **Never drop the `sca_` prefix check** in `presented_token` — the daemon's own
+  API token arrives through the same `Authorization: Bearer` header.
+- `/env` must never carry the token: it feeds the app's *browser* UI.
+
+Model in [`src/apps/token.rs`](src/apps/token.rs), enforcement in
+[`src/gateway/ui_server/app_auth.rs`](src/gateway/ui_server/app_auth.rs). Full
+guide: [docs/space-app-api-token.md](docs/space-app-api-token.md).
+
 ## Daemon network binding & API token
 
 The daemon's own surface (UI HTTP 18788 + WS gateway 18789) binds `127.0.0.1`
 by default via `SENCLAW_UI_BIND_HOST` — a knob deliberately **separate** from
 the Space-App `SENCLAW_BIND_HOST` (apps have no auth; the env would propagate
-to them). Binding the daemon to a non-loopback host auto-enables token auth
+to them). Desktop users flip it at **Settings → General → Network access**
+(Private `127.0.0.1` / Public `0.0.0.0`); the choice is persisted in prefs and
+handed to the daemon at spawn time, so it needs a daemon restart to take
+effect. Binding the daemon to a non-loopback host auto-enables token auth
 (`src/gateway/ui_server/auth.rs`): every non-loopback peer must present the
 API token (`SENCLAW_API_TOKEN` env, else auto-generated `~/.senclaw/api_token`,
 0600) via `Authorization: Bearer`, `X-SenClaw-Token`, `?token=`, or the

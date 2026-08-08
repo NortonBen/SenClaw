@@ -267,3 +267,104 @@ test('forDaemon says what is missing rather than building a broken client', () =
     if (saved !== undefined) process.env.SENCLAW_SPACE_APP_ID = saved;
   }
 });
+
+// ---------------------------------------------------------------------------
+// The app's identity on the wire
+// ---------------------------------------------------------------------------
+//
+// The access token is what tells the daemon *which* app is calling. It travels
+// in a header, so it is invisible to the body-recording stub above — these
+// tests keep the headers.
+
+import { API_VERSION, HEADER_API_VERSION, HEADER_APP_TOKEN } from '../dist/index.js';
+import { requireAppToken } from '../dist/mcp.js';
+
+const TOKEN = 'sca_' + 'a'.repeat(64);
+
+async function headerRecordingDaemon() {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push(req.headers);
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{"items":[]}');
+    });
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  return { seen, port, close: () => new Promise(r => server.close(r)) };
+}
+
+test('every daemon call carries the access token and the contract version', async () => {
+  const d = await headerRecordingDaemon();
+  try {
+    const space = new SenclawSpace({
+      appId: 't',
+      apiBase: `http://127.0.0.1:${d.port}/api/space/apps`,
+      appToken: TOKEN,
+    });
+    await space.listConfig();
+    assert.equal(d.seen[0][HEADER_APP_TOKEN.toLowerCase()], TOKEN);
+    assert.equal(d.seen[0][HEADER_API_VERSION.toLowerCase()], String(API_VERSION));
+  } finally {
+    await d.close();
+  }
+});
+
+test('no token means no header, not an empty one', async () => {
+  // Running the app by hand, or in the browser. Sending the header blank would
+  // make the daemon try to resolve '' and refuse a call its default mode serves.
+  const d = await headerRecordingDaemon();
+  try {
+    const space = new SenclawSpace({
+      appId: 't',
+      apiBase: `http://127.0.0.1:${d.port}/api/space/apps`,
+      appToken: '',
+    });
+    await space.listConfig();
+    assert.equal(d.seen[0][HEADER_APP_TOKEN.toLowerCase()], undefined);
+  } finally {
+    await d.close();
+  }
+});
+
+test('the inbound guard refuses everyone but the daemon', async () => {
+  const guard = requireAppToken({ token: TOKEN, skip: ['/health', '/public/*'] });
+  const server = http.createServer((req, res) => {
+    // A minimal express-shaped request: the guard reads `path`, `headers`, `query`.
+    const url = new URL(req.url, 'http://x');
+    const shim = { path: url.pathname, url: req.url, headers: req.headers, query: {} };
+    const resShim = {
+      status(code) { res.statusCode = code; return this; },
+      json(payload) { res.end(JSON.stringify(payload)); },
+    };
+    guard(shim, resShim, () => { res.statusCode = 200; res.end('ok'); });
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  const call = (path, token) => fetch(`http://127.0.0.1:${port}${path}`, {
+    headers: token ? { [HEADER_APP_TOKEN]: token } : {},
+  }).then(r => r.status);
+  try {
+    assert.equal(await call('/api/notes', TOKEN), 200, "the daemon's own request must pass");
+    // What the guard exists to stop: another local process on the port.
+    assert.equal(await call('/api/notes', null), 401);
+    assert.equal(await call('/api/notes', 'sca_' + 'f'.repeat(64)), 401);
+    // The health check runs before anything is proxied; locking it out would
+    // make the app look permanently dead to the daemon.
+    assert.equal(await call('/health', null), 200);
+    assert.equal(await call('/public/logo.png', null), 200);
+  } finally {
+    await new Promise(r => server.close(r));
+  }
+});
+
+test('the guard is inert when no token was issued', async () => {
+  // A bare `npm start` outside SenClaw. Refusing everything would turn "not
+  // launched by SenClaw" into "app is down".
+  const guard = requireAppToken({ token: '' });
+  let passed = false;
+  guard({ path: '/api/x', url: '/api/x', headers: {}, query: {} }, null, () => { passed = true; });
+  assert.equal(passed, true);
+});

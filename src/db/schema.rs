@@ -668,6 +668,19 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
             last_seen_at INTEGER
         );
 
+        -- One access token per installed app: the identity it presents on
+        -- /api/space/apps/<id>/… so the daemon can tell app A's calls from
+        -- app B's. Minted on first launch, handed to the process in
+        -- SENCLAW_TOKEN_ACCESS_APP, deleted when the app is uninstalled so a
+        -- later app reusing the id cannot inherit it.
+        -- See src/apps/token.rs and docs/space-app-api-token.md.
+        CREATE TABLE IF NOT EXISTS space_app_tokens (
+            app_id      TEXT PRIMARY KEY,
+            token       TEXT NOT NULL UNIQUE,
+            created_at  INTEGER NOT NULL,
+            rotated_at  INTEGER
+        );
+
         CREATE TABLE IF NOT EXISTS space_app_config (
             app_id      TEXT NOT NULL,
             key         TEXT NOT NULL,
