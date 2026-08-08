@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show File;
+import 'dart:io' show File, InternetAddressType, NetworkInterface;
 import 'dart:math';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -14,6 +14,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 import '../chat/audio_service.dart' show audioServiceProvider;
 import 'package:qr_flutter/qr_flutter.dart';
+import '../../core/daemon/daemon_provider.dart';
+import '../../core/daemon/daemon_supervisor.dart';
 import '../../core/prefs.dart';
 import '../../core/i18n/l10n.dart';
 import '../../core/i18n/locale_provider.dart';
@@ -752,6 +754,246 @@ class _ApiTokenFieldState extends ConsumerState<_ApiTokenField> {
   }
 }
 
+/// Where the daemon listens: loopback only (private) or every interface
+/// (public / LAN).
+///
+/// The daemon reads this as `SENCLAW_UI_BIND_HOST` once, at startup, so the
+/// choice is persisted in prefs and handed to the supervisor — the running
+/// daemon keeps its socket until it is restarted, which this card offers
+/// inline rather than leaving as an unstated requirement.
+///
+/// Public is a real exposure decision, not a preference: the daemon then gates
+/// every /api route behind the API token for non-loopback peers (loopback —
+/// this app — stays exempt), so the panel points at where that token lives.
+class NetworkBindField extends ConsumerStatefulWidget {
+  const NetworkBindField({super.key});
+  @override
+  ConsumerState<NetworkBindField> createState() => _NetworkBindFieldState();
+}
+
+class _NetworkBindFieldState extends ConsumerState<NetworkBindField> {
+  /// What the user has chosen; the supervisor still reports what the RUNNING
+  /// daemon got, and the gap between the two is what the restart hint is for.
+  late bool _public;
+  bool _restarting = false;
+  List<String> _lanAddrs = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _public = ref.read(daemonSupervisorProvider).isPublicBind;
+    _loadLanAddresses();
+  }
+
+  Future<void> _loadLanAddresses() async {
+    if (kIsWeb) return;
+    try {
+      final ifs = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+        includeLinkLocal: false,
+      );
+      final addrs = [
+        for (final i in ifs)
+          for (final a in i.addresses) a.address,
+      ];
+      if (mounted) setState(() => _lanAddrs = addrs);
+    } catch (_) {
+      // No addresses is a fine answer — the hint just omits the URL.
+    }
+  }
+
+  Future<void> _choose(bool public) async {
+    setState(() => _public = public);
+    try {
+      await ref.read(prefsProvider).setBool(kBindPublicKey, public);
+    } catch (_) {}
+    ref.read(daemonSupervisorProvider).bindHost = public
+        ? DaemonSupervisor.kPublicBindHost
+        : DaemonSupervisor.kPrivateBindHost;
+  }
+
+  Future<void> _restartDaemon() async {
+    setState(() => _restarting = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(daemonSupervisorProvider).restart();
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(
+          content: Text(context.tr('Daemon restarted with the new setting.'))));
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _restarting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final sup = ref.watch(daemonSupervisorProvider);
+    final port = ref.watch(appConfigProvider).uiPort;
+    // An adopted daemon was started by something else (a terminal, a leftover
+    // process); our env would not have reached it whatever the setting says.
+    final adopted = sup.phase == DaemonPhase.adopted;
+    final needsRestart = sup.bindHostPending || adopted;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(
+        context.tr(
+            'Who can reach this daemon. Private keeps it on this machine; '
+            'Public lets phones and other computers on your network use it.'),
+        style: TextStyle(color: c.textSecondary, fontSize: 12),
+      ),
+      const SizedBox(height: AppTokens.s12),
+      Row(children: [
+        _BindCard(
+          icon: Icons.lock_outline_rounded,
+          label: context.tr('Private'),
+          detail: '127.0.0.1',
+          selected: !_public,
+          onTap: () => _choose(false),
+        ),
+        const SizedBox(width: AppTokens.s12),
+        _BindCard(
+          icon: Icons.public_rounded,
+          label: context.tr('Public'),
+          detail: '0.0.0.0',
+          selected: _public,
+          onTap: () => _choose(true),
+        ),
+      ]),
+      if (_public) ...[
+        const SizedBox(height: AppTokens.s12),
+        _NoticeBox(
+          tone: _NoticeTone.warning,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              context.tr(
+                  'Anyone on your network can reach SenClaw. The daemon '
+                  'requires the API token from every non-local device — it is '
+                  'in ~/.senclaw/api_token on this machine.'),
+              style: TextStyle(color: c.textPrimary, fontSize: 12),
+            ),
+            if (_lanAddrs.isNotEmpty) ...[
+              const SizedBox(height: AppTokens.s8),
+              SelectableText(
+                _lanAddrs.map((a) => 'http://$a:$port').join('   '),
+                style: TextStyle(
+                    color: c.textSecondary, fontSize: 12, fontFamily: 'monospace'),
+              ),
+            ],
+          ]),
+        ),
+      ],
+      if (needsRestart) ...[
+        const SizedBox(height: AppTokens.s12),
+        Row(children: [
+          Expanded(
+            child: Text(
+              adopted
+                  ? context.tr(
+                      'This daemon was started outside the app, so it keeps '
+                      'its own setting until it is restarted here.')
+                  : context.tr(
+                      'The running daemon still uses the previous setting. '
+                      'Restart it to apply.'),
+              style: TextStyle(color: c.textMuted, fontSize: 12),
+            ),
+          ),
+          const SizedBox(width: AppTokens.s8),
+          FilledButton.icon(
+            onPressed: _restarting ? null : _restartDaemon,
+            icon: _restarting
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.restart_alt, size: 18),
+            label: Text(context.tr('Restart daemon')),
+          ),
+        ]),
+      ],
+    ]);
+  }
+}
+
+class _BindCard extends StatelessWidget {
+  const _BindCard({
+    required this.icon,
+    required this.label,
+    required this.detail,
+    required this.selected,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final String detail;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppTokens.rLg),
+      onTap: onTap,
+      child: Container(
+        width: 190,
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppTokens.s16, vertical: AppTokens.s12),
+        decoration: BoxDecoration(
+          color: selected ? c.accentSoft : c.surface,
+          border: Border.all(
+              color: selected ? c.accent : c.border, width: selected ? 1.5 : 1),
+          borderRadius: BorderRadius.circular(AppTokens.rLg),
+        ),
+        child: Row(children: [
+          Icon(icon, size: 20, color: selected ? c.accent : c.textSecondary),
+          const SizedBox(width: AppTokens.s12),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label,
+                style: TextStyle(
+                    color: selected ? c.accent : c.textPrimary,
+                    fontWeight: FontWeight.w600)),
+            Text(detail,
+                style: TextStyle(
+                    color: c.textMuted, fontSize: 11, fontFamily: 'monospace')),
+          ]),
+        ]),
+      ),
+    );
+  }
+}
+
+enum _NoticeTone { warning }
+
+class _NoticeBox extends StatelessWidget {
+  const _NoticeBox({required this.child, required this.tone});
+  final Widget child;
+  final _NoticeTone tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final accent = tone == _NoticeTone.warning ? AppTokens.warning : c.accent;
+    return Container(
+      padding: const EdgeInsets.all(AppTokens.s12),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: .10),
+        border: Border.all(color: accent.withValues(alpha: .45)),
+        borderRadius: BorderRadius.circular(AppTokens.rMd),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Icon(Icons.warning_amber_rounded, size: 18, color: accent),
+        const SizedBox(width: AppTokens.s8),
+        Expanded(child: child),
+      ]),
+    );
+  }
+}
+
 class _GeneralSection extends ConsumerWidget {
   const _GeneralSection();
   @override
@@ -763,6 +1005,13 @@ class _GeneralSection extends ConsumerWidget {
     return SettingsBody(
       title: context.tr('General'),
       children: [
+        Text(context.tr('Network access'),
+            style: TextStyle(
+                color: context.colors.textSecondary,
+                fontWeight: FontWeight.w700)),
+        const SizedBox(height: AppTokens.s8),
+        const NetworkBindField(),
+        const SizedBox(height: AppTokens.s24),
         Text(context.tr('Connection'),
             style: TextStyle(
                 color: context.colors.textSecondary,
