@@ -37,6 +37,20 @@ const Map<String, String> viSettingsScreen = {
   'Check for updates automatically': 'Tự động kiểm tra cập nhật',
   'Once a day, in the background. Nothing installs without your say-so.':
       'Mỗi ngày một lần, chạy nền. Không tự cài gì khi bạn chưa đồng ý.',
+  'At every start and once a day after that, in the background. A new version '
+          'pops up a notice; nothing installs without your say-so.':
+      'Mỗi lần khởi động và sau đó mỗi ngày một lần, chạy nền. Có bản mới sẽ '
+          'hiện thông báo; không tự cài gì khi bạn chưa đồng ý.',
+  'You asked not to be notified about {v}.':
+      'Bạn đã chọn không nhận thông báo về {v}.',
+  'Reminders about {v} are paused until {when}.':
+      'Tạm ngưng nhắc về {v} — sẽ nhắc lại {when}.',
+  'Notify me again': 'Thông báo lại',
+  'later': 'sau',
+  'the next check': 'lần kiểm tra tới',
+  'in {n}m': 'sau {n} phút',
+  'in {n}h': 'sau {n} giờ',
+  'in {n}d': 'sau {n} ngày',
   "What's new in {v}": 'Có gì mới ở {v}',
   'You are on the latest version.': 'Bạn đang dùng phiên bản mới nhất.',
   'Version {v} is available.': 'Đã có phiên bản {v}.',

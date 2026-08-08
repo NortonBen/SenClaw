@@ -200,6 +200,71 @@ void main() {
       expect(hits, 0);
     });
 
+    // The launch check is the one the user actually sees (it pops the dialog),
+    // and this app can sit in the tray for a week — the daily debounce would
+    // swallow it on almost every restart.
+    test('startupCheck runs even though the daily check ran an hour ago',
+        () async {
+      var hits = 0;
+      final c = await makeContainer(
+        currentVersion: '0.2.0',
+        prefs: {
+          kUpdateLastCheckKey:
+              DateTime.now().subtract(const Duration(hours: 1)).toIso8601String(),
+        },
+        client: MockClient((_) async {
+          hits++;
+          return http.Response(manifestJson('0.3.0'), 200);
+        }),
+      );
+      await c.read(updateProvider.notifier).startupCheck();
+      expect(hits, 1);
+      expect(c.read(updateProvider).phase, UpdatePhase.available);
+    });
+
+    // A crash-restart loop must not turn into a request loop.
+    test('startupCheck still floors at a few minutes', () async {
+      var hits = 0;
+      final c = await makeContainer(
+        currentVersion: '0.2.0',
+        prefs: {
+          kUpdateLastCheckKey: DateTime.now()
+              .subtract(const Duration(minutes: 2))
+              .toIso8601String(),
+        },
+        client: MockClient((_) async {
+          hits++;
+          return http.Response(manifestJson('0.3.0'), 200);
+        }),
+      );
+      await c.read(updateProvider.notifier).startupCheck();
+      expect(hits, 0);
+    });
+
+    test('startupCheck respects the auto-check toggle being off', () async {
+      var hits = 0;
+      final c = await makeContainer(
+        currentVersion: '0.2.0',
+        prefs: {kUpdateAutoCheckKey: false},
+        client: MockClient((_) async {
+          hits++;
+          return http.Response(manifestJson('0.3.0'), 200);
+        }),
+      );
+      await c.read(updateProvider.notifier).startupCheck();
+      expect(hits, 0);
+    });
+
+    test('startupCheck stays silent when the server is unreachable', () async {
+      final c = await makeContainer(
+        currentVersion: '0.2.0',
+        client: MockClient((_) async => throw Exception('offline')),
+      );
+      await c.read(updateProvider.notifier).startupCheck();
+      expect(c.read(updateProvider).phase, UpdatePhase.idle);
+      expect(c.read(updateProvider).error, isNull);
+    });
+
     test('a manual check ignores both the interval and the toggle', () async {
       final c = await makeContainer(
         currentVersion: '0.2.0',
@@ -256,6 +321,62 @@ void main() {
       await n.check();
       await n.skipCurrent();
       expect(n.shouldAnnounce(), isFalse);
+    });
+
+    test('remindLater silences the popup until it expires', () async {
+      final c = await makeContainer(
+        currentVersion: '0.2.0',
+        client: okWith(manifestJson('0.3.0')),
+      );
+      final n = c.read(updateProvider.notifier);
+      await n.check();
+      await n.remindLater(after: const Duration(milliseconds: 20));
+      expect(n.shouldAnnounce(), isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(n.shouldAnnounce(), isTrue, reason: 'later means later, not never');
+    });
+
+    // The nav-rail dot and the Updates page are unaffected by either escape
+    // hatch — only the popup is muted.
+    test('silencing the popup does not hide the update itself', () async {
+      final c = await makeContainer(
+        currentVersion: '0.2.0',
+        client: okWith(manifestJson('0.3.0')),
+      );
+      final n = c.read(updateProvider.notifier);
+      await n.check();
+      await n.skipCurrent();
+      expect(c.read(updateProvider).hasUpdate, isTrue);
+    });
+
+    test('resumeAnnouncements undoes a skip and a snooze', () async {
+      final c = await makeContainer(
+        currentVersion: '0.2.0',
+        prefs: {kUpdateSkippedKey: '0.3.0'},
+        client: okWith(manifestJson('0.3.0')),
+      );
+      final n = c.read(updateProvider.notifier);
+      await n.check();
+      await n.remindLater();
+      expect(n.shouldAnnounce(), isFalse);
+
+      await n.resumeAnnouncements();
+      expect(n.shouldAnnounce(), isTrue);
+      expect(c.read(updateProvider).announcementSilenced, isFalse);
+    });
+
+    // The silenced state has to live in the state object, not be read from
+    // prefs on demand: Settings shows it, and a prefs read behind Riverpod's
+    // back would leave that row stale after the user hits "Notify me again".
+    test('the silenced state is reflected in state, not just prefs', () async {
+      final c = await makeContainer(
+        currentVersion: '0.2.0',
+        prefs: {kUpdateSkippedKey: '0.3.0'},
+        client: okWith(manifestJson('0.3.0')),
+      );
+      await c.read(updateProvider.notifier).check();
+      expect(c.read(updateProvider).announcementSilenced, isTrue);
+      expect(c.read(updateProvider).skippedVersion, '0.3.0');
     });
   });
 

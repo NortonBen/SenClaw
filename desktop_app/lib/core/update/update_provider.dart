@@ -17,8 +17,21 @@ import 'update_service.dart';
 const kUpdateLastCheckKey = 'senclaw:update:last-check';
 const kUpdateSkippedKey = 'senclaw:update:skipped-version';
 const kUpdateAutoCheckKey = 'senclaw:update:auto-check';
+// "Remind me later" — stored WITH the version it applies to, so a release
+// published during the snooze window is still announced.
+const kUpdateSnoozeUntilKey = 'senclaw:update:snooze-until';
+const kUpdateSnoozeVersionKey = 'senclaw:update:snooze-version';
 
 const kUpdateCheckInterval = Duration(hours: 24);
+
+/// How long "Remind me later" silences the startup popup for one version.
+/// A day, matching the check cadence: the next launch after that re-announces.
+const kUpdateSnoozeDuration = Duration(hours: 24);
+
+/// Floor for [UpdateNotifier.startupCheck], which otherwise ignores
+/// [kUpdateCheckInterval]. Without it, an app the supervisor keeps restarting
+/// would hit GitHub on every relaunch.
+const kUpdateStartupMinInterval = Duration(minutes: 30);
 
 enum UpdatePhase { idle, checking, upToDate, available, downloading, ready, applying, error }
 
@@ -31,6 +44,9 @@ class UpdateState {
     this.error,
     this.lastCheck,
     this.autoCheck = true,
+    this.skippedVersion,
+    this.snoozeVersion,
+    this.snoozeUntil,
   });
 
   final UpdatePhase phase;
@@ -46,11 +62,31 @@ class UpdateState {
   /// reading prefs behind Riverpod's back would need a manual notify to show.
   final bool autoCheck;
 
+  /// Version the user chose never to be reminded about ("Skip this version").
+  final String? skippedVersion;
+
+  /// Version the user postponed, and until when. Both null unless a snooze is
+  /// active; the pair is checked together so a *newer* release still speaks up.
+  final String? snoozeVersion;
+  final DateTime? snoozeUntil;
+
   bool get hasUpdate =>
       manifest != null &&
       (phase == UpdatePhase.available ||
           phase == UpdatePhase.downloading ||
           phase == UpdatePhase.ready);
+
+  /// The startup popup for the pending release has been silenced — skipped
+  /// outright, or snoozed and the snooze has not expired yet. The nav-rail dot
+  /// and the Updates page stay visible either way; only the popup is muted.
+  bool get announcementSilenced {
+    final m = manifest;
+    if (m == null) return false;
+    final v = '${m.version}';
+    if (skippedVersion == v) return true;
+    final until = snoozeUntil;
+    return snoozeVersion == v && until != null && DateTime.now().isBefore(until);
+  }
 
   UpdateState copyWith({
     UpdatePhase? phase,
@@ -59,7 +95,11 @@ class UpdateState {
     String? error,
     DateTime? lastCheck,
     bool? autoCheck,
+    String? skippedVersion,
+    String? snoozeVersion,
+    DateTime? snoozeUntil,
     bool clearError = false,
+    bool clearSilence = false,
   }) =>
       UpdateState(
         phase: phase ?? this.phase,
@@ -68,6 +108,11 @@ class UpdateState {
         error: clearError ? null : (error ?? this.error),
         lastCheck: lastCheck ?? this.lastCheck,
         autoCheck: autoCheck ?? this.autoCheck,
+        skippedVersion:
+            clearSilence ? null : (skippedVersion ?? this.skippedVersion),
+        snoozeVersion:
+            clearSilence ? null : (snoozeVersion ?? this.snoozeVersion),
+        snoozeUntil: clearSilence ? null : (snoozeUntil ?? this.snoozeUntil),
       );
 }
 
@@ -87,9 +132,13 @@ class UpdateNotifier extends Notifier<UpdateState> {
   UpdateState build() {
     final prefs = ref.read(prefsProvider);
     final raw = prefs.getString(kUpdateLastCheckKey);
+    final snooze = prefs.getString(kUpdateSnoozeUntilKey);
     return UpdateState(
       lastCheck: raw == null ? null : DateTime.tryParse(raw),
       autoCheck: prefs.getBool(kUpdateAutoCheckKey) ?? true,
+      skippedVersion: prefs.getString(kUpdateSkippedKey),
+      snoozeVersion: prefs.getString(kUpdateSnoozeVersionKey),
+      snoozeUntil: snooze == null ? null : DateTime.tryParse(snooze),
     );
   }
 
@@ -106,6 +155,25 @@ class UpdateNotifier extends Notifier<UpdateState> {
     if (!state.autoCheck) return;
     final last = state.lastCheck;
     if (last != null && DateTime.now().difference(last) < kUpdateCheckInterval) {
+      return;
+    }
+    await check(silent: true);
+  }
+
+  /// The check that runs once per launch, from [_startUpdateChecks] in app.dart.
+  ///
+  /// Deliberately ignores [kUpdateCheckInterval]: "did anything ship since I
+  /// last had the app open?" is exactly the question a launch should answer,
+  /// and this app can sit in the tray for a week between restarts, so the daily
+  /// debounce would routinely swallow the one check the user notices. Still
+  /// silent — no error toast for a check nobody asked for — and still floored by
+  /// [kUpdateStartupMinInterval] so a restart loop cannot hammer GitHub.
+  Future<void> startupCheck() async {
+    if (!_enabled) return;
+    if (!state.autoCheck) return;
+    final last = state.lastCheck;
+    if (last != null &&
+        DateTime.now().difference(last) < kUpdateStartupMinInterval) {
       return;
     }
     await check(silent: true);
@@ -145,18 +213,44 @@ class UpdateNotifier extends Notifier<UpdateState> {
     state = state.copyWith(phase: UpdatePhase.available, manifest: m, lastCheck: now);
   }
 
-  /// Whether to surface the one-time "update available" prompt. Respects the
-  /// user having skipped this exact version.
+  /// Whether to put the "update available" popup on screen. Respects both ways
+  /// the user can decline it: skipping this exact version, or postponing it.
   bool shouldAnnounce() {
     final m = state.manifest;
     if (m == null || state.phase != UpdatePhase.available) return false;
-    return ref.read(prefsProvider).getString(kUpdateSkippedKey) != '${m.version}';
+    return !state.announcementSilenced;
   }
 
+  /// "Don't tell me about this version again." A later release still announces.
   Future<void> skipCurrent() async {
     final m = state.manifest;
     if (m == null) return;
-    await ref.read(prefsProvider).setString(kUpdateSkippedKey, '${m.version}');
+    final v = '${m.version}';
+    await ref.read(prefsProvider).setString(kUpdateSkippedKey, v);
+    state = state.copyWith(skippedVersion: v);
+  }
+
+  /// "Remind me later" — silences this version's popup for [after].
+  Future<void> remindLater({Duration after = kUpdateSnoozeDuration}) async {
+    final m = state.manifest;
+    if (m == null) return;
+    final v = '${m.version}';
+    final until = DateTime.now().add(after);
+    final prefs = ref.read(prefsProvider);
+    await prefs.setString(kUpdateSnoozeVersionKey, v);
+    await prefs.setString(kUpdateSnoozeUntilKey, until.toIso8601String());
+    state = state.copyWith(snoozeVersion: v, snoozeUntil: until);
+  }
+
+  /// Undo either of the above, from Settings → Updates. Clears both records
+  /// rather than only the matching one: the user is asking to be told again,
+  /// and a leftover snooze on the same version would quietly re-mute it.
+  Future<void> resumeAnnouncements() async {
+    final prefs = ref.read(prefsProvider);
+    await prefs.remove(kUpdateSkippedKey);
+    await prefs.remove(kUpdateSnoozeVersionKey);
+    await prefs.remove(kUpdateSnoozeUntilKey);
+    state = state.copyWith(clearSilence: true);
   }
 
   Future<void> setAutoCheck(bool on) async {

@@ -19,6 +19,15 @@ const Map<String, String> viShellMisc = {
   // ── Shell footer: update badge + connection dot ────────────────────────
   'SenClaw {v} is available.': 'Đã có SenClaw {v}.',
   'Update available': 'Có bản cập nhật',
+
+  // ── Startup "update available" popup (update_announcer.dart) ───────────
+  'A new version of SenClaw is available': 'Đã có phiên bản SenClaw mới',
+  'Version {v} — you are running {current}.':
+      'Phiên bản {v} — bạn đang dùng {current}.',
+  'View update': 'Xem cập nhật',
+  'Remind me later': 'Nhắc lại sau',
+  'Skip this version': 'Bỏ qua bản này',
+
   'Offline': 'Ngoại tuyến',
   'Daemon: {status} · open Diagnostics': 'Daemon: {status} · mở Chẩn đoán',
 

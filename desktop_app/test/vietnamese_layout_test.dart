@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:senclaw_desktop/core/i18n/l10n.dart';
 import 'package:senclaw_desktop/core/i18n/locale_provider.dart';
 import 'package:senclaw_desktop/core/prefs.dart';
+import 'package:senclaw_desktop/core/update/update_announcer.dart';
+import 'package:senclaw_desktop/core/update/update_manifest.dart';
 import 'package:senclaw_desktop/features/settings/settings_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -113,6 +116,32 @@ void main() {
       await _pump(tester, const SettingsScreen(),
           lang: lang, size: const Size(900, 600));
       expect(tester.takeException(), isNull);
+    });
+
+    // Three actions on one row, and the Vietnamese labels are the longer ones —
+    // the popup greets the user at launch, so an overflow here is the first
+    // thing they would see.
+    testWidgets('the update popup lays out in $lang', (tester) async {
+      await _pump(tester, const SizedBox.expand(),
+          lang: lang, size: const Size(900, 700));
+
+      unawaited(showUpdateAvailableDialog(
+        tester.element(find.byType(SizedBox).first),
+        manifest: UpdateManifest.tryParse(
+            '{"version":"0.5.0","notes":"- chuẩn hoá thông báo cập nhật",'
+            '"assets":{}}')!,
+        currentVersion: '0.4.10',
+      ));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(
+          find.text(lang == 'vi'
+              ? 'Nhắc lại sau'
+              : 'Remind me later'),
+          findsOneWidget);
+      expect(find.text(lang == 'vi' ? 'Xem cập nhật' : 'View update'),
+          findsOneWidget);
     });
   }
 

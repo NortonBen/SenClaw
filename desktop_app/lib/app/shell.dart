@@ -7,8 +7,10 @@ import '../core/config/app_config.dart';
 import '../core/i18n/l10n.dart';
 import '../core/transport/connection.dart';
 import '../core/transport/ws_client.dart';
+import '../core/update/update_announcer.dart';
 import '../core/update/update_provider.dart';
 import '../features/chat/notifications.dart' show NotificationsBell;
+import '../features/settings/settings_screen.dart' show settingsSectionProvider;
 import '../features/space/space_providers.dart';
 import '../features/space/space_screen.dart' show RunningAppsLayer;
 import '../theme/tokens.dart';
@@ -30,26 +32,6 @@ class AppShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
     final location = GoRouterState.of(context).uri.path;
-
-    // Announce a new release once per version, as a snackbar rather than a
-    // dialog: the app starts with the machine, and blocking the screen at boot
-    // over an optional update is rude.
-    ref.listen(updateProvider, (prev, next) {
-      if (prev?.manifest?.version == next.manifest?.version) return;
-      final n = ref.read(updateProvider.notifier);
-      if (!n.shouldAnnounce()) return;
-      final messenger = ScaffoldMessenger.maybeOf(context);
-      if (messenger == null) return;
-      messenger.showSnackBar(SnackBar(
-        content: Text(context.trArgs(
-            'SenClaw {v} is available.', {'v': next.manifest!.version})),
-        duration: const Duration(seconds: 8),
-        action: SnackBarAction(
-          label: context.tr('View'),
-          onPressed: () => context.go('/settings'),
-        ),
-      ));
-    });
 
     final frame = Row(
       children: [
@@ -75,25 +57,38 @@ class AppShell extends ConsumerWidget {
       ],
     );
 
-    return Scaffold(
-      backgroundColor: c.bg,
-      body: _isMacOS
-          ? Column(
-              children: [
-                // Reserve + drag the traffic-light strip.
-                GestureDetector(
-                  onPanStart: (_) => windowManager.startDragging(),
-                  child: Container(
-                    height: _kMacTitleBar,
-                    color: c.sidebar,
+    // A new release announces itself here, as a modal — see [UpdateAnnouncer].
+    // Wrapping the whole shell keeps the popup alive across navigation.
+    return UpdateAnnouncer(
+      onOpenUpdates: () => openUpdatesPage(context, ref),
+      child: Scaffold(
+        backgroundColor: c.bg,
+        body: _isMacOS
+            ? Column(
+                children: [
+                  // Reserve + drag the traffic-light strip.
+                  GestureDetector(
+                    onPanStart: (_) => windowManager.startDragging(),
+                    child: Container(
+                      height: _kMacTitleBar,
+                      color: c.sidebar,
+                    ),
                   ),
-                ),
-                Expanded(child: frame),
-              ],
-            )
-          : frame,
+                  Expanded(child: frame),
+                ],
+              )
+            : frame,
+      ),
     );
   }
+}
+
+/// Settings → Updates. Both entry points into the update flow (the popup and
+/// the version label in the rail) go through here, so neither can land on the
+/// Settings screen showing some other section.
+void openUpdatesPage(BuildContext context, WidgetRef ref) {
+  ref.read(settingsSectionProvider.notifier).state = 'updates';
+  context.go('/settings');
 }
 
 class _NavRail extends ConsumerWidget {
@@ -161,7 +156,7 @@ class _VersionLabel extends ConsumerWidget {
     return Tooltip(
       message: context.tr('Update available'),
       child: InkWell(
-        onTap: () => context.go('/settings'),
+        onTap: () => openUpdatesPage(context, ref),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppTokens.s4),
           child: Row(

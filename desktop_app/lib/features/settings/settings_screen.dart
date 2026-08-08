@@ -388,10 +388,43 @@ class UpdatesSection extends ConsumerWidget {
           _ToggleRow(
             label: context.tr('Check for updates automatically'),
             desc: context.tr(
-                'Once a day, in the background. Nothing installs without your say-so.'),
+                'At every start and once a day after that, in the background. '
+                'A new version pops up a notice; nothing installs without your '
+                'say-so.'),
             value: s.autoCheck,
             onChanged: (v) => n.setAutoCheck(v),
           ),
+          // The only place the user can undo "Skip this version" / "Remind me
+          // later" — otherwise the popup they silenced is gone for good with no
+          // trace of why.
+          if (s.announcementSilenced) ...[
+            const SizedBox(height: AppTokens.s8),
+            Row(
+              children: [
+                Icon(Icons.notifications_off_outlined,
+                    size: 16, color: c.textMuted),
+                const SizedBox(width: AppTokens.s8),
+                Expanded(
+                  child: Text(
+                    s.skippedVersion == '${s.manifest?.version}'
+                        ? context.trArgs(
+                            'You asked not to be notified about {v}.',
+                            {'v': s.manifest!.version})
+                        : context.trArgs(
+                            'Reminders about {v} are paused until {when}.', {
+                            'v': s.manifest!.version,
+                            'when': _snoozeLabel(context, s.snoozeUntil),
+                          }),
+                    style: TextStyle(color: c.textMuted, fontSize: 12),
+                  ),
+                ),
+                TextButton(
+                  onPressed: n.resumeAnnouncements,
+                  child: Text(context.tr('Notify me again')),
+                ),
+              ],
+            ),
+          ],
           if (s.manifest != null && s.hasUpdate && (s.manifest!.notes?.isNotEmpty ?? false)) ...[
             const SizedBox(height: AppTokens.s8),
             Text(
@@ -414,6 +447,17 @@ class UpdatesSection extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// When a paused reminder comes back. Hours while it is same-day, so "in 6h"
+/// rather than a date the user has to subtract today from.
+String _snoozeLabel(BuildContext context, DateTime? until) {
+  if (until == null) return context.tr('later');
+  final left = until.difference(DateTime.now());
+  if (left.inMinutes <= 0) return context.tr('the next check');
+  if (left.inHours < 1) return context.trArgs('in {n}m', {'n': left.inMinutes});
+  if (left.inHours < 48) return context.trArgs('in {n}h', {'n': left.inHours});
+  return context.trArgs('in {n}d', {'n': left.inDays});
 }
 
 class _UpdateStatusLine extends StatelessWidget {

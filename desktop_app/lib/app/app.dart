@@ -81,13 +81,16 @@ class _SenClawAppState extends ConsumerState<SenClawApp>
     }
   }
 
-  /// Background update checks. Delayed at launch so the check does not compete
-  /// with the daemon boot for I/O, then hourly — [UpdateNotifier.maybeCheck]
-  /// debounces to once a day, and it has to be re-asked because this app lives
-  /// in the tray for days at a time and rarely restarts.
+  /// Background update checks. The launch one runs through
+  /// [UpdateNotifier.startupCheck], which skips the daily debounce so every
+  /// start answers "is there a new version?" — a find pops the update
+  /// announcer's modal. Delayed a few seconds so it does not compete with
+  /// the daemon boot for I/O. Then hourly via [UpdateNotifier.maybeCheck],
+  /// which does debounce to once a day, because this app lives in the tray for
+  /// days at a time and rarely restarts.
   void _startUpdateChecks() {
     Future.delayed(const Duration(seconds: 10), () {
-      if (mounted) ref.read(updateProvider.notifier).maybeCheck();
+      if (mounted) ref.read(updateProvider.notifier).startupCheck();
     });
     _updateTimer = Timer.periodic(const Duration(hours: 1), (_) {
       if (mounted) ref.read(updateProvider.notifier).maybeCheck();

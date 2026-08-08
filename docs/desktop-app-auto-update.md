@@ -229,11 +229,33 @@ Trạng thái lưu trong `SharedPreferences` qua `Prefs` sẵn có: `update.last
 - Lỗi mạng ⇒ nuốt im lặng, chỉ log. Không toast. Máy offline không đáng bị làm phiền.
 - "Skip version này" ⇒ ghi `update.skippedVersion`, im cho tới bản kế.
 
+**Cập nhật 2026-08-08 — check ở MỖI lần khởi động + popup.**
+`UpdateNotifier.startupCheck()` (gọi từ `_startUpdateChecks` trong `app.dart`)
+**bỏ qua** debounce 24h: câu hỏi "từ lần trước mở app tới giờ có bản mới nào
+không?" chính là câu hỏi mà một lần khởi động phải trả lời, mà app này nằm ở
+tray cả tuần không restart nên debounce ngày sẽ nuốt đúng cái check user để ý.
+Vẫn `silent: true`, và vẫn có sàn `kUpdateStartupMinInterval` (30 phút) để một
+vòng crash-restart không biến thành vòng request. Tick hàng giờ giữ nguyên
+`maybeCheck()` (debounce ngày).
+
+Ba trạng thái im lặng của **popup** (chỉ popup — chấm ở nav rail và trang
+Updates luôn hiện):
+
+| Hành động | Pref | Ý nghĩa |
+|---|---|---|
+| "Xem cập nhật" | — | mở Settings → Updates, không ghi gì |
+| "Nhắc lại sau" | `senclaw:update:snooze-version` + `:snooze-until` | im **đúng version đó** trong `kUpdateSnoozeDuration` (24h). Bản mới hơn ra trong lúc snooze vẫn được báo — đó là lý do phải lưu kèm version. |
+| "Bỏ qua bản này" | `senclaw:update:skipped-version` | im vĩnh viễn cho version đó |
+| Esc / bấm ra ngoài | — | không ghi gì ⇒ lần khởi động sau hỏi lại |
+
+Hoàn tác ở Settings → Updates (`resumeAnnouncements()`, xoá cả ba key) — nếu
+không thì "Bỏ qua bản này" là cửa một chiều không dấu vết.
+
 ### 7.3 UI (4 điểm chạm)
 
 1. **Badge ở nav rail** — chấm nhỏ trên `v$kAppVersion` ([`shell.dart:111`](../desktop_app/lib/app/shell.dart)) khi có bản mới; bấm → Settings → Updates. Đây là chỗ user vốn đã liếc để biết mình đang chạy bản nào.
 2. **Settings → mục "Updates"** (thêm key `'updates'` vào `_sections` + `_UpdatesSection` trong [`settings_screen.dart`](../desktop_app/lib/features/settings/settings_screen.dart)): version hiện tại, "Kiểm tra ngay", lần check cuối, release notes (render bằng `gpt_markdown` đã có sẵn), nút "Tải & Cài" + progress, toggle auto-check.
-3. **Snackbar** một lần mỗi version khi phát hiện bản mới — có nút "Xem" và "Bỏ qua". Không dùng dialog: app khởi động cùng máy, chặn màn hình lúc boot là thô lỗ.
+3. ~~**Snackbar** một lần mỗi version~~ → **thay bằng popup 2026-08-08**: `UpdateAnnouncer` ([`lib/core/update/update_announcer.dart`](../desktop_app/lib/core/update/update_announcer.dart)) bọc `AppShell`, hiện `AlertDialog` một lần mỗi version với version + release notes và ba lựa chọn **Xem cập nhật / Nhắc lại sau / Bỏ qua bản này**. Toast 8 giây trên một máy vừa boot đúng là loại thông báo user không kịp thấy; ba đường thoát là thứ giữ cho một modal không thô lỗ. Bọc ngoài shell (không nằm trong) để popup sống qua điều hướng và pump được riêng trong test.
 4. **Menu macOS → "Check for Updates…"** — đúng chỗ trong ảnh chụp màn hình. Thêm item vào `macos/Runner/Base.lproj/MainMenu.xib`, gửi qua MethodChannel `senclaw/app` (channel này đã tồn tại cho `activate`) một method mới `checkForUpdates` → Dart điều hướng tới Settings → Updates và trigger check.
    > Tiện thể: item **"Settings…"** trong ảnh đang xám vì xib template Flutter nối nó vào hư không. Nối nốt vào `/settings` — sửa 1 dòng, hết một món khó chịu.
 

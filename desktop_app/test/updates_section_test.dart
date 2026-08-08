@@ -27,8 +27,9 @@ Future<void> pumpSection(
   required String currentVersion,
   String body = _manifest,
   bool check = true,
+  Map<String, Object> prefs = const {},
 }) async {
-  SharedPreferences.setMockInitialValues({});
+  SharedPreferences.setMockInitialValues(prefs);
   final sp = await SharedPreferences.getInstance();
   final container = ProviderContainer(overrides: [
     prefsProvider.overrideWithValue(sp),
@@ -92,6 +93,38 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse,
         reason: 'the switch must reflect the new state, not snap back');
+  });
+
+  // "Skip this version" in the startup popup is otherwise a one-way door — this
+  // row is the only way back.
+  testWidgets('a silenced version can be un-silenced here', (tester) async {
+    await pumpSection(tester,
+        currentVersion: '0.2.0', prefs: {kUpdateSkippedKey: '0.3.0'});
+
+    expect(find.textContaining('not to be notified about 0.3.0'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Notify me again'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('not to be notified'), findsNothing);
+    final ctx = tester.element(find.byType(UpdatesSection));
+    final container = ProviderScope.containerOf(ctx);
+    expect(container.read(updateProvider.notifier).shouldAnnounce(), isTrue);
+  });
+
+  testWidgets('a snoozed version says when it comes back', (tester) async {
+    await pumpSection(tester, currentVersion: '0.2.0', prefs: {
+      kUpdateSnoozeVersionKey: '0.3.0',
+      kUpdateSnoozeUntilKey:
+          DateTime.now().add(const Duration(hours: 6)).toIso8601String(),
+    });
+
+    expect(find.textContaining('paused until in 5h'), findsOneWidget);
+  });
+
+  testWidgets('nothing silenced means no undo row', (tester) async {
+    await pumpSection(tester, currentVersion: '0.2.0');
+    expect(find.widgetWithText(TextButton, 'Notify me again'), findsNothing);
   });
 
   testWidgets('install asks before killing running agents', (tester) async {
