@@ -13,6 +13,9 @@ npm install @senclaw/space-sdk
 
 Node ≥ 18. TypeScript types ship with the package.
 
+> Other languages: [Python](../senclaw-app-sdk-python) ·
+> [Go](../senclaw-app-sdk-go) · [Rust](../../app-space-sdk).
+
 ## What you get
 
 | Import | What's in it | Runs where |

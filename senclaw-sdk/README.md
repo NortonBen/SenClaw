@@ -1,66 +1,86 @@
-# `senclaw-sdk/` — SDK viết Space App, bản publish được
+# `senclaw-sdk/` — publishable SDKs for writing Space Apps
 
-Mỗi thư mục ở đây là **một package độc lập, publish lên registry công khai**, để
-người viết Space App ngoài monorepo chỉ cần `npm install` / `pip install` chứ
-không phải clone cả repo SenClaw.
+Each directory here is an **independent package published to a public
+registry**, so someone writing a Space App outside the monorepo runs
+`npm install` / `pip install` / `go get` instead of cloning all of SenClaw.
 
-| Thư mục | Package | Registry |
+| Directory | Package | Registry |
 |---|---|---|
 | [`senclaw-app-sdk/`](senclaw-app-sdk) | `@senclaw/space-sdk` | npm |
 | [`senclaw-app-sdk-python/`](senclaw-app-sdk-python) | `senclaw-space-sdk` | PyPI |
+| [`senclaw-app-sdk-go/`](senclaw-app-sdk-go) | `github.com/NortonBen/SenClaw/senclaw-sdk/senclaw-app-sdk-go` | Go modules (the repo itself) |
 
-Bản **Rust** vẫn ở [`../app-space-sdk`](../app-space-sdk): nó là workspace member
-của chính repo này, và repo ngoài trỏ tới nó bằng git dependency chứ không qua
-crates.io — xem [docs/space-app-sdk-publish-guide.md](../docs/space-app-sdk-publish-guide.md).
+The **Rust** SDK stays at [`../app-space-sdk`](../app-space-sdk): it is a
+workspace member of this repo, and outside repos point at it with a git
+dependency rather than through crates.io — see
+[docs/space-app-sdk-publish-guide.md](../docs/space-app-sdk-publish-guide.md).
 
-Cả ba nói cùng một hợp đồng manifest: chế độ vòng đời (`background` / `session`),
-`requires`, `sandbox`, `runner` — [docs/space-app-lifecycle.md](../docs/space-app-lifecycle.md).
+All four speak the same manifest contract: lifecycle mode (`background` /
+`session`), `requires`, `sandbox`, `runner` —
+[docs/space-app-lifecycle.md](../docs/space-app-lifecycle.md).
 
-## Ngang tính năng với bản Rust
+> Tiếng Việt: [README-vn.md](README-vn.md).
 
-Cột Rust là chuẩn — `app-space-sdk` là bản đầy đủ nhất vì phần lớn app trong
-`apps/*` viết bằng Rust. Hai bản kia bám theo.
+## Parity with the Rust SDK
 
-| | Rust | Node | Python |
-|---|:--:|:--:|:--:|
-| `llm.request` (system/prompt/maxTokens/**profile**) | ✅ | ✅ | ✅ |
-| Trả về đủ `text` + `model` + `finish` + `usage` | `llm_request_usage` | `llmDetailed` | `llm_detailed` |
-| `agent.run` (agent đủ tool, nhiều bước) | — ¹ | ✅ | ✅ |
-| `knowledge.save` / `.search` / `.recall` | ✅ | ✅ | ✅ |
-| `usage.report` (app tự cầm key provider) | ✅ | ✅ | ✅ |
-| Liệt kê / đổi model đang hoạt động | ✅ | ✅ | ✅ |
-| `capabilities` — hỏi daemon nó làm được gì | — ¹ | ✅ | ✅ |
-| Config + SQLite riêng của app | — ¹ | ✅ | ✅ |
-| Đăng ký MCP server | — ¹ | ✅ | ✅ |
-| Máy chủ MCP dựng sẵn | — ² | `/mcp` | `McpServer` |
-| Dispatch (poll/heartbeat/reclaim/finalize) | ✅ | `/dispatch` | `dispatch.py` |
-| Manifest: định nghĩa + kiểm + CLI | — ³ | `/lifecycle` + `senclaw-manifest` | `manifest.py` + `-m` |
-| `bind_host` / `PORT` / tắt êm | thủ công | `/lifecycle` | `serve()` |
+The Rust column is the reference — `app-space-sdk` is the most complete, because
+most apps in `apps/*` are written in Rust. The others follow it.
 
-¹ App Rust gọi thẳng `POST /api/space/apps/<id>/bridge` bằng `reqwest` —
-`SpaceClient::bridge_action` là private nên chưa có wrapper công khai. Không
-phải thiếu năng lực, chỉ là chưa bọc.
-² App Rust dùng `rmcp` trực tiếp, không cần lớp bọc.
-³ Manifest của app Rust do người viết tay; test
+| | Rust | Node | Python | Go |
+|---|:--:|:--:|:--:|:--:|
+| `llm.request` (system/prompt/maxTokens/**profile**) | ✅ | ✅ | ✅ | ✅ |
+| Full `text` + `model` + `finish` + `usage` | `llm_request_usage` | `llmDetailed` | `llm_detailed` | `LLMDetailed` |
+| `agent.run` (an agent with tools, multiple steps) | — ¹ | ✅ | ✅ | ✅ |
+| `knowledge.save` / `.search` / `.recall` | ✅ | ✅ | ✅ | ✅ |
+| `usage.report` (app holds its own provider key) | ✅ | ✅ | ✅ | ✅ |
+| List / switch the active model | ✅ | ✅ | ✅ | ✅ |
+| `capabilities` — ask the daemon what it can do | — ¹ | ✅ | ✅ | ✅ |
+| The app's own config + SQLite | — ¹ | ✅ | ✅ | ✅ |
+| Register an MCP server | — ¹ | ✅ | ✅ | ✅ |
+| Built-in MCP server | — ² | `/mcp` | `McpServer` | `MCPServer` |
+| Dispatch (poll/heartbeat/reclaim/finalize) | ✅ | `/dispatch` | `dispatch.py` | `/dispatch` |
+| Manifest: types + validation + CLI | — ³ | `/lifecycle` + `senclaw-manifest` | `manifest.py` + `-m` | `manifest` + `cmd/senclaw-manifest` |
+| `bind_host` / `PORT` / graceful stop | manual | `/lifecycle` | `serve()` | `Serve()` |
+
+¹ A Rust app calls `POST /api/space/apps/<id>/bridge` directly with `reqwest` —
+`SpaceClient::bridge_action` is private, so there is no public wrapper yet. Not
+a missing capability, just an unwrapped one.
+² A Rust app uses `rmcp` directly and needs no wrapper.
+³ A Rust app's manifest is hand-written; the test
 [`space_app_lifecycle_manifests.rs`](../tests/space_app_lifecycle_manifests.rs)
-là thứ bắt lỗi chính tả cho toàn repo.
+is what catches typos across the whole repo.
 
-`events` / `fs` / `net` của bản Rust **không có bản tương ứng, và không cần**:
-chúng chỉ là lớp mô phỏng `EventEmitter`, `fs.readFile`, `net.createServer` của
-Node cho Rust. Node và Python đã có sẵn trong thư viện chuẩn.
+The Rust SDK's `events` / `fs` / `net` modules have **no equivalent and need
+none**: they only reproduce Node's `EventEmitter`, `fs.readFile` and
+`net.createServer` for Rust. Node, Python and Go already have them.
 
-Mỗi SDK mang theo app mẫu chạy được của chính nó trong `examples/` — cài bằng
-`register-local` là daemon chạy được ngay, không cần build gì thêm.
+Every SDK carries its own runnable example app under `examples/` — installing it
+with `register-local` gives a working app in the daemon, with nothing else to
+build.
 
-## Publish
+## Which one to pick
+
+| | |
+|---|---|
+| **Rust** | The app lives in this monorepo under `apps/*`, or needs the fastest start and smallest footprint |
+| **Node** | The app is mostly a web UI, or leans on an npm library |
+| **Python** | The app leans on the Python ecosystem (ML, scraping, data). No dependencies means no install step at all |
+| **Go** | A single static binary, no runtime to install on the user's machine — but there is **no install step** for a Go app, so it ships built or compiles in `start` ([details](senclaw-app-sdk-go#read-this-first-a-go-app-has-no-install-step)) |
+
+## Publishing
 
 ```bash
 # npm
-cd senclaw-app-sdk && npm publish        # `prepare` tự build lại dist/ trước khi đóng gói
+cd senclaw-app-sdk && npm publish        # `prepare` rebuilds dist/ before packing
 
 # PyPI
 cd senclaw-app-sdk-python && python -m build && python -m twine upload dist/*
+
+# Go — no registry step: a git tag is the release.
+git tag senclaw-sdk/senclaw-app-sdk-go/v0.1.0 && git push origin --tags
 ```
 
-Cả hai đều bump version bằng tay trong `package.json` / `pyproject.toml` — không
-có bước sinh version tự động, và một version đã publish là không sửa được.
+npm and PyPI bump their version by hand in `package.json` / `pyproject.toml` —
+there is no version-generation step, and a published version cannot be changed.
+Go modules take the version from the tag, and the tag must carry the module's
+subdirectory prefix or `go get` will not see it.

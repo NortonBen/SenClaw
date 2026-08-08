@@ -227,12 +227,15 @@ Lưu ý:
   người dùng không tắt được sandbox của app.
 - `runtime.runner` (`binary` | `node` | `python` | `shell`, đoán được từ `start`
   thì bỏ) — app Node/Python được cài phụ thuộc một lần sau cài/update; Python
-  thêm `.venv` riêng trong thư mục app.
+  thêm `.venv` riêng trong thư mục app. **`binary` và `shell` không có bước
+  install nào cả**: `runtime.install` khai ở đó bị bỏ qua im lặng, nên app Go
+  hoặc ship binary đã build, hoặc biên dịch ngay trong `start` (`go run .`,
+  trong hạn 30 giây health-check).
 - Chi tiết cả bốn mục trên: [docs/space-app-lifecycle.md](space-app-lifecycle.md).
   SDK cho ngôn ngữ khác Rust: [Node](../senclaw-sdk/senclaw-app-sdk) ·
-  [Python](../senclaw-sdk/senclaw-app-sdk-python), kèm app mẫu chạy được
-  [`senclaw-sdk/senclaw-app-sdk/examples/`](../senclaw-sdk/senclaw-app-sdk/examples/) và
-  [`senclaw-sdk/senclaw-app-sdk-python/examples/`](../senclaw-sdk/senclaw-app-sdk-python/examples/).
+  [Python](../senclaw-sdk/senclaw-app-sdk-python) ·
+  [Go](../senclaw-sdk/senclaw-app-sdk-go), mỗi bản kèm app mẫu chạy được trong
+  `examples/` — xem bảng đối chiếu ở [senclaw-sdk/README.md](../senclaw-sdk/README.md).
 - `description` viết thật kỹ — nó vừa là mô tả gói trên hub, vừa là ngữ cảnh để agent hiểu app.
 - Trường tuỳ chọn `widgets[]` cho phép app đưa UI mini vào thẳng ô chat — xem mục 3.5.
 - Link mở ra ngoài trong UI phải đi qua flow `openExternal` → `POST /api/ui/open-url` (xem [docs/space-app-open-external.md](space-app-open-external.md), helper chuẩn `apps/zeach/web/src/openExternal.ts`), đừng để navigate webview nhúng.

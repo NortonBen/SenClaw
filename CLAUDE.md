@@ -227,7 +227,7 @@ on `/runtime`. Knobs: `SENCLAW_SPACE_SUPERVISE_SECS` (20),
 
 ### Space App SDKs
 
-Three, one per language an app can be written in — all documented against the
+Four, one per language an app can be written in — all documented against the
 same manifest:
 
 | | |
@@ -235,13 +235,20 @@ same manifest:
 | Rust | [`app-space-sdk/`](app-space-sdk/) |
 | Node / TypeScript | [`senclaw-sdk/senclaw-app-sdk/`](senclaw-sdk/senclaw-app-sdk/) — `@senclaw/space-sdk` on npm, subpaths `/mcp` and `/lifecycle` |
 | Python | [`senclaw-sdk/senclaw-app-sdk-python/`](senclaw-sdk/senclaw-app-sdk-python/) — `senclaw-space-sdk` on PyPI, `senclaw_space`, standard library only |
+| Go | [`senclaw-sdk/senclaw-app-sdk-go/`](senclaw-sdk/senclaw-app-sdk-go/) — `go get github.com/NortonBen/SenClaw/senclaw-sdk/senclaw-app-sdk-go`, package `senclaw` + subpackages `manifest` / `dispatch`, standard library only |
 
-Each SDK carries its own runnable minimal app under `examples/` —
-[`senclaw-sdk/senclaw-app-sdk/examples/`](senclaw-sdk/senclaw-app-sdk/examples/) and
-[`senclaw-sdk/senclaw-app-sdk-python/examples/`](senclaw-sdk/senclaw-app-sdk-python/examples/).
-Both SDKs
-expose a manifest validator that catches the silent-failure spellings
-(`python -m senclaw_space.manifest <file>` / `validateManifest()`).
+Each SDK carries its own runnable minimal app under `examples/`, and each
+exposes a manifest validator that catches the silent-failure spellings
+(`python -m senclaw_space.manifest <file>` / `validateManifest()` /
+`go run …/cmd/senclaw-manifest <file>`).
+
+**A Go app has no install step.** `runtime.install` runs for the `node` and
+`python` runners only ([`src/apps/prepare.rs`](src/apps/prepare.rs) returns
+early for `binary` and `shell`), so a Go app either ships a built binary
+(`start: "./app"`, runner inferred `binary`) or compiles in `start`
+(`go run .`, runner `shell`, `requires.bin: ["go"]`, within the daemon's 30s
+health budget). Declaring `install: "go build …"` is silently skipped — the Go
+SDK's `manifest.Validate` is the only thing that flags it.
 
 ## Per-app Space App sandbox
 

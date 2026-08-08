@@ -4,6 +4,7 @@ Viết Space App bằng Python. Không phụ thuộc thư viện ngoài — ch�
 library, nên app **không cần bước cài đặt** trước lần chạy đầu.
 
 > Bản Node/TypeScript: [`../senclaw-app-sdk`](../senclaw-app-sdk).
+> Bản Go: [`../senclaw-app-sdk-go`](../senclaw-app-sdk-go).
 > Bản Rust: [`../../app-space-sdk`](../../app-space-sdk).
 > Vòng đời app (background/session), `requires`, `sandbox`:
 > [`docs/space-app-lifecycle.md`](../../docs/space-app-lifecycle.md).
