@@ -41,6 +41,8 @@ most apps in `apps/*` are written in Rust. The others follow it.
 | Dispatch (poll/heartbeat/reclaim/finalize) | ✅ | `/dispatch` | `dispatch.py` | `/dispatch` |
 | Manifest: types + validation + CLI | — ³ | `/lifecycle` + `senclaw-manifest` | `manifest.py` + `-m` | `manifest` + `cmd/senclaw-manifest` |
 | `bind_host` / `PORT` / graceful stop | manual | `/lifecycle` | `serve()` | `Serve()` |
+| Access token sent on every daemon call | ✅ | ✅ | ✅ | ✅ |
+| Guard closing the app's own port to all but the daemon | `auth::require_app_token` | `requireAppToken` | `require_app_token=True` | `RequireAppToken` |
 
 ¹ A Rust app calls `POST /api/space/apps/<id>/bridge` directly with `reqwest` —
 `SpaceClient::bridge_action` is private, so there is no public wrapper yet. Not
@@ -57,6 +59,20 @@ none**: they only reproduce Node's `EventEmitter`, `fs.readFile` and
 Every SDK carries its own runnable example app under `examples/` — installing it
 with `register-local` gives a working app in the daemon, with nothing else to
 build.
+
+## The app's access token
+
+Every SDK reads `SENCLAW_TOKEN_ACCESS_APP` — the token the daemon mints per
+installed app — and sends it, plus `SENCLAW_API_VERSION`, on every daemon call.
+That token is the app's identity: it is bound to one app id, and using it against
+another is refused, which is what keeps one app out of another's settings,
+database and AI bridge.
+
+The reverse direction is opt-in per app: each SDK ships a guard that refuses any
+request to the *app's own* port that did not come through the daemon. See the
+per-SDK README, and
+[docs/space-app-api-token.md](../docs/space-app-api-token.md) for the whole
+picture including `SENCLAW_APP_TOKEN_MODE=strict`.
 
 ## Which one to pick
 

@@ -39,13 +39,20 @@ A minimal app::
 """
 
 from .client import (
+    API_VERSION,
+    ENV_API_VERSION,
+    ENV_APP_TOKEN,
+    HEADER_API_VERSION,
+    HEADER_APP_TOKEN,
     KnowledgeHit,
     LlmReply,
     LlmUsage,
     ModelInfo,
     SenclawError,
     SenclawSpace,
+    api_version_from_env,
     app_id_from_env,
+    app_token_from_env,
     bind_host,
     port,
 )
@@ -58,6 +65,11 @@ from .server import Request, Response, serve
 # Reach it as `from senclaw_space.dispatch import DispatchProvider`.
 
 __all__ = [
+    "API_VERSION",
+    "ENV_API_VERSION",
+    "ENV_APP_TOKEN",
+    "HEADER_API_VERSION",
+    "HEADER_APP_TOKEN",
     "KnowledgeHit",
     "LlmReply",
     "LlmUsage",
@@ -67,7 +79,9 @@ __all__ = [
     "Response",
     "SenclawError",
     "SenclawSpace",
+    "api_version_from_env",
     "app_id_from_env",
+    "app_token_from_env",
     "bind_host",
     "error_content",
     "port",

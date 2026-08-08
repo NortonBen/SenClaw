@@ -70,7 +70,8 @@ use super::space::{
     space_app_config_delete, space_app_config_get, space_app_config_list, space_app_config_set,
     space_app_env, space_app_logs_clear, space_app_logs_get, space_app_mcp_info,
     space_app_mcp_register, space_app_requirements, space_app_sandbox_get, space_app_sandbox_put,
-    space_app_sqlite_query, space_apps_bridge, space_apps_delete,
+    space_app_sqlite_query, space_app_token_get, space_app_token_rotate, space_apps_bridge,
+    space_apps_delete,
     space_apps_install_zip, space_apps_list, space_apps_proxy, space_apps_proxy_root,
     space_apps_ready, space_apps_register, space_apps_register_local, space_apps_restart,
     space_apps_start,
@@ -792,6 +793,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(space_app_logs_get).delete(space_app_logs_clear),
         )
         .route("/api/space/apps/:id/bridge", post(space_apps_bridge))
+        .route(
+            "/api/space/apps/:id/token",
+            get(space_app_token_get).post(space_app_token_rotate),
+        )
         .route("/api/space/apps/:id/static/*path", get(space_apps_static))
         .route(
             "/api/space/apps/:id/proxy/*path",
@@ -958,6 +963,13 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         // the loopback daemon — /api/llm-config serves cleartext provider
         // keys. See auth::restrictive_cors.
         .layer(super::auth::restrictive_cors())
+        // Per-app access tokens: an app may only act on its own
+        // /api/space/apps/<id>/… . Layered here rather than at the serve site
+        // so the relay bridge — which reuses this router — is scoped too.
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            super::app_auth::app_auth_mw,
+        ))
         .with_state(state)
 }
 

@@ -231,6 +231,43 @@ const problems: string[] = validateManifest(json);                        // or 
 | `SENCLAW_SPACE_APP_ID` | This app's id |
 | `SENCLAW_BASE_URL` | Daemon base URL, default `http://127.0.0.1:18788` |
 | `SENCLAW_BIND_HOST` | Bind host; absent means loopback, and loopback is the right default |
+| `SENCLAW_TOKEN_ACCESS_APP` | This app's access token — its identity to the daemon |
+| `SENCLAW_API_VERSION` | Space-App API contract version (currently 2) |
+
+## The app's access token
+
+The daemon mints one access token per installed app. It is the app's *identity*:
+a token is bound to one app id, and using it against another is refused. Without
+it, any local process that knows an app's id — which is public — could read that
+app's settings, query its database and drive its AI bridge.
+
+**Outbound is automatic.** `SenclawSpace` reads `SENCLAW_TOKEN_ACCESS_APP` from
+`process.env` and sends it (plus `X-SenClaw-Api-Version`) on every daemon call.
+In the browser there is no token by design — the app's page is trusted
+same-origin, and a secret handed to page JS is a secret in every extension the
+user has installed.
+
+**Inbound is opt-in.** An app's own REST and MCP endpoints have no authentication
+of their own: the port is open to every process on the machine. Mount the guard
+and the only caller that gets through is the daemon, whose proxy stamps the token
+on everything it forwards:
+
+```ts
+import { requireAppToken, serveSpaceMcp } from '@senclaw/space-sdk/mcp';
+
+app.use(requireAppToken({ skip: ['/health', '/public/*'] }));
+
+// or, through the MCP harness:
+await serveSpaceMcp({ appId: 'demo', requireAppToken: true, authSkipPaths: ['/ws/*'] });
+```
+
+Two things are never refused: a missing token in the environment (a bare
+`npm start` outside SenClaw — 401ing the health check would make the app look
+permanently down), and the exempt paths above. Add anything a client dials
+directly, such as a browser extension's WebSocket.
+
+Full guide, including `SENCLAW_APP_TOKEN_MODE=strict`:
+[docs/space-app-api-token.md](https://github.com/NortonBen/SenClaw/blob/main/docs/space-app-api-token.md).
 
 ## Related
 

@@ -214,6 +214,47 @@ empty slices as `[]` for the same reason: serde's `Vec` rejects an explicit
 | `MCPServer` | JSON-RPC `initialize` / `tools/list` / `tools/call`, no MCP SDK needed; a panicking tool becomes a message, not a dead app |
 | Static serving | Path-traversal guard plus an `index.html` fallback so a client-side router works |
 
+## The app's access token
+
+The daemon mints one access token per installed app and puts it in the launched
+process's environment as `SENCLAW_TOKEN_ACCESS_APP`. It is this app's *identity*:
+a token is bound to one app id, and using it against another is refused. Without
+it, any local process that knows an app's id — which is public — could read that
+app's settings, query its database and drive its AI bridge.
+
+**Outbound is automatic.** `New`/`MustNew` read the token from the environment
+and `Space` sends it (plus `X-SenClaw-Api-Version`) on every daemon call. Nothing
+to do. Running the app by hand, pass it explicitly:
+
+```bash
+SENCLAW_TOKEN_ACCESS_APP=$(curl -s localhost:18788/api/space/apps/demo/token | jq -r .token) go run .
+```
+
+**Inbound is opt-in.** An app's own REST and MCP endpoints have no authentication
+of their own: the port is open to every process on the machine. Turn on
+`RequireAppToken` and the only caller that gets through is the daemon — its proxy
+stamps the token on everything it forwards (the UI iframe, the app's own fetches,
+MCP tool calls):
+
+```go
+senclaw.Serve(senclaw.Config{
+	RequireAppToken: true,
+	HealthPath:      "/api/status",        // always exempt
+	AuthSkipPaths:   []string{"/ws/*"},    // a browser extension dials this directly
+})
+```
+
+Two things are never refused: a missing token in the environment (that is a bare
+`go run .`, and 401ing the health check would make the app look permanently
+down), and the exempt paths above.
+
+`SENCLAW_API_VERSION` carries the contract version — `APIVersion` in this SDK,
+currently 2. A daemon serving an older contract still answers; one asked for a
+version it does not implement replies **426** rather than half-answering.
+
+Full guide, including `SENCLAW_APP_TOKEN_MODE=strict`:
+[docs/space-app-api-token.md](https://github.com/NortonBen/SenClaw/blob/main/docs/space-app-api-token.md).
+
 ## SIGTERM — read before writing an app
 
 A **session** app is stopped when it goes idle: the daemon sends `SIGTERM` to

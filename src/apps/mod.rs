@@ -11,11 +11,15 @@
 //! - [`requirements`] — does this machine have Node 18 / Python 3.10 / ffmpeg?
 //! - [`prepare`] — `npm ci` / `pip install` into a venv, once per install.
 //! - [`sandbox_decl`] — applying the confinement an app declares for itself.
+//! - [`token`] — the per-app access token that says *which* app is calling
+//!   `/api/space/apps/<id>/…`, and the API contract version it was built for.
 
 pub mod manifest;
 pub mod prepare;
 pub mod requirements;
 pub mod sandbox_decl;
+pub mod token;
 
 pub use manifest::{RunMode, Runner, Requires, RuntimeSpec, SandboxDecl};
 pub use requirements::{CheckResult, RequirementsReport};
+pub use token::{TokenMode, API_VERSION, ENV_API_VERSION, ENV_APP_TOKEN};

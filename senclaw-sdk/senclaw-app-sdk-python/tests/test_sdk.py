@@ -546,3 +546,144 @@ def test_bridge_passes_through_a_payload_with_no_status_field():
         assert d.client().knowledge_search("q") == []
     finally:
         d.close()
+
+
+# ---------------------------------------------------------------------------
+# App access token — the app's identity, both directions
+# ---------------------------------------------------------------------------
+
+from senclaw_space import (  # noqa: E402
+    ENV_APP_TOKEN,
+    HEADER_APP_TOKEN,
+    HEADER_API_VERSION,
+    api_version_from_env,
+)
+
+_TOKEN = "sca_" + "a" * 64
+
+
+class _HeaderRecordingDaemon:
+    """Like _FakeDaemon, but keeps the request headers — which is the whole
+    point here: the token is invisible in the body."""
+
+    def __init__(self) -> None:
+        self.headers: list[dict] = []
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        self.port = sock.getsockname()[1]
+        sock.close()
+        outer = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):  # noqa: A003
+                return
+
+            def _reply(self):
+                outer.headers.append({k.lower(): v for k, v in self.headers.items()})
+                body = b'{"items":[]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = _reply
+            do_POST = _reply
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", self.port), H)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def test_client_sends_token_and_version_on_every_call():
+    d = _HeaderRecordingDaemon()
+    try:
+        space = SenclawSpace(
+            app_id="t", base_url=f"http://127.0.0.1:{d.port}", app_token=_TOKEN
+        )
+        space.list_config()
+        sent = d.headers[0]
+        assert sent[HEADER_APP_TOKEN.lower()] == _TOKEN
+        assert sent[HEADER_API_VERSION.lower()], "the daemon cannot negotiate an unstated contract"
+    finally:
+        d.close()
+
+
+def test_client_omits_an_empty_token_header():
+    # Running the app by hand: nothing in the environment. Sending the header
+    # blank would make the daemon try to resolve "" and refuse a call its
+    # default mode would have served.
+    d = _HeaderRecordingDaemon()
+    try:
+        space = SenclawSpace(app_id="t", base_url=f"http://127.0.0.1:{d.port}", app_token="")
+        space.list_config()
+        assert HEADER_APP_TOKEN.lower() not in d.headers[0]
+    finally:
+        d.close()
+
+
+def test_api_version_from_env_ignores_garbage():
+    old = os.environ.get("SENCLAW_API_VERSION")
+    try:
+        os.environ["SENCLAW_API_VERSION"] = "7"
+        assert api_version_from_env() == 7
+        # A non-numeric value must not become 0, which would drop the header.
+        os.environ["SENCLAW_API_VERSION"] = "v2"
+        assert api_version_from_env() >= 1
+    finally:
+        if old is None:
+            os.environ.pop("SENCLAW_API_VERSION", None)
+        else:
+            os.environ["SENCLAW_API_VERSION"] = old
+
+
+def test_serve_guard_refuses_everyone_but_the_daemon():
+    old = os.environ.get(ENV_APP_TOKEN)
+    os.environ[ENV_APP_TOKEN] = _TOKEN
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    p = sock.getsockname()[1]
+    sock.close()
+    os.environ["PORT"] = str(p)
+    t = threading.Thread(
+        target=serve,
+        args=({("GET", "/api/notes"): lambda req: {"ok": True}},),
+        kwargs={
+            "health_path": "/api/status",
+            "require_app_token": True,
+            "auth_skip_paths": ["/public/*"],
+            "log": lambda m: None,
+        },
+        daemon=True,
+    )
+    t.start()
+    time.sleep(0.4)
+
+    def call(path: str, token: str | None) -> int:
+        req = urllib.request.Request(f"http://127.0.0.1:{p}{path}")
+        if token:
+            req.add_header(HEADER_APP_TOKEN, token)
+        try:
+            with urllib.request.urlopen(req, timeout=3) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    try:
+        assert call("/api/notes", _TOKEN) == 200, "the daemon's own request must pass"
+        # What the guard exists to stop: another local process on the port.
+        assert call("/api/notes", None) == 401
+        assert call("/api/notes", "sca_" + "f" * 64) == 401
+        # The daemon's health check runs before anything is proxied; locking it
+        # out would make the app look permanently dead.
+        assert call("/api/status", None) == 200
+        assert call("/public/logo.png", None) in (200, 404), "skipped prefix must not 401"
+    finally:
+        if old is None:
+            os.environ.pop(ENV_APP_TOKEN, None)
+        else:
+            os.environ[ENV_APP_TOKEN] = old
+        os.environ.pop("PORT", None)

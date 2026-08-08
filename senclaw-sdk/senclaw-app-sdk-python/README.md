@@ -161,6 +161,47 @@ có hiệu lực chứ không phải một lỗi.
 | `space.get_config` / `set_config` | Cùng KV mà UI của app đọc/ghi — không phải file trong thư mục app (update sẽ đè) |
 | `McpServer` | JSON-RPC `initialize` / `tools/list` / `tools/call`, không cần MCP SDK |
 
+## Token truy cập của app
+
+Daemon phát cho mỗi app đã cài một token, đặt vào môi trường tiến trình qua
+`SENCLAW_TOKEN_ACCESS_APP`. Đó là **định danh** của app: token gắn với đúng một
+app id, dùng cho id khác sẽ bị từ chối. Không có nó, bất kỳ tiến trình nào biết
+id của app — mà id là công khai — cũng đọc được settings, truy vấn được database
+và điều khiển được AI bridge của app đó.
+
+**Chiều ra: tự động.** `SenclawSpace()` đọc token từ môi trường và gửi kèm
+(cùng `X-SenClaw-Api-Version`) trên mọi lời gọi daemon. Chạy tay thì truyền
+thẳng:
+
+```python
+space = SenclawSpace(app_id="demo", app_token="sca_…")
+```
+
+**Chiều vào: bật thủ công.** REST + MCP của chính app không có xác thực nào —
+cổng mở cho mọi tiến trình trên máy. Bật guard thì chỉ còn daemon gọi được, vì
+proxy của daemon đóng dấu token lên mọi request nó chuyển tiếp (iframe UI, fetch
+của app, mọi lời gọi MCP):
+
+```python
+serve(
+    routes,
+    health_path="/api/status",     # luôn được miễn
+    require_app_token=True,
+    auth_skip_paths=["/public/*"], # extension gọi thẳng
+)
+```
+
+Hai trường hợp không bao giờ bị từ chối: **không có token trong env** (đó là
+`python app.py` chạy tay ngoài SenClaw — trả 401 cho cả health check sẽ biến
+"chưa phát token" thành "app chết"), và các đường dẫn miễn trừ ở trên.
+
+`SENCLAW_API_VERSION` mang phiên bản hợp đồng (hiện là 2). Daemon phục vụ hợp
+đồng cũ hơn bình thường; hợp đồng mới hơn nó chưa hỗ trợ thì trả **426** thay vì
+trả lời nửa vời.
+
+Hướng dẫn đầy đủ, gồm cả `SENCLAW_APP_TOKEN_MODE=strict`:
+[docs/space-app-api-token.md](https://github.com/NortonBen/SenClaw/blob/main/docs/space-app-api-token.md).
+
 ## SIGTERM — đọc trước khi viết app
 
 Một app **session** bị dừng khi rảnh: daemon gửi `SIGTERM` cho cả process

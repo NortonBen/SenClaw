@@ -130,6 +130,13 @@ pub async fn dispatch(bridge: &ApiBridgeState, req: ApiRequest) -> ApiResponse {
         .method(req.method.as_str())
         .uri(req.path.as_str())
         .header("content-type", "application/json")
+        // A relay frame is already authenticated by relay pairing, and this
+        // synthesised request carries none of the marks a browser leaves — so
+        // the per-app token middleware would take the phone app for an
+        // unidentified process and, under strict mode, refuse it every
+        // `/api/space/apps/<id>/…` call. An extension, not a header: nothing on
+        // the network can forge one.
+        .extension(super::app_auth::TrustedOperator)
         .body(req.body.map(Body::from).unwrap_or_else(Body::empty))
     {
         Ok(r) => r,

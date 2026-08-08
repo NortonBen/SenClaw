@@ -14,6 +14,50 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
+/// Env var carrying this app's access token into its process.
+///
+/// The daemon mints one token per installed app and puts it here on every
+/// launch. Presenting it on `/api/space/apps/<id>/…` is what tells the daemon
+/// *which* app is calling: a token is bound to one app id, and using it against
+/// another is refused. Without it, any local process that knows an app's id —
+/// which is public — could read that app's settings, query its database and
+/// drive its AI bridge.
+pub const ENV_APP_TOKEN: &str = "SENCLAW_TOKEN_ACCESS_APP";
+
+/// Env var carrying the Space-App API contract version.
+pub const ENV_API_VERSION: &str = "SENCLAW_API_VERSION";
+
+/// Header the access token travels in.
+pub const HEADER_APP_TOKEN: &str = "x-senclaw-app-token";
+
+/// Header the contract version travels in, both directions.
+pub const HEADER_API_VERSION: &str = "x-senclaw-api-version";
+
+/// The Space-App API contract this SDK is written against. Sent on every call;
+/// a daemon serving an older contract answers 426 rather than half-answering.
+pub const API_VERSION: u32 = 2;
+
+/// The access token the daemon issued this app, or `None` outside SenClaw.
+///
+/// `None` is not an error: a daemon on the default `SENCLAW_APP_TOKEN_MODE=off`
+/// serves tokenless calls exactly as it always did. Under `strict` they are
+/// refused — which is the point.
+pub fn app_token_from_env() -> Option<String> {
+    std::env::var(ENV_APP_TOKEN)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// The contract version the daemon launched this app under.
+pub fn api_version_from_env() -> u32 {
+    std::env::var(ENV_API_VERSION)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(API_VERSION)
+}
+
 /// A client for the SenClaw daemon's Space-App open API.
 #[derive(Clone, Debug)]
 pub struct SpaceClient {
@@ -22,6 +66,38 @@ pub struct SpaceClient {
     /// This app's id (used for the per-app bridge endpoint).
     pub app_id: String,
     http: reqwest::Client,
+}
+
+/// Build the HTTP client that stamps this app's identity on every request.
+///
+/// Default headers rather than per-call `.header(…)`: this client has a dozen
+/// call sites and the one that gets forgotten is the one that breaks under
+/// `SENCLAW_APP_TOKEN_MODE=strict`, months later, in whichever app touched it
+/// last. An absent token adds no header at all — sending it blank would make
+/// the daemon try to resolve `""` and refuse a call its default mode serves.
+fn http_client(token: Option<&str>, api_version: u32) -> reqwest::Client {
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+    let mut headers = HeaderMap::new();
+    if let Some(t) = token {
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(HEADER_APP_TOKEN.as_bytes()),
+            HeaderValue::from_str(t),
+        ) {
+            let mut value = value;
+            value.set_sensitive(true);
+            headers.insert(name, value);
+        }
+    }
+    if let (Ok(name), Ok(value)) = (
+        HeaderName::from_bytes(HEADER_API_VERSION.as_bytes()),
+        HeaderValue::from_str(&api_version.to_string()),
+    ) {
+        headers.insert(name, value);
+    }
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 /// One configured LLM in the daemon.
@@ -56,11 +132,29 @@ pub struct LlmReply {
 }
 
 impl SpaceClient {
+    /// The access token and contract version still come from the environment —
+    /// they are this *process's* identity, not something a caller picks. Use
+    /// [`SpaceClient::with_token`] to override them when running by hand.
     pub fn new(base_url: impl Into<String>, app_id: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             app_id: app_id.into(),
-            http: reqwest::Client::new(),
+            http: http_client(app_token_from_env().as_deref(), api_version_from_env()),
+        }
+    }
+
+    /// Same, with an explicit access token. Pass it when running the app by
+    /// hand against a live daemon — Plugins → Space Apps shows the token, as
+    /// does `GET /api/space/apps/<id>/token`.
+    pub fn with_token(
+        base_url: impl Into<String>,
+        app_id: impl Into<String>,
+        token: Option<&str>,
+    ) -> Self {
+        Self {
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            app_id: app_id.into(),
+            http: http_client(token, api_version_from_env()),
         }
     }
 
