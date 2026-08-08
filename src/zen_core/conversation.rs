@@ -202,6 +202,7 @@ async fn summarize_history(
         &config.profile,
         false,
         false,
+        None, // compaction is internal — nothing to stream to the UI
     )
     .await?;
 
@@ -993,6 +994,27 @@ pub async fn query(
             config.stream
         );
         let llm_started = std::time::Instant::now();
+        // Live text sink: every visible delta becomes a `TextChunk` event while
+        // the turn runs, so the UI paints as the model writes and the voice
+        // pipeline can speak the first sentence long before the turn ends.
+        // Without this the whole answer only appears at `MessageComplete`.
+        let delta_sink: query_llm::TextDeltaSink = {
+            let bus = config.event_bus.clone();
+            let agent_id = config.agent_id.clone();
+            let cumulative = std::sync::Mutex::new(String::new());
+            Arc::new(move |delta: &str| {
+                let content = {
+                    let mut c = cumulative.lock().unwrap();
+                    c.push_str(delta);
+                    c.clone()
+                };
+                bus.emit(EngineEvent::TextChunk(TextChunkData {
+                    agent_id: agent_id.clone(),
+                    content,
+                    delta: delta.to_string(),
+                }));
+            })
+        };
         let llm_call = query_llm::query_llm(
             &config.http_client,
             &messages,
@@ -1002,6 +1024,7 @@ pub async fn query(
             &config.profile,
             config.thinking,
             config.stream,
+            Some(&delta_sink),
         );
         // Local native inference (Candle CPU/Metal, MLX native) runs in-process
         // and is much slower than cloud APIs — especially MLX with TurboQuant

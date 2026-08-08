@@ -142,6 +142,7 @@ pub async fn execute_prompt_hook(
         profile,
         false,
         false,
+        None, // hook prompt — never surfaces in a chat bubble
     );
 
     let hook_started = std::time::Instant::now();

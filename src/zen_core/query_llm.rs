@@ -20,6 +20,50 @@ use super::*;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Sink for assistant text as it streams off the provider — called once per
+/// text delta, in arrival order, while the turn is still running.
+///
+/// `conversation.rs` wires it to `EngineEvent::TextChunk`, which the AgentPool
+/// forwards to the UI as `agent:delta`. That is what lets a client start on the
+/// first sentence (voice chat speaks it through TTS) instead of waiting for the
+/// completed turn.
+pub type TextDeltaSink = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// Reassembles SSE lines across network chunk boundaries.
+///
+/// A `bytes_stream()` chunk cuts wherever TCP happened to split: mid-line, and
+/// mid-UTF-8-sequence. Decoding each chunk on its own and iterating `.lines()`
+/// therefore handed truncated JSON to the parser, which `continue`d past it —
+/// silently dropping whatever text that event carried. Buffer bytes, cut on
+/// `\n`, and only decode complete lines.
+#[derive(Default)]
+struct SseLines {
+    buf: Vec<u8>,
+}
+
+impl SseLines {
+    /// Feed one network chunk; returns every complete line it completed.
+    fn push(&mut self, chunk: &[u8]) -> Vec<String> {
+        self.buf.extend_from_slice(chunk);
+        let mut out = Vec::new();
+        while let Some(pos) = self.buf.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = self.buf.drain(..=pos).collect();
+            out.push(String::from_utf8_lossy(&line).trim().to_string());
+        }
+        out
+    }
+
+    /// Whatever is left when the stream ends without a trailing newline.
+    fn flush(&mut self) -> Option<String> {
+        if self.buf.is_empty() {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&self.buf).trim().to_string();
+        self.buf.clear();
+        (!line.is_empty()).then_some(line)
+    }
+}
+
 // ============================================================================
 // Credentials
 // ============================================================================
@@ -127,6 +171,7 @@ pub async fn query_llm(
     profile: &ModelProfile,
     thinking: bool,
     stream: bool,
+    on_delta: Option<&TextDeltaSink>,
 ) -> Result<Message> {
     let adapt = effective_adapter(profile);
     info!(
@@ -165,6 +210,7 @@ pub async fn query_llm(
                 profile,
                 thinking,
                 stream,
+                on_delta,
             )
             .await
         }
@@ -197,7 +243,8 @@ pub async fn query_llm(
             .await
         }
         "local-candle-native" => {
-            query_local_candle_native(messages, system_prompt, tools, cancel, profile).await
+            query_local_candle_native(messages, system_prompt, tools, cancel, profile, on_delta)
+                .await
         }
         "local-mlx" => {
             query_local_mlx(
@@ -208,6 +255,7 @@ pub async fn query_llm(
                 cancel,
                 profile,
                 stream,
+                on_delta,
             )
             .await
         }
@@ -221,6 +269,7 @@ pub async fn query_llm(
                 profile,
                 thinking,
                 stream,
+                on_delta,
             )
             .await
         }
@@ -371,12 +420,19 @@ pub(crate) fn effective_adapter(profile: &ModelProfile) -> &str {
 /// Uses the same OpenAI-shaped `messages` / `tools` for chat-template rendering;
 /// parses Qwen-style `<tool_call>…</tool_call>` from the generated text.
 #[allow(unused_variables)]
+/// NOTE on `_on_delta`: the local backends stream RAW model tokens, still
+/// carrying the dialect's thinking/tool markers (`<think>`, harmony channels).
+/// Those are only stripped at the end by `stream_parser::parse_complete`, so
+/// forwarding them live would push `<think>` fragments into the chat bubble —
+/// and into the TTS pipeline, which would read them out loud. Local turns
+/// therefore stay non-incremental until the parser can run streaming.
 async fn query_local_candle_native(
     messages: &[Message],
     system_prompt: &str,
     tools: &[Arc<dyn Tool>],
     cancel: &CancellationToken,
     profile: &ModelProfile,
+    _on_delta: Option<&TextDeltaSink>,
 ) -> Result<Message> {
     #[cfg(not(feature = "local-candle"))]
     {
@@ -736,6 +792,9 @@ async fn query_local_mlx(
     cancel: &CancellationToken,
     profile: &ModelProfile,
     _stream: bool,
+    // See `query_local_candle_native` — raw local tokens are not safe to
+    // forward incrementally.
+    _on_delta: Option<&TextDeltaSink>,
 ) -> Result<Message> {
     #[cfg(not(feature = "local-mlx"))]
     {
@@ -859,6 +918,7 @@ async fn query_openai(
     profile: &ModelProfile,
     _thinking: bool,
     stream: bool,
+    on_delta: Option<&TextDeltaSink>,
 ) -> Result<Message> {
     let url = format!(
         "{}/chat/completions",
@@ -914,7 +974,7 @@ async fn query_openai(
     }
 
     if stream {
-        parse_openai_stream(response, cancel).await
+        parse_openai_stream(response, cancel, on_delta).await
     } else {
         let json: Value = response.json().await.context("OpenAI JSON parse")?;
         parse_openai_non_stream(&json)
@@ -924,6 +984,7 @@ async fn query_openai(
 async fn parse_openai_stream(
     response: reqwest::Response,
     cancel: &CancellationToken,
+    on_delta: Option<&TextDeltaSink>,
 ) -> Result<Message> {
     let mut stream = response.bytes_stream();
     let mut text_buf = String::new();
@@ -931,17 +992,29 @@ async fn parse_openai_stream(
     let mut tool_calls: Vec<Value> = Vec::new();
     let mut model_name = String::new();
     let mut usage: Option<RawUsage> = None;
+    let mut lines = SseLines::default();
 
-    while let Some(chunk_result) = stream.next().await {
+    let mut ended = false;
+    while !ended {
         if cancel.is_cancelled() {
             bail!("Stream cancelled");
         }
 
-        let chunk = chunk_result.context("OpenAI stream chunk error")?;
-        let chunk_str = String::from_utf8_lossy(&chunk);
+        // On stream end, flush the buffer once: a provider that omits the
+        // trailing newline would otherwise strand its last event.
+        let batch = match stream.next().await {
+            Some(chunk_result) => {
+                let chunk = chunk_result.context("OpenAI stream chunk error")?;
+                lines.push(&chunk)
+            }
+            None => {
+                ended = true;
+                lines.flush().into_iter().collect()
+            }
+        };
 
-        for line in chunk_str.lines() {
-            let line = line.trim();
+        for line in batch {
+            let line = line.as_str();
             if line.is_empty() || line == "data: [DONE]" {
                 continue;
             }
@@ -951,7 +1024,10 @@ async fn parse_openai_stream(
             let json_str = &line[6..];
             let delta: Value = match serde_json::from_str(json_str) {
                 Ok(v) => v,
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::warn!("[llm-stream] openai: undecodable SSE line ({e}) — dropped");
+                    continue;
+                }
             };
 
             if model_name.is_empty() {
@@ -969,6 +1045,11 @@ async fn parse_openai_stream(
                     if let Some(delta) = choice.get("delta") {
                         if let Some(content) = delta["content"].as_str() {
                             text_buf.push_str(content);
+                            if !content.is_empty() {
+                                if let Some(sink) = on_delta {
+                                    sink(content);
+                                }
+                            }
                         }
                         if let Some(reasoning) = delta["reasoning_content"].as_str() {
                             reasoning_buf.push_str(reasoning);
@@ -1129,6 +1210,7 @@ async fn query_anthropic(
     profile: &ModelProfile,
     thinking: bool,
     stream: bool,
+    on_delta: Option<&TextDeltaSink>,
 ) -> Result<Message> {
     let url = format!("{}/v1/messages", profile.base_url.trim_end_matches('/'));
 
@@ -1187,7 +1269,7 @@ async fn query_anthropic(
     }
 
     if stream {
-        parse_anthropic_stream(response, cancel).await
+        parse_anthropic_stream(response, cancel, on_delta).await
     } else {
         let json: Value = response.json().await.context("Anthropic JSON parse")?;
         parse_anthropic_non_stream(&json)
@@ -1197,6 +1279,7 @@ async fn query_anthropic(
 async fn parse_anthropic_stream(
     response: reqwest::Response,
     cancel: &CancellationToken,
+    on_delta: Option<&TextDeltaSink>,
 ) -> Result<Message> {
     let mut stream = response.bytes_stream();
     let mut text_buf = String::new();
@@ -1204,17 +1287,27 @@ async fn parse_anthropic_stream(
     let mut tool_use_blocks: Vec<Value> = Vec::new();
     let mut current_tool_idx: Option<usize> = None;
     let mut usage: Option<RawUsage> = None;
+    let mut lines = SseLines::default();
 
-    while let Some(chunk_result) = stream.next().await {
+    let mut ended = false;
+    while !ended {
         if cancel.is_cancelled() {
             bail!("Stream cancelled");
         }
 
-        let chunk = chunk_result.context("Anthropic stream chunk error")?;
-        let chunk_str = String::from_utf8_lossy(&chunk);
+        let batch = match stream.next().await {
+            Some(chunk_result) => {
+                let chunk = chunk_result.context("Anthropic stream chunk error")?;
+                lines.push(&chunk)
+            }
+            None => {
+                ended = true;
+                lines.flush().into_iter().collect()
+            }
+        };
 
-        for line in chunk_str.lines() {
-            let line = line.trim();
+        for line in batch {
+            let line = line.as_str();
             if line.is_empty() {
                 continue;
             }
@@ -1224,7 +1317,10 @@ async fn parse_anthropic_stream(
             let json_str = &line[6..];
             let event: Value = match serde_json::from_str(json_str) {
                 Ok(v) => v,
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::warn!("[llm-stream] anthropic: undecodable SSE line ({e}) — dropped");
+                    continue;
+                }
             };
 
             let event_type = event["type"].as_str().unwrap_or("");
@@ -1260,8 +1356,11 @@ async fn parse_anthropic_stream(
                     if let Some(delta) = event.get("delta") {
                         match delta["type"].as_str().unwrap_or("") {
                             "text_delta" => {
-                                if let Some(t) = delta["text"].as_str() {
+                                if let Some(t) = delta["text"].as_str().filter(|t| !t.is_empty()) {
                                     text_buf.push_str(t);
+                                    if let Some(sink) = on_delta {
+                                        sink(t);
+                                    }
                                 }
                             }
                             "thinking_delta" => {
@@ -1665,6 +1764,55 @@ pub fn create_llm_client() -> Result<Client> {
         .timeout(REQUEST_TIMEOUT)
         .build()
         .context("Failed to create HTTP client")
+}
+
+#[cfg(test)]
+mod sse_tests {
+    use super::SseLines;
+
+    #[test]
+    fn splits_complete_lines_and_keeps_the_remainder() {
+        let mut lines = SseLines::default();
+        assert_eq!(lines.push(b"data: {\"a\":1}\n"), vec!["data: {\"a\":1}"]);
+        // No newline yet — nothing may be emitted.
+        assert!(lines.push(b"data: {\"b\"").is_empty());
+        assert_eq!(lines.push(b":2}\n"), vec!["data: {\"b\":2}"]);
+    }
+
+    /// The bug this type exists for: a `data:` line cut by the network used to
+    /// be decoded on its own, fail to parse, and be dropped — losing the text
+    /// it carried from both the stream and the final message.
+    #[test]
+    fn reassembles_a_line_split_across_three_chunks() {
+        let mut lines = SseLines::default();
+        let mut out = Vec::new();
+        for part in [b"data: {\"tex".as_ref(), b"t\":\"hel".as_ref(), b"lo\"}\n\n".as_ref()] {
+            out.extend(lines.push(part));
+        }
+        assert_eq!(out, vec!["data: {\"text\":\"hello\"}", ""]);
+    }
+
+    /// A chunk boundary inside a multi-byte character must not corrupt it —
+    /// decoding per chunk turned Vietnamese diacritics into replacement chars.
+    #[test]
+    fn survives_a_split_inside_a_utf8_sequence() {
+        let text = "chào bạn";
+        let payload = format!("data: {text}\n");
+        let bytes = payload.as_bytes();
+        let cut = payload.find('à').unwrap() + 1; // mid-sequence
+
+        let mut lines = SseLines::default();
+        assert!(lines.push(&bytes[..cut]).is_empty());
+        assert_eq!(lines.push(&bytes[cut..]), vec![format!("data: {text}")]);
+    }
+
+    #[test]
+    fn flush_returns_a_trailing_line_without_a_newline() {
+        let mut lines = SseLines::default();
+        assert!(lines.push(b"data: [DONE]").is_empty());
+        assert_eq!(lines.flush().as_deref(), Some("data: [DONE]"));
+        assert_eq!(lines.flush(), None);
+    }
 }
 
 #[cfg(test)]

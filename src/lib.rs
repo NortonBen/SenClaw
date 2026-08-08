@@ -604,6 +604,18 @@ impl agent::agent_pool::AgentEventSink for WsAgentEventSink {
         });
     }
 
+    fn notify_agent_delta(&self, chat_jid: &str, delta: &str) {
+        let gw = Arc::clone(&self.gateway);
+        let jid = chat_jid.to_string();
+        let delta = delta.to_string();
+        // Deliberately NOT persisted: the completed `agent:reply` is the record
+        // of the turn. Writing a row per token would bloat the chat log and
+        // replay duplicated text on history load.
+        tokio::spawn(async move {
+            gw.notify_agent_delta(&jid, &delta).await;
+        });
+    }
+
     fn notify_agent_state(&self, chat_jid: &str, state: &str) {
         let gw = Arc::clone(&self.gateway);
         let db = Arc::clone(&self.db);

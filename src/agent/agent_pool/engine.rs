@@ -10,7 +10,7 @@ use reqwest::Client;
 use super::traits::{AgentToolInfo, CoreApi, CoreHandlers};
 use super::types::{
     AskQuestionRequestData, CompactExecData, CompactStartData, MessageCompleteData,
-    SessionErrorData, StateUpdateData, TodosUpdateItem, ToolPermissionRequestData,
+    SessionErrorData, StateUpdateData, TodosUpdateItem, ToolPermissionRequestData, MAIN_AGENT_ID,
 };
 use crate::agent::permission_bridge::{AskQuestionData, AskQuestionOption};
 use crate::config::Config;
@@ -273,6 +273,16 @@ impl ZenCoreApi {
                                         has_tool_calls: data.has_tool_calls,
                                         output_tokens: data.output_tokens,
                                     });
+                                }
+                            }
+                            EngineEvent::TextChunk(data) => {
+                                // Sub-agent text is not the user-facing reply —
+                                // streaming it would interleave a dispatched
+                                // worker's prose into the chat bubble.
+                                if data.agent_id == MAIN_AGENT_ID {
+                                    if let Some(ref cb) = h.text_chunk {
+                                        cb(data);
+                                    }
                                 }
                             }
                             EngineEvent::StateUpdate(data) => {
@@ -656,6 +666,16 @@ impl CoreApi for ZenCoreApi {
     fn on_state_update(&self, jid: &str, handler: Box<dyn Fn(StateUpdateData) + Send + Sync>) {
         self.with_handlers(jid, |entry| {
             entry.state_update = Some(Arc::from(handler));
+        });
+    }
+
+    fn on_text_chunk(
+        &self,
+        jid: &str,
+        handler: Box<dyn Fn(crate::zen_core::TextChunkData) + Send + Sync>,
+    ) {
+        self.with_handlers(jid, |entry| {
+            entry.text_chunk = Some(Arc::from(handler));
         });
     }
 

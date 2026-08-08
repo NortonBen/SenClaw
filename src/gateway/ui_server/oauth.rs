@@ -292,6 +292,7 @@ pub(crate) async fn oauth_test_model(
         &profile,
         false,
         false,
+        None, // connectivity probe
     )
     .await;
     let elapsed_ms = started.elapsed().as_millis() as u64;

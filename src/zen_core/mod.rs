@@ -306,8 +306,15 @@ pub struct ThinkingChunkData {
 }
 
 /// Event: `message:text:chunk`
+///
+/// One incremental slice of the assistant's visible answer, emitted while the
+/// turn is still running. `content` is the cumulative text so far, `delta` just
+/// the new piece. `agent_id` is what lets consumers keep sub-agent chatter out
+/// of the chat stream — only `MAIN_AGENT_ID` is the user-facing reply.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TextChunkData {
+    #[serde(default, rename = "agentId")]
+    pub agent_id: String,
     pub content: String,
     pub delta: String,
 }

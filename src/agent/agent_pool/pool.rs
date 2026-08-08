@@ -2568,6 +2568,29 @@ impl AgentPool {
             );
         }
 
+        // ---- message:text:chunk (live reply streaming) ----
+        //
+        // Forwards each visible delta to the UI as `agent:delta`. The Web and
+        // desktop clients accumulate it into a streaming bubble; voice chat
+        // additionally carves it into sentences and starts TTS on the first one,
+        // so the assistant begins talking while the model is still writing.
+        {
+            let pool = Arc::clone(self);
+            let jid = _jid.clone();
+            let jid_arg = jid.clone();
+            self.core_api.on_text_chunk(
+                &jid_arg,
+                Box::new(move |data: crate::zen_core::TextChunkData| {
+                    if data.delta.is_empty() {
+                        return;
+                    }
+                    if let Some(sink) = pool.agent_event_sink.lock().unwrap().as_ref() {
+                        sink.notify_agent_delta(&jid, &data.delta);
+                    }
+                }),
+            );
+        }
+
         // ---- state:update ----
         {
             let pool = Arc::clone(self);

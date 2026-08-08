@@ -24,6 +24,10 @@ use crate::types::GroupBinding;
 pub trait AgentEventSink: Send + Sync {
     fn notify_agent_reply(&self, chat_jid: &str, text: &str, tokens: u32);
     fn notify_agent_state(&self, chat_jid: &str, state: &str);
+    /// Incremental slice of the reply being written. Default no-op: channels
+    /// that can only deliver whole messages (Telegram, Feishu…) ignore it; the
+    /// Web/desktop UI accumulates it into a live bubble.
+    fn notify_agent_delta(&self, chat_jid: &str, delta: &str) {}
     fn notify_permission_request(
         &self,
         chat_jid: &str,
@@ -198,6 +202,13 @@ pub trait CoreApi: Send + Sync {
     ) {
     }
     fn on_state_update(&self, _jid: &str, _handler: Box<dyn Fn(StateUpdateData) + Send + Sync>) {}
+    /// Incremental assistant text, while the turn is still running.
+    fn on_text_chunk(
+        &self,
+        _jid: &str,
+        _handler: Box<dyn Fn(crate::zen_core::TextChunkData) + Send + Sync>,
+    ) {
+    }
     fn on_todos_update(
         &self,
         _jid: &str,
@@ -277,6 +288,7 @@ pub trait CoreApi: Send + Sync {
 pub(crate) struct CoreHandlers {
     pub message_complete: Option<Arc<dyn Fn(MessageCompleteData) + Send + Sync>>,
     pub state_update: Option<Arc<dyn Fn(StateUpdateData) + Send + Sync>>,
+    pub text_chunk: Option<Arc<dyn Fn(crate::zen_core::TextChunkData) + Send + Sync>>,
     pub todos_update: Option<Arc<dyn Fn(Vec<TodosUpdateItem>) + Send + Sync>>,
     pub compact_start: Option<Arc<dyn Fn(CompactStartData) + Send + Sync>>,
     pub compact_exec: Option<Arc<dyn Fn(CompactExecData) + Send + Sync>>,

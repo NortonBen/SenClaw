@@ -393,7 +393,7 @@ async fn dispatch_completion(
     let messages = vec![crate::zen_core::create_user_message(blocks)];
 
     let msg = crate::zen_core::query_llm::query_llm(
-        client, &messages, system, &[], &cancel, profile, false, false,
+        client, &messages, system, &[], &cancel, profile, false, false, None,
     )
     .await
     .map_err(|e| format!("LLM request failed: {e}"))?;
