@@ -29,7 +29,7 @@ class _FakeSandboxApi implements ApiClient {
   void dispose() {}
 
   @override
-  Future<dynamic> get(String path, {Map<String, dynamic>? query}) async {
+  Future<dynamic> get(String path, {Map<String, dynamic>? query, Duration? timeout}) async {
     calls.add('GET $path');
     switch (path) {
       case '/api/space/apps/sandbox-overview':

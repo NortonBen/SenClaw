@@ -21,7 +21,7 @@ class _RecordingApi implements ApiClient {
   void dispose() {}
 
   @override
-  Future<dynamic> get(String path, {Map<String, dynamic>? query}) async => {};
+  Future<dynamic> get(String path, {Map<String, dynamic>? query, Duration? timeout}) async => {};
 
   @override
   Future<dynamic> post(String path, {Object? body}) async {

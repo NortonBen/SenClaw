@@ -33,8 +33,10 @@ const Map<String, String> viShellMisc = {
 
   // ── Startup gate (boot splash / daemon crash) ──────────────────────────
   'Starting SenClaw daemon…': 'Đang khởi động daemon SenClaw…',
+  'Connecting to the SenClaw daemon…': 'Đang kết nối tới daemon SenClaw…',
   'Daemon started': 'Daemon đã chạy',
   'Cannot reach the SenClaw daemon': 'Không kết nối được daemon SenClaw',
+  'Free the port and retry': 'Giải phóng cổng rồi thử lại',
 
   // ── Updater (update_service.dart / update_provider.dart) ───────────────
   'This is a dev build — updates are disabled.':

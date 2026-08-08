@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import 'port_tools.dart';
+
 /// Lifecycle of the local daemon as seen by the desktop app.
 enum DaemonPhase {
   idle, // not started yet
@@ -23,11 +25,57 @@ enum DaemonPhase {
 /// If a daemon is already listening on the UI port (e.g. started by `cargo run`
 /// or a second window), we ADOPT it instead of spawning a conflicting one.
 class DaemonSupervisor extends ChangeNotifier {
-  DaemonSupervisor({this.host = '127.0.0.1', this.uiPort = 18788, this.wsPort = 18789});
+  DaemonSupervisor({
+    this.host = '127.0.0.1',
+    this.uiPort = 18788,
+    this.wsPort = 18789,
+    String bindHost = kPrivateBindHost,
+    this.adoptProbeBudget = const Duration(seconds: 12),
+  }) : _bindHost = bindHost;
+
+  /// How long a port that is open but silent gets to start answering before we
+  /// declare it unusable. Injectable so tests need not wait it out.
+  final Duration adoptProbeBudget;
+
+  /// Loopback: the daemon answers this machine only. The default, and the
+  /// only setting that needs no authentication.
+  static const String kPrivateBindHost = '127.0.0.1';
+
+  /// Every interface: the daemon is reachable from the LAN. The daemon turns
+  /// API-token auth on by itself for non-loopback peers (see auth.rs).
+  static const String kPublicBindHost = '0.0.0.0';
 
   final String host;
   final int uiPort;
   final int wsPort;
+
+  String _bindHost;
+  String? _activeBindHost;
+
+  /// What the daemon we are TALKING TO actually bound, as opposed to what the
+  /// next spawn will use. `null` when no daemon of ours is up, and also for an
+  /// adopted one — a daemon started outside the app took its bind host from
+  /// its own environment and we cannot know it. Kept apart from [bindHost] so
+  /// the settings panel can tell "already applied" from "needs a restart"; one
+  /// field for both would always report "applied" the instant it was changed.
+  String? get activeBindHost => _activeBindHost;
+
+  /// Whether the running daemon is serving something other than the current
+  /// choice — i.e. whether a restart is owed. False when nothing is running:
+  /// there is nothing to restart, and the next start picks the choice up.
+  bool get bindHostPending => isUp && _activeBindHost != _bindHost;
+
+  /// What the spawned daemon binds to (`SENCLAW_UI_BIND_HOST`). Takes effect on
+  /// the next [start]/[restart] — a listening socket cannot be re-bound.
+  String get bindHost => _bindHost;
+  set bindHost(String value) {
+    final next = value.trim().isEmpty ? kPrivateBindHost : value.trim();
+    if (next == _bindHost) return;
+    _bindHost = next;
+    notifyListeners();
+  }
+
+  bool get isPublicBind => _bindHost != kPrivateBindHost && _bindHost != 'localhost';
 
   static const int _logCap = 2000;
 
@@ -58,10 +106,22 @@ class DaemonSupervisor extends ChangeNotifier {
     }
     if (_phase == DaemonPhase.starting || _phase == DaemonPhase.running) return;
 
-    // Adopt an already-running daemon rather than fighting over the port.
+    // Adopt an already-running daemon rather than fighting over the port —
+    // but only one that ANSWERS. A TCP accept proves a process holds the port,
+    // not that it serves the API: a daemon killed mid-update, a wedged one, or
+    // an unrelated program on 18788 all pass the connect test and then never
+    // reply, which used to strand the app on a blank white screen forever.
     if (await _portOpen(uiPort)) {
-      _log('[supervisor] daemon already listening on $uiPort — adopting');
-      _setPhase(DaemonPhase.adopted);
+      if (await _httpAnswers(uiPort, budget: adoptProbeBudget)) {
+        _log('[supervisor] daemon already listening on $uiPort — adopting');
+        _activeBindHost = null; // its environment, not ours
+        _setPhase(DaemonPhase.adopted);
+        return;
+      }
+      _lastError = 'port $uiPort is held by a process that does not answer the '
+          'SenClaw API — close it (Diagnostics → Kill port) and retry';
+      _log('[supervisor] $_lastError');
+      _setPhase(DaemonPhase.crashed);
       return;
     }
 
@@ -86,6 +146,10 @@ class DaemonSupervisor extends ChangeNotifier {
         'SENCLAW_BIN': bin.path,
         'SENCLAW_UI_PORT': '$uiPort',
         'SENCLAW_WS_PORT': '$wsPort',
+        // Loopback unless the user opted into LAN access (Settings → General →
+        // Network access). Deliberately NOT `SENCLAW_BIND_HOST`, which is the
+        // Space Apps' knob — those authenticate nothing of their own.
+        'SENCLAW_UI_BIND_HOST': _bindHost,
       };
       final proc = await Process.start(
         bin.path,
@@ -117,6 +181,7 @@ class DaemonSupervisor extends ChangeNotifier {
     // Wait (up to ~60s) for the UI port to accept connections.
     final ok = await _waitForPort(uiPort, attempts: 300);
     if (ok) {
+      _activeBindHost = _bindHost; // what this process was handed at spawn
       _setPhase(DaemonPhase.running);
       _log('[supervisor] daemon up on $uiPort');
     } else if (_phase != DaemonPhase.crashed) {
@@ -128,6 +193,15 @@ class DaemonSupervisor extends ChangeNotifier {
   Future<void> restart() async {
     _log('[supervisor] restart requested');
     await stop();
+    // An adopted daemon is nobody's child — `stop()` has no process to signal,
+    // so without this the "restart" would just re-adopt the same old daemon and
+    // a changed bind host (or binary) would silently never take effect.
+    if (await _portOpen(uiPort)) {
+      final pid = await PortTools.killPort(uiPort);
+      _log(pid == null
+          ? '[supervisor] port $uiPort still held; could not identify the owner'
+          : '[supervisor] killed the listener on $uiPort (pid $pid)');
+    }
     await Future.delayed(const Duration(milliseconds: 400));
     _phase = DaemonPhase.idle;
     await start();
@@ -207,6 +281,38 @@ class DaemonSupervisor extends ChangeNotifier {
       return true;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// Does whatever holds [port] actually speak the SenClaw API?
+  ///
+  /// ANY HTTP status counts — 401 from a token-gated daemon or 404 from an
+  /// older route set still proves a live server on the other end. Only silence
+  /// (or a non-HTTP peer) is a failure. Uses `dart:io` directly rather than the
+  /// app's [ApiClient] so the probe carries no auth headers and cannot be
+  /// affected by a stale config.
+  Future<bool> _httpAnswers(int port,
+      {Duration budget = const Duration(seconds: 12)}) async {
+    final deadline = DateTime.now().add(budget);
+    HttpClient? client;
+    try {
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+      while (DateTime.now().isBefore(deadline)) {
+        try {
+          final req = await client
+              .getUrl(Uri.parse('http://$host:$port/api/config'))
+              .timeout(const Duration(seconds: 3));
+          final res = await req.close().timeout(const Duration(seconds: 3));
+          await res.drain<void>().timeout(const Duration(seconds: 3));
+          return true;
+        } catch (e) {
+          _log('[supervisor] health probe on $port: $e');
+          await Future.delayed(const Duration(milliseconds: 600));
+        }
+      }
+      return false;
+    } finally {
+      client?.close(force: true);
     }
   }
 
