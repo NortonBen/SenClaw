@@ -7,6 +7,30 @@ const Map<String, String> viSettingsScreen = {
   'Applies everywhere immediately. System follows your OS language (Vietnamese → Tiếng Việt, otherwise English).':
       'Áp dụng ngay trên toàn ứng dụng. Hệ thống bám theo ngôn ngữ hệ điều hành (tiếng Việt → Tiếng Việt, còn lại → English).',
 
+  // General → Network access (daemon bind host)
+  'Network access': 'Truy cập mạng',
+  'Who can reach this daemon. Private keeps it on this machine; '
+          'Public lets phones and other computers on your network use it.':
+      'Ai được kết nối tới daemon này. Riêng tư thì chỉ máy này dùng được; '
+          'Công khai thì điện thoại và máy khác trong mạng cũng dùng được.',
+  // ('Private' → 'Riêng tư' is already keyed below, under Telegram chat types.)
+  'Public': 'Công khai',
+  'Anyone on your network can reach SenClaw. The daemon '
+          'requires the API token from every non-local device — it is '
+          'in ~/.senclaw/api_token on this machine.':
+      'Mọi thiết bị trong mạng đều tới được SenClaw. Daemon sẽ bắt buộc '
+          'token API với mọi thiết bị không phải máy này — token nằm ở '
+          '~/.senclaw/api_token trên máy này.',
+  'The running daemon still uses the previous setting. Restart it to apply.':
+      'Daemon đang chạy vẫn dùng thiết lập cũ. Khởi động lại để áp dụng.',
+  'This daemon was started outside the app, so it keeps '
+          'its own setting until it is restarted here.':
+      'Daemon này được khởi động từ bên ngoài ứng dụng nên vẫn giữ thiết lập '
+          'riêng của nó cho tới khi được khởi động lại ở đây.',
+  'Restart daemon': 'Khởi động lại daemon',
+  'Daemon restarted with the new setting.':
+      'Đã khởi động lại daemon với thiết lập mới.',
+
   // Sidebar sections
   'Channels': 'Kênh',
   'Profiles': 'Hồ sơ',

@@ -57,3 +57,10 @@ const kPinnedAppsKey = 'senclaw:pinned-apps';
 /// API access token for daemons bound beyond loopback (Settings → General →
 /// Connection). Read once during connection bootstrap.
 const kApiTokenKey = 'senclaw:api-token';
+
+/// Whether the daemon this app spawns binds every interface (`0.0.0.0`, LAN
+/// reachable) instead of loopback. Off by default — see Settings → General →
+/// Network access. Read when the supervisor is created and applied as
+/// `SENCLAW_UI_BIND_HOST` at spawn time, so it only takes effect on a daemon
+/// restart.
+const kBindPublicKey = 'senclaw:bind-public';

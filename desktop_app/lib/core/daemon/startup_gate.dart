@@ -6,6 +6,7 @@ import '../i18n/l10n.dart';
 import '../transport/connection.dart';
 import 'daemon_provider.dart';
 import 'daemon_supervisor.dart';
+import 'port_tools.dart';
 
 /// Completes once the daemon is VERIFIED reachable over HTTP — not merely
 /// spawned. `connectionBootstrapProvider` starts/adopts the daemon and waits
@@ -19,21 +20,27 @@ final daemonReadyProvider = FutureProvider<void>((ref) async {
   final sup = ref.read(daemonSupervisorProvider);
   final api = ref.read(apiClientProvider);
 
-  // ~30s of HTTP-level probing on top of the supervisor's own port wait.
+  // Probe on a WALL-CLOCK deadline, not a fixed attempt count: each attempt now
+  // carries its own timeout, so counting attempts no longer bounds the wait.
+  // Whatever happens, this future settles — the gate must never be left
+  // awaiting something that cannot complete.
+  final deadline = DateTime.now().add(const Duration(seconds: 45));
   Object? lastErr;
-  for (var i = 0; i < 60; i++) {
+  while (DateTime.now().isBefore(deadline)) {
     if (sup.phase == DaemonPhase.crashed) {
       throw StateError(sup.lastError ?? 'daemon crashed while starting');
     }
     try {
-      await api.get('/api/config');
+      await api.get('/api/config', timeout: const Duration(seconds: 5));
       return;
     } catch (e) {
       lastErr = e;
       await Future.delayed(const Duration(milliseconds: 500));
     }
   }
-  throw StateError('daemon HTTP API not responding: $lastErr');
+  throw StateError(
+      'the daemon did not answer /api/config within 45s (state: ${sup.phase.name})'
+      '${lastErr == null ? '' : ' — last error: $lastErr'}');
 });
 
 /// Startup gate for the whole app shell.
@@ -95,13 +102,13 @@ class _StartupGateState extends ConsumerState<StartupGate> {
         if (spawning) _sawStarting = true;
 
         if (!_sawStarting) {
-          // Adopt path probe (daemon likely already up) — resolves in well
-          // under a second; keep the frame visually empty so the main UI
-          // appears to open immediately.
-          return Scaffold(
-            backgroundColor: Theme.of(context).colorScheme.surface,
-            body: const SizedBox.expand(),
-          );
+          // Adopt path probe (daemon likely already up) — normally resolves in
+          // well under a second, so stay visually empty at first and let the
+          // main UI appear to open immediately. But an empty frame with no time
+          // limit is precisely the "white screen" bug: past [_kQuietProbe] the
+          // probe is no longer quick, and the user gets told what we're waiting
+          // for instead of staring at a blank window.
+          return _ConnectingSplash(sup: sup);
         }
         return _DaemonStartingSplash(sup: sup);
       },
@@ -119,10 +126,62 @@ class _StartupGateState extends ConsumerState<StartupGate> {
   }
 }
 
+/// How long the adopt path may stay blank before it owes the user an
+/// explanation. Long enough that a healthy adopt (a few hundred ms) never
+/// flashes a splash, short enough that nobody calls it a frozen window.
+const Duration _kQuietProbe = Duration(milliseconds: 1200);
+
+/// The adopt path: blank while the probe is quick, then a splash that says what
+/// is being waited on. Never an unexplained empty window.
+class _ConnectingSplash extends StatefulWidget {
+  const _ConnectingSplash({required this.sup});
+  final DaemonSupervisor sup;
+
+  @override
+  State<_ConnectingSplash> createState() => _ConnectingSplashState();
+}
+
+class _ConnectingSplashState extends State<_ConnectingSplash> {
+  bool _slow = false;
+  Timer? _t;
+
+  @override
+  void initState() {
+    super.initState();
+    _t = Timer(_kQuietProbe, () {
+      if (mounted) setState(() => _slow = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_slow) {
+      return Scaffold(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        body: const SizedBox.expand(),
+      );
+    }
+    return _DaemonStartingSplash(
+      sup: widget.sup,
+      label: context.tr('Connecting to the SenClaw daemon…'),
+    );
+  }
+}
+
 /// Secondary screen shown only when the app has to boot the daemon itself.
 class _DaemonStartingSplash extends StatelessWidget {
-  const _DaemonStartingSplash({required this.sup});
+  const _DaemonStartingSplash({required this.sup, this.label});
   final DaemonSupervisor sup;
+
+  /// Overrides the "Starting…" caption — the adopt path is connecting to a
+  /// daemon it did not start, and saying "starting" there would be a lie.
+  final String? label;
 
   @override
   Widget build(BuildContext context) {
@@ -149,7 +208,7 @@ class _DaemonStartingSplash extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2.4),
             ),
             const SizedBox(height: 16),
-            Text(context.tr('Starting SenClaw daemon…'),
+            Text(label ?? context.tr('Starting SenClaw daemon…'),
                 style: Theme.of(context).textTheme.bodyMedium),
             if (lastLog != null) ...[
               const SizedBox(height: 10),
@@ -255,10 +314,28 @@ class _StartupError extends ConsumerWidget {
                 ),
               ],
               const SizedBox(height: 20),
-              FilledButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh_rounded, size: 18),
-                label: Text(context.tr('Retry')),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // The common cause is a leftover daemon holding the port
+                  // without serving it — freeing the port IS the fix, so put it
+                  // one click away instead of in a docs sentence.
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await PortTools.killPort(
+                          ref.read(appConfigProvider).uiPort);
+                      onRetry();
+                    },
+                    icon: const Icon(Icons.power_settings_new_rounded, size: 18),
+                    label: Text(context.tr('Free the port and retry')),
+                  ),
+                  const SizedBox(width: 12),
+                  FilledButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    label: Text(context.tr('Retry')),
+                  ),
+                ],
               ),
             ],
           ),

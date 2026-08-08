@@ -10,6 +10,16 @@ opt-in tường minh, và khi đó mọi peer không phải loopback bắt buộ
 SENCLAW_UI_BIND_HOST=0.0.0.0 senclaw
 ```
 
+Trên desktop app, cùng công tắc đó nằm ở **Settings → General → Network
+access**: chọn *Private* (`127.0.0.1`) hay *Public* (`0.0.0.0`). Lựa chọn ghi
+vào prefs (`senclaw:bind-public`) và được supervisor truyền thành
+`SENCLAW_UI_BIND_HOST` **lúc spawn daemon** — socket đã bind rồi thì không đổi
+được, nên panel hiện nút *Restart daemon* khi daemon đang chạy còn dùng thiết
+lập cũ, và báo riêng trường hợp daemon được "nhận nuôi" (khởi động từ terminal
+— nó lấy bind host từ môi trường của chính nó, không phải từ đây). Chọn Public
+sẽ hiện luôn cảnh báo kèm địa chỉ LAN và nhắc token nằm ở
+`~/.senclaw/api_token`.
+
 Khi bind host không phải loopback, daemon tự bật chế độ token:
 
 - Token đọc từ `SENCLAW_API_TOKEN` (env), nếu không có thì dùng/tự sinh
