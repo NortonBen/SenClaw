@@ -9396,7 +9396,7 @@ dependencies = [
 
 [[package]]
 name = "senclaw"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "ab_glyph",
  "aes-gcm",
