@@ -5,6 +5,7 @@
 //!   * `cog_cognify`       — full pipeline: chunk → triplets → graph
 //!   * `cog_search`        — generic SearchType dispatch
 //!   * `cog_recall`        — convenience for SpreadingActivation (recall w/ write-back)
+//!   * `cog_history`       — timeline of one fact (every value + its window)
 //!   * `cog_forget`        — delete a node (cascades edges)
 //!   * `cog_memory_stats`  — counts + LTP histogram
 //!
@@ -27,8 +28,8 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::mcp::schedule_server::ToolResult;
 use crate::memory::cognitive::{
-    create_cognitive_llm, CognifyOptions, CognitiveSystem, LlmClient, NodeSet, SearchQuery,
-    SearchType,
+    create_cognitive_llm, parse_as_of, CognifyOptions, CognitiveSystem, LlmClient, NodeSet,
+    SearchQuery, SearchType,
 };
 use crate::memory::embedding::{create_embedding_provider, EmbeddingProvider};
 
@@ -67,9 +68,9 @@ struct CognifyParams {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct SearchParams {
     query: String,
-    /// One of: chunks | triplet | graph | spreading | fts | hybrid.
+    /// One of: chunks | triplet | graph | spreading | fts | hybrid | temporal.
     /// Defaults to "graph". `fts` needs no embeddings; `hybrid` blends
-    /// vector + FTS.
+    /// vector + FTS; `temporal` ranks facts by how close they sit to `as_of`.
     #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
@@ -79,6 +80,11 @@ struct SearchParams {
     /// Optional knowledge space id — restrict search to that space only.
     #[serde(default)]
     space: Option<String>,
+    /// Answer as of this moment in time instead of now — "2026-07-31",
+    /// "2026-07-31T09:00:00Z" or unix seconds. Facts superseded before it are
+    /// returned; facts asserted after it are not. Omit for current facts.
+    #[serde(default)]
+    as_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -91,6 +97,21 @@ struct RecallParams {
     /// Optional knowledge space id — restrict recall to that space only.
     #[serde(default)]
     space: Option<String>,
+    /// Recall what was true at this moment instead of now — see cog_search.
+    #[serde(default)]
+    as_of: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct HistoryParams {
+    /// Entity name, as it appears in the graph (case-insensitive).
+    subject: String,
+    /// Restrict to one predicate, e.g. "sell_price". Omit for every fact
+    /// about the subject.
+    #[serde(default)]
+    predicate: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -202,6 +223,7 @@ impl McpCognitiveServer {
                         p.limit,
                         p.hops,
                         p.space.as_deref(),
+                        p.as_of.as_deref(),
                     )
                     .await
                     .content
@@ -222,8 +244,33 @@ impl McpCognitiveServer {
         match self.open_system() {
             Ok(sys) => {
                 CognitiveServer::new(sys, self.group_folder.clone())
-                    .cog_recall(&p.query, p.limit, p.hops, p.space.as_deref())
+                    .cog_recall(
+                        &p.query,
+                        p.limit,
+                        p.hops,
+                        p.space.as_deref(),
+                        p.as_of.as_deref(),
+                    )
                     .await
+                    .content
+            }
+            Err(e) => ToolResult::err(format!("Error: {e}")).content,
+        }
+    }
+
+    #[rmcp::tool(
+        description = "Timeline of a fact: every value a subject's predicate has held, with the window each was believed in. Use when the answer depends on when — 'what did X used to be', 'when did X change'."
+    )]
+    fn cog_history(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            HistoryParams,
+        >,
+    ) -> String {
+        match self.open_system() {
+            Ok(sys) => {
+                CognitiveServer::new(sys, self.group_folder.clone())
+                    .cog_history(&p.subject, p.predicate.as_deref(), p.limit)
                     .content
             }
             Err(e) => ToolResult::err(format!("Error: {e}")).content,
@@ -382,19 +429,37 @@ impl CognitiveServer {
         limit: Option<usize>,
         hops: Option<u8>,
         space: Option<&str>,
+        as_of: Option<&str>,
     ) -> ToolResult {
-        let q_type = match mode.unwrap_or("graph") {
+        let raw_mode = mode.unwrap_or("graph");
+        let q_type = match raw_mode {
             "chunks" => SearchType::Chunks,
             "triplet" => SearchType::Triplet,
             "spreading" => SearchType::SpreadingActivation,
             "fts" => SearchType::Fts,
             "hybrid" => SearchType::Hybrid,
+            "temporal" => SearchType::Temporal,
             _ => SearchType::GraphCompletion,
+        };
+        // An unparseable `as_of` must not silently answer about *now* — that
+        // is a wrong answer wearing the right shape.
+        let at = match as_of.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(raw) => match parse_as_of(raw) {
+                Some(t) => Some(t),
+                None => {
+                    return ToolResult::err(format!(
+                        "cog_search: could not read as_of {raw:?} — use 2026-07-31, \
+                         2026-07-31T09:00:00Z or unix seconds"
+                    ))
+                }
+            },
+            None => None,
         };
         let mut q = SearchQuery::chunks(query, limit.unwrap_or(8));
         q.query_type = q_type;
         q.hops = hops.unwrap_or(2);
         q.decay_per_hop = 0.6;
+        q.as_of = at;
         if let Some(space) = space.map(str::trim).filter(|s| !s.is_empty()) {
             q.node_sets = vec![NodeSet::space(space)];
         }
@@ -404,14 +469,82 @@ impl CognitiveServer {
         }
     }
 
+    /// Timeline of one fact — every value `(subject, predicate)` has held and
+    /// the window each was believed in. This is the read side of supersession:
+    /// nothing is deleted when a fact changes, so the history is always there
+    /// to show.
+    pub fn cog_history(
+        &self,
+        subject: &str,
+        predicate: Option<&str>,
+        limit: Option<usize>,
+    ) -> ToolResult {
+        let entity = match self.sys.graph.find_entity_by_name(subject.trim()) {
+            Ok(Some(e)) => e,
+            Ok(None) => {
+                return ToolResult::ok(format!(
+                    "No entity named {subject:?} in the graph."
+                ))
+            }
+            Err(e) => return ToolResult::err(format!("cog_history failed: {e}")),
+        };
+        let rows = match self
+            .sys
+            .graph
+            .edge_history(entity.id, predicate, limit.unwrap_or(50))
+        {
+            Ok(r) => r,
+            Err(e) => return ToolResult::err(format!("cog_history failed: {e}")),
+        };
+        if rows.is_empty() {
+            return ToolResult::ok(format!("No recorded facts for {:?}.", entity.name));
+        }
+        let mut out = format!("History for {}:\n", entity.name);
+        for e in &rows {
+            let object = self
+                .sys
+                .graph
+                .get_node(e.dst)
+                .ok()
+                .flatten()
+                .map(|n| if n.name.is_empty() { n.summary } else { n.name })
+                .unwrap_or_else(|| e.dst.to_string());
+            let until = match e.valid_to {
+                None => "now".to_string(),
+                Some(t) => fmt_ts(t),
+            };
+            out.push_str(&format!(
+                "- {} = {}  [{} → {}]{}\n",
+                e.predicate,
+                object,
+                fmt_ts(e.valid_from),
+                until,
+                if e.is_current() { "  (current)" } else { "" }
+            ));
+        }
+        ToolResult::ok(out)
+    }
+
     pub async fn cog_recall(
         &self,
         query: &str,
         limit: Option<usize>,
         hops: Option<u8>,
         space: Option<&str>,
+        as_of: Option<&str>,
     ) -> ToolResult {
         let mut q = SearchQuery::spreading(query, limit.unwrap_or(8), hops.unwrap_or(2));
+        if let Some(raw) = as_of.map(str::trim).filter(|s| !s.is_empty()) {
+            match parse_as_of(raw) {
+                Some(t) => q.as_of = Some(t),
+                None => {
+                    return ToolResult::err(format!(
+                        "cog_recall: could not read as_of {raw:?} — use 2026-07-31, \
+                         2026-07-31T09:00:00Z or unix seconds"
+                    ))
+                }
+            }
+        }
         if let Some(space) = space.map(str::trim).filter(|s| !s.is_empty()) {
             q.node_sets = vec![NodeSet::space(space)];
         }
@@ -441,6 +574,15 @@ impl CognitiveServer {
             Err(e) => ToolResult::err(format!("cog_memory_stats failed: {e}")),
         }
     }
+}
+
+/// Human-readable UTC stamp for timelines. Deliberately not localised: this
+/// text goes into an LLM prompt, where an unambiguous format beats a pretty
+/// one.
+fn fmt_ts(secs: i64) -> String {
+    chrono::DateTime::from_timestamp(secs, 0)
+        .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| secs.to_string())
 }
 
 fn format_hits(hits: &[crate::memory::cognitive::SearchHit]) -> ToolResult {
@@ -524,7 +666,7 @@ mod tests {
             .await;
         assert!(!r.is_error, "{}", r.content);
         let s = srv
-            .cog_search("compiler", Some("chunks"), Some(5), None, None)
+            .cog_search("compiler", Some("chunks"), Some(5), None, None, None)
             .await;
         assert!(!s.is_error);
         assert!(s.content.contains("compiler"), "got: {}", s.content);
@@ -555,7 +697,7 @@ mod tests {
         assert!(!c.is_error, "{}", c.content);
         assert!(c.content.contains("entities_added"));
 
-        let r = srv.cog_recall("compiler", Some(5), Some(2), None).await;
+        let r = srv.cog_recall("compiler", Some(5), Some(2), None, None).await;
         assert!(!r.is_error);
         assert!(r.content.contains("Found") || r.content.contains("No matching"));
     }

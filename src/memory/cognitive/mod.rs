@@ -15,6 +15,7 @@
 //! * [`tiers`]       — `EdgeTier::{L1Working, L2Episodic, L3Semantic}`
 //! * [`ltp`]         — Long-term potentiation state machine
 //! * [`node_set`]    — scope tagging (group / persona / cowork / global)
+//! * [`predicate_meta`] — per-predicate cardinality (drives fact supersession)
 //! * [`graph_store`] — `GraphStore` trait + `SqliteGraphStore`
 
 pub mod cognify;
@@ -34,6 +35,7 @@ pub mod ltp;
 pub mod maintenance;
 pub mod mlx_embedder;
 pub mod node_set;
+pub mod predicate_meta;
 pub mod retrievers;
 pub mod schema;
 pub mod search;
@@ -70,8 +72,9 @@ pub use maintenance::{
 };
 pub use mlx_embedder::MlxStaticEmbedder;
 pub use node_set::{NodeSet, ScopeKind};
+pub use predicate_meta::Cardinality;
 pub use retrievers::CognitiveRetriever;
-pub use search::{SearchHit, SearchQuery, SearchType};
+pub use search::{parse_as_of, SearchHit, SearchQuery, SearchType};
 pub use soul_ingest::{
     consolidate_to_soul, ingest_all_souls, ingest_soul, ingest_soul_from_disk, spawn_soul_watcher,
     split_soul_sections, ConsolidateReport,

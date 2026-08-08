@@ -28,8 +28,20 @@ pub struct RelationshipEdge {
     pub predicate: String,
     pub props: Value,
 
+    /// World time — when the fact holds. `valid_to = None` means "this is
+    /// still the current fact"; a value means a later fact superseded it.
+    /// Only contradiction resolution writes `valid_to`; decay must not.
     pub valid_from: i64,
     pub valid_to: Option<i64>,
+    /// The chunk/episode whose fact superseded this one. Provenance for
+    /// "why does the graph no longer believe this?".
+    pub invalidated_by: Option<Uuid>,
+
+    /// System time — when decay consolidated the edge to dormant. Distinct
+    /// from `valid_to` on purpose: "nobody has mentioned this lately" and
+    /// "this is no longer true" are different claims, and only the second
+    /// one should hide a fact from retrieval.
+    pub archived_at: Option<i64>,
 
     pub strength: f32,
     pub tier: EdgeTier,
@@ -56,6 +68,8 @@ impl RelationshipEdge {
             props: Value::Object(Default::default()),
             valid_from: now,
             valid_to: None,
+            invalidated_by: None,
+            archived_at: None,
             strength: 0.35,
             tier: EdgeTier::L1Working,
             activation_count: 0,
@@ -83,11 +97,58 @@ impl RelationshipEdge {
     }
 
     /// True when the edge has been archived (consolidated to dormant state)
-    /// by the decay sweep — `valid_to` doubles as the archive marker.
-    /// Archived edges keep their row (the knowledge is preserved and still
-    /// retrievable, just down-ranked) and are frozen: no further decay.
+    /// by the decay sweep. Archived edges keep their row (the knowledge is
+    /// preserved and still retrievable, just down-ranked) and are frozen: no
+    /// further decay.
     pub fn is_archived(&self) -> bool {
-        self.valid_to.is_some()
+        self.archived_at.is_some()
+    }
+
+    /// True when this is still what the graph believes — no later fact has
+    /// superseded it. Independent of [`Self::is_archived`]: a dormant edge is
+    /// still current, an invalidated one is not.
+    pub fn is_current(&self) -> bool {
+        self.valid_to.is_none()
+    }
+
+    /// True when the fact held at `t` (world time). `[valid_from, valid_to)`,
+    /// half-open so a supersession timestamp belongs to the new fact only.
+    pub fn is_valid_at(&self, t: i64) -> bool {
+        self.valid_from <= t && self.valid_to.is_none_or(|end| end > t)
+    }
+
+    /// Close the fact's validity: a later fact for the same subject and
+    /// predicate replaced it. Never deletes — the row stays queryable as
+    /// history and via `as_of`, matching how decay archives rather than
+    /// prunes.
+    ///
+    /// Also stamps `archived_at`: a superseded fact is by definition not
+    /// live knowledge, and freezing it keeps the decay sweep off rows that
+    /// exist only for the record.
+    pub fn invalidate(&mut self, at: i64, by: Uuid) {
+        // Never let a supersession land before the fact started — an
+        // out-of-order ingest would otherwise produce a negative interval.
+        self.valid_to = Some(at.max(self.valid_from));
+        self.invalidated_by = Some(by);
+        if self.archived_at.is_none() {
+            self.archived_at = Some(at);
+            self.strength = self.strength.max(ARCHIVE_STRENGTH_FLOOR);
+        }
+    }
+
+    /// The fact is being asserted again after having been superseded (someone
+    /// moved back, the price returned). Re-opens the interval from `now`.
+    ///
+    /// Deliberately **not** part of [`Self::strengthen`]: only a fresh
+    /// extraction may revive a fact's truth. Traversal-time Hebbian
+    /// reinforcement — which fires merely because a retrieval walked past —
+    /// must never resurrect something the graph knows to be outdated.
+    pub fn reassert(&mut self, now: i64) {
+        if self.valid_to.is_some() {
+            self.valid_to = None;
+            self.invalidated_by = None;
+            self.valid_from = now;
+        }
     }
 
     /// Read-only decay calculation — what the strength *would* be at `now`
@@ -110,10 +171,12 @@ impl RelationshipEdge {
     /// Hebbian strengthen: `w_new = w_old + η·(1 - w_old)·boost·importance_scale`.
     /// Returns `Some((from, to))` if the edge was promoted to a new tier.
     pub fn strengthen(&mut self, importance: f32, now: i64) -> Option<(EdgeTier, EdgeTier)> {
-        // Reactivation revives an archived edge: the knowledge is back in
+        // Reactivation revives an *archived* edge: the knowledge is back in
         // active circulation, so the dormant marker comes off and decay
-        // applies again from this activation.
-        self.valid_to = None;
+        // applies again from this activation. It does NOT touch `valid_to`
+        // — mentioning an outdated fact does not make it true again (that is
+        // `reassert`, which only extraction may call).
+        self.archived_at = None;
         let imp = importance.clamp(STRENGTHEN_IMPORTANCE_FLOOR, 1.0);
         let boost = self.tier.co_access_boost() * imp;
         let delta = HEBBIAN_LR * (1.0 - self.strength).max(0.0) * boost;
@@ -195,11 +258,12 @@ impl RelationshipEdge {
     }
 
     /// Consolidate the edge into dormant/archived state instead of deleting
-    /// it: stamp `valid_to`, floor the strength so spreading retrieval can
+    /// it: stamp `archived_at`, floor the strength so spreading retrieval can
     /// still traverse it weakly, and freeze it (archived edges skip decay).
-    /// [`Self::strengthen`] revives it.
+    /// [`Self::strengthen`] revives it. The fact's truth is untouched — a
+    /// dormant fact is still the current one until something supersedes it.
     pub fn archive(&mut self, now: i64) {
-        self.valid_to = Some(now);
+        self.archived_at = Some(now);
         self.strength = self.strength.max(ARCHIVE_STRENGTH_FLOOR);
     }
 }
@@ -276,6 +340,80 @@ mod tests {
         e.strength = 0.5;
         e.last_activated = now - 60;
         assert!(!e.decay(now), "recently-used old edge must stay active");
+    }
+
+    // The bug the archived_at split exists to prevent: while decay's marker
+    // and "no longer true" shared one column, any re-mention of a superseded
+    // fact revived it as current.
+    #[test]
+    fn strengthen_wakes_a_dormant_edge_but_never_revives_a_false_one() {
+        let mut dormant = fresh();
+        dormant.archive(100);
+        dormant.strengthen(1.0, 200);
+        assert!(!dormant.is_archived(), "dormant knowledge wakes on mention");
+        assert!(dormant.is_current());
+
+        let mut superseded = fresh();
+        superseded.invalidate(100, Uuid::new_v4());
+        superseded.strengthen(1.0, 200);
+        assert!(
+            !superseded.is_current(),
+            "mentioning an outdated fact must not make it true again"
+        );
+        assert_eq!(superseded.valid_to, Some(100));
+    }
+
+    #[test]
+    fn invalidate_closes_the_interval_and_records_who_did_it() {
+        let mut e = fresh();
+        e.valid_from = 1_000;
+        let culprit = Uuid::new_v4();
+        e.invalidate(2_000, culprit);
+
+        assert_eq!(e.valid_to, Some(2_000));
+        assert_eq!(e.invalidated_by, Some(culprit));
+        assert!(e.is_valid_at(1_500), "still true before the handover");
+        assert!(!e.is_valid_at(2_000), "the seam belongs to the new fact");
+        assert!(!e.is_valid_at(2_500));
+        assert!(!e.is_valid_at(999), "not yet true before it was asserted");
+        // Superseded facts stop decaying — they exist for the record now.
+        assert!(e.is_archived());
+    }
+
+    // Out-of-order ingest: a fact discovered later can carry an earlier
+    // timestamp. The interval must never run backwards.
+    #[test]
+    fn invalidate_cannot_close_before_the_fact_started() {
+        let mut e = fresh();
+        e.valid_from = 5_000;
+        e.invalidate(1_000, Uuid::new_v4());
+        assert_eq!(e.valid_to, Some(5_000));
+        assert!(e.valid_to.unwrap() >= e.valid_from);
+    }
+
+    #[test]
+    fn reassert_reopens_a_superseded_fact() {
+        let mut e = fresh();
+        e.valid_from = 1_000;
+        e.invalidate(2_000, Uuid::new_v4());
+
+        e.reassert(3_000);
+        assert!(e.is_current());
+        assert_eq!(e.invalidated_by, None);
+        assert_eq!(e.valid_from, 3_000, "the new interval starts now");
+        assert!(!e.is_valid_at(2_500), "the gap stays a gap");
+        assert!(e.is_valid_at(3_500));
+    }
+
+    #[test]
+    fn reassert_leaves_a_current_fact_alone() {
+        let mut e = fresh();
+        e.valid_from = 1_000;
+        e.reassert(9_000);
+        assert_eq!(
+            e.valid_from, 1_000,
+            "re-mentioning a live fact must not restart its history"
+        );
     }
 
     #[test]

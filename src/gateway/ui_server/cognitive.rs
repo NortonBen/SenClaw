@@ -59,7 +59,24 @@ pub(crate) fn search_type_from_mode(mode: Option<&str>) -> SearchType {
         "spreading" => SearchType::SpreadingActivation,
         "fts" => SearchType::Fts,
         "hybrid" => SearchType::Hybrid,
+        "temporal" => SearchType::Temporal,
         _ => SearchType::GraphCompletion,
+    }
+}
+
+/// Read the optional `asOf` field off a request body. `Err` on an
+/// unparseable value — quietly answering about *now* when the caller asked
+/// about a past date is the one failure mode temporal retrieval exists to
+/// prevent.
+fn as_of_from_body(raw: Option<&str>) -> Result<Option<i64>, AppError> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(v) => cognitive::parse_as_of(v).map(Some).ok_or_else(|| {
+            AppError(
+                StatusCode::BAD_REQUEST,
+                format!("could not read asOf {v:?} — use 2026-07-31, 2026-07-31T09:00:00Z or unix seconds"),
+            )
+        }),
     }
 }
 
@@ -110,6 +127,17 @@ pub struct EdgeView {
     /// The UI styles these differently (dashed) so users can tell a derived
     /// guess from an extracted fact.
     pub inferred: bool,
+    /// World time the fact was asserted from.
+    #[serde(rename = "validFrom")]
+    pub valid_from: i64,
+    /// Set once a later fact replaced this one — the UI strikes those through
+    /// instead of showing them as equal truth.
+    #[serde(rename = "validTo")]
+    pub valid_to: Option<i64>,
+    /// Set when decay put the edge to sleep. Orthogonal to `validTo`:
+    /// dormant is not false.
+    #[serde(rename = "archivedAt")]
+    pub archived_at: Option<i64>,
 }
 
 impl From<RelationshipEdge> for EdgeView {
@@ -132,6 +160,9 @@ impl From<RelationshipEdge> for EdgeView {
             activation_count: e.activation_count,
             last_activated: e.last_activated,
             inferred,
+            valid_from: e.valid_from,
+            valid_to: e.valid_to,
+            archived_at: e.archived_at,
         }
     }
 }
@@ -324,6 +355,128 @@ fn default_top_limit() -> usize {
 pub struct TopNodeView {
     pub node: NodeView,
     pub degree: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HistoryQuery {
+    /// Entity name (case-insensitive) or node UUID.
+    pub subject: String,
+    #[serde(default)]
+    pub predicate: Option<String>,
+    #[serde(default = "default_history_limit")]
+    pub limit: usize,
+}
+
+fn default_history_limit() -> usize {
+    100
+}
+
+/// GET /api/cognitive/history — every value a subject's predicate has held.
+///
+/// The read side of supersession: when a fact changes, the old edge keeps its
+/// row with `validTo` stamped, so the whole timeline is always available
+/// rather than being overwritten.
+pub(crate) async fn cognitive_history(
+    State(_s): State<Arc<UiState>>,
+    Query(q): Query<HistoryQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    let subject = q.subject.trim();
+    if subject.is_empty() {
+        return Err(AppError(StatusCode::BAD_REQUEST, "subject is empty".into()));
+    }
+    // Accept a UUID as well as a name — the graph view links by id.
+    let node = match uuid::Uuid::parse_str(subject) {
+        Ok(id) => sys.graph.get_node(id),
+        Err(_) => sys.graph.find_entity_by_name(subject),
+    }
+    .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let Some(node) = node else {
+        return Err(AppError(
+            StatusCode::NOT_FOUND,
+            format!("no node matching {subject:?}"),
+        ));
+    };
+
+    let rows = sys
+        .graph
+        .edge_history(node.id, q.predicate.as_deref(), q.limit.clamp(1, 500))
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let facts: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|e| {
+            let object = sys
+                .graph
+                .get_node(e.dst)
+                .ok()
+                .flatten()
+                .map(|n| if n.name.is_empty() { n.summary } else { n.name })
+                .unwrap_or_default();
+            serde_json::json!({
+                "predicate": e.predicate,
+                "object": object,
+                "objectId": e.dst.to_string(),
+                "validFrom": e.valid_from,
+                "validTo": e.valid_to,
+                "current": e.is_current(),
+                "archivedAt": e.archived_at,
+                "invalidatedBy": e.invalidated_by.map(|u| u.to_string()),
+                "strength": e.strength,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "subject": { "id": node.id.to_string(), "name": node.name },
+        "facts": facts,
+    })))
+}
+
+/// GET /api/cognitive/predicates — the cardinality registry that decides
+/// which new facts supersede old ones.
+pub(crate) async fn cognitive_predicates(
+    State(_s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    let rows = sys
+        .graph
+        .list_predicate_meta()
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "predicates": rows })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PredicateUpdateBody {
+    pub predicate: String,
+    /// "single" (a new object supersedes the old) or "multi".
+    pub cardinality: String,
+}
+
+/// POST /api/cognitive/predicates — correct a classification by hand.
+/// Marked `source = "user"` so a future re-seed never overwrites it.
+pub(crate) async fn cognitive_set_predicate(
+    State(_s): State<Arc<UiState>>,
+    Json(body): Json<PredicateUpdateBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sys = require_system()?;
+    let card = match body.cardinality.trim().to_ascii_lowercase().as_str() {
+        "single" => cognitive::Cardinality::Single,
+        "multi" => cognitive::Cardinality::Multi,
+        other => {
+            return Err(AppError(
+                StatusCode::BAD_REQUEST,
+                format!("cardinality must be \"single\" or \"multi\", got {other:?}"),
+            ))
+        }
+    };
+    sys.graph
+        .set_predicate_cardinality(body.predicate.trim(), card, "user")
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "predicate": body.predicate.trim(),
+        "cardinality": card.as_str(),
+    })))
 }
 
 pub(crate) async fn cognitive_top_nodes(
@@ -723,6 +876,10 @@ pub struct SearchBody {
     /// Restrict to one knowledge space (custom scope id). None = global.
     #[serde(default)]
     pub space: Option<String>,
+    /// Answer as of this moment instead of now ("2026-07-31", RFC 3339, or
+    /// unix seconds). Omit for current facts.
+    #[serde(default, rename = "asOf")]
+    pub as_of: Option<String>,
 }
 
 fn default_search_limit() -> usize {
@@ -749,6 +906,7 @@ pub(crate) async fn cognitive_search(
     q.hops = body.hops.clamp(1, 6);
     q.rerank = body.rerank;
     q.decay_per_hop = 0.6;
+    q.as_of = as_of_from_body(body.as_of.as_deref())?;
     if let Some(space) = body
         .space
         .as_deref()
@@ -1196,6 +1354,9 @@ pub struct RecallBody {
     /// Restrict to one knowledge space (custom scope id). None = global.
     #[serde(default)]
     pub space: Option<String>,
+    /// Recall what was true at this moment instead of now.
+    #[serde(default, rename = "asOf")]
+    pub as_of: Option<String>,
 }
 
 fn truncate_chars(s: &str, n: usize) -> String {
@@ -1222,6 +1383,7 @@ pub(crate) async fn cognitive_recall(
     q.query_type = search_type_from_mode(body.mode.as_deref());
     q.hops = body.hops.unwrap_or(2).clamp(1, 6);
     q.decay_per_hop = 0.6;
+    q.as_of = as_of_from_body(body.as_of.as_deref())?;
     if let Some(space) = body
         .space
         .as_deref()

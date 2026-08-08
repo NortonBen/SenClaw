@@ -66,6 +66,10 @@ fn fixture(port: u16, start: &str) -> Fixture {
     std::fs::create_dir_all(&app_dir).unwrap();
     let mut cfg = Config::from_env();
     cfg.paths.db_path = dir.join("test.db");
+    // `Db::open` opens TWO files and `cognitive_db_path` is configured
+    // independently — leaving it alone points this test at the developer's
+    // real ~/.senclaw/senclaw_cognitive.db and runs schema migrations on it.
+    cfg.paths.cognitive_db_path = dir.join("test_cognitive.db");
     let db = Arc::new(Db::open(&cfg).unwrap());
     let manifest = serde_json::json!({
         "id": "oneproc",

@@ -16,6 +16,10 @@ fn temp_state() -> (Arc<UiState>, Arc<Db>) {
     let dir = std::env::temp_dir().join(format!("tool-alias-e2e-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     cfg.paths.db_path = dir.join("test.db");
+    // `Db::open` opens TWO files and `cognitive_db_path` is configured
+    // independently — leaving it alone points this test at the developer's
+    // real ~/.senclaw/senclaw_cognitive.db and runs schema migrations on it.
+    cfg.paths.cognitive_db_path = dir.join("test_cognitive.db");
     let db = Arc::new(Db::open(&cfg).unwrap());
     let state = Arc::new(UiState {
         config: Arc::new(cfg),

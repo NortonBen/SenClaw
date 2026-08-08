@@ -14,6 +14,7 @@ use crate::db::Db;
 use super::data_point::{DataPoint, NodeKind};
 use super::ltp::LtpStatus;
 use super::node_set::NodeSet;
+use super::predicate_meta::{normalize as normalize_predicate, Cardinality};
 use super::tiers::EdgeTier;
 use super::triplet::RelationshipEdge;
 
@@ -51,9 +52,49 @@ pub trait GraphStore: Send + Sync {
 
     fn upsert_edge(&self, edge: &RelationshipEdge) -> Result<()>;
     fn delete_edge(&self, src: Uuid, dst: Uuid, predicate: &str) -> Result<()>;
+
+    /// Every edge incident to `node`, superseded ones included. This is the
+    /// *write-path* view: cognify needs to see an invalidated fact in order
+    /// to re-assert it. Retrieval must use [`Self::neighbors_at`] instead.
     fn neighbors(&self, node: Uuid, max: usize) -> Result<Vec<RelationshipEdge>>;
 
-    /// Pull a batch of **active** (non-archived, `valid_to IS NULL`) edges
+    /// Edges incident to `node` that hold at the given world time.
+    ///
+    /// * `as_of = None` — what the graph believes **now**: `valid_to IS NULL`.
+    ///   This is the default for every retrieval, which is what stops a
+    ///   superseded price from being recalled as the current one.
+    /// * `as_of = Some(t)` — time travel: `valid_from <= t < valid_to`.
+    ///
+    /// Archived (dormant) edges are still returned in both modes — dormancy
+    /// down-ranks a fact, it does not make it untrue.
+    fn neighbors_at(
+        &self,
+        node: Uuid,
+        max: usize,
+        as_of: Option<i64>,
+    ) -> Result<Vec<RelationshipEdge>>;
+
+    /// Facts currently held for `(src, predicate)` — the lookup that decides
+    /// what a newly extracted fact supersedes.
+    fn current_edges_for(&self, src: Uuid, predicate: &str) -> Result<Vec<RelationshipEdge>>;
+
+    /// Every version of `(src, predicate)` ordered oldest-first, superseded
+    /// ones included: the timeline behind `cog_history`.
+    fn edge_history(&self, src: Uuid, predicate: Option<&str>, limit: usize)
+        -> Result<Vec<RelationshipEdge>>;
+
+    /// Cardinality for a predicate; `Multi` when the table has no row (see
+    /// [`super::predicate_meta`] for why unknown must never supersede).
+    fn predicate_cardinality(&self, predicate: &str) -> Result<Cardinality>;
+    fn set_predicate_cardinality(
+        &self,
+        predicate: &str,
+        cardinality: Cardinality,
+        source: &str,
+    ) -> Result<()>;
+    fn list_predicate_meta(&self) -> Result<Vec<PredicateMetaRow>>;
+
+    /// Pull a batch of **active** (non-archived) edges
     /// ordered by `last_activated ASC` (stalest first). `offset` lets the
     /// decay tick page through the table in chunks without holding
     /// everything in memory. Archived edges are frozen — scanning them
@@ -298,6 +339,16 @@ pub struct NodeSetInfo {
     pub nodes: usize,
 }
 
+/// Row shape returned by [`GraphStore::list_predicate_meta`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PredicateMetaRow {
+    pub predicate: String,
+    pub cardinality: String,
+    pub source: String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: i64,
+}
+
 /// Row shape returned by [`GraphStore::recent_decay_runs`].
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DecayLogRow {
@@ -358,7 +409,7 @@ fn redirect_edges_and_delete(
         rusqlite::params![canonical_id, dup_id],
     )?;
     const EDGE_COLS: &str = "predicate, props_json,
-         valid_from, valid_to,
+         valid_from, valid_to, invalidated_by, archived_at,
          strength, tier, activation_count, last_activated,
          ltp_status, ltp_detected_at,
          entity_confidence, endpoint_selectivity, forman_curvature,
@@ -506,6 +557,10 @@ fn row_to_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<RelationshipEdge> {
     let source_episode_id = src_ep.map(bytes_uuid).transpose().map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, e.into())
     })?;
+    let inv_by: Option<Vec<u8>> = row.get("invalidated_by")?;
+    let invalidated_by = inv_by.map(bytes_uuid).transpose().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, e.into())
+    })?;
     Ok(RelationshipEdge {
         src,
         dst,
@@ -513,6 +568,8 @@ fn row_to_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<RelationshipEdge> {
         props,
         valid_from: row.get("valid_from")?,
         valid_to: row.get("valid_to")?,
+        invalidated_by,
+        archived_at: row.get("archived_at")?,
         strength: row.get::<_, f64>("strength")? as f32,
         tier: EdgeTier::from_u8(row.get::<_, i64>("tier")? as u8),
         activation_count: row.get::<_, i64>("activation_count")? as u32,
@@ -749,14 +806,18 @@ impl GraphStore for SqliteGraphStore {
             conn.execute(
                 r#"INSERT INTO cog_edges
                    (src, dst, predicate, props_json, valid_from, valid_to,
+                    invalidated_by, archived_at,
                     strength, tier, activation_count, last_activated,
                     ltp_status, ltp_detected_at, entity_confidence,
                     endpoint_selectivity, forman_curvature, activation_timestamps,
                     source_episode_id, context, created_at)
-                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+                   VALUES (?1,?2,?3,?4,?5,?6,?20,?21,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
                    ON CONFLICT(src, dst, predicate) DO UPDATE SET
                      props_json            = excluded.props_json,
+                     valid_from            = excluded.valid_from,
                      valid_to              = excluded.valid_to,
+                     invalidated_by        = excluded.invalidated_by,
+                     archived_at           = excluded.archived_at,
                      strength              = excluded.strength,
                      tier                  = excluded.tier,
                      activation_count      = excluded.activation_count,
@@ -788,6 +849,8 @@ impl GraphStore for SqliteGraphStore {
                     ep_id,
                     edge.context,
                     edge.created_at,
+                    edge.invalidated_by.map(|u| uuid_bytes(u).to_vec()),
+                    edge.archived_at,
                 ],
             )?;
             Ok(())
@@ -822,11 +885,170 @@ impl GraphStore for SqliteGraphStore {
         })
     }
 
+    fn neighbors_at(
+        &self,
+        node: Uuid,
+        max: usize,
+        as_of: Option<i64>,
+    ) -> Result<Vec<RelationshipEdge>> {
+        let id = uuid_bytes(node).to_vec();
+        self.db.with_cog_conn(|conn| {
+            // Two shapes rather than one clever SQL: "current" is served by
+            // the partial index on (src, predicate) WHERE valid_to IS NULL,
+            // which a `?2 IS NULL OR …` predicate would not be able to use.
+            let rows = match as_of {
+                None => {
+                    let mut stmt = conn.prepare(
+                        "SELECT * FROM cog_edges
+                         WHERE (src = ?1 OR dst = ?1) AND valid_to IS NULL
+                         ORDER BY last_activated DESC
+                         LIMIT ?2",
+                    )?;
+                    let out = stmt
+                        .query_map(params![id, max as i64], row_to_edge)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    out
+                }
+                Some(t) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT * FROM cog_edges
+                         WHERE (src = ?1 OR dst = ?1)
+                           AND valid_from <= ?2
+                           AND (valid_to IS NULL OR valid_to > ?2)
+                         ORDER BY last_activated DESC
+                         LIMIT ?3",
+                    )?;
+                    let out = stmt
+                        .query_map(params![id, t, max as i64], row_to_edge)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    out
+                }
+            };
+            Ok(rows)
+        })
+    }
+
+    fn current_edges_for(&self, src: Uuid, predicate: &str) -> Result<Vec<RelationshipEdge>> {
+        let id = uuid_bytes(src).to_vec();
+        self.db.with_cog_conn(|conn| {
+            // Case-insensitive on the predicate: extraction emits whatever
+            // casing the model felt like, and `upsert_triplet` matches
+            // existing edges the same way.
+            let mut stmt = conn.prepare(
+                "SELECT * FROM cog_edges
+                 WHERE src = ?1 AND valid_to IS NULL
+                   AND predicate = ?2 COLLATE NOCASE",
+            )?;
+            let rows = stmt
+                .query_map(params![id, predicate], row_to_edge)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+
+    fn edge_history(
+        &self,
+        src: Uuid,
+        predicate: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RelationshipEdge>> {
+        let id = uuid_bytes(src).to_vec();
+        self.db.with_cog_conn(|conn| {
+            let rows = match predicate {
+                Some(p) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT * FROM cog_edges
+                         WHERE src = ?1 AND predicate = ?2 COLLATE NOCASE
+                         ORDER BY valid_from ASC LIMIT ?3",
+                    )?;
+                    let out = stmt
+                        .query_map(params![id, p, limit as i64], row_to_edge)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    out
+                }
+                None => {
+                    let mut stmt = conn.prepare(
+                        "SELECT * FROM cog_edges
+                         WHERE src = ?1 AND predicate NOT IN ('MENTIONS')
+                         ORDER BY predicate ASC, valid_from ASC LIMIT ?2",
+                    )?;
+                    let out = stmt
+                        .query_map(params![id, limit as i64], row_to_edge)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    out
+                }
+            };
+            Ok(rows)
+        })
+    }
+
+    fn predicate_cardinality(&self, predicate: &str) -> Result<Cardinality> {
+        let key = normalize_predicate(predicate);
+        if key.is_empty() {
+            return Ok(Cardinality::Multi);
+        }
+        self.db.with_cog_conn(|conn| {
+            let found: Option<String> = conn
+                .query_row(
+                    "SELECT cardinality FROM cog_predicate_meta WHERE predicate = ?1",
+                    params![key],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            Ok(found.map(|s| Cardinality::parse(&s)).unwrap_or(Cardinality::Multi))
+        })
+    }
+
+    fn set_predicate_cardinality(
+        &self,
+        predicate: &str,
+        cardinality: Cardinality,
+        source: &str,
+    ) -> Result<()> {
+        let key = normalize_predicate(predicate);
+        if key.is_empty() {
+            return Ok(());
+        }
+        let now = chrono::Utc::now().timestamp();
+        self.db.with_cog_conn(|conn| {
+            conn.execute(
+                "INSERT INTO cog_predicate_meta (predicate, cardinality, source, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(predicate) DO UPDATE SET
+                   cardinality = excluded.cardinality,
+                   source      = excluded.source,
+                   updated_at  = excluded.updated_at",
+                params![key, cardinality.as_str(), source, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn list_predicate_meta(&self) -> Result<Vec<PredicateMetaRow>> {
+        self.db.with_cog_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT predicate, cardinality, source, updated_at
+                 FROM cog_predicate_meta ORDER BY cardinality, predicate",
+            )?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(PredicateMetaRow {
+                        predicate: r.get(0)?,
+                        cardinality: r.get(1)?,
+                        source: r.get(2)?,
+                        updated_at: r.get(3)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+
     fn scan_edges(&self, limit: usize, offset: usize) -> Result<Vec<RelationshipEdge>> {
         self.db.with_cog_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT * FROM cog_edges
-                 WHERE valid_to IS NULL
+                 WHERE archived_at IS NULL
                  ORDER BY last_activated ASC
                  LIMIT ?1 OFFSET ?2",
             )?;
@@ -1649,6 +1871,146 @@ mod tests {
         let get = |id: &str| sets.iter().find(|s| s.scope_id == id).unwrap().nodes;
         assert_eq!(get("ai-office:nghien-cuu"), 1);
         assert_eq!(get("ai-office:noi-dung"), 1);
+    }
+
+    /// Two entities plus an edge between them, at a chosen assertion time.
+    fn fact(store: &SqliteGraphStore, subj: &DataPoint, object: &str, pred: &str, at: i64) -> Uuid {
+        let obj = DataPoint::entity(object, at);
+        store.upsert_node(&obj).unwrap();
+        let mut e = RelationshipEdge::new(subj.id, obj.id, pred, at);
+        e.last_activated = at;
+        store.upsert_edge(&e).unwrap();
+        obj.id
+    }
+
+    #[test]
+    fn superseded_facts_disappear_from_the_present_but_not_from_history() {
+        let store = SqliteGraphStore::new(test_db());
+        let shop = DataPoint::entity("BTMC", 0);
+        store.upsert_node(&shop).unwrap();
+
+        let old = fact(&store, &shop, "149.900", "sell_price", 1_000);
+        let new = fact(&store, &shop, "141.500", "sell_price", 2_000);
+
+        // Close the old one the way cognify does.
+        let mut prior = store
+            .current_edges_for(shop.id, "sell_price")
+            .unwrap()
+            .into_iter()
+            .find(|e| e.dst == old)
+            .unwrap();
+        prior.invalidate(2_000, Uuid::new_v4());
+        store.upsert_edge(&prior).unwrap();
+
+        // "What is the price?" — one answer, the current one.
+        let current = store.current_edges_for(shop.id, "sell_price").unwrap();
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].dst, new);
+
+        // Retrieval sees only the current fact...
+        let now_edges = store.neighbors_at(shop.id, 10, None).unwrap();
+        assert_eq!(now_edges.len(), 1, "superseded fact must not be recalled");
+        assert_eq!(now_edges[0].dst, new);
+
+        // ...but the old one is still there when you ask about back then.
+        let then = store.neighbors_at(shop.id, 10, Some(1_500)).unwrap();
+        assert_eq!(then.len(), 1);
+        assert_eq!(then[0].dst, old, "as_of must return the fact of that time");
+
+        // And nothing was deleted.
+        assert_eq!(store.neighbors(shop.id, 10).unwrap().len(), 2);
+        let history = store.edge_history(shop.id, Some("sell_price"), 50).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].dst, old, "history is oldest-first");
+        assert!(history[0].valid_to.is_some());
+        assert!(history[1].is_current());
+    }
+
+    // The half-open interval matters at the seam: at the exact second of the
+    // handover, the new fact is the answer — otherwise both would match.
+    #[test]
+    fn the_supersession_instant_belongs_to_the_new_fact() {
+        let store = SqliteGraphStore::new(test_db());
+        let shop = DataPoint::entity("BTMC", 0);
+        store.upsert_node(&shop).unwrap();
+        let old = fact(&store, &shop, "149.900", "sell_price", 1_000);
+        fact(&store, &shop, "141.500", "sell_price", 2_000);
+        let mut prior = store
+            .neighbors(shop.id, 10)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.dst == old)
+            .unwrap();
+        prior.invalidate(2_000, Uuid::new_v4());
+        store.upsert_edge(&prior).unwrap();
+
+        let at_seam = store.neighbors_at(shop.id, 10, Some(2_000)).unwrap();
+        assert_eq!(at_seam.len(), 1);
+        assert_ne!(at_seam[0].dst, old);
+        // One second earlier the old fact was still in force.
+        assert_eq!(
+            store.neighbors_at(shop.id, 10, Some(1_999)).unwrap()[0].dst,
+            old
+        );
+    }
+
+    // Dormant is not false: decay must not hide a fact from recall.
+    #[test]
+    fn archived_edges_are_still_current_facts() {
+        let store = SqliteGraphStore::new(test_db());
+        let a = DataPoint::entity("A", 0);
+        store.upsert_node(&a).unwrap();
+        let b = fact(&store, &a, "B", "lives_in", 1_000);
+
+        let mut e = store.neighbors(a.id, 10).unwrap().remove(0);
+        e.archive(5_000);
+        store.upsert_edge(&e).unwrap();
+
+        let current = store.neighbors_at(a.id, 10, None).unwrap();
+        assert_eq!(current.len(), 1, "an archived fact is still the answer");
+        assert_eq!(current[0].dst, b);
+        assert!(current[0].is_archived() && current[0].is_current());
+        // But decay stops scanning it.
+        assert!(store.scan_edges(10, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn predicate_cardinality_defaults_to_multi_and_is_overridable() {
+        let store = SqliteGraphStore::new(test_db());
+        // Seeded by the schema.
+        assert_eq!(
+            store.predicate_cardinality("sell_price").unwrap(),
+            Cardinality::Single
+        );
+        assert_eq!(
+            store.predicate_cardinality("has_task").unwrap(),
+            Cardinality::Multi
+        );
+        // Casing/spacing an LLM might emit still resolves.
+        assert_eq!(
+            store.predicate_cardinality("Sell Price").unwrap(),
+            Cardinality::Single
+        );
+        // Never-seen predicate: multi, so nothing gets superseded by accident.
+        assert_eq!(
+            store.predicate_cardinality("wibbles_at").unwrap(),
+            Cardinality::Multi
+        );
+
+        store
+            .set_predicate_cardinality("wibbles_at", Cardinality::Single, "user")
+            .unwrap();
+        assert_eq!(
+            store.predicate_cardinality("wibbles_at").unwrap(),
+            Cardinality::Single
+        );
+        let row = store
+            .list_predicate_meta()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.predicate == "wibbles_at")
+            .unwrap();
+        assert_eq!(row.source, "user", "hand edits must be marked as such");
     }
 
     #[test]

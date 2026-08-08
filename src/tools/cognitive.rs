@@ -53,6 +53,26 @@ fn default_node_sets(agent_id: &str) -> Vec<NodeSet> {
 /// Build the `result_for_assistant` text plus the structured data the UI
 /// renders in a single helper. The summary line is what the agent reads
 /// when chaining tool calls; the JSON is for the chat UI's tool card.
+/// Read the optional `as_of` argument. An unparseable value is an **error**,
+/// never a silent fall back to "now": answering about the present when the
+/// caller asked about the past is a wrong answer that looks right.
+fn parse_as_of_arg(input: &Value) -> Result<Option<i64>> {
+    let Some(raw) = input.get("as_of").and_then(|v| v.as_str()) else {
+        // Numbers are accepted too — models emit `as_of: 1754006400` often
+        // enough that rejecting it would just be rude.
+        return Ok(input.get("as_of").and_then(|v| v.as_i64()));
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    cognitive::parse_as_of(raw).map(Some).ok_or_else(|| {
+        anyhow::anyhow!(
+            "could not read as_of {raw:?} — use 2026-07-31, 2026-07-31T09:00:00Z or unix seconds"
+        )
+    })
+}
+
 fn assistant_result(summary: impl Into<String>, data: Value) -> ToolOutput {
     ToolOutput::Result {
         data,
@@ -211,6 +231,10 @@ impl Tool for CogSearchTool {
          • graph — k-hop subgraph expansion from semantic seeds (default, best for context)\n\
          • spreading — like graph but ALSO strengthens edges via Hebbian write-back (use when \
            the query represents real recall the user should remember more easily next time)\n\
+         • temporal — facts as they stood at `as_of`, ranked by closeness to that moment\n\
+         Every mode answers with CURRENT facts by default: a value that a later one replaced \
+         (an old price, a previous job) is excluded. Pass `as_of` to ask what was true then \
+         instead — 'giá vàng ngày 31/07' → as_of='2026-07-31'.\n\
          Prefer CogRecall for everyday 'what do I know about X' questions — it picks spreading \
          automatically and includes write-back."
     }
@@ -222,13 +246,15 @@ impl Tool for CogSearchTool {
                 "query": { "type": "string", "description": "Natural-language query." },
                 "mode": {
                     "type": "string",
-                    "enum": ["chunks", "triplet", "graph", "spreading"],
+                    "enum": ["chunks", "triplet", "graph", "spreading", "temporal"],
                     "description": "Retrieval strategy. Default: graph.",
                     "default": "graph"
                 },
                 "limit": { "type": "integer", "default": 8, "minimum": 1, "maximum": 50 },
                 "hops": { "type": "integer", "default": 2, "minimum": 1, "maximum": 5,
-                          "description": "Hops for graph/spreading modes." }
+                          "description": "Hops for graph/spreading modes." },
+                "as_of": { "type": "string",
+                           "description": "Answer as of this moment instead of now: \"2026-07-31\", \"2026-07-31T09:00:00Z\" or unix seconds. Omit for current facts." }
             },
             "required": ["query"]
         })
@@ -271,10 +297,12 @@ impl Tool for CogSearchTool {
             "chunks" => SearchType::Chunks,
             "triplet" => SearchType::Triplet,
             "spreading" => SearchType::SpreadingActivation,
+            "temporal" => SearchType::Temporal,
             _ => SearchType::GraphCompletion,
         };
         q.hops = hops;
         q.decay_per_hop = 0.6;
+        q.as_of = parse_as_of_arg(&input)?;
 
         let hits = sys.search(&q).await?;
         let data = serde_json::json!({
@@ -336,7 +364,9 @@ impl Tool for CogRecallTool {
          Like CogSearch with mode=spreading: the query embeds to seed nodes, then BFS expands \
          k hops while STRENGTHENING the traversed edges (Hebbian write-back). Use this for the \
          common case 'what do I know about X' — over time, frequently-recalled topics become \
-         easier to find. For pure read-only lookups prefer CogSearch with mode='graph'."
+         easier to find. Returns only facts that are still current; pass `as_of` for what was \
+         true at an earlier moment. For pure read-only lookups prefer CogSearch with \
+         mode='graph'."
     }
 
     fn input_schema(&self) -> Value {
@@ -345,7 +375,9 @@ impl Tool for CogRecallTool {
             "properties": {
                 "query": { "type": "string" },
                 "limit": { "type": "integer", "default": 8, "minimum": 1, "maximum": 50 },
-                "hops":  { "type": "integer", "default": 2, "minimum": 1, "maximum": 5 }
+                "hops":  { "type": "integer", "default": 2, "minimum": 1, "maximum": 5 },
+                "as_of": { "type": "string",
+                           "description": "Recall what was true at this moment instead of now: \"2026-07-31\" or unix seconds." }
             },
             "required": ["query"]
         })
@@ -376,7 +408,7 @@ impl Tool for CogRecallTool {
             .unwrap_or(2)
             .clamp(1, 5) as u8;
 
-        let q = SearchQuery::spreading(query, limit, hops);
+        let q = SearchQuery::spreading(query, limit, hops).at(parse_as_of_arg(&input)?);
         let hits = sys.search(&q).await?;
         let data = serde_json::json!({
             "hits": hits.iter().map(|h| serde_json::json!({

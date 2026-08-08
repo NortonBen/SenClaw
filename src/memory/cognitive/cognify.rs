@@ -24,6 +24,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::memory::chunker::{chunk_text, ChunkerOptions};
 
@@ -262,6 +263,10 @@ pub struct CognifyReport {
     pub llm_skipped: bool,
     pub edges_added: usize,
     pub edges_strengthened: usize,
+    /// Older facts this run superseded — a new `sell_price` closing the
+    /// previous one. Not a deletion: the row stays as history and is still
+    /// reachable through an `as_of` query.
+    pub edges_invalidated: usize,
 }
 
 pub struct CognifyPipeline {
@@ -491,6 +496,10 @@ impl CognifyPipeline {
             .find(|e| e.dst == obj.id && e.predicate.eq_ignore_ascii_case(&raw.predicate));
         match existing {
             Some(mut e) => {
+                // Seeing the fact asserted again is the one thing that may
+                // re-open a closed interval — the price came back, the person
+                // moved back. Retrieval-time strengthening must not.
+                e.reassert(now);
                 e.strengthen(opts.importance, now);
                 self.embedder.graph.upsert_edge(&e)?;
                 report.edges_strengthened += 1;
@@ -506,7 +515,64 @@ impl CognifyPipeline {
             }
         }
 
+        report.edges_invalidated +=
+            self.supersede_conflicting(&subj, &obj, &raw.predicate, chunk_node.id, now)?;
+
         Ok(())
+    }
+
+    /// Close older facts that the one just written replaces.
+    ///
+    /// Only for predicates the registry marks `single` — `sell_price` has one
+    /// value at a time, `has_task` has several, and treating them alike is how
+    /// a graph ends up holding three simultaneous gold prices four days apart
+    /// (measured; see docs/temporal-graph-research.md). Unknown predicates are
+    /// `multi`, so the default behaviour is exactly what it was before.
+    ///
+    /// Nothing is deleted: the old edge keeps its row with `valid_to` stamped,
+    /// stays reachable through `as_of`, and is simply no longer the answer to
+    /// "what is true now".
+    fn supersede_conflicting(
+        &self,
+        subj: &DataPoint,
+        obj: &DataPoint,
+        predicate: &str,
+        chunk_id: Uuid,
+        now: i64,
+    ) -> Result<usize> {
+        if !self
+            .embedder
+            .graph
+            .predicate_cardinality(predicate)?
+            .supersedes()
+        {
+            return Ok(0);
+        }
+        let mut closed = 0usize;
+        for mut old in self.embedder.graph.current_edges_for(subj.id, predicate)? {
+            if old.dst == obj.id {
+                continue; // same fact, just re-asserted above
+            }
+            // Ingesting an OLD document must not overthrow the present. A
+            // fact may only be superseded by one that starts no earlier than
+            // it does — without this guard, uploading a 2019 archive would
+            // silently rewrite today's answers.
+            if old.valid_from > now {
+                continue;
+            }
+            old.invalidate(now, chunk_id);
+            self.embedder.graph.upsert_edge(&old)?;
+            closed += 1;
+        }
+        if closed > 0 {
+            tracing::debug!(
+                subject = %subj.name,
+                predicate,
+                superseded = closed,
+                "[cognitive] newer fact closed older ones"
+            );
+        }
+        Ok(closed)
     }
 
     /// Entity resolution: exact-name match first, then fall through to
@@ -745,6 +811,222 @@ mod tests {
         let embedder = CognitiveEmbedder::new(graph, vector, provider);
         let llm = Arc::new(StubLlm::new(replies));
         CognifyPipeline::new(embedder, llm)
+    }
+
+    // ── Temporal: a new fact supersedes the one it replaces ──────────────
+    //
+    // Modelled on the measured failure (docs/temporal-graph-research.md):
+    // BTMC's sell_price arrived three times in five days and all three sat in
+    // the graph as equally current, so "giá vàng BTMC bao nhiêu?" was answered
+    // by vector similarity rather than by recency.
+
+    fn price_reply(shop: &str, value: &str) -> String {
+        format!(
+            r#"{{"triplets":[{{"subject":"{shop}","subject_type":"organization","predicate":"sell_price","object":"{value}","object_type":"price"}}]}}"#
+        )
+    }
+
+    async fn current_objects(pipe: &CognifyPipeline, subject: &str, predicate: &str) -> Vec<String> {
+        let subj = pipe
+            .embedder
+            .graph
+            .find_entity_by_name(subject)
+            .unwrap()
+            .expect("subject entity");
+        pipe.embedder
+            .graph
+            .current_edges_for(subj.id, predicate)
+            .unwrap()
+            .into_iter()
+            .map(|e| {
+                pipe.embedder
+                    .graph
+                    .get_node(e.dst)
+                    .unwrap()
+                    .map(|n| n.name)
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_newer_single_valued_fact_supersedes_the_old_one() {
+        let pipe = build_pipeline(vec![
+            price_reply("BTMC", "149.900"),
+            price_reply("BTMC", "141.500"),
+        ]);
+        pipe.cognify("BTMC bán 149.900", "d1", &CognifyOptions::default())
+            .await
+            .unwrap();
+        let second = pipe
+            .cognify("BTMC bán 141.500", "d2", &CognifyOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(second.edges_invalidated, 1);
+        assert_eq!(
+            current_objects(&pipe, "BTMC", "sell_price").await,
+            vec!["141.500".to_string()],
+            "only the latest price may answer as current"
+        );
+
+        // Nothing was destroyed: the old price is still on the timeline.
+        let subj = pipe
+            .embedder
+            .graph
+            .find_entity_by_name("BTMC")
+            .unwrap()
+            .unwrap();
+        let history = pipe
+            .embedder
+            .graph
+            .edge_history(subj.id, Some("sell_price"), 20)
+            .unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history.iter().any(|e| e.valid_to.is_some() && e.invalidated_by.is_some()));
+    }
+
+    #[tokio::test]
+    async fn multi_valued_predicates_accumulate_untouched() {
+        // Three tasks are three tasks — the supersession rule must not fire
+        // for a predicate that is legitimately many-valued.
+        let reply = |task: &str| {
+            format!(
+                r#"{{"triplets":[{{"subject":"tôi","subject_type":"person","predicate":"has_task","object":"{task}","object_type":"task"}}]}}"#
+            )
+        };
+        let pipe = build_pipeline(vec![reply("viết báo cáo"), reply("phân tích giá vàng")]);
+        pipe.cognify("giao việc 1", "d1", &CognifyOptions::default())
+            .await
+            .unwrap();
+        let second = pipe
+            .cognify("giao việc 2", "d2", &CognifyOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(second.edges_invalidated, 0);
+        let mut tasks = current_objects(&pipe, "tôi", "has_task").await;
+        tasks.sort();
+        assert_eq!(tasks.len(), 2, "both tasks stay current");
+    }
+
+    #[tokio::test]
+    async fn re_asserting_the_same_fact_only_strengthens_it() {
+        let pipe = build_pipeline(vec![
+            price_reply("BTMC", "149.900"),
+            price_reply("BTMC", "149.900"),
+        ]);
+        pipe.cognify("BTMC bán 149.900", "d1", &CognifyOptions::default())
+            .await
+            .unwrap();
+        let again = pipe
+            .cognify("BTMC vẫn bán 149.900", "d2", &CognifyOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(again.edges_invalidated, 0, "a fact cannot supersede itself");
+        assert!(again.edges_strengthened > 0);
+        assert_eq!(
+            current_objects(&pipe, "BTMC", "sell_price").await,
+            vec!["149.900".to_string()]
+        );
+    }
+
+    // Someone moves away and back: the fact must be current again, not
+    // stuck closed.
+    #[tokio::test]
+    async fn a_returning_fact_is_re_opened_by_extraction() {
+        let lives = |city: &str| {
+            format!(
+                r#"{{"triplets":[{{"subject":"Sen","subject_type":"person","predicate":"lives_in","object":"{city}","object_type":"city"}}]}}"#
+            )
+        };
+        let pipe = build_pipeline(vec![lives("Hà Nội"), lives("Đà Nẵng"), lives("Hà Nội")]);
+        for (i, text) in ["Sen sống ở Hà Nội", "Sen chuyển vào Đà Nẵng", "Sen quay lại Hà Nội"]
+            .iter()
+            .enumerate()
+        {
+            let r = pipe
+                .cognify(text, &format!("d{i}"), &CognifyOptions::default())
+                .await
+                .unwrap();
+            assert!(!r.llm_skipped, "step {i} did not reach the extractor");
+        }
+        assert_eq!(
+            current_objects(&pipe, "Sen", "lives_in").await,
+            vec!["Hà Nội".to_string()],
+            "moving back must make the original fact current again — and alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn recall_returns_the_current_fact_not_the_superseded_one() {
+        // The whole point, end to end: retrieval walks the graph and must not
+        // hand an outdated value to the agent.
+        let pipe = build_pipeline(vec![
+            price_reply("BTMC", "149.900"),
+            price_reply("BTMC", "141.500"),
+        ]);
+        pipe.cognify("BTMC bán 149.900", "d1", &CognifyOptions::default())
+            .await
+            .unwrap();
+
+        let subj = pipe
+            .embedder
+            .graph
+            .find_entity_by_name("BTMC")
+            .unwrap()
+            .unwrap();
+
+        // Backdate the first price by two days. Both cognify runs happen in
+        // the same second here, and a fact whose interval is zero seconds
+        // wide is — correctly — reachable at no point in time at all; the
+        // real timeline this models spans days.
+        let two_days_ago = chrono::Utc::now().timestamp() - 2 * 86_400;
+        let mut first = pipe
+            .embedder
+            .graph
+            .neighbors(subj.id, 32)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.predicate.eq_ignore_ascii_case("sell_price"))
+            .unwrap();
+        first.valid_from = two_days_ago;
+        pipe.embedder.graph.upsert_edge(&first).unwrap();
+
+        pipe.cognify("BTMC bán 141.500", "d2", &CognifyOptions::default())
+            .await
+            .unwrap();
+
+        let reachable = |as_of: Option<i64>| -> Vec<String> {
+            pipe.embedder
+                .graph
+                .neighbors_at(subj.id, 32, as_of)
+                .unwrap()
+                .into_iter()
+                .filter(|e| e.predicate.eq_ignore_ascii_case("sell_price"))
+                .map(|e| {
+                    pipe.embedder
+                        .graph
+                        .get_node(e.dst)
+                        .unwrap()
+                        .map(|n| n.name)
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+
+        assert_eq!(
+            reachable(None),
+            vec!["141.500".to_string()],
+            "a recall about now must not reach the superseded price"
+        );
+        // Time travel still reaches yesterday's answer.
+        assert_eq!(
+            reachable(Some(chrono::Utc::now().timestamp() - 86_400)),
+            vec!["149.900".to_string()],
+            "as_of must return the price that was in force then"
+        );
     }
 
     #[tokio::test]

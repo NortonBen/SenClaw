@@ -10,7 +10,7 @@
 //! Hebbian write-back. Read-only retrievers use `effective_strength` so they
 //! never alter the graph.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -75,6 +75,15 @@ impl CognitiveRetriever {
     }
 
     pub async fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+        let hits = self.search_unfiltered(query).await?;
+        // Filtering edges is not enough on its own: the seed step is a vector
+        // / FTS lookup over *nodes*, and an outdated value ("149.900") is
+        // still a node. Without this pass a superseded price walks straight
+        // into the answer as a direct hit, having never crossed an edge.
+        self.retain_temporally_visible(hits, query.as_of)
+    }
+
+    async fn search_unfiltered(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
         let hits = if query.node_sets.is_empty() {
             self.dispatch(query).await?
         } else {
@@ -101,6 +110,37 @@ impl CognitiveRetriever {
         }
     }
 
+    /// Drop hits whose every fact was superseded before the moment being
+    /// asked about.
+    ///
+    /// The rule is narrow on purpose: a node is dropped only when it *has*
+    /// edges and **none** of them holds at `as_of`. A node with no edges at
+    /// all (a freshly extracted entity, a chunk) is not history — it simply
+    /// has no facts yet, and hiding it would break ordinary text recall.
+    ///
+    /// Costs one indexed lookup per surviving hit (a second only for the rare
+    /// node with no live edges), over a candidate set already truncated to
+    /// the query limit.
+    fn retain_temporally_visible(
+        &self,
+        hits: Vec<SearchHit>,
+        as_of: Option<i64>,
+    ) -> Result<Vec<SearchHit>> {
+        let mut out = Vec::with_capacity(hits.len());
+        for hit in hits {
+            let live = self.embedder.graph.neighbors_at(hit.node.id, 1, as_of)?;
+            if !live.is_empty() {
+                out.push(hit);
+                continue;
+            }
+            let any = self.embedder.graph.neighbors(hit.node.id, 1)?;
+            if any.is_empty() {
+                out.push(hit); // no facts at all — not a historical value
+            }
+        }
+        Ok(out)
+    }
+
     async fn dispatch(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
         Ok(match query.query_type {
             SearchType::Chunks => self.search_chunks(query).await?,
@@ -109,6 +149,7 @@ impl CognitiveRetriever {
             SearchType::SpreadingActivation => self.search_spreading(query).await?,
             SearchType::Fts => self.search_fts(query)?,
             SearchType::Hybrid => self.search_hybrid(query).await?,
+            SearchType::Temporal => self.search_temporal(query).await?,
         })
     }
 
@@ -291,7 +332,7 @@ impl CognitiveRetriever {
             let edges = self
                 .embedder
                 .graph
-                .neighbors(entity.id, 32)
+                .neighbors_at(entity.id, 32, query.as_of)
                 .context("neighbors for triplet")?;
             // The seed entity itself first.
             hits.push(SearchHit {
@@ -321,6 +362,74 @@ impl CognitiveRetriever {
                 break;
             }
         }
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        hits.truncate(query.limit);
+        Ok(hits)
+    }
+
+    // ---- Temporal (facts as of a moment in world time) ----
+
+    /// Like `Triplet`, but ranked by *when* rather than only by strength.
+    ///
+    /// Seeds come from vector + FTS (a question about a past state often
+    /// names the entity literally — "giá vàng BTMC ngày 31/07" — and the
+    /// keyword half is what finds it when the embedder is dormant). Edges are
+    /// filtered to the requested moment by `neighbors_at`, then scored with a
+    /// proximity term so the fact that was in force closest to `as_of` wins
+    /// over one that merely has a high Hebbian strength.
+    async fn search_temporal(&self, query: &SearchQuery) -> Result<Vec<SearchHit>> {
+        let over = (query.limit * 2).max(query.limit);
+        let mut seeds = self
+            .vector_seeds(&query.query_text, over, Some(NodeKind::Entity))
+            .await
+            .unwrap_or_default();
+        if seeds.is_empty() {
+            seeds = self.fts_seeds(&query.query_text, over, None)?;
+        }
+
+        let now = Utc::now().timestamp();
+        let at = query.as_of.unwrap_or(now);
+        let mut hits: Vec<SearchHit> = Vec::new();
+        let mut seen: HashSet<Uuid> = HashSet::new();
+
+        for (entity, seed_score) in seeds {
+            let edges = self
+                .embedder
+                .graph
+                .neighbors_at(entity.id, 32, query.as_of)
+                .context("neighbors for temporal")?;
+            if seen.insert(entity.id) {
+                hits.push(SearchHit {
+                    node: entity.clone(),
+                    score: seed_score,
+                    path: Vec::new(),
+                });
+            }
+            for edge in edges {
+                if edge.predicate == "MENTIONS" {
+                    continue; // provenance, not a fact
+                }
+                let neighbor_id = if edge.src == entity.id {
+                    edge.dst
+                } else {
+                    edge.src
+                };
+                let Some(nbr) = self.embedder.graph.get_node(neighbor_id)? else {
+                    continue;
+                };
+                let score = seed_score * temporal_proximity(&edge, at);
+                hits.push(SearchHit {
+                    node: nbr,
+                    score,
+                    path: vec![edge],
+                });
+            }
+        }
+
         hits.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -440,7 +549,10 @@ impl CognitiveRetriever {
         for _hop in 0..query.hops {
             let mut next: Vec<(Uuid, f32, Vec<RelationshipEdge>)> = Vec::new();
             for (node_id, activation, path) in frontier.drain(..) {
-                let edges = self.embedder.graph.neighbors(node_id, 64)?;
+                // Temporal gate for the whole traversal: `as_of = None`
+                // (the default) hides facts a later one superseded, so a
+                // spreading recall cannot surface last week's price.
+                let edges = self.embedder.graph.neighbors_at(node_id, 64, query.as_of)?;
                 for mut edge in edges {
                     let neighbor_id = if edge.src == node_id {
                         edge.dst
@@ -573,6 +685,112 @@ mod tests {
         .await
         .unwrap();
         (embedder, pipe)
+    }
+
+    /// Two prices for one shop, the first superseded a day ago — the shape
+    /// the graph was silently accumulating before supersession existed.
+    async fn price_fixture() -> Arc<CognitiveEmbedder> {
+        let cfg = Config::from_env();
+        let db = Arc::new(Db::open_in_memory(&cfg).unwrap());
+        let graph: Arc<dyn GraphStore> = Arc::new(SqliteGraphStore::new(Arc::clone(&db)));
+        let vector: Arc<dyn VectorStore> = Arc::new(SqliteVectorStore::new(Arc::clone(&db)));
+        let provider: Arc<dyn EmbeddingProvider> = Arc::new(FakeEmbedder);
+        let embedder = Arc::new(CognitiveEmbedder::new(graph, vector, provider));
+
+        let now = Utc::now().timestamp();
+        let day = 86_400;
+        let shop = DataPoint::entity("BTMC", now - 3 * day);
+        let old_price = DataPoint::entity("149.900", now - 3 * day);
+        let new_price = DataPoint::entity("141.500", now);
+        for n in [&shop, &old_price, &new_price] {
+            embedder.add_node(n).await.unwrap();
+        }
+
+        let mut old = RelationshipEdge::new(shop.id, old_price.id, "sell_price", now - 3 * day);
+        old.last_activated = now - 3 * day;
+        old.strength = 0.9; // deliberately the *stronger* edge
+        old.invalidate(now - day, Uuid::new_v4());
+        embedder.graph.upsert_edge(&old).unwrap();
+
+        let mut new = RelationshipEdge::new(shop.id, new_price.id, "sell_price", now - day);
+        new.last_activated = now - day;
+        new.strength = 0.3;
+        embedder.graph.upsert_edge(&new).unwrap();
+        embedder
+    }
+
+    // The guarantee the whole feature exists for: recall answers with the
+    // fact that is true now, even when the outdated one is the stronger edge.
+    #[tokio::test]
+    async fn recall_never_surfaces_a_superseded_fact() {
+        let embedder = price_fixture().await;
+        let r = CognitiveRetriever::new(embedder);
+
+        for q in [
+            SearchQuery::spreading("BTMC", 10, 2),
+            SearchQuery::graph_completion("BTMC", 10, 2),
+            SearchQuery::triplet("BTMC", 10),
+            SearchQuery::temporal("BTMC", 10, None),
+        ] {
+            let mode = format!("{:?}", q.query_type);
+            let names: Vec<String> = r
+                .search(&q)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|h| h.node.name)
+                .collect();
+            assert!(
+                names.iter().any(|n| n == "141.500"),
+                "{mode}: current price missing; got {names:?}"
+            );
+            assert!(
+                !names.iter().any(|n| n == "149.900"),
+                "{mode}: superseded price leaked into a present-tense recall; got {names:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn as_of_reaches_the_fact_that_was_true_then() {
+        let embedder = price_fixture().await;
+        let r = CognitiveRetriever::new(embedder);
+        let two_days_ago = Utc::now().timestamp() - 2 * 86_400;
+
+        let names: Vec<String> = r
+            .search(&SearchQuery::temporal("BTMC", 10, Some(two_days_ago)))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|h| h.node.name)
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "149.900"),
+            "time travel must return the price in force then; got {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n == "141.500"),
+            "a fact asserted later must not appear in the past; got {names:?}"
+        );
+    }
+
+    // Time travel is opt-in per call and must not leak into the next query.
+    #[tokio::test]
+    async fn as_of_does_not_change_the_default_answer() {
+        let embedder = price_fixture().await;
+        let r = CognitiveRetriever::new(embedder);
+        let past = SearchQuery::temporal("BTMC", 10, Some(Utc::now().timestamp() - 2 * 86_400));
+        let _ = r.search(&past).await.unwrap();
+
+        let names: Vec<String> = r
+            .search(&SearchQuery::temporal("BTMC", 10, None))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|h| h.node.name)
+            .collect();
+        assert!(names.iter().any(|n| n == "141.500"));
+        assert!(!names.iter().any(|n| n == "149.900"));
     }
 
     #[tokio::test]
@@ -775,4 +993,31 @@ mod tests {
             after.activation_count
         );
     }
+}
+
+/// How much a fact counts when the question is "as of `at`".
+///
+/// The Hebbian `strength` answers "how live is this knowledge", which is the
+/// wrong axis for a dated question — a price mentioned a hundred times still
+/// isn't the price on the day being asked about. So proximity dominates and
+/// strength only breaks ties:
+///
+/// * in force at `at` (`valid_from <= at < valid_to`) → full marks, minus a
+///   gentle penalty for having started long before, so the *most recent* fact
+///   still standing at that moment wins over an older one that also held;
+/// * not yet asserted, or already superseded → heavily discounted rather than
+///   dropped: `neighbors_at` has already filtered, and anything reaching here
+///   is a boundary case worth showing below the real answers.
+fn temporal_proximity(edge: &RelationshipEdge, at: i64) -> f32 {
+    const WEEK: f32 = 7.0 * 86_400.0;
+    let strength_tiebreak = 0.15 * edge.effective_strength(at).clamp(0.0, 1.0);
+    if !edge.is_valid_at(at) {
+        return 0.05 + strength_tiebreak;
+    }
+    // Age of the assertion at the asked-about moment, in weeks, squashed to
+    // (0, 1]. A fact asserted the same day scores ~1.0; one from a month
+    // earlier that is still in force scores ~0.2 — present, but outranked.
+    let age_weeks = ((at - edge.valid_from).max(0) as f32) / WEEK;
+    let recency = 1.0 / (1.0 + age_weeks);
+    (0.85 * recency + strength_tiebreak).clamp(0.0, 1.0)
 }

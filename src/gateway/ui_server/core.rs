@@ -908,6 +908,15 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             get(super::cognitive::cognitive_top_nodes),
         )
         .route(
+            "/api/cognitive/history",
+            get(super::cognitive::cognitive_history),
+        )
+        .route(
+            "/api/cognitive/predicates",
+            get(super::cognitive::cognitive_predicates)
+                .post(super::cognitive::cognitive_set_predicate),
+        )
+        .route(
             "/api/cognitive/sample",
             get(super::cognitive::cognitive_sample),
         )
