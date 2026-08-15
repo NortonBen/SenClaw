@@ -1,5 +1,7 @@
 [workspace]
-members = ["app-space-sdk", "apps/ssh-manager", "apps/email", "apps/deepwiki", "apps/code-ide", "apps/mindmap", "apps/mini-browser", "apps/luna-calendar", "apps/skill-builder", "apps/docx-editor", "apps/crm", "apps/clock", "apps/ontology", "apps/ai-office", "apps/moltbook", "apps/ai-chat", "apps/video-flow", "apps/rewrite-story", "apps/video-cloner", "apps/hub", "apps/shopee", "apps/social", "apps/kaen", "apps/youtube", "apps/search", "apps/json", "apps/rule-engine", "apps/lakehouse", "apps/zeach", "apps/tiktok-activity", "apps/facebook-pro", "apps/capital", "apps/predict", "apps/drawio", "apps/warehouse", "apps/news", "apps/autotest", "apps/thinking", "apps/google-workspace", "apps/tiktok-dl", "apps/secscan", "apps/sentinel", "apps/cafe", "apps/ipscout", "apps/study", "apps/sandbox", "apps/ba", "apps/widget-pack", "apps/discuss", "apps/terraform"]
+# The Space Apps moved to their own repository. `app-space-sdk` stays: it is
+# the Rust SDK those apps build against, published from here.
+members = ["app-space-sdk"]
 resolver = "2"
 
 [package]
