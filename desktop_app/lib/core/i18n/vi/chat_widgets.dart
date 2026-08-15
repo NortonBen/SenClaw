@@ -83,4 +83,8 @@ const Map<String, String> viChatWidgets = {
   '_No plan content._': '_Không có nội dung kế hoạch._',
   'Approve plan and start editing': 'Duyệt kế hoạch và bắt đầu chỉnh sửa',
   'Clear context and start fresh': 'Xoá ngữ cảnh và bắt đầu lại',
+
+  // Tool parameter rendering (ToolParams)
+  'Yes': 'Có',
+  'No': 'Không',
 };

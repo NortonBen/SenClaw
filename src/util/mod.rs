@@ -2,6 +2,7 @@
 
 pub mod crypto;
 pub mod fetch_safety;
+pub mod file_perms;
 pub mod llm_log;
 pub mod local_time;
 pub mod paths;

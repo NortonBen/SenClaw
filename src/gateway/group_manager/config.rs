@@ -27,6 +27,8 @@ pub(super) fn save_global_config(path: &Path, cfg: &GlobalConfig) -> Result<()> 
     }
     let json = serde_json::to_string_pretty(cfg)?;
     fs::write(path, json)?;
+    // config.json holds every LLM `apiKey` in cleartext; it was created 0644.
+    crate::util::file_perms::restrict_best_effort(path);
     Ok(())
 }
 

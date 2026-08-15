@@ -751,6 +751,24 @@ impl ZenEngine {
         Self::resolve_model_profile_with(override_id.as_deref())
     }
 
+    /// Whether the model a turn would run on accepts image blocks.
+    ///
+    /// Deliberately routed through [`Self::resolve_model_profile_at`] rather
+    /// than re-deriving the config: the answer has to match the model that
+    /// actually receives the turn, including the quirks of that resolution (an
+    /// unknown `override_id` falls back to the active config, an empty override
+    /// list falls back to the first entry). A separate lookup would disagree on
+    /// exactly those edges and route a vision model's images through OCR.
+    ///
+    /// The explicit `vision` toggle from Settings → Models wins; otherwise the
+    /// model name is matched against [`vision::infer_vision`].
+    pub(crate) fn model_accepts_images(
+        config_path: &std::path::Path,
+        override_id: Option<&str>,
+    ) -> bool {
+        vision::model_has_vision(&Self::resolve_model_profile_at(config_path, override_id))
+    }
+
     /// Pure selection step: pick the `LlmConfig` for `override_id` (per-group
     /// model), falling back to the globally active id. Returns `None` when
     /// neither matches a known config (caller then defaults to the first entry).
@@ -790,8 +808,19 @@ impl ZenEngine {
                     })
                     .unwrap_or_else(|| ".senclaw/config.json".to_string())
             });
+        Self::resolve_model_profile_at(std::path::Path::new(&config_path), override_id)
+    }
 
-        let loaded = load_llm_configs(std::path::Path::new(&config_path));
+    /// Same resolution against an explicit `config.json`.
+    ///
+    /// Split out so callers holding a [`Config`](crate::config::Config) — and
+    /// tests — can ask about the profile a turn would use without going through
+    /// the process-global `SENCLAW_CONFIG_PATH`.
+    pub(crate) fn resolve_model_profile_at(
+        config_path: &std::path::Path,
+        override_id: Option<&str>,
+    ) -> ModelProfile {
+        let loaded = load_llm_configs(config_path);
         if !loaded.configs.is_empty() {
             let selected = Self::select_llm_config(&loaded, override_id)
                 .unwrap_or_else(|| loaded.configs[0].clone());
@@ -1002,7 +1031,21 @@ impl ZenCore for ZenEngine {
     }
 
     fn process_user_input(&self, prompt: &str, original_input: Option<&str>) -> Result<()> {
-        info!("[{}] process_user_input: {}", self.instance_id, prompt);
+        self.process_user_input_with_images(prompt, original_input, Vec::new())
+    }
+
+    fn process_user_input_with_images(
+        &self,
+        prompt: &str,
+        original_input: Option<&str>,
+        images: Vec<ImageSource>,
+    ) -> Result<()> {
+        info!(
+            "[{}] process_user_input: {} ({} image block(s))",
+            self.instance_id,
+            prompt,
+            images.len()
+        );
 
         // Queue when a turn is already in flight (mirrors TS SemaEngine
         // pending-input queue): `/commands` run solo in a later turn; injects
@@ -1014,6 +1057,17 @@ impl ZenCore for ZenEngine {
             if state.current_state(MAIN_AGENT_ID) == SessionState::Processing {
                 let queued = Self::push_pending(&mut state, prompt, original_input);
                 drop(state);
+                if !images.is_empty() {
+                    // The pending queue carries text only. Callers dispatch
+                    // image turns through the per-group queue precisely so this
+                    // can't happen; say so out loud if it ever does, rather than
+                    // letting the model answer about an image it never got.
+                    warn!(
+                        "[{}] queued mid-turn input dropped {} image block(s) — the pending-input queue is text-only",
+                        self.instance_id,
+                        images.len()
+                    );
+                }
                 self.report_queued(prompt, queued);
                 return Ok(());
             }
@@ -1029,7 +1083,7 @@ impl ZenCore for ZenEngine {
             queue_length: 0,
         }));
 
-        self.start_query(prompt)
+        self.start_query(prompt, images)
     }
 
     fn pause_session(&self) {
@@ -1390,7 +1444,7 @@ impl ZenEngine {
     /// Callers must have already set the main agent to `Processing`
     /// (`process_user_input` does; the queued-batch path arrives here with
     /// the state still `Processing` from the previous turn).
-    fn start_query(&self, prompt: &str) -> Result<()> {
+    fn start_query(&self, prompt: &str, images: Vec<ImageSource>) -> Result<()> {
         let cancel = CancellationToken::new();
         {
             let mut state = self.state.lock().unwrap();
@@ -1486,6 +1540,12 @@ impl ZenEngine {
             AgentMode::Agent => None,
         };
 
+        // User-authored operating rules (`~/.senclaw/AGENTS.md`). Read per
+        // turn so an edit takes effect without a restart; the file is small
+        // and usually absent.
+        let operating_rules =
+            crate::user_profile::operating_rules_block(&crate::config::Config::from_env());
+
         let system_prompt = Self::assemble_system_prompt(
             &opts.system_prompt,
             &opts.working_dir,
@@ -1494,6 +1554,7 @@ impl ZenEngine {
             plan_mode_reminder.as_deref(),
             always_skills_block.as_deref(),
             opts.user_defaults.as_deref(),
+            operating_rules.as_deref(),
         );
 
         // Resolve profile: per-group override → active UI config → env fallback.
@@ -1573,9 +1634,11 @@ impl ZenEngine {
             let mut blocks = Vec::<ContentBlock>::new();
             if messages.is_empty() {
                 let include_project_doc = Self::instance_uses_workspace(&self.instance_id);
-                if let Some(ctx) =
-                    Self::collect_first_turn_context(&opts.working_dir, include_project_doc)
-                {
+                if let Some(ctx) = Self::collect_first_turn_context(
+                    &opts.working_dir,
+                    include_project_doc,
+                    &self.instance_id,
+                ) {
                     blocks.push(ContentBlock::Text { text: ctx });
                 }
             }
@@ -1614,6 +1677,11 @@ impl ZenEngine {
                         "<system-reminder>\nReply in {lang}. Do not include hidden reasoning, chain-of-thought, or thinking blocks in the final answer.\n</system-reminder>"
                     ),
                 });
+            }
+            // Attachments go in ahead of the question: every provider we target
+            // reads an image best when the text that asks about it follows it.
+            for source in images {
+                blocks.push(ContentBlock::Image { source });
             }
             blocks.push(ContentBlock::Text {
                 text: prompt.clone(),
@@ -1765,7 +1833,9 @@ impl ZenEngine {
                 );
                 match engine_weak.upgrade() {
                     Some(engine) => {
-                        if let Err(e) = engine.start_query(&joined) {
+                        // Queued inputs are text-only (see the warn in
+                        // process_user_input_with_images).
+                        if let Err(e) = engine.start_query(&joined, Vec::new()) {
                             warn!("[{instance_id}] queued-input turn failed to start: {e}");
                             let mut st = state_for_spawn.lock().unwrap();
                             st.update_state(MAIN_AGENT_ID, SessionState::Idle);
@@ -1814,6 +1884,7 @@ impl ZenEngine {
         plan_mode_reminder: Option<&str>,
         always_skills: Option<&str>,
         user_defaults: Option<&str>,
+        operating_rules: Option<&str>,
     ) -> String {
         // Default to the full sema-core-compatible SYSTEM_PROMPT when caller
         // doesn't override. Matches `code-old/sema-code-core/prompt/system.ts`.
@@ -1843,6 +1914,16 @@ impl ZenEngine {
             out.push_str(block);
         }
         if let Some(block) = user_defaults {
+            out.push_str("\n\n");
+            out.push_str(block);
+        }
+        // `AGENTS.md`, last. Position matters twice over: appending keeps the
+        // cacheable prefix above it intact, and — the reason that is not
+        // negotiable — this is text the user types. Spliced in ahead of the
+        // base prompt, a line saying "ignore the rules above" would be read
+        // before the safety section. The wrapper written by
+        // `operating_rules_block` states that safety still wins.
+        if let Some(block) = operating_rules {
             out.push_str("\n\n");
             out.push_str(block);
         }
@@ -2270,18 +2351,39 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
         false
     }
 
-    /// Read `SENCLAW.md` (walks up from `working_dir`) and current date.
-    /// Returns a `<system-reminder>` block to inject into the first user turn,
-    /// or `None` if nothing useful was found.
+    /// Read `SENCLAW.md` (walks up from `working_dir`), the user profile, and
+    /// the current date. Returns a `<system-reminder>` block to inject into the
+    /// first user turn, or `None` if nothing useful was found.
     ///
     /// When `include_project_doc` is `false`, only the date line is emitted —
     /// the project markdown is skipped entirely. Used for non-workspace agents.
     ///
     /// Reads `SENCLAW.md` first, then falls back to `CLAUDE.md` for backward
     /// compatibility with existing repos that haven't renamed yet.
-    fn collect_first_turn_context(working_dir: &str, include_project_doc: bool) -> Option<String> {
+    ///
+    /// The user profile (Soul Core) rides here rather than in the per-turn
+    /// memory blocks in `AgentPool` because it is stable for the whole
+    /// session: emitting it once keeps the system prompt cacheable and costs
+    /// its tokens a single time instead of every turn. `instance_id` is the
+    /// chat JID, which is what decides how much of the profile this context is
+    /// allowed to see — see [`crate::user_profile::ProfileScope`].
+    fn collect_first_turn_context(
+        working_dir: &str,
+        include_project_doc: bool,
+        instance_id: &str,
+    ) -> Option<String> {
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let mut parts: Vec<String> = vec![format!("Today's date is {date}.")];
+
+        // Soul Core: who the human is. Tier filtering happens inside
+        // `block_for_instance`; never inline the profile here.
+        let cfg = crate::config::Config::from_env();
+        if let Some(block) = crate::user_profile::block_for_instance(&cfg, instance_id) {
+            parts.push(block);
+        }
+        if let Some(block) = crate::user_profile::tools_notes_block(&cfg, instance_id) {
+            parts.push(block);
+        }
 
         if include_project_doc {
             // Walk up the directory tree looking for SENCLAW.md, then CLAUDE.md.
@@ -2305,11 +2407,17 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
                 }
             };
             if let Some((fname, content)) = project_doc {
-                if !content.trim().is_empty() {
-                    parts.push(format!(
-                        "Project instructions ({fname}):\n{}",
-                        content.trim()
-                    ));
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    // Cap the project doc. It was read unbounded, which is a
+                    // per-session cost with no ceiling — this repo's own
+                    // CLAUDE.md is 34 KB. Char-boundary truncation, because a
+                    // byte slice through a multi-byte character panics.
+                    let body = crate::util::text::truncate_on_char_boundary(
+                        trimmed,
+                        crate::user_profile::MAX_FLAT_FILE_CHARS,
+                    );
+                    parts.push(format!("Project instructions ({fname}):\n{body}"));
                 }
             }
         }
@@ -2353,6 +2461,37 @@ Skill hint: `{name}` may help with this request — {first_sentence}.\n\
             );
         }
     }
+}
+
+/// Human title for an MCP tool, shown on permission cards and tool results.
+///
+/// Built-in tools show their name alone. The server segment was pure repetition
+/// for them — the tool name already opens with its domain ("Space Current
+/// Time", "Memory Search", "Profile Update"), so the prefix read as "SPACE:
+/// Space Current Time". Under bundling it was worse than redundant: every
+/// built-in was labelled with the host process ("CORE:", later "CORE:"),
+/// naming the transport rather than anything the user recognises.
+///
+/// External servers keep the prefix — a Space App's tool name carries no hint
+/// of which app it came from, and that is worth showing.
+fn mcp_display_title(server_name: &str, tool_name: &str) -> String {
+    let capitalized = tool_name
+        .replace('_', " ")
+        .split_whitespace()
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if server_name.starts_with("senclaw-") {
+        return capitalized;
+    }
+    format!("{}: {}", server_name.to_uppercase(), capitalized)
 }
 
 // ===== McpRegistryBridgeTool =====
@@ -2417,27 +2556,7 @@ impl Tool for McpRegistryBridgeTool {
     }
 
     fn get_display_title(&self, _input: &Value) -> String {
-        let name = self.tool_name.replace('_', " ");
-        // Capitalize words
-        let capitalized = name
-            .split_whitespace()
-            .map(|w| {
-                let mut c = w.chars();
-                match c.next() {
-                    None => String::new(),
-                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        let server_display = if self.server_name.starts_with("senclaw-") {
-            &self.server_name["senclaw-".len()..]
-        } else {
-            &self.server_name
-        };
-
-        format!("{}: {}", server_display.to_uppercase(), capitalized)
+        mcp_display_title(&self.server_name, &self.tool_name)
     }
 
     fn gen_tool_permission(&self, input: &Value) -> Option<ToolPermissionInfo> {
@@ -3142,11 +3261,71 @@ mod tests {
             None,
             None,
             Some("## User defaults\n- Search: use x"),
+            None,
         );
         assert!(with.contains("## User defaults"));
         let without =
-            ZenEngine::assemble_system_prompt("base", "/tmp", None, None, None, None, None);
+            ZenEngine::assemble_system_prompt("base", "/tmp", None, None, None, None, None, None);
         assert!(!without.contains("## User defaults"));
+    }
+
+    #[test]
+    fn builtin_tool_titles_carry_no_server_prefix() {
+        // The card used to read "CORE: Space Current Time" — the host process
+        // name, which means nothing to the reader, in front of a tool name
+        // that already says "Space".
+        assert_eq!(
+            mcp_display_title("senclaw-core", "space_current_time"),
+            "Space Current Time"
+        );
+        assert_eq!(
+            mcp_display_title("senclaw-profile", "profile_update"),
+            "Profile Update"
+        );
+        for server in ["senclaw-core", "senclaw-memory", "senclaw-space"] {
+            let title = mcp_display_title(server, "space_event_create");
+            assert!(!title.contains(':'), "{server} still prefixes: {title}");
+        }
+    }
+
+    #[test]
+    fn external_tool_titles_keep_their_server() {
+        // A Space App's tool name says nothing about which app it belongs to,
+        // so dropping the prefix there would lose real information.
+        assert_eq!(
+            mcp_display_title("ssh-manager-mcp", "ssh_execute_command"),
+            "SSH-MANAGER-MCP: Ssh Execute Command"
+        );
+    }
+
+    #[test]
+    fn operating_rules_land_after_the_base_prompt() {
+        // Order is a security property, not formatting: AGENTS.md is text the
+        // user types, so it must never precede the base prompt's safety
+        // section.
+        let out = ZenEngine::assemble_system_prompt(
+            "BASE_MARKER",
+            "/tmp",
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("<user_operating_rules>\nRULE_MARKER\n</user_operating_rules>"),
+        );
+        let base_at = out.find("BASE_MARKER").expect("base present");
+        let rule_at = out.find("RULE_MARKER").expect("rules present");
+        assert!(
+            base_at < rule_at,
+            "operating rules preceded the base prompt"
+        );
+    }
+
+    #[test]
+    fn operating_rules_absent_leaves_prompt_untouched() {
+        let without =
+            ZenEngine::assemble_system_prompt("base", "/tmp", None, None, None, None, None, None);
+        assert!(!without.contains("user_operating_rules"));
     }
 
     /// Build an engine from a fully-specified `SkillMetadata` + body.
@@ -3352,5 +3531,76 @@ mod tests {
             active_cognitive_id: None,
         };
         assert!(ZenEngine::select_llm_config(&loaded2, Some("also-missing")).is_none());
+    }
+
+    /// Write `configs` to a throwaway config.json and hand back its path plus
+    /// the tempdir guard (drop it and the file goes).
+    fn config_file(
+        configs: &[crate::gateway::group_manager::LlmConfig],
+        active: Option<&str>,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        for c in configs {
+            crate::gateway::group_manager::save_llm_config(&path, c).unwrap();
+        }
+        crate::gateway::group_manager::set_active_llm_config(&path, active).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn model_accepts_images_infers_from_the_model_name() {
+        let (_dir, path) = config_file(
+            &[llm_cfg("a", "gpt-4o"), llm_cfg("b", "deepseek-chat")],
+            Some("a"),
+        );
+        assert!(ZenEngine::model_accepts_images(&path, None));
+        assert!(!ZenEngine::model_accepts_images(&path, Some("b")));
+    }
+
+    #[test]
+    fn model_accepts_images_honours_the_explicit_flag() {
+        // A self-hosted VL model behind a name no pattern can know, and a
+        // vision-named model the user switched off because their gateway chokes.
+        let mut on = llm_cfg("a", "internal-build-7");
+        on.vision = Some(true);
+        let mut off = llm_cfg("b", "gpt-4o");
+        off.vision = Some(false);
+        let (_dir, path) = config_file(&[on, off], Some("b"));
+
+        assert!(ZenEngine::model_accepts_images(&path, Some("a")));
+        assert!(!ZenEngine::model_accepts_images(&path, None));
+    }
+
+    #[test]
+    fn model_accepts_images_follows_the_per_group_override() {
+        // The bug this guards: answering "can it see?" for the globally-active
+        // model while the turn actually runs on the group's pinned one.
+        let (_dir, path) = config_file(
+            &[
+                llm_cfg("a", "deepseek-chat"),
+                llm_cfg("b", "claude-sonnet-4-5"),
+            ],
+            Some("a"),
+        );
+        assert!(!ZenEngine::model_accepts_images(&path, None));
+        assert!(ZenEngine::model_accepts_images(&path, Some("b")));
+    }
+
+    #[test]
+    fn model_accepts_images_matches_the_resolvers_own_fallbacks() {
+        // A stale group override must answer for the model the turn will really
+        // use (the active one), not fail closed — otherwise a vision chat
+        // silently drops to OCR after its pinned config is deleted.
+        let (_dir, path) = config_file(
+            &[llm_cfg("a", "gpt-4o"), llm_cfg("b", "deepseek-chat")],
+            Some("a"),
+        );
+        assert!(ZenEngine::model_accepts_images(&path, Some("deleted")));
+
+        // Neither override nor active resolves → first config, same as
+        // resolve_model_profile_at.
+        let (_dir2, path2) = config_file(&[llm_cfg("a", "gpt-4o")], Some("gone"));
+        assert!(ZenEngine::model_accepts_images(&path2, Some("also-gone")));
     }
 }

@@ -1011,8 +1011,10 @@ pub(crate) async fn handle_message_send(
     let group_jid = msg["groupJid"].as_str().unwrap_or("").to_string();
     let text = msg["text"].as_str().unwrap_or("").trim().to_string();
 
-    // Extract attachments if present
-    let attachments: Vec<super::wire::ImageAttachment> = msg["attachments"]
+    // Extract attachments if present. `name` is optional — a pasted image has
+    // no filename — but a document without one is unlabelable, so fall back to
+    // the MIME's subtype rather than dropping the attachment.
+    let attachments: Vec<crate::types::MessageAttachment> = msg["attachments"]
         .as_array()
         .map(|arr| {
             arr.iter()
@@ -1020,13 +1022,17 @@ pub(crate) async fn handle_message_send(
                     let data_url = v["dataUrl"].as_str().unwrap_or("");
                     let mime_type = v["mimeType"].as_str().unwrap_or("");
                     if data_url.is_empty() || mime_type.is_empty() {
-                        None
-                    } else {
-                        Some(super::wire::ImageAttachment {
-                            data_url: data_url.to_string(),
-                            mime_type: mime_type.to_string(),
-                        })
+                        return None;
                     }
+                    Some(crate::types::MessageAttachment {
+                        data_url: data_url.to_string(),
+                        mime_type: mime_type.to_string(),
+                        name: v["name"]
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string),
+                    })
                 })
                 .collect()
         })
@@ -1178,15 +1184,6 @@ pub(crate) async fn handle_message_send(
     )
     .await;
 
-    // Convert attachments to the format expected by the agent system
-    let agent_attachments: Vec<crate::agent::input_builder::ImageAttachment> = attachments
-        .into_iter()
-        .map(|a| crate::agent::input_builder::ImageAttachment {
-            url: a.data_url,
-            mime_type: Some(a.mime_type),
-        })
-        .collect();
-
     // Cowork hook: when a user message lands in a cowork group, persist
     // the message AND create a task in the team's task list so the manager
     // has a tracked work item. We ALSO prepend a team-context preamble to
@@ -1209,9 +1206,38 @@ pub(crate) async fn handle_message_send(
         text.clone()
     };
 
+    // Client-supplied hidden context (the reminder dialog uses it to say which
+    // event the user is answering about). It reaches the agent but is NOT the
+    // stored message: `stored.content` above is the raw `text`, so history —
+    // and every client that replays it — shows what the person actually typed.
+    //
+    // Sending it inside `text` was the bug: the optimistic bubble looked right
+    // until the daemon echoed the stored message back, at which point the user
+    // saw the whole internal instruction, event id and tool list in their own
+    // chat bubble.
+    let effective_text = apply_context_preamble(
+        &effective_text,
+        msg["contextPreamble"].as_str(),
+    );
+
     state
         .api
-        .enqueue_and_process(&group_jid, &group, &effective_text, &agent_attachments);
+        .enqueue_and_process(&group_jid, &group, &effective_text, &attachments);
+}
+
+/// Prepend client-supplied hidden context to the text the agent receives.
+///
+/// The preamble is deliberately a separate wire field rather than part of
+/// `text`: only `text` is persisted as the user's message, so the transcript
+/// keeps showing what the person typed. The reminder dialog uses this to tell
+/// the agent which event is being discussed — an instruction block naming the
+/// event id and the tools to call, which read as gibberish when it leaked into
+/// the user's own chat bubble.
+fn apply_context_preamble(text: &str, preamble: Option<&str>) -> String {
+    match preamble.map(str::trim) {
+        Some(p) if !p.is_empty() => format!("{p}\n\n{text}"),
+        _ => text.to_string(),
+    }
 }
 
 pub(crate) async fn handle_permission_response(
@@ -2158,6 +2184,26 @@ pub(crate) async fn handle_agent_control(
                 sender,
                 &serde_json::json!({"type": "error", "message": format!("Unknown agent:control action: {action}")}),
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod context_preamble_tests {
+    use super::apply_context_preamble;
+
+    #[test]
+    fn preamble_reaches_the_agent() {
+        let out = apply_context_preamble("Xoá nhắc nhở này", Some("[Ngữ cảnh] eventId=abc"));
+        assert!(out.starts_with("[Ngữ cảnh] eventId=abc"));
+        assert!(out.ends_with("Xoá nhắc nhở này"));
+    }
+
+    #[test]
+    fn absent_or_blank_preamble_leaves_text_untouched() {
+        // A blank field must not open the turn with two stray newlines.
+        for p in [None, Some(""), Some("   \n ")] {
+            assert_eq!(apply_context_preamble("chào", p), "chào");
         }
     }
 }

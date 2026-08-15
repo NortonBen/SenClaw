@@ -16,6 +16,7 @@ import {
   ControlOutlined,
   ScanOutlined,
   LinkOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
 import { useAppContext } from '../contexts/AppContext';
 import { AppLayout } from '../components/AppLayout';
@@ -32,12 +33,14 @@ import { CognitiveSettings } from '../components/settings/CognitiveSettings';
 import { WhisperSettings } from '../components/settings/WhisperSettings';
 import { TtsSettings } from '../components/settings/TtsSettings';
 import { OcrSettings } from '../components/settings/OcrSettings';
+import { UserProfileSettings } from '../components/settings/UserProfileSettings';
 
 const { Content } = Layout;
 const { Title, Text } = Typography;
 
 type SettingsSection =
   | 'general'
+  | 'user-profile'
   | 'tool-rules'
   | 'channels'
   | 'agents'
@@ -68,6 +71,7 @@ export const SettingsPage: React.FC = () => {
       { key: 'tool-rules', icon: <FilterOutlined />, label: 'Tool Rules' },
       { key: 'channels', icon: <ApiOutlined />, label: 'Channels' },
       { key: 'agents', icon: <UserOutlined />, label: 'Profile' },
+      { key: 'user-profile', icon: <IdcardOutlined />, label: 'Hồ sơ người dùng' },
       { key: 'agent-behavior', icon: <ControlOutlined />, label: 'Agent Behavior' },
       { key: 'llm', icon: <ThunderboltOutlined />, label: 'LLM' },
       { key: 'provider-signin', icon: <LinkOutlined />, label: 'Provider Sign-in' },
@@ -109,6 +113,8 @@ export const SettingsPage: React.FC = () => {
             onUnregisterBinding={ws.unregisterBinding}
           />
         );
+      case 'user-profile':
+        return <UserProfileSettings />;
       case 'llm':
         return <LLMSettings />;
       case 'provider-signin':

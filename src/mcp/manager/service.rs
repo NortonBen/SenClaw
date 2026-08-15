@@ -296,6 +296,22 @@ impl McpManager {
         };
         vec![
             BuiltInServerInfo {
+                // The host process, listed first because it is what actually
+                // runs when `mcp.bundled` is on: every server below it is a
+                // child inside this one rather than a subprocess of its own.
+                name: crate::mcp::core_server::SERVER_NAME.into(),
+                transport: "stdio".into(),
+                description: Some(
+                    "Gói tool lõi — chạy mọi server tích hợp sẵn bên dưới trong một tiến \
+                     trình, nên không cái nào phải khởi động riêng."
+                        .into(),
+                ),
+                tools: vec![t(
+                    crate::mcp::core_server::STATUS_TOOL,
+                    "List the built-in servers bundled into this process and their tool counts",
+                )],
+            },
+            BuiltInServerInfo {
                 name: "senclaw-schedule".into(),
                 transport: "stdio".into(),
                 description: Some(
@@ -810,9 +826,9 @@ impl McpManager {
             }
         };
         if !connected {
-            self.connect_server(&server_name).await.map_err(|e| {
-                anyhow::anyhow!("MCP server not connected: {server_name} — {e}")
-            })?;
+            self.connect_server(&server_name)
+                .await
+                .map_err(|e| anyhow::anyhow!("MCP server not connected: {server_name} — {e}"))?;
         }
 
         let mut external = self.external.write().await;

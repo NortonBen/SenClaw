@@ -23,6 +23,47 @@ const Map<String, String> viSettingsScreen = {
           '~/.senclaw/api_token trên máy này.',
   'The running daemon still uses the previous setting. Restart it to apply.':
       'Daemon đang chạy vẫn dùng thiết lập cũ. Khởi động lại để áp dụng.',
+
+  // Space Apps → App access token (per-app isolation switch)
+  'App access token': 'Token truy cập của app',
+  'Every installed app gets its own secret, and the daemon treats it '
+          'as the app’s name. This decides what happens to a call that '
+          'arrives without one. A token that IS present is always checked '
+          'and always scoped to its own app.':
+      'Mỗi app đã cài có một bí mật riêng, và daemon coi đó là tên của app. '
+          'Mục này quyết định điều gì xảy ra với lời gọi KHÔNG kèm token. '
+          'Còn token có kèm thì luôn được kiểm và luôn bị giới hạn trong '
+          'đúng app của nó.',
+  'Require': 'Bắt buộc',
+  'Warn only': 'Chỉ cảnh báo',
+  'Off': 'Tắt',
+  'In force now — no daemon restart needed.':
+      'Có hiệu lực ngay — không cần khởi động lại daemon.',
+  'App isolation is off. Any process on this machine can read '
+          'any app’s settings and query its database just by naming the '
+          'app’s id, which is public. Leave this on Off only for an app '
+          'that genuinely cannot send the token.':
+      'Cách ly giữa các app đang tắt. Mọi tiến trình trên máy này đọc được '
+          'settings và truy vấn được database của bất kỳ app nào, chỉ cần biết '
+          'id của app — mà id là công khai. Chỉ để Tắt khi có app thật sự '
+          'không gửi token được.',
+  'Everything is served, but each app calling without a token is '
+          'logged once — this is how you find out what would break before '
+          'requiring it.':
+      'Mọi thứ vẫn chạy, nhưng mỗi app gọi mà thiếu token sẽ được ghi log một '
+          'lần — đây là cách biết app nào sẽ gãy trước khi bật Bắt buộc.',
+  'Apps built on a SenClaw SDK send the token on their own, and '
+          'the daemon stamps it on everything it proxies. An app using its '
+          'own HTTP client gets 401 until it sends '
+          'SENCLAW_TOKEN_ACCESS_APP — switch to Warn only for a while to '
+          'see which ones those are.':
+      'App viết bằng SDK của SenClaw tự gửi token, và daemon tự đóng dấu lên '
+          'mọi thứ nó chuyển tiếp. App tự dựng HTTP client riêng sẽ nhận 401 '
+          'cho tới khi gửi SENCLAW_TOKEN_ACCESS_APP — chuyển sang Chỉ cảnh báo '
+          'một thời gian để biết đó là những app nào.',
+  'This overrides SENCLAW_APP_TOKEN_MODE=':
+      'Thiết lập này đè lên SENCLAW_APP_TOKEN_MODE=',
+  ' from the daemon’s environment.': ' trong môi trường của daemon.',
   'This daemon was started outside the app, so it keeps '
           'its own setting until it is restarted here.':
       'Daemon này được khởi động từ bên ngoài ứng dụng nên vẫn giữ thiết lập '
@@ -478,4 +519,49 @@ const Map<String, String> viSettingsScreen = {
   'Test failed: {e}': 'Kiểm tra thất bại: {e}',
   'Speed must be 0.25–4.0': 'Tốc độ phải trong khoảng 0.25–4.0',
   'Saved': 'Đã lưu',
+
+  // ── Settings → Your profile (Soul Core: USER.md / TOOLS.md / AGENTS.md) ──
+  'Your profile': 'Hồ sơ của bạn',
+  'What agents know about YOU — as opposed to a Profile\'s persona, '
+          'which is who the agent is. Shared by every agent profile.':
+      'Những gì agent biết về BẠN — khác với Persona của Profile, thứ mô tả '
+          'agent là ai. Dùng chung cho mọi profile agent.',
+  'Public fields go everywhere, including Telegram/Feishu group '
+          'chats. Private fields appear only in your own 1-1 conversations. '
+          'Email, address and phone default to private.':
+      'Trường công khai đi vào mọi ngữ cảnh, kể cả nhóm chat Telegram/Feishu. '
+          'Trường riêng tư chỉ hiện trong hội thoại 1-1 của chính bạn. '
+          'Email, địa chỉ và số điện thoại mặc định riêng tư.',
+  'Details': 'Thông tin',
+  'Full name': 'Họ tên',
+  'What to call you': 'Xưng hô',
+  'Pronouns': 'Đại từ',
+  'Language': 'Ngôn ngữ',
+  'Timezone': 'Múi giờ',
+  'Occupation': 'Nghề nghiệp',
+  'Location': 'Địa điểm',
+  'Phone': 'Điện thoại',
+  'Extra notes': 'Ghi chú thêm',
+  'Rules the agent learned': 'Quy tắc agent đã học',
+  'None yet. Tell the agent "from now on, keep replies short" and it '
+          'records the rule here.':
+      'Chưa có. Nói với agent "từ giờ trả lời ngắn gọn" và nó sẽ ghi quy tắc '
+          'vào đây.',
+  'What the agent actually receives': 'Agent thực sự nhận được gì',
+  'Private conversation': 'Hội thoại riêng tư',
+  'Group chat': 'Nhóm chat',
+  '(nothing)': '(không có gì)',
+  'Save profile': 'Lưu hồ sơ',
+  'Saved. Agents use it from the next chat session.':
+      'Đã lưu. Agent sẽ dùng từ phiên chat tiếp theo.',
+  'Local environment notes (TOOLS.md)': 'Ghi chú môi trường (TOOLS.md)',
+  'SSH hosts, device names, preferred TTS voices — kept out of skills '
+          'so skills stay shareable. Private conversations only.':
+      'Máy chủ SSH, tên thiết bị, giọng đọc TTS ưa dùng — để tách khỏi skill '
+          'thì skill vẫn chia sẻ được. Chỉ hiện trong hội thoại riêng tư.',
+  'Operating rules (AGENTS.md)': 'Quy tắc vận hành (AGENTS.md)',
+  'Rules applied in every session, appended to the system prompt. '
+          'SenClaw\'s built-in safety section always wins over anything here.':
+      'Quy tắc áp dụng cho mọi phiên, nối vào cuối system prompt. Phần Safety '
+          'mặc định của SenClaw luôn thắng nếu có mâu thuẫn.',
 };

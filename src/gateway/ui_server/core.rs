@@ -40,11 +40,10 @@ use super::local_models::{
 };
 use super::marketplace::{
     marketplace_hub_install, marketplace_mcp_status, marketplace_mcp_use_tools,
-    marketplace_plugin_install,
-    marketplace_plugin_toggle, marketplace_plugin_uninstall, marketplace_source_catalog,
-    marketplace_source_disable_all, marketplace_source_enable_all, marketplace_source_get,
-    marketplace_sources_add, marketplace_sources_delete, marketplace_sources_list,
-    marketplace_sources_reorder, marketplace_sources_sync,
+    marketplace_plugin_install, marketplace_plugin_toggle, marketplace_plugin_uninstall,
+    marketplace_source_catalog, marketplace_source_disable_all, marketplace_source_enable_all,
+    marketplace_source_get, marketplace_sources_add, marketplace_sources_delete,
+    marketplace_sources_list, marketplace_sources_reorder, marketplace_sources_sync,
 };
 use super::mcp::{
     hooks_get, hooks_put, mcp_servers_connect, mcp_servers_delete, mcp_servers_disconnect,
@@ -70,17 +69,16 @@ use super::space::{
     space_app_config_delete, space_app_config_get, space_app_config_list, space_app_config_set,
     space_app_env, space_app_logs_clear, space_app_logs_get, space_app_mcp_info,
     space_app_mcp_register, space_app_requirements, space_app_sandbox_get, space_app_sandbox_put,
-    space_app_sqlite_query, space_app_token_get, space_app_token_rotate, space_apps_bridge,
-    space_apps_delete,
+    space_app_sqlite_query, space_app_token_get, space_app_token_mode_get,
+    space_app_token_mode_put, space_app_token_rotate, space_apps_bridge, space_apps_delete,
     space_apps_install_zip, space_apps_list, space_apps_proxy, space_apps_proxy_root,
     space_apps_ready, space_apps_register, space_apps_register_local, space_apps_restart,
-    space_apps_start,
-    space_apps_static, space_apps_stop,
-    space_apps_update, space_apps_updates, space_events_create, space_events_delete,
-    space_events_get, space_events_list, space_events_search, space_events_set_reminder,
-    space_events_update, space_notes_create, space_notes_delete, space_notes_list,
-    space_notes_search, space_notes_update, space_schedules_cancel, space_schedules_create,
-    space_schedules_detail, space_schedules_list, space_schedules_run_now, space_schedules_update,
+    space_apps_start, space_apps_static, space_apps_status, space_apps_stop, space_apps_update,
+    space_apps_updates, space_events_create, space_events_delete, space_events_get,
+    space_events_list, space_events_search, space_events_set_reminder, space_events_update,
+    space_notes_create, space_notes_delete, space_notes_list, space_notes_search,
+    space_notes_update, space_schedules_cancel, space_schedules_create, space_schedules_detail,
+    space_schedules_list, space_schedules_run_now, space_schedules_update,
     space_screenshot_extract, space_screenshot_get, space_sync_apple_calendar,
     space_sync_apple_notes, space_sync_google_calendar, space_sync_google_workspace,
     space_today_summary,
@@ -109,6 +107,13 @@ use super::wiki::{
 pub trait UiApi: Send + Sync {
     /// Signal all agents to reload their skill registries.
     fn reload_all_skills(&self) {}
+    /// Push a small event to every connected admin socket.
+    ///
+    /// For "something you are displaying changed, re-fetch it" signals. Send
+    /// the *fact* of the change, not the data: this fans out to every admin
+    /// client, which is a wider audience than any single file's own tier rule
+    /// assumes. Default is a no-op so bare test setups need no gateway.
+    fn broadcast_event(&self, _event: serde_json::Value) {}
     /// Get current thinking-enabled state.
     fn get_thinking_enabled(&self) -> bool {
         false
@@ -279,7 +284,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/marketplace/sources/reorder",
             post(marketplace_sources_reorder),
         )
-        .route("/api/marketplace/hub/install", post(marketplace_hub_install))
+        .route(
+            "/api/marketplace/hub/install",
+            post(marketplace_hub_install),
+        )
         .route(
             "/api/marketplace/sources/:id",
             get(marketplace_source_get).delete(marketplace_sources_delete),
@@ -362,6 +370,21 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route(
             "/api/agents/:folder/files",
             get(super::profile_files::get_files).put(super::profile_files::put_files),
+        )
+        // Soul Core — the three global files describing the human and the
+        // machine. Deliberately not under /api/space/apps/, which app_auth
+        // gates per app id.
+        .route(
+            "/api/user-profile",
+            get(super::user_profile::get_user_profile).put(super::user_profile::put_user_profile),
+        )
+        .route(
+            "/api/tools-notes",
+            get(super::user_profile::get_tools_notes).put(super::user_profile::put_tools_notes),
+        )
+        .route(
+            "/api/agents-rules",
+            get(super::user_profile::get_agents_rules).put(super::user_profile::put_agents_rules),
         )
         // Workflows (saved DAGs of agent + script steps)
         .route(
@@ -488,7 +511,10 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             post(super::oauth::oauth_account_refresh),
         )
         .route("/api/oauth/bind", post(super::oauth::oauth_bind_config))
-        .route("/api/oauth/test-model", post(super::oauth::oauth_test_model))
+        .route(
+            "/api/oauth/test-model",
+            post(super::oauth::oauth_test_model),
+        )
         .route(
             "/api/oauth/accounts/:id/models",
             get(super::oauth::oauth_account_models),
@@ -745,7 +771,14 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route("/api/background/stats", get(super::background::stats))
         // Apps
         .route("/api/space/apps", get(space_apps_list))
+        .route("/api/space/apps/status", get(space_apps_status))
         .route("/api/space/apps/updates", get(space_apps_updates))
+        // Deliberately NOT under /api/space/apps/ — everything there is
+        // scoped to one app id by `app_auth`, and this is the fleet-wide switch.
+        .route(
+            "/api/space/app-token-mode",
+            get(space_app_token_mode_get).put(space_app_token_mode_put),
+        )
         .route("/api/space/apps/register", post(space_apps_register))
         .route(
             "/api/space/apps/register-local",

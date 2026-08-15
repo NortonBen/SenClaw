@@ -34,12 +34,14 @@ import '../plugins/space_app_sandbox_dialog.dart';
 import 'entity_providers.dart';
 import 'provider_signin_section.dart';
 import 'settings_providers.dart';
+import 'user_profile_section.dart';
 
 const _sections = [
   ('appearance', 'Appearance', Icons.palette_outlined),
   ('general', 'General', Icons.tune),
   ('channels', 'Channels', Icons.hub_outlined),
   ('agents', 'Profiles', Icons.badge_outlined),
+  ('user-profile', 'Your profile', Icons.account_circle_outlined),
   ('rules', 'Tool Rules', Icons.rule_folder_outlined),
   ('llm', 'LLM Models', Icons.smart_toy_outlined),
   ('signin', 'Provider Sign-in', Icons.link),
@@ -100,6 +102,7 @@ class SettingsScreen extends ConsumerWidget {
             'appearance' => const _AppearanceSection(),
             'channels' => const _ChannelsSection(),
             'agents' => const _AgentsSection(),
+            'user-profile' => const UserProfileSection(),
             'rules' => const _ToolRulesSection(),
             'llm' => const _LlmSection(),
             'signin' => const ProviderSignInSection(),
@@ -991,6 +994,153 @@ class _NoticeBox extends StatelessWidget {
         Expanded(child: child),
       ]),
     );
+  }
+}
+
+/// The fleet-wide app-isolation switch (`/api/space/app-token-mode`).
+///
+/// Deliberately three choices rather than an on/off toggle: the middle one is
+/// what makes this safe to turn on, because it names the apps that would break
+/// without breaking them. Going straight from Off to Require on a fleet of
+/// installed apps is how an operator ends up reverting the whole feature.
+///
+/// Unlike the daemon bind host next to it, this needs no restart — the daemon
+/// reads it on every request.
+class AppTokenModeField extends ConsumerStatefulWidget {
+  const AppTokenModeField({super.key});
+  @override
+  ConsumerState<AppTokenModeField> createState() => _AppTokenModeFieldState();
+}
+
+class _AppTokenModeFieldState extends ConsumerState<AppTokenModeField> {
+  Map<String, dynamic>? _state;
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final r = await ref
+          .read(apiClientProvider)
+          .get('/api/space/app-token-mode') as Map<String, dynamic>;
+      if (mounted) setState(() { _state = r; _error = null; });
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    }
+  }
+
+  Future<void> _choose(String mode) async {
+    setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final r = await ref.read(apiClientProvider).put(
+            '/api/space/app-token-mode',
+            body: {'mode': mode},
+          ) as Map<String, dynamic>;
+      if (!mounted) return;
+      setState(() => _state = r);
+      messenger.showSnackBar(SnackBar(
+          content: Text(context.tr('In force now — no daemon restart needed.'))));
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      await _load();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    if (_error != null) {
+      return Text('$_error', style: TextStyle(color: c.textMuted, fontSize: 12));
+    }
+    if (_state == null) return const LinearProgressIndicator();
+
+    final mode = _state!['mode'] as String? ?? 'strict';
+    final source = _state!['source'] as String? ?? 'default';
+    final envMode = _state!['envMode'] as String? ?? 'strict';
+    final envSet = _state!['envSet'] == true;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(
+        context.tr(
+            'Every installed app gets its own secret, and the daemon treats it '
+            'as the app’s name. This decides what happens to a call that '
+            'arrives without one. A token that IS present is always checked '
+            'and always scoped to its own app.'),
+        style: TextStyle(color: c.textSecondary, fontSize: 12),
+      ),
+      const SizedBox(height: AppTokens.s12),
+      Wrap(spacing: AppTokens.s12, runSpacing: AppTokens.s12, children: [
+        _BindCard(
+          icon: Icons.verified_user_outlined,
+          label: context.tr('Require'),
+          detail: 'strict',
+          selected: mode == 'strict',
+          onTap: _saving ? () {} : () => _choose('strict'),
+        ),
+        _BindCard(
+          icon: Icons.report_gmailerrorred_outlined,
+          label: context.tr('Warn only'),
+          detail: 'warn',
+          selected: mode == 'warn',
+          onTap: _saving ? () {} : () => _choose('warn'),
+        ),
+        _BindCard(
+          icon: Icons.lock_open_rounded,
+          label: context.tr('Off'),
+          detail: 'off',
+          selected: mode == 'off',
+          onTap: _saving ? () {} : () => _choose('off'),
+        ),
+      ]),
+      const SizedBox(height: AppTokens.s12),
+      if (mode == 'off')
+        _NoticeBox(
+          tone: _NoticeTone.warning,
+          child: Text(
+            context.tr(
+                'App isolation is off. Any process on this machine can read '
+                'any app’s settings and query its database just by naming the '
+                'app’s id, which is public. Leave this on Off only for an app '
+                'that genuinely cannot send the token.'),
+            style: TextStyle(color: c.textPrimary, fontSize: 12),
+          ),
+        )
+      else if (mode == 'warn')
+        Text(
+          context.tr(
+              'Everything is served, but each app calling without a token is '
+              'logged once — this is how you find out what would break before '
+              'requiring it.'),
+          style: TextStyle(color: c.textMuted, fontSize: 12),
+        )
+      else
+        Text(
+          context.tr(
+              'Apps built on a SenClaw SDK send the token on their own, and '
+              'the daemon stamps it on everything it proxies. An app using its '
+              'own HTTP client gets 401 until it sends '
+              'SENCLAW_TOKEN_ACCESS_APP — switch to Warn only for a while to '
+              'see which ones those are.'),
+          style: TextStyle(color: c.textMuted, fontSize: 12),
+        ),
+      if (source == 'ui' && envSet) ...[
+        const SizedBox(height: AppTokens.s8),
+        Text(
+          context.tr('This overrides SENCLAW_APP_TOKEN_MODE=') + envMode +
+              context.tr(' from the daemon’s environment.'),
+          style: TextStyle(color: c.textMuted, fontSize: 11),
+        ),
+      ],
+    ]);
   }
 }
 
@@ -4551,7 +4701,13 @@ class SpaceAppsSection extends ConsumerWidget {
       children: [
         Text(context.tr('Install, register, and remove embedded Space Apps.'),
             style: TextStyle(color: c.textMuted, fontSize: 12)),
-        const SizedBox(height: AppTokens.s12),
+        const SizedBox(height: AppTokens.s16),
+        Text(context.tr('App access token'),
+            style: TextStyle(
+                color: c.textSecondary, fontWeight: FontWeight.w700)),
+        const SizedBox(height: AppTokens.s8),
+        const AppTokenModeField(),
+        const SizedBox(height: AppTokens.s20),
         Row(
           children: [
             FilledButton.icon(

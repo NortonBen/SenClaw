@@ -160,3 +160,19 @@ class SettingsApi {
 }
 
 final settingsApiProvider = Provider<SettingsApi>((ref) => SettingsApi(ref));
+
+// ===== Soul Core (USER.md / TOOLS.md / AGENTS.md) =====
+
+/// The user profile: who the *human* is. Distinct from a Profile's SOUL.md,
+/// which is who the *agent* is — see `src/user_profile/` on the daemon side.
+final userProfileProvider = FutureProvider<Map<String, dynamic>>((ref) async =>
+    _asMap(await ref.read(apiClientProvider).get('/api/user-profile')));
+
+/// Machine-local environment notes. Private tier by definition (SSH hosts,
+/// internal IPs), so the daemon withholds it from group chats.
+final toolsNotesProvider = FutureProvider<Map<String, dynamic>>((ref) async =>
+    _asMap(await ref.read(apiClientProvider).get('/api/tools-notes')));
+
+/// User-editable operating rules appended to the system prompt.
+final agentsRulesProvider = FutureProvider<Map<String, dynamic>>((ref) async =>
+    _asMap(await ref.read(apiClientProvider).get('/api/agents-rules')));

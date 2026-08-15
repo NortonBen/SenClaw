@@ -1,5 +1,7 @@
 import { Button, Tag, Typography, theme } from 'antd';
 
+import { ToolParams } from './ToolParams';
+
 const { Text } = Typography;
 
 export interface CommonPermissionOption {
@@ -42,20 +44,7 @@ export function CommonPermissionRequestCard({
       <Text strong style={{ display: 'block', marginBottom: 6 }}>
         {heading}
       </Text>
-      <div
-        style={{
-          whiteSpace: 'pre-wrap',
-          fontFamily: 'monospace',
-          fontSize: 12,
-          color: token.colorTextSecondary,
-          padding: 8,
-          borderRadius: 8,
-          background: token.colorFillAlter,
-          marginBottom: 8,
-        }}
-      >
-        {content}
-      </div>
+      <ToolParams content={content} />
       {resolved ? (
         <Tag color="default">Resolved: {resolved.label}</Tag>
       ) : (

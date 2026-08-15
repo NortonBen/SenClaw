@@ -147,6 +147,8 @@ enum Command {
     SandboxServer,
     /// Start the token-usage accounting MCP server (stdio JSON-RPC)
     UsageServer,
+    /// Start the Soul Core MCP server — profile_* tools over USER.md (stdio JSON-RPC)
+    UserProfileServer,
     /// Internal: brush (rust-bash) sandbox child — reads a script from stdin,
     /// runs it in-process, writes output to <dir>/stdout|stderr, exits with the
     /// script's code. Spawned by the code REPL so the timeout is kill-enforced.
@@ -177,6 +179,10 @@ enum Command {
     /// Start the built-in Kanban board MCP server (stdio JSON-RPC). Native —
     /// talks to the Kanban DB directly.
     KanbanServer,
+    /// Start the aggregated Zen Kit MCP server (stdio JSON-RPC) — hosts every
+    /// built-in server (wiki, workspace, memory, …) whose env is present, in
+    /// one process instead of one subprocess each.
+    CoreServer,
 }
 
 #[tokio::main]
@@ -206,8 +212,10 @@ async fn main() -> Result<()> {
                 | Command::OcrServer
                 | Command::JsServer
                 | Command::UsageServer
+                | Command::UserProfileServer
                 | Command::BrushSandbox { .. }
                 | Command::KanbanServer
+                | Command::CoreServer
         )
     );
 
@@ -280,6 +288,9 @@ async fn main() -> Result<()> {
         Command::JsServer => senclaw::mcp::js_server::run_stdio_server().await,
         Command::SandboxServer => senclaw::mcp::sandbox_server::run_stdio_server().await,
         Command::UsageServer => senclaw::mcp::usage_server::run_stdio_server().await,
+        Command::UserProfileServer => {
+            senclaw::mcp::user_profile_server::run_stdio_server().await
+        }
         Command::BrushSandbox { dir } => {
             senclaw::gateway::ui_server::bash_sandbox::child_main(&dir).await
         }
@@ -291,5 +302,6 @@ async fn main() -> Result<()> {
         } => senclaw::cli::commands::cognitive::train(epochs, lr, neg_per_pos, max_nodes).await,
         Command::CognitiveMaintain => senclaw::cli::commands::cognitive::maintain().await,
         Command::KanbanServer => senclaw::kanban::mcp::run_stdio_server().await,
+        Command::CoreServer => senclaw::mcp::core_server::run_stdio_server().await,
     }
 }

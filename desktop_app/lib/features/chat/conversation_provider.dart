@@ -261,13 +261,17 @@ class ConversationNotifier extends StateNotifier<ConversationState> {
       ts: DateTime.now().toIso8601String(),
       data: attachments.isEmpty ? const {} : {'attachments': attachments},
     ));
-    final payloadText = (contextPreamble != null && contextPreamble.isNotEmpty)
-        ? '$contextPreamble\n\n$trimmed'
-        : trimmed;
+    // The preamble travels in its own field, never inside `text`. The daemon
+    // persists `text` verbatim as the user's message and prepends the preamble
+    // only for the agent — so when the stored message is echoed back (or
+    // replayed by history:load) the bubble still shows what the user typed,
+    // not the internal instruction block.
     ws.send({
       'type': 'message',
       'groupJid': jid,
-      'text': payloadText,
+      'text': trimmed,
+      if (contextPreamble != null && contextPreamble.isNotEmpty)
+        'contextPreamble': contextPreamble,
       if (attachments.isNotEmpty) 'attachments': attachments,
     });
   }

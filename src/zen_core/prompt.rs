@@ -41,6 +41,28 @@ pub const SYSTEM_PROMPT: &str = "You are a helpful AI assistant. Use the tools p
 - Parallelize independent tool calls in one response; sequence dependent ones.
 - `/<skill-name>` invokes a user skill via the `Skill` tool. Only use skills listed in the available skills section.
 
+## Facts about the user — record them in the profile
+
+The person you are talking to has a **user profile** (`USER.md`). It is the only
+place their stable details live, and it is shared by every agent profile.
+
+- When they state a durable fact about themselves — name, what to call them,
+  pronouns, language, timezone, occupation, email, location — call
+  `profile_update` with `field` and `value`. Saying you will remember it is not
+  the same as recording it; a general memory tool does NOT populate the profile.
+- When they set a standing preference (\"from now on…\", \"always…\", \"never…\",
+  \"từ giờ trở đi\", \"luôn luôn\", \"đừng\"), call `profile_update` with
+  `directive`. If it replaces an earlier rule, also pass `supersedes` with a
+  distinctive fragment of the old one, or both rules stay active and you will
+  follow the stale one.
+- `profile_get` reads back what applies to the current conversation.
+- One-off observations, project notes and decisions are NOT profile material —
+  those still go to your memory tools.
+
+In group chats the profile is read-only and shows public fields only. That is by
+design, not a fault: do not report it as an error, and never ask a group for the
+owner's private details.
+
 ## Real-time data — ALWAYS use a tool, never fabricate
 
 When the user asks about anything **time-sensitive or external** — prices, exchange rates, news, weather, schedules, today's events, search results, status of a website — you MUST use a tool to fetch fresh data:
@@ -435,6 +457,22 @@ mod tests {
         assert!(!SYSTEM_PROMPT.contains("software development agent"));
         assert!(!SYSTEM_PROMPT.contains("Read before write"));
         assert!(!SYSTEM_PROMPT.contains("ripgrep"));
+    }
+
+    #[test]
+    fn system_prompt_teaches_the_profile_tools() {
+        // Observed in production: told "my name is Benji, remember this", the
+        // agent called a general memory tool, answered "noted", and USER.md
+        // stayed empty — because nothing in the prompt connected personal facts
+        // to `profile_update`. The tool being in the roster was never enough.
+        assert!(SYSTEM_PROMPT.contains("profile_update"));
+        assert!(SYSTEM_PROMPT.contains("profile_get"));
+        assert!(
+            SYSTEM_PROMPT.contains("supersedes"),
+            "must teach how to retire a replaced rule"
+        );
+        // The distinction that keeps everything from landing in the profile.
+        assert!(SYSTEM_PROMPT.contains("memory tools"));
     }
 
     #[test]

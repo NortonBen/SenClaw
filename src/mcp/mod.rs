@@ -18,12 +18,15 @@ pub mod ocr_server;
 pub mod sandbox_server;
 pub mod schedule_server;
 pub mod send_server;
+pub mod space_apps;
 pub mod space_server;
 pub mod ts_transpile;
 pub mod usage_server;
+pub mod user_profile_server;
 pub mod virtual_server;
 pub mod wiki_server;
 pub mod workspace_server;
+pub mod core_server;
 
 pub use client::{McpToolInfo, SharedMcpRegistry};
 pub use config::{
@@ -31,3 +34,4 @@ pub use config::{
     McpServerStatus, McpToolDef, McpTransportType,
 };
 pub use manager::{is_mcp_tool, parse_mcp_tool_name, BuiltInServerInfo, McpManager};
+pub use core_server::CoreServer;

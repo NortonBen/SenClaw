@@ -22,7 +22,6 @@ use crate::agent::dispatch_bridge::{
     build_dispatch_resume_hint, AdminActivityCallback, DispatchBridgeApi,
 };
 use crate::agent::group_queue::GroupQueue;
-use crate::agent::input_builder::ImageAttachment;
 use crate::agent::permission_bridge::{
     AskQuestionPayload, FormPayload, PermissionBridge, PermissionPayload,
 };
@@ -36,6 +35,7 @@ use crate::mcp::helper::{
 };
 use crate::memory::daily_logger::DailyLogger;
 use crate::types::GroupBinding;
+use crate::types::MessageAttachment;
 use crate::util::local_time::local_iso_string_now;
 
 /// For Web UI only: fold structured `reasoning` + `content` into one string so the client
@@ -1033,107 +1033,136 @@ impl AgentPool {
             let workspace_s = workspace_dir.to_string_lossy().to_string();
             let db_path_s = cfg.paths.db_path.to_string_lossy().to_string();
             let agents_dir_s = cfg.paths.agents_dir.to_string_lossy().to_string();
+            let user_profile_s = cfg.paths.user_profile_path.to_string_lossy().to_string();
             let dispatch_state_s = cfg.paths.dispatch_state_path.to_string_lossy().to_string();
             let virtual_agents_dir_s = cfg.paths.virtual_agents_dir.to_string_lossy().to_string();
 
             let mut mcp_servers: Vec<McpServerConfig> = Vec::new();
-            mcp_servers.push(schedule_mcp_config(
-                &db_path_s,
-                &binding.folder,
-                &binding.jid,
-            ));
-            // Background-tasks MCP — a chat can create/manage autonomous
-            // background work. Guard 2 (no self-replication) holds by
-            // construction: this is only injected into real chat sessions, and
-            // the background runner builds its own tool + MCP set per task, so a
-            // background run never receives this server unless a task explicitly
-            // requests it (and background_create exposes no raw MCP injection).
-            mcp_servers.push(background_mcp_config(
-                &db_path_s,
-                &binding.folder,
-                &binding.jid,
-            ));
-            // Usage MCP — read-only token/cost accounting so any chat can ask
-            // "hôm nay tốn bao nhiêu" without opening the dashboard.
-            mcp_servers.push(usage_mcp_config(&db_path_s));
-            mcp_servers.push(workspace_mcp_config(
-                &state_file_s,
-                &workspace_s,
-                allowed_work_dirs.as_deref(),
-            ));
-            mcp_servers.push(send_mcp_config(
-                18081,
-                &binding.jid,
-                binding.bot_token.as_deref(),
-                &db_path_s,
-            ));
-            // Dispatch MCP — register for every group, not just admin ones.
-            // DAG mode is now a first-class workflow any chat can opt into via
-            // the AgentModeSelector, so the dispatch tools must be available
-            // wherever a user might switch to DAG. The engine's per-mode tool
-            // filter (zen_core/engine.rs `is_dag` branch) is what actually
-            // exposes dispatch tools to the model — they're stripped out of
-            // Plan mode, and in Agent mode they're available but unused
-            // unless the model explicitly calls them. State is per-folder, so
-            // groups don't share dispatch state.
-            mcp_servers.push(dispatch_mcp_config(
-                &dispatch_state_s,
-                &binding.folder,
-                Some(&virtual_agents_dir_s),
-            ));
 
-            mcp_servers.push(memory_mcp_config(
-                &db_path_s,
-                &memory_index_folder,
-                &agents_dir_s,
-                Some(cfg.memory.embedding_provider.as_str()),
-                if cfg.memory.openai_api_key.is_empty() {
-                    None
-                } else {
-                    Some(cfg.memory.openai_api_key.as_str())
-                },
-                if cfg.memory.openai_base_url.is_empty() {
-                    None
-                } else {
-                    Some(cfg.memory.openai_base_url.as_str())
-                },
-                custom_memory_dir.as_deref(),
-            ));
-            // Cognitive memory used to ship as the `senclaw-cognitive` MCP
-            // server here. It's now built into the in-process tool list
-            // (see `tools::all_tools` — CogAdd/CogSearch/CogRecall/CogForget/
-            // CogStats). The MCP server binary is still available for
-            // out-of-process callers; we just don't spawn it as a per-agent
-            // subprocess any more.
-            mcp_servers.push(wiki_mcp_config(
-                cfg.paths.wiki_dir.to_string_lossy().as_ref(),
-            ));
-            mcp_servers.push(space_mcp_config(&db_path_s, &binding.folder, &binding.jid));
-            mcp_servers.push(litho_mcp_config(
-                cfg.mcp.litho_binary.as_str(),
-                if cfg.memory.openai_base_url.is_empty() {
-                    None
-                } else {
-                    Some(cfg.memory.openai_base_url.as_str())
-                },
-                if cfg.memory.openai_api_key.is_empty() {
-                    None
-                } else {
-                    Some(cfg.memory.openai_api_key.as_str())
-                },
-                if cfg.mcp.litho_model_efficient.is_empty() {
-                    None
-                } else {
-                    Some(cfg.mcp.litho_model_efficient.as_str())
-                },
-            ));
-            mcp_servers.push(browser_mcp_config(cfg.ws_port, &binding.jid));
-            mcp_servers.push(ocr_mcp_config(cfg.ui_server.port));
-            // Sandboxed JS executor — no shared state, just default limits.
-            mcp_servers.push(js_mcp_config(5_000, 128));
-            // OS-sandbox executor (sbx_* tools) — Seatbelt/bubblewrap/docker
-            // isolated shell + real python/node, shared engine DB.
-            mcp_servers.push(crate::mcp::helper::sandbox_mcp_config());
+            let openai_key = (!cfg.memory.openai_api_key.is_empty())
+                .then_some(cfg.memory.openai_api_key.as_str());
+            let openai_base = (!cfg.memory.openai_base_url.is_empty())
+                .then_some(cfg.memory.openai_base_url.as_str());
+            let litho_model = (!cfg.mcp.litho_model_efficient.is_empty())
+                .then_some(cfg.mcp.litho_model_efficient.as_str());
+            let wiki_dir_s = cfg.paths.wiki_dir.to_string_lossy().to_string();
+
+            if cfg.mcp.bundled {
+                // One subprocess hosting every built-in server, instead of the
+                // fourteen below. Same servers, same env, same tools — see
+                // `crate::mcp::core_server`.
+                mcp_servers.push(crate::mcp::helper::core_mcp_config(
+                    crate::mcp::helper::CoreMcpParams {
+                        db_path: &db_path_s,
+                        group_folder: &binding.folder,
+                        chat_jid: &binding.jid,
+                        workspace_state_file: &state_file_s,
+                        default_workspace: &workspace_s,
+                        allowed_work_dirs: allowed_work_dirs.as_deref(),
+                        agents_dir: &agents_dir_s,
+                        memory_folder: &memory_index_folder,
+                        embedding_provider: Some(cfg.memory.embedding_provider.as_str()),
+                        openai_api_key: openai_key,
+                        openai_base_url: openai_base,
+                        custom_memory_dir: custom_memory_dir.as_deref(),
+                        dispatch_state_path: &dispatch_state_s,
+                        virtual_agents_dir: &virtual_agents_dir_s,
+                        wiki_dir: &wiki_dir_s,
+                        send_bridge_port: 18081,
+                        bot_token: binding.bot_token.as_deref(),
+                        ws_port: cfg.ws_port,
+                        agent_id: &binding.jid,
+                        ui_port: cfg.ui_server.port,
+                        litho_binary: cfg.mcp.litho_binary.as_str(),
+                        litho_model_efficient: litho_model,
+                        user_profile_path: &user_profile_s,
+                        js_timeout_ms: 5_000,
+                        js_memory_mb: 128,
+                        servers: crate::mcp::helper::DEFAULT_CORE_SERVERS,
+                    },
+                ));
+            } else {
+                mcp_servers.push(schedule_mcp_config(
+                    &db_path_s,
+                    &binding.folder,
+                    &binding.jid,
+                ));
+                // Background-tasks MCP — a chat can create/manage autonomous
+                // background work. Guard 2 (no self-replication) holds by
+                // construction: this is only injected into real chat sessions, and
+                // the background runner builds its own tool + MCP set per task, so a
+                // background run never receives this server unless a task explicitly
+                // requests it (and background_create exposes no raw MCP injection).
+                mcp_servers.push(background_mcp_config(
+                    &db_path_s,
+                    &binding.folder,
+                    &binding.jid,
+                ));
+                // Usage MCP — read-only token/cost accounting so any chat can ask
+                // "hôm nay tốn bao nhiêu" without opening the dashboard.
+                mcp_servers.push(usage_mcp_config(&db_path_s));
+                mcp_servers.push(workspace_mcp_config(
+                    &state_file_s,
+                    &workspace_s,
+                    allowed_work_dirs.as_deref(),
+                ));
+                mcp_servers.push(send_mcp_config(
+                    18081,
+                    &binding.jid,
+                    binding.bot_token.as_deref(),
+                    &db_path_s,
+                ));
+                // Dispatch MCP — register for every group, not just admin ones.
+                // DAG mode is now a first-class workflow any chat can opt into via
+                // the AgentModeSelector, so the dispatch tools must be available
+                // wherever a user might switch to DAG. The engine's per-mode tool
+                // filter (zen_core/engine.rs `is_dag` branch) is what actually
+                // exposes dispatch tools to the model — they're stripped out of
+                // Plan mode, and in Agent mode they're available but unused
+                // unless the model explicitly calls them. State is per-folder, so
+                // groups don't share dispatch state.
+                mcp_servers.push(dispatch_mcp_config(
+                    &dispatch_state_s,
+                    &binding.folder,
+                    Some(&virtual_agents_dir_s),
+                ));
+
+                mcp_servers.push(memory_mcp_config(
+                    &db_path_s,
+                    &memory_index_folder,
+                    &agents_dir_s,
+                    Some(cfg.memory.embedding_provider.as_str()),
+                    openai_key,
+                    openai_base,
+                    custom_memory_dir.as_deref(),
+                ));
+                // Cognitive memory used to ship as the `senclaw-cognitive` MCP
+                // server here. It's now built into the in-process tool list
+                // (see `tools::all_tools` — CogAdd/CogSearch/CogRecall/CogForget/
+                // CogStats). The MCP server binary is still available for
+                // out-of-process callers; we just don't spawn it as a per-agent
+                // subprocess any more.
+                mcp_servers.push(wiki_mcp_config(&wiki_dir_s));
+                mcp_servers.push(space_mcp_config(
+                    &db_path_s,
+                    &binding.folder,
+                    &binding.jid,
+                    cfg.ui_server.port,
+                ));
+                mcp_servers.push(litho_mcp_config(
+                    cfg.mcp.litho_binary.as_str(),
+                    openai_base,
+                    openai_key,
+                    litho_model,
+                ));
+                mcp_servers.push(browser_mcp_config(cfg.ws_port, &binding.jid));
+                mcp_servers.push(ocr_mcp_config(cfg.ui_server.port));
+                // Sandboxed JS executor — no shared state, just default limits.
+                mcp_servers.push(js_mcp_config(5_000, 128));
+                // OS-sandbox executor (sbx_* tools) — Seatbelt/bubblewrap/docker
+                // isolated shell + real python/node, shared engine DB.
+                mcp_servers.push(crate::mcp::helper::sandbox_mcp_config());
+            }
 
             // Load marketplace MCP servers from enabled plugins — mirrors TS AgentPool.ts:753-755
             if let Some(mm) = self.marketplace_manager.lock().unwrap().as_ref() {
@@ -1399,7 +1428,7 @@ impl AgentPool {
         prompt: &str,
         retries_left: u32,
     ) -> Result<()> {
-        self.process_and_wait_inner_with_images(jid, group, prompt, &[], retries_left)
+        self.process_and_wait_inner_with_attachments(jid, group, prompt, &[], retries_left)
             .await
     }
 
@@ -1418,13 +1447,208 @@ impl AgentPool {
             .map(|p| crate::util::paths::expand_tilde(p))
     }
 
-    /// Process-and-wait with image attachments support.
-    pub(crate) async fn process_and_wait_inner_with_images(
+    /// Whether the model this group's turn will run on accepts image blocks.
+    ///
+    /// Asks the engine's own resolver with the group's `llm_config_id`, the
+    /// same override it pushes via `set_model_override`, so a chat pinned to a
+    /// text-only model doesn't inherit the answer for the globally-active
+    /// vision model (and vice versa). No config loaded yet → `false`, which
+    /// routes to OCR: degrading beats a provider 400.
+    fn model_supports_vision(&self, group: &GroupBinding) -> bool {
+        let config_path = self
+            .config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.paths.global_config_path.clone());
+        let Some(config_path) = config_path else {
+            tracing::warn!("[AgentPool] no runtime config — treating model as vision-less");
+            return false;
+        };
+        crate::zen_core::engine::ZenEngine::model_accepts_images(
+            &config_path,
+            group.llm_config_id.as_deref(),
+        )
+    }
+
+    /// Transcribe attached images for a model that can't see them.
+    ///
+    /// Never fails the turn: a decode error, a missing OCR model or an engine
+    /// error all become `text: None` for that image, which
+    /// [`append_ocr_context`](crate::agent::input_builder::append_ocr_context)
+    /// renders as an explicit "OCR unavailable" the model must own up to.
+    async fn ocr_images(
+        &self,
+        images: &[crate::zen_core::ImageSource],
+    ) -> Vec<crate::agent::input_builder::OcrExtract> {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+        let config = self.config.lock().unwrap().clone();
+        let mut out = Vec::with_capacity(images.len());
+        for img in images {
+            let text = match (config.as_ref(), STANDARD.decode(img.data.as_bytes())) {
+                (Some(cfg), Ok(bytes)) => {
+                    match crate::gateway::ui_server::ocr::ocr_text_from_bytes(cfg, bytes).await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            tracing::warn!("[AgentPool] OCR failed for an attachment: {e}");
+                            None
+                        }
+                    }
+                }
+                (None, _) => None,
+                (_, Err(e)) => {
+                    tracing::warn!("[AgentPool] attachment is not valid base64: {e}");
+                    None
+                }
+            };
+            out.push(crate::agent::input_builder::OcrExtract {
+                media_type: img.media_type.clone(),
+                text,
+            });
+        }
+        out
+    }
+
+    /// Save and read every non-image attachment on this turn.
+    ///
+    /// Runs on a blocking thread: decoding base64, writing to disk and unzipping
+    /// a `.docx` are all synchronous work that would otherwise stall the runtime
+    /// while the user waits on their own message.
+    async fn read_documents(
+        &self,
+        jid: &str,
+        docs: &[&MessageAttachment],
+    ) -> Vec<crate::agent::documents::DocumentExtract> {
+        let uploads_dir = self
+            .config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.paths.uploads_dir.clone());
+        let Some(uploads_dir) = uploads_dir else {
+            tracing::warn!("[AgentPool] no runtime config — cannot save attached documents");
+            return Vec::new();
+        };
+        // One stamp for the whole turn: two files attached together sort next to
+        // each other in the uploads directory.
+        let stamp = crate::util::local_time::local_iso_string_now().replace(':', "-");
+        let jid = jid.to_string();
+        let owned: Vec<MessageAttachment> = docs.iter().map(|a| (*a).clone()).collect();
+
+        tokio::task::spawn_blocking(move || {
+            owned
+                .iter()
+                .map(|a| crate::agent::documents::process_document(&uploads_dir, &jid, &stamp, a))
+                .collect()
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("[AgentPool] document processing panicked: {e}");
+            Vec::new()
+        })
+    }
+
+    /// Turn a prompt plus its attachments into what the engine takes: final
+    /// prompt text, and the image blocks to ride alongside it.
+    ///
+    /// Documents are read into the prompt first, so that
+    /// [`build_agent_input`](crate::agent::input_builder::build_agent_input)
+    /// then sees the complete text and can pick up image URLs / `@paths`
+    /// written *inside* an attached document's extract as well as the explicit
+    /// image attachments.
+    pub(crate) async fn prepare_turn_input(
+        &self,
+        jid: &str,
+        prompt: &str,
+        attachments: &[MessageAttachment],
+    ) -> (String, Vec<crate::zen_core::ImageSource>) {
+        let (image_atts, doc_atts): (Vec<_>, Vec<_>) =
+            attachments.iter().partition(|a| a.is_image());
+
+        let prompt = if doc_atts.is_empty() {
+            prompt.to_string()
+        } else {
+            let docs = self.read_documents(jid, &doc_atts).await;
+            crate::agent::documents::append_document_context(prompt, &docs)
+        };
+
+        let build_result = if image_atts.is_empty() {
+            crate::agent::input_builder::build_agent_input(&prompt, None)
+        } else {
+            let images: Vec<crate::agent::input_builder::ImageAttachment> = image_atts
+                .iter()
+                .map(|a| crate::agent::input_builder::ImageAttachment {
+                    url: a.data_url.clone(),
+                    mime_type: Some(a.mime_type.clone()),
+                })
+                .collect();
+            crate::agent::input_builder::build_agent_input(&prompt, Some(&images))
+        };
+
+        if !build_result.image_srcs.is_empty() {
+            tracing::info!(
+                "[AgentPool] Detected {} image sources: {:?}",
+                build_result.image_srcs.len(),
+                build_result.image_srcs
+            );
+        }
+        if !build_result.failures.is_empty() {
+            tracing::warn!(
+                "[AgentPool] Image load failures: {:?}",
+                build_result.failures
+            );
+        }
+
+        crate::agent::input_builder::split_input(build_result.input)
+    }
+
+    /// Hand the turn to the engine, routing any attached images.
+    ///
+    /// A text-only endpoint answers an image block with a hard 400, so the
+    /// model's declared capability decides. Vision wins when available (it reads
+    /// layout, charts and handwriting OCR drops); otherwise the images are
+    /// transcribed and folded into the prompt text so the model at least knows
+    /// what it was sent.
+    pub(crate) async fn dispatch_user_input(
         &self,
         jid: &str,
         group: &GroupBinding,
         prompt: &str,
-        attachments: &[ImageAttachment],
+        images: Vec<crate::zen_core::ImageSource>,
+    ) -> Result<()> {
+        if images.is_empty() {
+            return self.core_api.process_user_input(jid, prompt);
+        }
+        if self.model_supports_vision(group) {
+            tracing::info!(
+                "[AgentPool] jid={jid} sending {} image block(s) to a vision model",
+                images.len()
+            );
+            return self
+                .core_api
+                .process_user_input_with_images(jid, prompt, images);
+        }
+        let extracts = self.ocr_images(&images).await;
+        let recognized = extracts
+            .iter()
+            .filter(|e| e.text.as_deref().is_some_and(|t| !t.trim().is_empty()))
+            .count();
+        tracing::info!(
+            "[AgentPool] jid={jid} model has no vision — OCR'd {} image(s), {recognized} with text",
+            images.len()
+        );
+        let prompt_with_ocr = crate::agent::input_builder::append_ocr_context(prompt, &extracts);
+        self.core_api.process_user_input(jid, &prompt_with_ocr)
+    }
+
+    /// Process-and-wait with attachment support (images and documents).
+    pub(crate) async fn process_and_wait_inner_with_attachments(
+        &self,
+        jid: &str,
+        group: &GroupBinding,
+        prompt: &str,
+        attachments: &[MessageAttachment],
         retries_left: u32,
     ) -> Result<()> {
         self.get_or_create(group).await?;
@@ -1650,69 +1874,23 @@ impl AgentPool {
             full_prompt
         };
 
-        // ---- process user input with InputBuilder (image handling) ----
+        // ---- process user input with InputBuilder (attachment handling) ----
         // Mirrors TS AgentPool.ts:826: core.processUserInput(fullPrompt).
-        // InputBuilder detects and processes image URLs/attachments.
+        // Documents are read into the prompt first, then InputBuilder resolves
+        // images (explicit attachments + any URLs/@paths in the text itself).
         tracing::info!(
-            "[AgentPool] process_user_input start jid={} prompt_len={}",
+            "[AgentPool] process_user_input start jid={} prompt_len={} attachments={}",
             jid,
-            full_prompt.len()
+            full_prompt.len(),
+            attachments.len()
         );
 
-        // Use InputBuilder to process the prompt for images
-        let build_result = if attachments.is_empty() {
-            crate::agent::input_builder::build_agent_input(&full_prompt, None)
-        } else {
-            let ws_attachments: Vec<crate::agent::input_builder::WebSocketImageAttachment> =
-                attachments
-                    .iter()
-                    .map(|a| crate::agent::input_builder::WebSocketImageAttachment {
-                        data_url: a.url.clone(),
-                        mime_type: a.mime_type.clone().unwrap_or_else(|| {
-                            // Try to detect MIME type from data URL if not provided
-                            if a.url.starts_with("data:image/") {
-                                a.url.split(';').next().unwrap_or("image/png").to_string()
-                            } else {
-                                "image/png".to_string()
-                            }
-                        }),
-                    })
-                    .collect();
-            crate::agent::input_builder::build_agent_input_with_attachments(
-                &full_prompt,
-                &ws_attachments,
-            )
-        };
+        let (processed_prompt, images) = self
+            .prepare_turn_input(jid, &full_prompt, attachments)
+            .await;
 
-        // For now, convert back to string for CoreApi (future: extend CoreApi to support Input enum)
-        let processed_prompt = match build_result.input {
-            crate::agent::input_builder::Input::Text(text) => text,
-            crate::agent::input_builder::Input::Blocks(blocks) => {
-                // Convert blocks back to text for now (image support will be added later)
-                let text_parts: Vec<String> = blocks
-                    .iter()
-                    .filter_map(|block| block.text.clone())
-                    .collect();
-                text_parts.join("\n")
-            }
-        };
-
-        // Log image processing results
-        if !build_result.image_srcs.is_empty() {
-            tracing::info!(
-                "[AgentPool] Detected {} image sources: {:?}",
-                build_result.image_srcs.len(),
-                build_result.image_srcs
-            );
-        }
-        if !build_result.failures.is_empty() {
-            tracing::warn!(
-                "[AgentPool] Image load failures: {:?}",
-                build_result.failures
-            );
-        }
-
-        self.core_api.process_user_input(jid, &processed_prompt)?;
+        self.dispatch_user_input(jid, group, &processed_prompt, images)
+            .await?;
 
         let bot_token = group.bot_token.clone();
         let jid_owned = jid.to_string();

@@ -107,6 +107,13 @@ impl Db {
             .with_context(|| format!("open cognitive sqlite {}", cog_path.display()))?;
         Self::apply_pragmas_and_cog_schema(&mut cog_conn, config)?;
 
+        // Owner-only, after the pragmas: WAL mode creates the `-wal`/`-shm`
+        // sidecars on first use, so restricting earlier would miss them. These
+        // files hold channel bot tokens, Space-App access tokens and the whole
+        // conversation history — they were created 0644 under the default umask.
+        crate::util::file_perms::restrict_sqlite(main_path);
+        crate::util::file_perms::restrict_sqlite(cog_path);
+
         Ok(Self {
             conn: Mutex::new(conn),
             cog_conn: Mutex::new(cog_conn),

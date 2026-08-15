@@ -15,9 +15,9 @@ pub mod safe_log;
 
 pub mod agent;
 pub mod apps;
-pub mod build_info;
 pub mod background;
 pub mod browser;
+pub mod build_info;
 pub mod channels;
 pub mod clawhub;
 pub mod cli;
@@ -42,6 +42,7 @@ pub mod tools;
 pub mod tts;
 pub mod types;
 pub mod usage;
+pub mod user_profile;
 pub mod util;
 pub mod widgets;
 pub mod wiki;
@@ -138,7 +139,7 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
         group_jid: &str,
         group: &crate::types::GroupBinding,
         text: &str,
-        attachments: &[crate::agent::input_builder::ImageAttachment],
+        attachments: &[crate::types::MessageAttachment],
     ) {
         // Mid-turn fast path: while this group's agent is processing, text-only
         // inputs go into the engine's pending queue — they get appended to the
@@ -159,7 +160,7 @@ impl gateway::websocket_gateway::WsGatewayApi for RealWsApi {
             gq.enqueue(
                 &jid_key,
                 Box::pin(async move {
-                    let _ = types::AgentApi::process_and_wait_with_images(
+                    let _ = types::AgentApi::process_and_wait_with_attachments(
                         agent_pool.as_ref(),
                         &jid,
                         &g,
@@ -1282,6 +1283,33 @@ fn raise_fd_limit() {
     }
 }
 
+/// One-shot sweep restricting every file under `~/.senclaw/` that holds a
+/// secret to owner-only (`0600`).
+///
+/// The individual write paths restrict themselves now, but a file only gets
+/// re-written when something changes it — an install that never touches its
+/// LLM config would keep `config.json` world-readable forever. This runs on
+/// every boot and is a no-op once the modes are already right.
+///
+/// Deliberately *not* exhaustive: state files with no secrets in them
+/// (`marketplace.json`, `workspace-state-*.json`, window geometry) are left
+/// alone. Widening this to the whole directory would be easy and wrong — it
+/// would fight any file another tool legitimately shares.
+fn harden_data_dir_permissions(cfg: &config::Config) {
+    use util::file_perms::{restrict_best_effort, restrict_sqlite};
+
+    restrict_sqlite(&cfg.paths.db_path);
+    restrict_sqlite(&cfg.paths.cognitive_db_path);
+    restrict_best_effort(&cfg.paths.global_config_path);
+
+    // Sibling files of config.json that carry credentials or MCP env blocks.
+    if let Some(home) = cfg.paths.global_config_path.parent() {
+        for name in ["oauth.json", "api_token", "project-config.json", "mcp.json"] {
+            restrict_best_effort(&home.join(name));
+        }
+    }
+}
+
 pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // ===== 0. Setup wizard =====
     setup::run_setup_if_needed(&cfg.paths.global_config_path);
@@ -1290,6 +1318,15 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     #[cfg(unix)]
     raise_fd_limit();
+
+    // ===== 0b. Lock down secret-bearing files =====
+    // The write paths now chmod 0600 themselves, but that only covers files
+    // written after this build. Existing installs already have `config.json`
+    // (every LLM apiKey), `senclaw.db` (bot tokens, Space-App tokens, full
+    // chat history) and the MCP config sitting at 0644 from the default
+    // umask — readable by any other account on the machine. Sweep once on
+    // boot so an upgrade fixes them without the user doing anything.
+    harden_data_dir_permissions(&cfg);
 
     // ===== 1. Database =====
     let db = Arc::new(db::Db::open(&cfg).context("open database")?);
@@ -1399,6 +1436,25 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         &cfg.telegram.agent_folder,
     );
     tracing::info!("[SenClaw] Main agent directory ensured");
+
+    // ===== 1d. Soul Core =====
+    // `USER.md` / `TOOLS.md` / `AGENTS.md` at `~/.senclaw/`. Global, outside
+    // `agents_dir`, so every agent profile shares one answer to "who is my
+    // human". Kept OUTSIDE the cognitive block above on purpose: that branch
+    // only runs when an embedding provider is configured, which is right for
+    // persona ingest and wrong here — the profile has nothing to do with the
+    // graph, and an install without embeddings must still notice edits.
+    user_profile::ensure_exists(&cfg);
+    user_profile::reload(&cfg.paths.user_profile_path);
+    user_profile::spawn_watcher(
+        Arc::new(cfg.clone()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    tracing::info!(
+        path = %cfg.paths.user_profile_path.display(),
+        "[SenClaw] Soul Core ready"
+    );
 
     // OAuth account store. Installed before anything can resolve a model
     // profile, because an OAuth-backed LlmConfig reads its bearer token from
@@ -2786,10 +2842,12 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         // time when the daemon is exposed beyond loopback. The in-band
         // `connect` token is not a sufficient gate — the message dispatcher
         // runs handlers for sockets that never authenticated.
-        let ws_router = gw.route(ws_state).layer(axum::middleware::from_fn_with_state(
-            Arc::clone(&api_auth),
-            gateway::ui_server::auth::ws_auth_mw,
-        ));
+        let ws_router = gw
+            .route(ws_state)
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&api_auth),
+                gateway::ui_server::auth::ws_auth_mw,
+            ));
         let ws_port = cfg.ws_port;
         let ws_addr = format!("{ui_bind_host}:{ws_port}");
         tracing::info!("[SenClaw] WebSocket gateway at ws://{ws_addr}");
@@ -2938,10 +2996,20 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     {
         struct RealUiApi {
             agent_pool: Arc<agent::agent_pool::AgentPool>,
+            ws_gateway: Arc<gateway::websocket_gateway::WebSocketGateway>,
         }
         impl gateway::ui_server::UiApi for RealUiApi {
             fn reload_all_skills(&self) {
                 self.agent_pool.reload_all_skills();
+            }
+            fn broadcast_event(&self, event: serde_json::Value) {
+                // `broadcast_to_admins` is async; UiApi is sync because most
+                // of it is cheap state access. Detach rather than block the
+                // HTTP handler on socket writes.
+                let gw = Arc::clone(&self.ws_gateway);
+                tokio::spawn(async move {
+                    gw.broadcast_to_admins(&event).await;
+                });
             }
             fn get_thinking_enabled(&self) -> bool {
                 self.agent_pool.get_thinking_enabled()
@@ -2995,6 +3063,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             persona_registry: Some(Arc::clone(&persona_registry)),
             agent_api: Some(Arc::new(RealUiApi {
                 agent_pool: agent_pool.clone(),
+                ws_gateway: Arc::clone(&ws_gateway),
             })),
             mcp_manager: Some(Arc::clone(&mcp_manager)),
             marketplace_manager: Some(Arc::clone(&marketplace_shared)),

@@ -11,6 +11,7 @@ import '../../dock/dispatch_provider.dart';
 import '../audio_service.dart';
 import 'form_card.dart';
 import 'question_card.dart';
+import 'tool_params.dart';
 import 'widget_card.dart';
 
 /// Dispatches a [ChatMessage] to the right bubble/card by kind.
@@ -558,10 +559,7 @@ class _PermissionCard extends StatelessWidget {
             ),
             if (message.permContent.isNotEmpty) ...[
               const SizedBox(height: AppTokens.s8),
-              Text(
-                message.permContent,
-                style: TextStyle(color: c.textSecondary, fontSize: 14),
-              ),
+              ToolParams(content: message.permContent),
             ],
             const SizedBox(height: AppTokens.s12),
             if (message.resolved)
@@ -1078,6 +1076,16 @@ class _Attachments extends StatelessWidget {
           for (final a in attachments)
             Builder(builder: (ctx) {
               final url = '${a['dataUrl'] ?? ''}';
+              // Documents have no thumbnail — a name chip is all that's
+              // meaningful, and rendering one through the image decoder below
+              // would only ever produce a broken-image icon.
+              if (!'${a['mimeType'] ?? ''}'.startsWith('image/')) {
+                return Chip(
+                  avatar: const Icon(Icons.description_outlined, size: 14),
+                  label: Text('${a['name'] ?? a['mimeType'] ?? 'file'}',
+                      style: const TextStyle(fontSize: 12)),
+                );
+              }
               final box = const BoxConstraints(
                   maxWidth: 260, maxHeight: 260, minWidth: 40, minHeight: 40);
               ImageProvider? provider;

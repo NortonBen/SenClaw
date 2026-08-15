@@ -73,6 +73,72 @@ The TS `src-old/index.ts` defines the canonical boot order, which `src/lib.rs::r
 
 React 18 + Vite 6 + Tailwind 3. Served by the Rust axum server embedded in the daemon. Source in `web/src/` with two entry points: `main.tsx` (main UI) and `wiki-main.tsx` (wiki viewer).
 
+## Chat attachments: images (vision, else OCR) and documents
+
+Everything attached to a chat message — from the web composer, the desktop
+picker, a paste, or a channel adapter that downloaded media — travels as
+`attachments: [{dataUrl, mimeType, name?}]` and is one type end to end:
+[`types::MessageAttachment`](src/types.rs). `is_image()` splits the two routes in
+[`AgentPool::prepare_turn_input`](src/agent/agent_pool/pool.rs); image turns
+bypass the engine's text-only mid-turn pending queue because the per-group queue
+is what serializes them ([`src/lib.rs`](src/lib.rs) `enqueue_and_process`).
+
+**Documents** ([`src/agent/documents.rs`](src/agent/documents.rs)) are saved
+under `~/.senclaw/uploads/<sanitized jid>/<stamp>-<name>` and their text pulled
+out (`text/*` and code by MIME *or* extension, `.docx` by unzipping
+`word/document.xml`; no PDF extractor is built in). `append_document_context`
+inlines up to 20k characters **and always states the saved path**, so the agent
+can Read/grep the rest — or the whole file when the format is one we can't parse.
+An unreadable file is reported as such, never silently dropped, and the block
+tells the model not to invent contents.
+
+**Images** go through `build_agent_input`, which resolves every source (local
+path, http(s) download, `data:` URL) to base64 and returns interleaved blocks.
+`split_input` then separates the text from the images, and
+`AgentPool::dispatch_user_input` picks one of two routes:
+
+- **Vision model** → the images travel as real `ContentBlock::Image` blocks,
+  placed *ahead* of the prompt text in the user turn
+  ([`ZenEngine::start_query`](src/zen_core/engine.rs)), and serialize as
+  `image_url` data URLs (OpenAI) or `source.data` raw base64 (Anthropic).
+- **Text-only model** → each image is transcribed by the built-in OCR engine and
+  `append_ocr_context` folds the result into the prompt, labelled as a
+  transcription. When OCR yields nothing the prompt tells the model to say so
+  and **not** guess — an unanswerable "describe this image" is otherwise
+  answered with an invented one.
+
+Rules for Claude:
+
+- **The capability check must go through
+  [`ZenEngine::model_accepts_images`](src/zen_core/engine.rs).** It wraps the
+  *same* `resolve_model_profile_at` the turn itself uses, including its
+  fallbacks (unknown per-group override → active config → first config). A
+  second lookup with its own resolution disagrees exactly on those edges and
+  routes a vision model's images through OCR.
+- **Never send image blocks on a maybe.** No config resolved → treat as
+  vision-less. A text-only endpoint answers an image block with a hard 400 that
+  fails the whole turn; OCR only degrades it.
+- **[`src/zen_core/vision.rs`](src/zen_core/vision.rs) patterns are
+  load-bearing, and the web copy in `LLMSettings.tsx` must match.** They were
+  pinned to the model generations that existed when written, which silently
+  demoted each new release to the OCR path. Generation digits are open-ended
+  (`claude-[3-9]`, `gpt-[5-9]`, `gemini-[2-9]`) for that reason. The explicit
+  `vision` toggle in Settings → Models always wins over inference.
+- **Save the document before extracting from it.** The path is the fallback for
+  every format we can't parse; an extractor that returns `Err` without a saved
+  file leaves the agent with nothing to open.
+- **Only Telegram downloads channel media** (photos and image-typed documents,
+  in [`src/channels/telegram.rs`](src/channels/telegram.rs) `download_media`).
+  Feishu/QQ/WeChat construct `attachments: Vec::new()` — adding media there means
+  filling that field, not just parsing the event. A channel turn is rebuilt from
+  DB history, so an adapter's attachments must reach
+  `StoredMessage::attachments` or `run_agent` can never see them.
+- Clients cap an image's long edge at 1568px before upload (`MAX_IMAGE_EDGE` in
+  `ChatView.tsx`, `kMaxImageEdge` in
+  `desktop_app/lib/features/chat/image_attachment.dart`) — a phone photo
+  otherwise base64s past Anthropic's 5 MB per-image limit. Documents are capped
+  at 32 MB on both ends (`MAX_DOC_BYTES`).
+
 ## Testing
 
 - Rust: `cargo test` — unit tests co-located in `#[cfg(test)]` modules at the bottom of each source file
@@ -130,6 +196,19 @@ Source of truth: server names live in [`src/mcp/helper.rs`](src/mcp/helper.rs) `
 ### Space-App MCP servers
 
 Space Apps register their own MCP servers with a different pattern: `mcp__<mcp.name>__<tool>`, where `<mcp.name>` is the `mcp.name` field of the app's `senclaw-manifest.json` (usually `<app-id>-mcp`, e.g. `ssh-manager-mcp` → `mcp__ssh-manager-mcp__ssh_execute_command`, but not always — luna-calendar registers `luna-mcp`). Never derive the server name from the app id; read the manifest. Tool names live in the app's `apps/<app>/src/mcp.rs` `tools/list`. Runtime check: `GET http://127.0.0.1:18788/api/mcp-servers` lists every registered server with its status. Full lookup + troubleshooting guide (including the `groups.allowed_tools` whitelist trap that empties a session's tool roster): [docs/tool-skill-name-lookup.md](docs/tool-skill-name-lookup.md).
+
+### Built-in MCP servers run in ONE process (`senclaw-core`)
+
+`AgentPool` used to spawn fourteen MCP subprocesses per chat session — one per
+built-in server. It now spawns a single `senclaw core-server` that hosts them
+all in-process and merges their tool tables, so `wiki_*`, `workspace_*`,
+`memory_*` … all arrive over one stdio connection. Each server keeps its own
+subcommand (`senclaw wiki-server`, …) for debugging one in isolation, and
+`mcp.bundled = false` (env `SENCLAW_MCP_BUNDLED`) restores the per-server spawn.
+Adding a server means giving it `from_env() -> Result<Option<Self>>` plus
+`vis = "pub"` on its `#[rmcp::tool_router]` — the aggregator never re-declares a
+tool. Full design, limits, and a verified stdio transcript:
+[docs/mcp-core-bundled.md](docs/mcp-core-bundled.md).
 
 ### MCP tool aliases (Plugins → Alias)
 
@@ -278,6 +357,43 @@ on `/runtime`. Knobs: `SENCLAW_SPACE_SUPERVISE_SECS` (20),
 `SENCLAW_SPACE_IDLE_SWEEP_SECS` (10). Full guide:
 [docs/space-app-lifecycle.md](docs/space-app-lifecycle.md).
 
+### Managing Space Apps from chat (`space_app_*`)
+
+`senclaw-space` carries five tools so an agent can do from a conversation what
+Settings → Space Apps does: `space_app_list` (installed apps + running state,
+filterable, `probe` for a real health check), `space_app_start`,
+`space_app_stop`, `space_app_restart`, and `space_app_mcp_list` (which MCP
+server each app registers, its status and tool count — the way to look up the
+full `mcp__<mcpName>__<tool>` name).
+
+They live in [`src/mcp/space_apps.rs`](src/mcp/space_apps.rs) and are **loopback
+HTTP calls back into the daemon**, unlike the notes/calendar half of the same
+server which opens the DB directly. The reason is not style: an app's process
+lives in the daemon's `SpaceMcpLauncher` — a child-process map, a user-stopped
+set, a launch counter, all in memory in *another* process. A second launcher in
+the MCP subprocess would fight the first one for ports. `space_mcp_config` sets
+`SENCLAW_SPACE_API_URL`; loopback peers are exempt from the daemon's API token,
+and the app-token gate covers only an app's *data* routes, never `/start` and
+`/stop` — so the local case needs no credential.
+
+Rules for Claude:
+
+- **`GET /api/space/apps/status` is a literal sibling of `:id`.** Adding a route
+  like it means adding the segment to `app_auth::split_app_path`'s literal list,
+  or it is parsed as an app named "status".
+- **Never report a stopped `session` app as broken.** It is the resting state;
+  only `background` apps are supervised. The tool descriptions say so because an
+  agent that "fixes" it restarts something working as designed.
+- **Stopping a `background` app stops whatever it was watching** (channel polls,
+  schedules) until someone starts it again — confirm with the user first.
+- **A client timeout on `space_app_start` is not a failure.** A first start can
+  be minutes (`npm ci`, venv); the daemon keeps going after the client gives up,
+  so the answer is "check again with `space_app_list`", never a retry.
+- **The MCP registry is enrichment, not the answer.** `space_app_mcp_list` reads
+  `mcpName` from the manifest and only *decorates* it with live status; when the
+  registry is unreadable it degrades (`registered: null` + `degraded` note)
+  rather than failing or claiming `registered: false`.
+
 ### Space App SDKs
 
 Four, one per language an app can be written in — all documented against the
@@ -391,12 +507,20 @@ token per installed app** (`sca_<64 hex>`, table `space_app_tokens`), hands it t
 the app's process in **`SENCLAW_TOKEN_ACCESS_APP`**, and treats it as the app's
 name: a token presented against another id is **403 in every mode**.
 
-- **`SENCLAW_APP_TOKEN_MODE`** = `off` (default — tokenless calls served exactly
-  as before, so the installed fleet keeps working) | `warn` (served + one log
-  line per app) | `strict` (refused unless the caller is the daemon's own UI).
-  Strict only gates the app's *data* routes (`/bridge`, `/config`, `/sqlite/query`,
-  `/mcp/register`, `/env`, `/token`) — never management routes or `/proxy`,
-  `/static`.
+- **`SENCLAW_APP_TOKEN_MODE`** = `strict` (**default** — a tokenless call to an
+  app's data route is refused unless the caller is the daemon's own UI) | `warn`
+  (served + one log line per app, the way to find what would break) | `off`
+  (served as before; the escape hatch for an app with a hand-rolled HTTP
+  client). Strict only gates the app's *data* routes (`/bridge`, `/config`,
+  `/sqlite/query`, `/mcp/register`, `/env`, `/token`) — never management routes
+  or `/proxy`, `/static`. An unrecognised value falls back to `strict`, never to
+  `off`: a typo must not silently disable app isolation.
+- **Changeable from the UI** at Settings → Space Apps (web + desktop), via
+  `GET`/`PUT /api/space/app-token-mode`. The choice lives in `router_state`
+  (`space:appTokenMode`), **overrides** the env var, and needs no daemon restart
+  — the middleware reads it per request. That route is deliberately not under
+  `/api/space/apps/`: `app_auth` gates everything there per app id, which under
+  strict would lock the operator out of the switch that turns strict off.
 - **`SENCLAW_API_VERSION`** — Space-App contract version (now **2**). Injected
   into every app, stamped on every app-scoped response, sent by every SDK. Older
   contracts are served; a newer one gets **426**.

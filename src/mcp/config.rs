@@ -259,6 +259,9 @@ impl McpConfigManager {
             f.flush()?;
         }
         std::fs::rename(&tmp, path)?;
+        // MCP config carries per-server `env` blocks, which is where API keys
+        // and tokens for external servers live.
+        crate::util::file_perms::restrict_best_effort(path);
         Ok(())
     }
 

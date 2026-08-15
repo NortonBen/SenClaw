@@ -116,6 +116,20 @@ pub struct PathsConfig {
     pub cognitive_db_path: PathBuf,
     pub agents_dir: PathBuf,
     pub workspace_dir: PathBuf,
+    /// Soul Core — who the *human* is (`~/.senclaw/USER.md`).
+    ///
+    /// Deliberately under `senclaw_home`, not `senclaw_data` where
+    /// `agents_dir` lives: the profile belongs to the person, not to any one
+    /// agent profile, and keeping it out of `agents_dir` is what stops
+    /// `spawn_soul_watcher` / persona ingest from ever treating it as an
+    /// agent's `SOUL.md`. See [`crate::user_profile`].
+    pub user_profile_path: PathBuf,
+    /// Machine-local environment notes (`~/.senclaw/TOOLS.md`) — SSH hosts,
+    /// device names, TTS voices. Kept out of skills so skills stay shareable.
+    pub tools_notes_path: PathBuf,
+    /// User-editable operating rules (`~/.senclaw/AGENTS.md`), appended to the
+    /// system prompt after the hardcoded base.
+    pub agents_rules_path: PathBuf,
     pub global_config_path: PathBuf,
     pub dispatch_state_path: PathBuf,
     pub managed_skills_dir: PathBuf,
@@ -151,6 +165,12 @@ pub struct PathsConfig {
     /// Default: `~/.senclaw/screenshots`. Override with
     /// `SENCLAW_SCREENSHOTS_DIR`.
     pub screenshots_dir: PathBuf,
+    /// Documents attached to chat messages, kept per chat under
+    /// `<root>/<sanitized jid>/`. The agent is handed the on-disk path
+    /// alongside the extracted text so it can Read/grep the whole file when the
+    /// inlined preview isn't enough. Default: `~/.senclaw/uploads`. Override
+    /// with `SENCLAW_UPLOADS_DIR`.
+    pub uploads_dir: PathBuf,
     /// Workflow definitions (`<name>.md` with YAML frontmatter).
     /// Default: `~/senclaw/workflows`. Override with `SENCLAW_WORKFLOWS_DIR`.
     pub workflows_dir: PathBuf,
@@ -223,6 +243,11 @@ pub struct McpConfig {
     pub litho_binary: String,
     /// Optional `--model-efficient` for Litho (`SENCLAW_LITHO_MODEL_EFFICIENT`).
     pub litho_model_efficient: String,
+    /// Host every built-in MCP server in one `core-server` subprocess instead
+    /// of one subprocess per server (default: true). `SENCLAW_MCP_BUNDLED=0`
+    /// restores the per-server spawn — worth having, because bundled children
+    /// share a process and a crash takes all of them down together.
+    pub bundled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -365,11 +390,18 @@ pub struct Config {
     /// default is the compiled [`crate::apps::token::API_VERSION`].
     pub space_api_version: u32,
     /// What happens to an app-scoped request that carries no access token
-    /// (`SENCLAW_APP_TOKEN_MODE`: `off` | `warn` | `strict`). Default `off`,
-    /// so apps built before per-app tokens keep working; a token that *is*
-    /// present is verified and scoped in every mode. See
-    /// [`crate::apps::token::TokenMode`] and docs/space-app-api-token.md.
+    /// (`SENCLAW_APP_TOKEN_MODE`: `off` | `warn` | `strict`). Default
+    /// **`strict`** — an app that does not prove who it is does not get another
+    /// app's data. Set `warn` to find out what would break, `off` for an app
+    /// that talks to the daemon with its own HTTP client and cannot be taught
+    /// to send the token. A token that *is* present is verified and scoped in
+    /// every mode. See [`crate::apps::token::TokenMode`] and
+    /// docs/space-app-api-token.md.
     pub space_app_token_mode: crate::apps::token::TokenMode,
+    /// Whether `SENCLAW_APP_TOKEN_MODE` was actually set. Without this a mode
+    /// that merely equals the default would be reported to the UI as "the
+    /// operator configured this", and the UI would offer no way back.
+    pub space_app_token_mode_from_env: bool,
     pub ws_port: u16,
     /// POSIX shell override for workflow script steps
     /// (`SENCLAW_WORKFLOW_SHELL`). None = auto (`/bin/sh` on POSIX).
@@ -504,6 +536,18 @@ impl Config {
                 ),
                 agents_dir: env_path("AGENTS_DIR", senclaw_data.join("agents")),
                 workspace_dir: env_path("WORKSPACE_DIR", senclaw_data.join("workspace")),
+                user_profile_path: env_path(
+                    "SENCLAW_USER_PROFILE_PATH",
+                    senclaw_home.join("USER.md"),
+                ),
+                tools_notes_path: env_path(
+                    "SENCLAW_TOOLS_NOTES_PATH",
+                    senclaw_home.join("TOOLS.md"),
+                ),
+                agents_rules_path: env_path(
+                    "SENCLAW_AGENTS_RULES_PATH",
+                    senclaw_home.join("AGENTS.md"),
+                ),
                 global_config_path: env_path(
                     "SENCLAW_CONFIG_PATH",
                     senclaw_home.join("config.json"),
@@ -584,6 +628,7 @@ impl Config {
                     "SENCLAW_SCREENSHOTS_DIR",
                     senclaw_home.join("screenshots"),
                 ),
+                uploads_dir: env_path("SENCLAW_UPLOADS_DIR", senclaw_home.join("uploads")),
                 workflows_dir: env_path("SENCLAW_WORKFLOWS_DIR", senclaw_data.join("workflows")),
                 workflow_data_dir: env_path(
                     "SENCLAW_WORKFLOW_DATA_DIR",
@@ -662,6 +707,7 @@ impl Config {
                 watchdog_enabled: env_bool("SENCLAW_MCP_WATCHDOG_ENABLED", true),
                 litho_binary: env_or("SENCLAW_LITHO_BINARY", "deepwiki-rs"),
                 litho_model_efficient: env_or("SENCLAW_LITHO_MODEL_EFFICIENT", ""),
+                bundled: env_bool("SENCLAW_MCP_BUNDLED", true),
             },
             dispatch: DispatchConfig {
                 enabled: env_bool("SENCLAW_DISPATCH_ENABLED", false),
@@ -686,14 +732,14 @@ impl Config {
             },
             space_supervise_secs: env_int("SENCLAW_SPACE_SUPERVISE_SECS", 20),
             space_idle_sweep_secs: env_int("SENCLAW_SPACE_IDLE_SWEEP_SECS", 10),
-            space_api_version: env_int(
-                "SENCLAW_API_VERSION",
-                crate::apps::token::API_VERSION,
-            )
-            .max(crate::apps::token::MIN_API_VERSION),
-            space_app_token_mode: crate::apps::token::TokenMode::parse(
+            space_api_version: env_int("SENCLAW_API_VERSION", crate::apps::token::API_VERSION)
+                .max(crate::apps::token::MIN_API_VERSION),
+            space_app_token_mode: crate::apps::token::TokenMode::from_env_value(
                 &env::var("SENCLAW_APP_TOKEN_MODE").unwrap_or_default(),
             ),
+            space_app_token_mode_from_env: env::var("SENCLAW_APP_TOKEN_MODE")
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false),
             ws_port: env_int("SENCLAW_WS_PORT", 18789),
             workflow_shell: env::var("SENCLAW_WORKFLOW_SHELL")
                 .ok()
