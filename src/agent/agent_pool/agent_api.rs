@@ -4,9 +4,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::agent::agent_pool::pool::AgentPool;
-use crate::agent::input_builder::ImageAttachment;
 use crate::types::AgentApi;
 use crate::types::GroupBinding;
+use crate::types::MessageAttachment;
 
 #[async_trait]
 impl AgentApi for AgentPool {
@@ -18,14 +18,14 @@ impl AgentApi for AgentPool {
         self.process_and_wait_inner(jid, group, prompt, 5).await
     }
 
-    async fn process_and_wait_with_images(
+    async fn process_and_wait_with_attachments(
         &self,
         jid: &str,
         group: &GroupBinding,
         prompt: &str,
-        attachments: &[ImageAttachment],
+        attachments: &[MessageAttachment],
     ) -> Result<()> {
-        self.process_and_wait_inner_with_images(jid, group, prompt, attachments, 5)
+        self.process_and_wait_inner_with_attachments(jid, group, prompt, attachments, 5)
             .await
     }
 

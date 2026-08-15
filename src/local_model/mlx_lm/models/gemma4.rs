@@ -57,9 +57,12 @@ use mlx_rs::{
     macros::{ModuleParameters, Quantizable},
     module::{Module, Param},
     nn,
-    ops::{arange, concatenate_axis, full, indexing::IndexOp, ones, power},
+    ops::{
+        arange, argpartition_axis, concatenate_axis, full, indexing::IndexOp, ones, power,
+        softmax_axis, zeros_dtype,
+    },
     quantization::{MaybeQuantized, Quantizable as _},
-    Array,
+    Array, Dtype,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -67,7 +70,7 @@ use serde_json::Value;
 use super::super::{
     cache::{KeyValueCache, KvCache, KvFetchResult},
     error::Error,
-    utils::{create_causal_mask, scaled_dot_product_attention},
+    utils::{create_causal_mask, moe::gather_qmm, scaled_dot_product_attention},
 };
 
 // -----------------------------------------------------------------------------
@@ -115,6 +118,28 @@ pub struct ModelArgs {
     pub final_logit_softcapping: Option<f32>,
     #[serde(default)]
     pub use_double_wide_mlp: bool,
+    /// Second KV head count, used by **full-attention** layers on the k-eq-V
+    /// checkpoints (26B/31B). `None` → full layers reuse
+    /// [`Self::num_key_value_heads`] like the sliding ones.
+    #[serde(default)]
+    pub num_global_key_value_heads: Option<i32>,
+    /// Full-attention layers derive V from the **raw K projection** instead of
+    /// carrying their own `v_proj` (26B/31B). The two still diverge afterwards:
+    /// K takes the scaled per-head norm and RoPE, V takes the no-scale norm and
+    /// no RoPE, so the cache still stores them separately.
+    #[serde(default)]
+    pub attention_k_eq_v: bool,
+    /// Replace the single dense FFN with `dense shared FFN ‖ 128 routed
+    /// experts` (26B-A4B). The two branches run in **parallel** off the same
+    /// residual and are summed — not chained.
+    #[serde(default)]
+    pub enable_moe_block: bool,
+    #[serde(default)]
+    pub num_experts: Option<i32>,
+    #[serde(default)]
+    pub top_k_experts: Option<i32>,
+    #[serde(default)]
+    pub moe_intermediate_size: Option<i32>,
     #[serde(default = "default_tie_word_embeddings")]
     pub tie_word_embeddings: bool,
     /// Per-layer attention type. Defaults to `sliding_window_pattern-1` sliding
@@ -131,6 +156,28 @@ pub struct ModelArgs {
     /// BOS token (default 2). The Gemma chat template starts with `{{ bos_token }}`.
     #[serde(skip)]
     pub bos_token_id: Option<u32>,
+    /// Quantization of the stacked routed-expert weights, read from
+    /// `config.json::quantization` by [`get_gemma4_model_args`].
+    ///
+    /// These weights arrive from safetensors **already quantized and already
+    /// stacked**, so unlike every other module the runtime never quantizes
+    /// them — it only needs the group size and bit width to interpret them in
+    /// `gather_qmm`. Getting either wrong is not a load error; it silently
+    /// misreads the packed words.
+    #[serde(skip, default = "default_expert_quant")]
+    pub expert_quant: (i32, i32),
+}
+
+fn default_expert_quant() -> (i32, i32) {
+    (64, 4)
+}
+
+/// Fully-specified MoE geometry (see [`ModelArgs::moe`]).
+#[derive(Debug, Clone, Copy)]
+pub struct MoeArgs {
+    pub num_experts: i32,
+    pub top_k: i32,
+    pub intermediate_size: i32,
 }
 
 fn default_global_head_dim() -> i32 {
@@ -192,6 +239,37 @@ impl ModelArgs {
                 partial_rotary_factor: Some(1.0),
             }
         }
+    }
+
+    /// Whether a layer of this type derives V from the raw K projection.
+    /// Only full-attention layers ever do; sliding layers always keep their own
+    /// `v_proj`.
+    fn k_eq_v_for(&self, layer_type: &str) -> bool {
+        self.attention_k_eq_v && layer_type == "full_attention"
+    }
+
+    /// KV head count for a given attention type. The k-eq-V checkpoints give
+    /// full-attention layers their own (smaller) count.
+    fn n_kv_heads_for(&self, layer_type: &str) -> i32 {
+        match self.num_global_key_value_heads {
+            Some(n) if n > 0 && self.k_eq_v_for(layer_type) => n,
+            _ => self.num_key_value_heads,
+        }
+    }
+
+    /// MoE geometry, present only when the block is enabled *and* fully
+    /// specified. A partially-declared MoE is treated as absent rather than
+    /// half-built: every field is load-bearing, and a missing one would
+    /// otherwise surface as a shape error deep in the expert matmul.
+    pub fn moe(&self) -> Option<MoeArgs> {
+        if !self.enable_moe_block {
+            return None;
+        }
+        Some(MoeArgs {
+            num_experts: self.num_experts.filter(|n| *n > 0)?,
+            top_k: self.top_k_experts.filter(|k| *k > 0)?,
+            intermediate_size: self.moe_intermediate_size.filter(|s| *s > 0)?,
+        })
     }
 
     /// Head dim used by a given attention type.
@@ -350,6 +428,13 @@ fn rms_norm_no_scale(x: &Array, eps: f32) -> Result<Array, Exception> {
     mlx_rs::fast::rms_norm(x, &ones, eps)
 }
 
+/// `rms_norm` with an explicit weight vector. The router needs this because its
+/// effective weight is `scale · hidden^-0.5` — a value that is *not* the stored
+/// tensor, so `nn::RmsNorm` (which owns its weight) cannot express it.
+fn rms_norm_weighted(x: &Array, weight: &Array, eps: f32) -> Result<Array, Exception> {
+    mlx_rs::fast::rms_norm(x, weight, eps)
+}
+
 // -----------------------------------------------------------------------------
 // Attention
 // -----------------------------------------------------------------------------
@@ -363,6 +448,8 @@ pub struct Attention {
     pub is_full: bool,
     /// `false` for KV-shared layers (no k/v projections of their own).
     pub has_kv: bool,
+    /// V comes from the raw `k_proj` output; there is no `v_proj` to load.
+    pub k_eq_v: bool,
 
     #[quantizable]
     #[param]
@@ -388,10 +475,13 @@ impl Attention {
     pub fn new(args: &ModelArgs, layer_idx: usize, layer_type: &str) -> Result<Self, Exception> {
         let dim = args.hidden_size;
         let n_heads = args.num_attention_heads;
-        let n_kv_heads = args.num_key_value_heads;
+        let n_kv_heads = args.n_kv_heads_for(layer_type);
         let head_dim = args.head_dim_for(layer_type);
         let is_full = layer_type == "full_attention";
         let has_kv = (layer_idx as i32) < args.first_kv_shared();
+        // k-eq-V layers carry no `v_proj` at all: V is the *raw* K projection,
+        // which then takes the no-scale norm and skips RoPE.
+        let k_eq_v = args.k_eq_v_for(layer_type);
 
         let mk_lin = |i: i32, o: i32| nn::LinearBuilder::new(i, o).bias(false).build();
         let q_proj = mk_lin(dim, n_heads * head_dim)?;
@@ -402,10 +492,14 @@ impl Attention {
                     dim,
                     n_kv_heads * head_dim,
                 )?)),
-                Some(MaybeQuantized::Original(mk_lin(
-                    dim,
-                    n_kv_heads * head_dim,
-                )?)),
+                if k_eq_v {
+                    None
+                } else {
+                    Some(MaybeQuantized::Original(mk_lin(
+                        dim,
+                        n_kv_heads * head_dim,
+                    )?))
+                },
                 Some(
                     nn::RmsNormBuilder::new(head_dim)
                         .eps(args.rms_norm_eps)
@@ -428,6 +522,7 @@ impl Attention {
             scale: 1.0,
             is_full,
             has_kv,
+            k_eq_v,
             q_proj: MaybeQuantized::Original(q_proj),
             k_proj,
             v_proj,
@@ -470,11 +565,19 @@ impl Attention {
                 .as_mut()
                 .ok_or_else(|| Exception::custom("non-shared layer missing k_proj"))?;
             let raw_k = k_proj.forward(x)?;
-            let v_proj = self
-                .v_proj
-                .as_mut()
-                .ok_or_else(|| Exception::custom("non-shared layer missing v_proj"))?;
-            let raw_v = v_proj.forward(x)?;
+            // k-eq-V: the *raw* K projection is also the raw V. The paths
+            // diverge immediately below — K gets the scaled per-head norm and
+            // RoPE, V the no-scale norm and no RoPE — so the two still land in
+            // the cache as distinct tensors.
+            let raw_v = if self.k_eq_v {
+                raw_k.clone()
+            } else {
+                let v_proj = self
+                    .v_proj
+                    .as_mut()
+                    .ok_or_else(|| Exception::custom("non-shared layer missing v_proj"))?;
+                v_proj.forward(x)?
+            };
 
             let k_norm = self
                 .k_norm
@@ -557,6 +660,196 @@ impl Mlp {
 // Decoder layer — 4 norms + attn + mlp + per-layer-input gate + layer scalar
 // -----------------------------------------------------------------------------
 
+// -----------------------------------------------------------------------------
+// MoE — router + stacked routed experts (26B-A4B)
+// -----------------------------------------------------------------------------
+
+/// Expert router: `rms_norm(x, scale · hidden⁻¹ᐟ²) → proj → top-k → softmax →
+/// × per_expert_scale`.
+///
+/// Two details that are easy to get wrong and produce plausible-looking
+/// garbage rather than an error:
+///
+/// 1. **The softmax is over the k selected scores only**, not the full expert
+///    axis. Softmaxing all 128 and then gathering k would give weights that no
+///    longer sum to 1, silently scaling every routed contribution down.
+/// 2. **The norm weight folds in `hidden_size^-0.5`.** The checkpoint's
+///    `router.scale` is the bare learned vector; the `1/√hidden` factor is part
+///    of the op, not the tensor.
+///
+/// Note the router reads the *unnormalized* block input, the same tensor the
+/// dense branch normalizes with its own `pre_feedforward_layernorm`.
+#[derive(Debug, Clone, ModuleParameters, Quantizable)]
+pub struct Router {
+    pub top_k: i32,
+    pub eps: f32,
+    /// `hidden_size^-0.5`, folded into the norm weight at call time.
+    pub root_size: f32,
+
+    /// 8-bit in the shipped checkpoint (per-module override in
+    /// `config.json::quantization`), unlike the 4-bit experts around it.
+    #[quantizable]
+    #[param]
+    pub proj: MaybeQuantized<nn::Linear>,
+    #[param]
+    pub scale: Param<Array>,
+    #[param]
+    pub per_expert_scale: Param<Array>,
+}
+
+impl Router {
+    pub fn new(args: &ModelArgs, moe: MoeArgs) -> Result<Self, Exception> {
+        Ok(Self {
+            top_k: moe.top_k,
+            eps: args.rms_norm_eps,
+            root_size: (args.hidden_size as f32).powf(-0.5),
+            proj: MaybeQuantized::Original(
+                nn::LinearBuilder::new(args.hidden_size, moe.num_experts)
+                    .bias(false)
+                    .build()?,
+            ),
+            scale: Param::new(ones::<f32>(&[args.hidden_size])?),
+            per_expert_scale: Param::new(ones::<f32>(&[moe.num_experts])?),
+        })
+    }
+
+    /// `x [B, L, hidden]` → `(indices [B, L, K], weights [B, L, K])`.
+    fn forward(&mut self, x: &Array) -> Result<(Array, Array), Exception> {
+        let weight = self.scale.as_ref().multiply(&array!(self.root_size))?;
+        let normed = rms_norm_weighted(x, &weight, self.eps)?;
+        let scores = self.proj.forward(&normed)?;
+
+        // Top-k experts. Order within the k is irrelevant — the combine is a
+        // weighted sum — but the softmax and the `per_expert_scale` gather must
+        // use the *same* index tensor, hence one `indices` for both.
+        let k = self.top_k;
+        let part = argpartition_axis(&scores.negative()?, k - 1, -1)?;
+        let indices = part.index((.., .., 0..k));
+
+        let picked = scores.take_along_axis(&indices, -1)?;
+        let weights = softmax_axis(&picked, -1, Some(true))?;
+        let per_expert = self.per_expert_scale.as_ref().take_along_axis(&indices, -1)?;
+        Ok((indices, weights.multiply(&per_expert)?))
+    }
+}
+
+/// One stacked quantized expert projection: `weight [E, out, in_packed]` with
+/// `scales`/`biases [E, out, in/group_size]`.
+///
+/// Loaded verbatim from the checkpoint's `experts.switch_glu.*` tensors, which
+/// ship already stacked *and* already quantized — so these are plain `#[param]`
+/// arrays and must be excluded from the runtime per-module quantize pass.
+#[derive(Debug, Clone, ModuleParameters)]
+pub struct SwitchLinear {
+    pub group_size: i32,
+    pub bits: i32,
+    #[param]
+    pub weight: Param<Array>,
+    #[param]
+    pub scales: Param<Array>,
+    #[param]
+    pub biases: Param<Array>,
+}
+
+impl SwitchLinear {
+    fn placeholder(group_size: i32, bits: i32) -> Result<Self, Exception> {
+        // Real shapes arrive from the weight loader; 1-element placeholders
+        // just make the parameter keys exist for matching.
+        let z = || zeros_dtype(&[1], Dtype::Float32);
+        Ok(Self {
+            group_size,
+            bits,
+            weight: Param::new(z()?),
+            scales: Param::new(z()?),
+            biases: Param::new(z()?),
+        })
+    }
+
+    fn forward(&self, x: &Array, indices: &Array) -> Result<Array, Exception> {
+        gather_qmm(
+            x,
+            self.weight.as_ref(),
+            self.scales.as_ref(),
+            self.biases.as_ref(),
+            indices,
+            true,
+            self.group_size,
+            self.bits,
+            false,
+        )
+    }
+}
+
+/// The 128 routed experts as three stacked matmuls, gated GeGLU-style.
+///
+/// Same shape as the DeepSeek switch-MLP, with **GeGLU** rather than SwiGLU:
+/// `down(gelu_approx(gate(x)) · up(x))`.
+#[derive(Debug, Clone, ModuleParameters)]
+pub struct SwitchGlu {
+    #[param]
+    pub gate_proj: SwitchLinear,
+    #[param]
+    pub up_proj: SwitchLinear,
+    #[param]
+    pub down_proj: SwitchLinear,
+}
+
+impl SwitchGlu {
+    fn new(group_size: i32, bits: i32) -> Result<Self, Exception> {
+        Ok(Self {
+            gate_proj: SwitchLinear::placeholder(group_size, bits)?,
+            up_proj: SwitchLinear::placeholder(group_size, bits)?,
+            down_proj: SwitchLinear::placeholder(group_size, bits)?,
+        })
+    }
+
+    /// `x [B, L, hidden]`, `indices [B, L, K]` → `[B, L, K, hidden]`.
+    #[allow(non_snake_case)]
+    fn forward(&self, x: &Array, indices: &Array) -> Result<Array, Exception> {
+        let s = x.shape();
+        let (B, L, H) = (s[0], s[1], s[2]);
+        // `[B, L, 1, 1, hidden]` so the batch dims broadcast against the
+        // `[B, L, K]` index tensor and the matmul sees M = 1.
+        let x_e = x.reshape(&[B, L, 1, 1, H])?;
+        let gate = nn::gelu_approximate(self.gate_proj.forward(&x_e, indices)?)?;
+        let up = self.up_proj.forward(&x_e, indices)?;
+        let h = gate.multiply(&up)?;
+        let out = self.down_proj.forward(&h, indices)?;
+        let os = out.shape();
+        out.reshape(&[os[0], os[1], os[2], os[4]])
+    }
+}
+
+/// Routed-expert branch: run the selected experts and combine them by router
+/// weight.
+#[derive(Debug, Clone, ModuleParameters)]
+pub struct Experts {
+    #[param]
+    pub switch_glu: SwitchGlu,
+}
+
+impl Experts {
+    pub fn new(group_size: i32, bits: i32) -> Result<Self, Exception> {
+        Ok(Self {
+            switch_glu: SwitchGlu::new(group_size, bits)?,
+        })
+    }
+
+    #[allow(non_snake_case)]
+    fn forward(
+        &self,
+        x: &Array,
+        indices: &Array,
+        weights: &Array,
+    ) -> Result<Array, Exception> {
+        let s = weights.shape();
+        let (B, L, K) = (s[0], s[1], s[2]);
+        let y = self.switch_glu.forward(x, indices)?; // [B, L, K, hidden]
+        y.multiply(&weights.reshape(&[B, L, K, 1])?)?
+            .sum_axes(&[-2], false)
+    }
+}
+
 #[derive(Debug, Clone, ModuleParameters, Quantizable)]
 pub struct DecoderLayer {
     #[quantizable]
@@ -574,6 +867,26 @@ pub struct DecoderLayer {
     #[param]
     pub post_feedforward_layernorm: nn::RmsNorm,
 
+    // MoE (26B-A4B). Present together or not at all — when set, the dense
+    // `mlp` stops being the whole FFN and becomes the *shared* branch of a
+    // parallel pair. These are flat fields rather than a nested `MoeBlock` so
+    // the flattened parameter keys match the checkpoint's tensor names
+    // verbatim (`model.layers.N.router.proj.weight`, …) and the weight loader
+    // needs no remapping.
+    #[quantizable]
+    #[param]
+    pub router: Option<Router>,
+    #[param]
+    pub experts: Option<Experts>,
+    /// Wraps the **dense** branch's output. Despite the name it is not a second
+    /// copy of `post_feedforward_layernorm`, which still wraps the sum.
+    #[param]
+    pub post_feedforward_layernorm_1: Option<nn::RmsNorm>,
+    #[param]
+    pub post_feedforward_layernorm_2: Option<nn::RmsNorm>,
+    #[param]
+    pub pre_feedforward_layernorm_2: Option<nn::RmsNorm>,
+
     // Per-layer input gating (PLE). Present when `hidden_size_per_layer_input > 0`.
     #[quantizable]
     #[param]
@@ -589,7 +902,12 @@ pub struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    pub fn new(args: &ModelArgs, layer_idx: usize) -> Result<Self, Exception> {
+    pub fn new(
+        args: &ModelArgs,
+        layer_idx: usize,
+        expert_group_size: i32,
+        expert_bits: i32,
+    ) -> Result<Self, Exception> {
         let layer_types = args.resolved_layer_types();
         let layer_type = &layer_types[layer_idx];
         let self_attn = Attention::new(args, layer_idx, layer_type)?;
@@ -625,6 +943,17 @@ impl DecoderLayer {
             (None, None, None)
         };
 
+        let (router, experts, post_ffn_1, post_ffn_2, pre_ffn_2) = match args.moe() {
+            None => (None, None, None, None, None),
+            Some(m) => (
+                Some(Router::new(args, m)?),
+                Some(Experts::new(expert_group_size, expert_bits)?),
+                Some(mk_norm()?),
+                Some(mk_norm()?),
+                Some(mk_norm()?),
+            ),
+        };
+
         Ok(Self {
             self_attn,
             mlp,
@@ -632,6 +961,11 @@ impl DecoderLayer {
             post_attention_layernorm: mk_norm()?,
             pre_feedforward_layernorm: mk_norm()?,
             post_feedforward_layernorm: mk_norm()?,
+            router,
+            experts,
+            post_feedforward_layernorm_1: post_ffn_1,
+            post_feedforward_layernorm_2: post_ffn_2,
+            pre_feedforward_layernorm_2: pre_ffn_2,
             per_layer_input_gate: gate,
             per_layer_projection: proj,
             post_per_layer_input_norm: norm,
@@ -656,9 +990,32 @@ impl DecoderLayer {
                 .forward(&normed, mask, cache, shared_kv, rope_offset)?;
         let h = x.add(&self.post_attention_layernorm.forward(&attn_out)?)?;
 
-        // h = h + post_ffn(mlp(pre_ffn(h)))
-        let ffn_in = self.pre_feedforward_layernorm.forward(&h)?;
-        let ffn_out = self.mlp.forward(&ffn_in)?;
+        // Feed-forward. Dense checkpoints run one branch; the MoE checkpoint
+        // runs the dense (shared) branch and the routed-expert branch **in
+        // parallel** off the same `h` and sums them. Note the router reads the
+        // raw `h`, not either branch's normalized input.
+        let ffn_out = match (
+            self.router.as_mut(),
+            self.experts.as_ref(),
+            self.post_feedforward_layernorm_1.as_mut(),
+            self.post_feedforward_layernorm_2.as_mut(),
+            self.pre_feedforward_layernorm_2.as_mut(),
+        ) {
+            (Some(router), Some(experts), Some(post_1), Some(post_2), Some(pre_2)) => {
+                let shared_in = self.pre_feedforward_layernorm.forward(&h)?;
+                let shared = post_1.forward(&self.mlp.forward(&shared_in)?)?;
+
+                let (indices, weights) = router.forward(&h)?;
+                let routed_in = pre_2.forward(&h)?;
+                let routed = post_2.forward(&experts.forward(&routed_in, &indices, &weights)?)?;
+
+                shared.add(&routed)?
+            }
+            _ => {
+                let ffn_in = self.pre_feedforward_layernorm.forward(&h)?;
+                self.mlp.forward(&ffn_in)?
+            }
+        };
         let mut h = h.add(&self.post_feedforward_layernorm.forward(&ffn_out)?)?;
 
         // Per-layer input gating.
@@ -748,8 +1105,9 @@ impl Gemma4TextModel {
             (None, None, None)
         };
 
+        let (eg, eb) = args.expert_quant;
         let layers = (0..n)
-            .map(|i| DecoderLayer::new(args, i))
+            .map(|i| DecoderLayer::new(args, i, eg, eb))
             .collect::<Result<Vec<_>, _>>()?;
         let norm = nn::RmsNormBuilder::new(args.hidden_size)
             .eps(args.rms_norm_eps)
@@ -1102,6 +1460,20 @@ pub fn get_gemma4_model_args(model_dir: impl AsRef<Path>) -> Result<ModelArgs, E
         .and_then(|v| v.as_u64())
         .map(|x| x as u32)
         .or(Some(2));
+
+    // Routed experts follow the checkpoint's top-level quantization, not any
+    // per-module override (the overrides in this checkpoint target
+    // `router.proj`, which is 8-bit and quantized the normal way).
+    if let Some(q) = root
+        .get("quantization")
+        .or_else(|| root.get("quantization_config"))
+    {
+        let g = q.get("group_size").and_then(|v| v.as_i64());
+        let b = q.get("bits").and_then(|v| v.as_i64());
+        if let (Some(g), Some(b)) = (g, b) {
+            args.expert_quant = (g as i32, b as i32);
+        }
+    }
 
     Ok(args)
 }
@@ -1559,6 +1931,14 @@ pub fn apply_per_module_quantization(model: &mut Model, plan: &QuantPlan) -> Res
             &format!("{lp}.mlp.down_proj"),
             plan,
         )?;
+        // MoE router. The stacked `experts.switch_glu.*` weights are
+        // deliberately absent from this walk: they arrive from safetensors
+        // already quantized and already stacked, so they are plain `#[param]`
+        // arrays rather than `MaybeQuantized` slots. Quantizing them here would
+        // re-quantize packed uint32 words as if they were floats.
+        if let Some(router) = layer.router.as_mut() {
+            quantize_maybe_linear(&mut router.proj, &format!("{lp}.router.proj"), plan)?;
+        }
         // PLE projections (per-layer-input gate + output projection)
         if let Some(g) = layer.per_layer_input_gate.as_mut() {
             quantize_maybe_linear(g, &format!("{lp}.per_layer_input_gate"), plan)?;
@@ -1637,6 +2017,133 @@ mod tests {
             serde_json::to_string(&cfg).unwrap(),
         )
         .unwrap();
+    }
+
+    /// The fields of `mlx-community/gemma-4-26b-a4b-it-4bit`'s real
+    /// `config.json` that make it a structurally different model from E2B.
+    fn write_26b_a4b_config(dir: &std::path::Path) {
+        let layer_types: Vec<&str> = (0..30)
+            .map(|i| {
+                if (i + 1) % 6 == 0 {
+                    "full_attention"
+                } else {
+                    "sliding_attention"
+                }
+            })
+            .collect();
+        let cfg = serde_json::json!({
+            "model_type": "gemma4",
+            "eos_token_id": [1, 106, 50],
+            "bos_token_id": 2,
+            "quantization": { "group_size": 64, "bits": 4 },
+            "text_config": {
+                "model_type": "gemma4_text",
+                "hidden_size": 2816,
+                "num_hidden_layers": 30,
+                "intermediate_size": 2112,
+                "num_attention_heads": 16,
+                "head_dim": 256,
+                "global_head_dim": 512,
+                "num_key_value_heads": 8,
+                "num_global_key_value_heads": 2,
+                "attention_k_eq_v": true,
+                "num_kv_shared_layers": 0,
+                "hidden_size_per_layer_input": 0,
+                "vocab_size": 262144,
+                "vocab_size_per_layer_input": 262144,
+                "rms_norm_eps": 1e-6,
+                "max_position_embeddings": 262144,
+                "sliding_window": 1024,
+                "final_logit_softcapping": 30.0,
+                "use_double_wide_mlp": false,
+                "tie_word_embeddings": true,
+                "enable_moe_block": true,
+                "num_experts": 128,
+                "top_k_experts": 8,
+                "moe_intermediate_size": 704,
+                "layer_types": layer_types
+            }
+        });
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn tmp_dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// The 26B-A4B checkpoint differs from E2B in four ways that each silently
+    /// build the wrong model rather than failing: MoE, k-eq-V full attention
+    /// with its own KV head count, no PLE, and no cross-layer KV sharing.
+    #[test]
+    fn parses_26b_a4b_moe_shape() {
+        let tmp = tmp_dir("gemma4_26b_args_test");
+        write_26b_a4b_config(&tmp);
+        let args = get_gemma4_model_args(&tmp).unwrap();
+
+        let moe = args.moe().expect("MoE block declared and fully specified");
+        assert_eq!(moe.num_experts, 128);
+        assert_eq!(moe.top_k, 8);
+        assert_eq!(moe.intermediate_size, 704);
+
+        // Routed experts read the top-level quantization, not a per-module one.
+        assert_eq!(args.expert_quant, (64, 4));
+
+        // k-eq-V applies to full-attention layers only, and brings its own KV
+        // head count with it.
+        assert!(args.k_eq_v_for("full_attention"));
+        assert!(!args.k_eq_v_for("sliding_attention"));
+        assert_eq!(args.n_kv_heads_for("full_attention"), 2);
+        assert_eq!(args.n_kv_heads_for("sliding_attention"), 8);
+
+        // No PLE, no KV sharing: every layer owns its KV.
+        assert_eq!(args.hidden_size_per_layer_input, 0);
+        assert_eq!(args.first_kv_shared(), 30);
+    }
+
+    /// E2B must be untouched by any of it — the MoE path is opt-in through
+    /// `enable_moe_block`, and `attention_k_eq_v` defaults false so E2B's full
+    /// layers keep their own `v_proj` and shared KV head count.
+    #[test]
+    fn e2b_keeps_its_dense_k_neq_v_shape() {
+        let tmp = tmp_dir("gemma4_e2b_shape_test");
+        write_e2b_config(&tmp);
+        let args = get_gemma4_model_args(&tmp).unwrap();
+
+        assert!(args.moe().is_none(), "E2B has no MoE block");
+        assert!(!args.k_eq_v_for("full_attention"));
+        assert_eq!(args.n_kv_heads_for("full_attention"), 1);
+        assert_eq!(args.n_kv_heads_for("sliding_attention"), 1);
+        assert_eq!(args.first_kv_shared(), 15);
+    }
+
+    /// A half-declared MoE must read as "no MoE" rather than build a
+    /// half-configured one: every field is load-bearing, and a missing one
+    /// would otherwise surface as a shape error deep inside the expert matmul.
+    #[test]
+    fn partially_declared_moe_is_treated_as_absent() {
+        let base = serde_json::json!({
+            "model_type": "gemma4_text",
+            "hidden_size": 2816, "num_hidden_layers": 30, "intermediate_size": 2112,
+            "num_attention_heads": 16, "head_dim": 256, "num_key_value_heads": 8,
+            "vocab_size": 262144, "rms_norm_eps": 1e-6, "max_position_embeddings": 4096,
+            "enable_moe_block": true, "num_experts": 128, "top_k_experts": 8,
+        });
+        // `moe_intermediate_size` missing.
+        let args: ModelArgs = serde_json::from_value(base.clone()).unwrap();
+        assert!(args.moe().is_none());
+
+        // Present but zero — equally unusable.
+        let mut with_zero = base;
+        with_zero["moe_intermediate_size"] = serde_json::json!(0);
+        let args: ModelArgs = serde_json::from_value(with_zero).unwrap();
+        assert!(args.moe().is_none());
     }
 
     #[test]

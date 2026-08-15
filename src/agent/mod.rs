@@ -4,6 +4,7 @@
 pub mod agent_pool;
 pub mod builtin_agents;
 pub mod dispatch_bridge;
+pub mod documents;
 pub mod group_queue;
 pub mod hook_config_loader;
 

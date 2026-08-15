@@ -40,7 +40,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::safe_eprintln;

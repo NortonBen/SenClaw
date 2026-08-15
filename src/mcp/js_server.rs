@@ -298,12 +298,34 @@ struct JsEvalFileParams {
 // ── MCP server ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct McpJsServer {
+pub struct McpJsServer {
     default_timeout_ms: u64,
     default_memory_mb: u64,
 }
 
-#[rmcp::tool_router(server_handler)]
+impl McpJsServer {
+    /// Always available — the sandbox needs no configuration, only limits, and
+    /// both have defaults. Returns `Option` purely so every child server in the
+    /// aggregated `senclaw-core` process is constructed the same way.
+    pub fn from_env() -> Result<Option<Self>> {
+        let default_timeout_ms = std::env::var("SENCLAW_JS_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_TIMEOUT_MS)
+            .clamp(1, MAX_TIMEOUT_MS);
+        let default_memory_mb = std::env::var("SENCLAW_JS_MEMORY_MB")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_MEMORY_MB)
+            .clamp(1, MAX_MEMORY_MB);
+        Ok(Some(Self {
+            default_timeout_ms,
+            default_memory_mb,
+        }))
+    }
+}
+
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpJsServer {
     #[rmcp::tool(
         description = "Run JavaScript in an isolated sandbox (QuickJS) — no filesystem, network, or process access. Returns the final value, captured console output, and any error. Bounded by a wall-clock timeout and memory limit. Use for calculations, data transforms, JSON munging, regex tests, and verifying small JS logic."
@@ -412,21 +434,7 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let default_timeout_ms = std::env::var("SENCLAW_JS_TIMEOUT_MS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_TIMEOUT_MS)
-        .clamp(1, MAX_TIMEOUT_MS);
-    let default_memory_mb = std::env::var("SENCLAW_JS_MEMORY_MB")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(DEFAULT_MEMORY_MB)
-        .clamp(1, MAX_MEMORY_MB);
-
-    let server = McpJsServer {
-        default_timeout_ms,
-        default_memory_mb,
-    };
+    let server = McpJsServer::from_env()?.expect("js server has no required env");
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
     Ok(())

@@ -80,8 +80,14 @@ fn safe_dirname(id: &str) -> String {
     id.replace('/', "__")
 }
 
+/// Model directory keyed off the raw config, so callers that hold a `Config`
+/// but no `UiState` (the AgentPool's no-vision OCR fallback) can reach it too.
+fn model_dir_for(config: &crate::config::Config, id: &str) -> PathBuf {
+    config.paths.ocr_models_dir.join(safe_dirname(id))
+}
+
 fn model_dir(state: &UiState, id: &str) -> PathBuf {
-    state.config.paths.ocr_models_dir.join(safe_dirname(id))
+    model_dir_for(&state.config, id)
 }
 
 fn is_installed(dir: &PathBuf) -> bool {
@@ -633,29 +639,29 @@ fn drop_engine(dir: &PathBuf) {
 #[cfg(not(feature = "ocr-paddle"))]
 fn drop_engine(_dir: &PathBuf) {}
 
-#[cfg(feature = "ocr-paddle")]
 /// Recognize text from image bytes for INTERNAL callers (the screenshot-extract
-/// endpoint), skipping the multipart layer.
+/// endpoint, and the AgentPool's fallback when the chat model can't see images),
+/// skipping the multipart layer.
 ///
 /// Returns `Ok(None)` when OCR simply isn't available — feature not built, or no
 /// model installed — so callers can fall back to vision instead of treating a
 /// non-setup as an error. `Ok(Some(""))` means OCR ran but found no text.
 #[cfg(feature = "ocr-paddle")]
 pub(crate) async fn ocr_text_from_bytes(
-    state: &UiState,
+    config: &crate::config::Config,
     bytes: Vec<u8>,
 ) -> Result<Option<String>, String> {
-    let settings = load_ocr_settings(&state.config.paths.global_config_path);
+    let settings = load_ocr_settings(&config.paths.global_config_path);
     let model_id = settings.model_id.clone().or_else(|| {
         CATALOG
             .iter()
             .map(|e| e.id.to_string())
-            .find(|id| is_installed(&model_dir(state, id)))
+            .find(|id| is_installed(&model_dir_for(config, id)))
     });
     let Some(model_id) = model_id else {
         return Ok(None); // nothing installed
     };
-    let dir = model_dir(state, &model_id);
+    let dir = model_dir_for(config, &model_id);
     if !is_installed(&dir) {
         return Ok(None);
     }
@@ -675,7 +681,7 @@ pub(crate) async fn ocr_text_from_bytes(
 
 #[cfg(not(feature = "ocr-paddle"))]
 pub(crate) async fn ocr_text_from_bytes(
-    _state: &UiState,
+    _config: &crate::config::Config,
     _bytes: Vec<u8>,
 ) -> Result<Option<String>, String> {
     Ok(None) // OCR not built into this binary

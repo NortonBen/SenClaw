@@ -227,6 +227,9 @@ impl AppChannel {
                                     mentions_bot_username: Some(true),
                                     bot_token: None,
                                     native_msg_id: None,
+                                    // The relay carries images as `data:` URLs inside the
+                                    // message body, which InputBuilder picks up from the text.
+                                    attachments: Vec::new(),
                                 };
                                 let h_list = handlers.read().unwrap();
                                 for h in h_list.iter() {

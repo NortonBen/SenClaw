@@ -12,14 +12,17 @@ static VISION_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         // OpenAI
         Regex::new(r"(?i)^gpt-4o").unwrap(),
         Regex::new(r"(?i)^gpt-4(\.\d+)?-vision").unwrap(),
-        Regex::new(r"(?i)^gpt-5").unwrap(),
-        Regex::new(r"(?i)^o1").unwrap(),
-        Regex::new(r"(?i)^o3").unwrap(),
+        Regex::new(r"(?i)^gpt-[5-9]").unwrap(),
+        // o-series reasoning models (o1, o3, o4-mini, …) — all vision-capable.
+        Regex::new(r"(?i)^o[1-9]").unwrap(),
         Regex::new(r"(?i)^chatgpt-4o").unwrap(),
-        // Anthropic Claude 3+ 全系支持视觉
-        Regex::new(r"(?i)^claude-[34]").unwrap(),
-        Regex::new(r"(?i)^claude-(opus|sonnet|haiku)-[34]").unwrap(),
-        Regex::new(r"(?i)^anthropic/claude-3").unwrap(),
+        // Anthropic — every Claude 3 and newer sees images. Matched unanchored
+        // so gateway-prefixed ids (`anthropic/…`, `openrouter/anthropic/…`) hit
+        // too, and open-ended on the generation digit: pinning it to the
+        // generations that existed when this was written silently demoted each
+        // new release to the OCR fallback.
+        Regex::new(r"(?i)claude-[3-9]").unwrap(),
+        Regex::new(r"(?i)claude-(opus|sonnet|haiku|fable)-[3-9]").unwrap(),
         // Qwen-VL 系列
         Regex::new(r"(?i)qwen.*-vl").unwrap(),
         Regex::new(r"(?i)qwen2(\.\d+)?-vl").unwrap(),
@@ -37,7 +40,7 @@ static VISION_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         Regex::new(r"(?i)gemini.*pro").unwrap(),
         Regex::new(r"(?i)gemini.*flash").unwrap(),
         Regex::new(r"(?i)gemini-1\.5").unwrap(),
-        Regex::new(r"(?i)gemini-2").unwrap(),
+        Regex::new(r"(?i)gemini-[2-9]").unwrap(),
         // DeepSeek-VL
         Regex::new(r"(?i)deepseek-vl").unwrap(),
         // Llama 3.2 vision
@@ -87,6 +90,31 @@ mod tests {
         assert!(!infer_vision("gpt-3.5-turbo"));
         assert!(!infer_vision("deepseek-chat"));
         assert!(!infer_vision("qwen-plus"));
+    }
+
+    /// The routing this feeds is now load-bearing: a miss here doesn't degrade
+    /// the answer politely, it sends the turn down the OCR path and the user
+    /// never learns their vision model was ignored.
+    #[test]
+    fn test_infer_vision_current_generations() {
+        for name in [
+            "claude-sonnet-4-5",
+            "claude-opus-5",
+            "claude-fable-5",
+            "anthropic/claude-sonnet-4.5",
+            "openrouter/anthropic/claude-opus-5",
+            "gpt-5",
+            "gpt-5.1-mini",
+            "o3-mini",
+            "o4-mini",
+            "gemini-3-pro",
+            "gemini-2.5-flash",
+        ] {
+            assert!(infer_vision(name), "{name} should be recognized as vision");
+        }
+        // Claude 2 predates image input; nothing here should widen to it.
+        assert!(!infer_vision("claude-2.1"));
+        assert!(!infer_vision("claude-instant-1.2"));
     }
 
     #[test]

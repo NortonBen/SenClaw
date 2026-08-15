@@ -28,6 +28,15 @@ impl super::Db {
         })
     }
 
+    /// Forget a key. Distinct from writing an empty value: a caller that
+    /// treats "absent" as "fall back to something else" needs the row gone.
+    pub fn delete_router_state(&self, key: &str) -> Result<()> {
+        self.with_conn(|c| {
+            c.execute("DELETE FROM router_state WHERE key = ?1", params![key])?;
+            Ok(())
+        })
+    }
+
     pub fn get_last_agent_timestamp(&self, chat_jid: &str) -> Result<Option<String>> {
         self.get_router_state(&format!("lastAgent:{chat_jid}"))
     }

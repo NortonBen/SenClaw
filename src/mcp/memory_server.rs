@@ -75,7 +75,7 @@ struct MemoryDeleteParams {
 }
 
 #[derive(Clone)]
-struct McpMemoryServer {
+pub struct McpMemoryServer {
     db_path: String,
     folder: String,
     agents_dir: PathBuf,
@@ -83,6 +83,27 @@ struct McpMemoryServer {
 }
 
 impl McpMemoryServer {
+    /// Build from the memory env trio, or `None` when any is absent. See
+    /// [`crate::mcp::wiki_server::McpWikiServer::from_env`] for why an
+    /// unconfigured child is `None` rather than an error.
+    pub fn from_env() -> Result<Option<Self>> {
+        let (Ok(db_path), Ok(folder), Ok(agents_dir)) = (
+            std::env::var("SENCLAW_DB_PATH"),
+            std::env::var("SENCLAW_FOLDER"),
+            std::env::var("SENCLAW_AGENTS_DIR"),
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            db_path,
+            folder,
+            agents_dir: PathBuf::from(agents_dir),
+            custom_memory_dir: std::env::var("SENCLAW_CUSTOM_MEMORY_DIR")
+                .ok()
+                .map(PathBuf::from),
+        }))
+    }
+
     /// The per-folder base dir (mirrors `MemoryManager::get_memory_dir_for_folder`):
     /// custom cowork dir, else `agents_dir/{folder}`. `MEMORY.md` lives here; curated
     /// files live under `<base>/memory/`.
@@ -109,7 +130,7 @@ impl McpMemoryServer {
     }
 }
 
-#[rmcp::tool_router(server_handler)]
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpMemoryServer {
     #[rmcp::tool(description = "Search memories using hybrid FTS5 + vector search")]
     async fn memory_search(
@@ -240,17 +261,8 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let db_path = std::env::var("SENCLAW_DB_PATH").context("SENCLAW_DB_PATH not set")?;
-    let folder = std::env::var("SENCLAW_FOLDER").context("SENCLAW_FOLDER not set")?;
-    let agents_dir = std::env::var("SENCLAW_AGENTS_DIR").context("SENCLAW_AGENTS_DIR not set")?;
-    let custom_memory_dir = std::env::var("SENCLAW_CUSTOM_MEMORY_DIR").ok();
-
-    let server = McpMemoryServer {
-        db_path,
-        folder,
-        agents_dir: PathBuf::from(agents_dir),
-        custom_memory_dir: custom_memory_dir.map(PathBuf::from),
-    };
+    let server = McpMemoryServer::from_env()?
+        .context("SENCLAW_DB_PATH / SENCLAW_FOLDER / SENCLAW_AGENTS_DIR not set")?;
 
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;

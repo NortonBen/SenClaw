@@ -1181,13 +1181,30 @@ struct UpdateChecklistStatusParams {
 }
 
 #[derive(Clone)]
-struct McpDispatchServer {
+pub struct McpDispatchServer {
     state_path: std::path::PathBuf,
     admin_folder: String,
     agents_config_dir: Option<String>,
 }
 
 impl McpDispatchServer {
+    /// Build from the dispatch env pair, or `None` when either is absent. See
+    /// [`crate::mcp::wiki_server::McpWikiServer::from_env`] for why an
+    /// unconfigured child is `None` rather than an error.
+    pub fn from_env() -> anyhow::Result<Option<Self>> {
+        let (Ok(state_path), Ok(admin_folder)) = (
+            std::env::var("SENCLAW_DISPATCH_STATE_PATH"),
+            std::env::var("SENCLAW_ADMIN_FOLDER"),
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            state_path: std::path::PathBuf::from(state_path),
+            admin_folder,
+            agents_config_dir: std::env::var("SENCLAW_AGENTS_CONFIG_DIR").ok(),
+        }))
+    }
+
     fn inner(&self) -> DispatchServer {
         let persona_resolver: Option<Box<dyn PersonaResolver>> = {
             let fs = self
@@ -1200,7 +1217,7 @@ impl McpDispatchServer {
     }
 }
 
-#[rmcp::tool_router(server_handler)]
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpDispatchServer {
     #[rmcp::tool(
         description = "List agents valid for dispatch subtasks. In Cowork sessions this is the workspace member list only; otherwise registered agents and virtual personas."
@@ -1333,17 +1350,8 @@ pub async fn run_stdio_server() -> anyhow::Result<()> {
         )
         .try_init();
 
-    let state_path = std::env::var("SENCLAW_DISPATCH_STATE_PATH")
-        .context("SENCLAW_DISPATCH_STATE_PATH not set")?;
-    let admin_folder =
-        std::env::var("SENCLAW_ADMIN_FOLDER").context("SENCLAW_ADMIN_FOLDER not set")?;
-    let agents_config_dir = std::env::var("SENCLAW_AGENTS_CONFIG_DIR").ok();
-
-    let server = McpDispatchServer {
-        state_path: std::path::PathBuf::from(state_path),
-        admin_folder,
-        agents_config_dir,
-    };
+    let server = McpDispatchServer::from_env()?
+        .context("SENCLAW_DISPATCH_STATE_PATH / SENCLAW_ADMIN_FOLDER not set")?;
 
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;

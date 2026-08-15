@@ -91,7 +91,11 @@ pub fn clamp(s: String) -> (String, bool) {
 /// by default (pip's cache, npm's config), and pointing it inside the sandbox
 /// means those writes land in the one place the sandbox is allowed to write
 /// instead of failing or escaping.
-pub fn build_env(sb: &Sandbox, extra: &BTreeMap<String, String>, home: &str) -> Vec<(String, String)> {
+pub fn build_env(
+    sb: &Sandbox,
+    extra: &BTreeMap<String, String>,
+    home: &str,
+) -> Vec<(String, String)> {
     let mut env: BTreeMap<String, String> = BTreeMap::new();
     env.insert(
         "PATH".into(),
@@ -186,7 +190,11 @@ mod tests {
     fn per_run_env_overrides_the_sandbox_env() {
         let mut extra = BTreeMap::new();
         extra.insert("MODE".to_string(), "run".to_string());
-        let env = build_env(&sb(json!({ "MODE": "sandbox", "KEEP": "yes" })), &extra, "/w");
+        let env = build_env(
+            &sb(json!({ "MODE": "sandbox", "KEEP": "yes" })),
+            &extra,
+            "/w",
+        );
         let get = |k: &str| env.iter().find(|(a, _)| a == k).map(|(_, v)| v.clone());
         assert_eq!(get("MODE").as_deref(), Some("run"));
         assert_eq!(get("KEEP").as_deref(), Some("yes"));

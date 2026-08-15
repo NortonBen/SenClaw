@@ -340,6 +340,95 @@ pub fn build_agent_input_with_attachments(
     build_agent_input(prompt, Some(&attachments))
 }
 
+/// Split a built input into the text the model reads and the image blocks the
+/// turn carries.
+///
+/// [`build_agent_input`] returns interleaved blocks; the two halves travel by
+/// different routes from here — the text through `process_user_input`, the
+/// images either as real content blocks (vision model) or, after OCR, folded
+/// back into that same text (text-only model). Text blocks are joined in order,
+/// so the `[image-load-warnings]` block still reaches the model.
+pub fn split_input(input: Input) -> (String, Vec<crate::zen_core::ImageSource>) {
+    match input {
+        Input::Text(text) => (text, Vec::new()),
+        Input::Blocks(blocks) => {
+            let mut text_parts: Vec<String> = Vec::new();
+            let mut images: Vec<crate::zen_core::ImageSource> = Vec::new();
+            for block in blocks {
+                match (block.text, block.source) {
+                    (Some(text), _) => text_parts.push(text),
+                    (None, Some(src)) => images.push(crate::zen_core::ImageSource {
+                        source_type: src.source_type,
+                        media_type: src.media_type,
+                        data: src.data,
+                    }),
+                    (None, None) => {}
+                }
+            }
+            (text_parts.join("\n"), images)
+        }
+    }
+}
+
+/// One attached image as a text-only model gets to see it.
+#[derive(Debug, Clone)]
+pub struct OcrExtract {
+    /// MIME of the source image, for the label.
+    pub media_type: String,
+    /// Recognized text. `None` when OCR could not run at all (feature not
+    /// built, no model installed, or the engine errored) — distinct from
+    /// `Some("")`, which means OCR ran and the image holds no text.
+    pub text: Option<String>,
+}
+
+/// Fold OCR output back into the prompt for a model that cannot see images.
+///
+/// The framing is deliberate: the model is told the images exist, told it is
+/// reading a transcription rather than the picture, and — when nothing could be
+/// extracted — told to say so instead of guessing. A model handed a bare
+/// "describe this image" with no image reliably invents one.
+pub fn append_ocr_context(prompt: &str, extracts: &[OcrExtract]) -> String {
+    if extracts.is_empty() {
+        return prompt.to_string();
+    }
+    let n = extracts.len();
+    let mut out = String::from(prompt);
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push_str("\n\n");
+    }
+    let any_text = extracts
+        .iter()
+        .any(|e| e.text.as_deref().is_some_and(|t| !t.trim().is_empty()));
+
+    out.push_str(&format!(
+        "[attached-images: {n}]\nThe current model cannot see images. "
+    ));
+    if any_text {
+        out.push_str(
+            "The image text below was extracted by OCR — it is a transcription, not the picture \
+             itself, so layout, colours and anything non-textual are lost. Answer from this text, \
+             and say plainly when the answer needs something OCR cannot show.\n",
+        );
+    } else {
+        out.push_str(
+            "OCR could not extract any text from the attachment(s), so you have no information \
+             about them at all. Tell the user this and ask them to switch to a vision model \
+             (Settings → Models) or install an OCR model (Settings → OCR). Do NOT guess what the \
+             image contains.\n",
+        );
+    }
+
+    for (i, e) in extracts.iter().enumerate() {
+        let label = format!("--- image {} of {n} ({}) ---", i + 1, e.media_type);
+        match e.text.as_deref().map(str::trim) {
+            Some(t) if !t.is_empty() => out.push_str(&format!("{label}\n{t}\n")),
+            Some(_) => out.push_str(&format!("{label}\n(no text found in this image)\n")),
+            None => out.push_str(&format!("{label}\n(OCR unavailable)\n")),
+        }
+    }
+    out
+}
+
 /// Detect image addresses in text (URL + @path format).
 fn detect_images_in_text(text: &str) -> Vec<String> {
     let mut found = Vec::new();
@@ -481,6 +570,81 @@ mod tests {
             }
             Input::Text(_) => panic!("expected Blocks with an image"),
         }
+    }
+
+    #[test]
+    fn test_split_input_separates_text_and_images() {
+        const PNG: &str =
+            "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+        let attachments = vec![ImageAttachment {
+            url: PNG.to_string(),
+            mime_type: Some("image/jpeg".to_string()),
+        }];
+        let result = build_agent_input("Ảnh này là gì?", Some(&attachments));
+        let (text, images) = split_input(result.input);
+        assert_eq!(text, "Ảnh này là gì?");
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].media_type, "image/jpeg");
+        assert_eq!(images[0].source_type, "base64");
+        // The blob must be raw base64 — a `data:` prefix here is what makes
+        // Anthropic reject the block.
+        assert!(!images[0].data.contains("data:"));
+    }
+
+    #[test]
+    fn test_split_input_keeps_load_warnings_in_text() {
+        // A failed image still has to tell the model something went wrong.
+        let (text, images) = split_input(build_agent_input("Xem @/nope/missing.png", None).input);
+        assert!(images.is_empty());
+        assert!(text.contains("[image-load-warnings]"));
+        assert!(text.contains("[image:missing.png]"));
+    }
+
+    #[test]
+    fn test_split_input_plain_text_passthrough() {
+        let (text, images) = split_input(Input::Text("hello".into()));
+        assert_eq!(text, "hello");
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn test_append_ocr_context_with_text() {
+        let extracts = vec![OcrExtract {
+            media_type: "image/png".into(),
+            text: Some("Tổng cộng: 250.000đ".into()),
+        }];
+        let out = append_ocr_context("Hoá đơn này bao nhiêu tiền?", &extracts);
+        assert!(out.starts_with("Hoá đơn này bao nhiêu tiền?"));
+        assert!(out.contains("[attached-images: 1]"));
+        assert!(out.contains("Tổng cộng: 250.000đ"));
+        assert!(out.contains("extracted by OCR"));
+    }
+
+    #[test]
+    fn test_append_ocr_context_when_nothing_extracted() {
+        // The no-text branch must forbid guessing — a model asked to describe an
+        // image it never received will invent one otherwise.
+        let extracts = vec![
+            OcrExtract {
+                media_type: "image/png".into(),
+                text: None,
+            },
+            OcrExtract {
+                media_type: "image/jpeg".into(),
+                text: Some("   ".into()),
+            },
+        ];
+        let out = append_ocr_context("Mô tả ảnh", &extracts);
+        assert!(out.contains("[attached-images: 2]"));
+        assert!(out.contains("Do NOT guess"));
+        assert!(out.contains("(OCR unavailable)"));
+        assert!(out.contains("(no text found in this image)"));
+        assert!(!out.contains("extracted by OCR"));
+    }
+
+    #[test]
+    fn test_append_ocr_context_no_images_is_identity() {
+        assert_eq!(append_ocr_context("chào", &[]), "chào");
     }
 
     #[test]

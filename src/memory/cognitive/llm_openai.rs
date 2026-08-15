@@ -523,6 +523,8 @@ mod tests {
             max_tokens: 4096,
             context_length: 32_000,
             vision: None,
+            auth: None,
+            oauth_account_id: None,
         };
         save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
         set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some("test-mlx")).unwrap();
@@ -551,6 +553,8 @@ mod tests {
             max_tokens: 4096,
             context_length: 32_000,
             vision: None,
+            auth: None,
+            oauth_account_id: None,
         };
         save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
         set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some("test-candle"))

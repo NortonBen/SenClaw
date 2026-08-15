@@ -65,7 +65,7 @@ impl KvCache {
     /// that as "skip prefix cache for this turn".
     pub fn try_snapshot(&self) -> Option<Self> {
         match self {
-            Self::Fp16(c) => Some(Self::Fp16(c.clone())),
+            Self::Fp16(c) => Some(Self::Fp16(c.snapshot_clone())),
             Self::TurboQuant(c) if !c.is_turbo_active() => Some(Self::Fp16(c.staging_clone())),
             Self::TurboQuant(_) => None,
             Self::Mamba1(c) => Some(Self::Mamba1(c.clone())),
@@ -463,6 +463,33 @@ pub struct SteppingKeyValueCache {
     /// query. `None` = no sliding behavior (full-attention layers / other
     /// models) — identical to the previous behavior.
     decode_window: Option<i32>,
+    /// Ring write head — `Some(h)` means the K/V buffers are **exactly**
+    /// `decode_window` rows, every row is a live in-window key, and they are
+    /// stored **rotated**: index `h` holds the oldest key and is the slot the
+    /// next single-token write overwrites in place.
+    ///
+    /// Why rotate at all: the pre-ring eviction path dropped the oldest key
+    /// with `slice_axis2(k, 1, stored_len)`, which left the buffer one row
+    /// short of `required_slots` and so re-entered the grow branch — a trim,
+    /// a `zeros` pad and a `concatenate` — **every decode step past the
+    /// window**. That is two full copies of the whole K buffer and two of V,
+    /// per sliding layer, per token. A ring overwrites one row and copies
+    /// nothing, which makes decode past the window exactly as cheap as decode
+    /// below it.
+    ///
+    /// Rotation is safe without any change at the model: attention is
+    /// permutation-invariant along the key axis (softmax over keys, then a
+    /// weighted sum of the matching values — permuting `(k, v)` pairs
+    /// consistently leaves the result unchanged), keys carry their RoPE phase
+    /// from when they were written, and RoPE offsets come from the caller
+    /// rather than this struct. The one requirement is that the consumer pass
+    /// **no mask** for these layers on decode, since every stored row is a
+    /// valid key — which is what `gemma4::Gemma4TextModel::forward` already
+    /// does at `seq <= 1`.
+    ///
+    /// The reordered key axis does change floating-point accumulation order in
+    /// SDPA, so this is a *token-parity* optimization, not a bit-identity one.
+    ring_head: Option<i32>,
     step: i32,
 }
 
@@ -482,6 +509,7 @@ impl SteppingKeyValueCache {
             stored_len: 0,
             max_seq_len: None,
             decode_window: None,
+            ring_head: None,
             step: KV_CACHE_STEP,
         }
     }
@@ -506,6 +534,7 @@ impl SteppingKeyValueCache {
             stored_len: 0,
             max_seq_len: Some(max_seq_len.max(1)),
             decode_window: None,
+            ring_head: None,
             step: KV_CACHE_STEP,
         }
     }
@@ -524,6 +553,7 @@ impl SteppingKeyValueCache {
             stored_len: 0,
             max_seq_len: Some(max_seq_len.max(1)),
             decode_window: Some(decode_window.max(1)),
+            ring_head: None,
             step: KV_CACHE_STEP,
         }
     }
@@ -565,6 +595,11 @@ impl SteppingKeyValueCache {
         let trim = i32::try_from(n).unwrap_or(i32::MAX);
         if trim <= 0 {
             return;
+        }
+        // "Last n tokens" is a positional claim, so a rotated buffer has to be
+        // linearized before the tail slice means anything.
+        if self.ring_head.is_some() {
+            let _ = self.unrotate();
         }
         let new_len = self.stored_len.saturating_sub(trim);
         if new_len < self.stored_len {
@@ -641,10 +676,114 @@ impl SteppingKeyValueCache {
             .ok_or_else(|| Exception::custom(format!("KV cache: missing dim {i} ({label})")))
     }
 
+    /// Rewrite a rotated ring buffer back into chronological order and leave
+    /// ring mode. Costs one copy, and only runs on the rare paths that need
+    /// positional meaning back: a multi-token write landing on a cache that
+    /// already decoded, `trim_by`, and taking a prefix-cache snapshot.
+    fn unrotate(&mut self) -> Result<(), Exception> {
+        let Some(head) = self.ring_head.take() else {
+            return Ok(());
+        };
+        let len = self.stored_len;
+        if head <= 0 || head >= len {
+            // Head at slot 0 means the buffer is already [oldest … newest].
+            return Ok(());
+        }
+        let (Some(k), Some(v)) = (self.keys.as_ref(), self.values.as_ref()) else {
+            return Ok(());
+        };
+        let k2 = concatenate_axis(&[slice_axis2(k, head, len)?, slice_axis2(k, 0, head)?], 2)?;
+        let v2 = concatenate_axis(&[slice_axis2(v, head, len)?, slice_axis2(v, 0, head)?], 2)?;
+        self.keys = Some(k2);
+        self.values = Some(v2);
+        Ok(())
+    }
+
+    /// A clone that is safe to hand to the prefix cache: rotated storage is
+    /// linearized first, since a snapshot is replayed as a *positional* prefix.
+    pub(crate) fn snapshot_clone(&self) -> Self {
+        let mut c = self.clone();
+        let _ = c.unrotate();
+        c
+    }
+
+    /// First evicting decode write: build the `w`-row ring out of the last
+    /// `w - 1` cached keys plus this one, and park the head on slot 0 (the
+    /// oldest key, hence the next slot to be overwritten). One copy, once.
+    fn ring_enter(
+        &mut self,
+        keys: &Array,
+        values: &Array,
+        w: i32,
+    ) -> Result<(Array, Array), Exception> {
+        let keep = w - 1;
+        let (ring_k, ring_v) = if keep <= 0 {
+            (keys.clone(), values.clone())
+        } else {
+            let k = self
+                .keys
+                .as_ref()
+                .ok_or_else(|| Exception::custom("ring_enter: keys missing"))?;
+            let v = self
+                .values
+                .as_ref()
+                .ok_or_else(|| Exception::custom("ring_enter: values missing"))?;
+            let start = self.stored_len - keep;
+            (
+                concatenate_axis(&[slice_axis2(k, start, self.stored_len)?, keys.clone()], 2)?,
+                concatenate_axis(&[slice_axis2(v, start, self.stored_len)?, values.clone()], 2)?,
+            )
+        };
+        self.keys = Some(ring_k.clone());
+        self.values = Some(ring_v.clone());
+        self.stored_len = w;
+        self.ring_head = Some(0);
+        Ok((ring_k, ring_v))
+    }
+
+    /// Steady-state decode write: overwrite the oldest slot in place, advance
+    /// the head. No eviction slice, no grow, no `concatenate` — the whole point
+    /// of the ring.
+    fn ring_write(&mut self, keys: &Array, values: &Array) -> Result<(Array, Array), Exception> {
+        let w = self.stored_len.max(1);
+        let head = self.ring_head.unwrap_or(0).rem_euclid(w);
+        let k_buf = self
+            .keys
+            .as_ref()
+            .ok_or_else(|| Exception::custom("ring_write: keys missing"))?;
+        let v_buf = self
+            .values
+            .as_ref()
+            .ok_or_else(|| Exception::custom("ring_write: values missing"))?;
+        let k = slice_update_axis2(k_buf, keys, head, 1)?;
+        let v = slice_update_axis2(v_buf, values, head, 1)?;
+        self.keys = Some(k.clone());
+        self.values = Some(v.clone());
+        self.ring_head = Some((head + 1) % w);
+        Ok((k, v))
+    }
+
     fn update_dense(&mut self, keys: &Array, values: &Array) -> Result<(Array, Array), Exception> {
         let k_shape = keys.shape();
         let v_shape = values.shape();
         let new_tokens = Self::dim(k_shape, 2, "keys T")?;
+
+        // ── Sliding-window ring ──────────────────────────────────────────
+        // Only single-token (decode) writes rotate. A multi-token write still
+        // means prefill, which needs chronological storage, so a rotated buffer
+        // is linearized first and then falls through to the append path below.
+        if let Some(w) = self.decode_window {
+            if new_tokens == 1 && self.keys.is_some() {
+                if self.ring_head.is_some() {
+                    return self.ring_write(keys, values);
+                }
+                if self.stored_len >= w {
+                    return self.ring_enter(keys, values, w);
+                }
+            } else if self.ring_head.is_some() {
+                self.unrotate()?;
+            }
+        }
 
         // Decode-time sliding window: a single-token (decode) write evicts down
         // to `decode_window`; multi-token prefill writes use the normal
@@ -1395,6 +1534,20 @@ mod tests {
         (t.clone(), t)
     }
 
+    /// The live keys along the time axis, in **storage** order (rotated once
+    /// the ring engages).
+    fn time_axis(cache: &SteppingKeyValueCache) -> Vec<f32> {
+        let keys = cache.keys.as_ref().expect("keys");
+        (0..cache.stored_len())
+            .map(|i| keys.index((.., .., i, ..)).item::<f32>())
+            .collect()
+    }
+
+    fn sorted(mut v: Vec<f32>) -> Vec<f32> {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v
+    }
+
     #[test]
     fn stepping_window_evicts() {
         let mut cache = SteppingKeyValueCache::with_max(2);
@@ -1439,12 +1592,155 @@ mod tests {
             window,
             "single-token decode writes cap at the window"
         );
-        // Retained = most recent `window` keys: 9 (last prefill token), 10, 11, 12.
-        let keys = cache.keys.as_ref().unwrap();
-        assert_eq!(keys.index((.., .., 0, ..)).item::<f32>(), 9.0);
-        assert_eq!(keys.index((.., .., 1, ..)).item::<f32>(), 10.0);
-        assert_eq!(keys.index((.., .., 2, ..)).item::<f32>(), 11.0);
-        assert_eq!(keys.index((.., .., 3, ..)).item::<f32>(), 12.0);
+        // Retained = most recent `window` keys: 9 (last prefill token), 10, 11,
+        // 12 — as a *set*. Storage order is rotated once the ring engages (see
+        // `ring_rotates_in_place_and_holds_the_window`), and attention is
+        // permutation-invariant along the key axis, so order is not asserted
+        // here. `snapshot_clone` is what restores chronological order.
+        assert_eq!(sorted(time_axis(&cache)), vec![9.0, 10.0, 11.0, 12.0]);
+    }
+
+    /// Steady-state decode on a sliding-window layer must overwrite one ring
+    /// slot per token: the physical buffer stays exactly `window` rows, the
+    /// head advances modulo the window, and the retained *set* is always the
+    /// last `window` keys — even though their storage order is rotated.
+    ///
+    /// The rotation is the optimization. The pre-ring path evicted with a tail
+    /// slice, which left the buffer one row short of the required slots and so
+    /// re-entered the grow branch (trim + `zeros` + `concatenate`) on *every*
+    /// token past the window.
+    #[test]
+    fn ring_rotates_in_place_and_holds_the_window() {
+        let window = 4;
+        let mut cache = SteppingKeyValueCache::with_decode_window(64_000, window);
+
+        let prefill: Vec<f32> = (0..10).map(|i| i as f32).collect();
+        let pk = Array::from_slice(&prefill, &[1, 1, 10, 1]);
+        let _ = cache.update_and_fetch(pk.clone(), pk).unwrap();
+        assert!(cache.ring_head.is_none(), "prefill must not rotate");
+
+        for v in 10..30 {
+            let (k, vv) = make_kv(1, v as f32);
+            let _ = cache.update_and_fetch(k, vv).unwrap();
+
+            assert_eq!(cache.stored_len(), window);
+            assert_eq!(
+                cache.keys.as_ref().unwrap().shape()[2],
+                window,
+                "ring must never grow the physical buffer"
+            );
+            assert!(cache.ring_head.is_some(), "decode past the window rotates");
+
+            let expected: Vec<f32> = ((v - window + 1)..=v).map(|i| i as f32).collect();
+            assert_eq!(
+                sorted(time_axis(&cache)),
+                expected,
+                "ring set after writing {v}"
+            );
+        }
+
+        // `ring_enter` fired on the first decode token (10) and parked the head
+        // at 0; tokens 11..=29 are 19 in-place writes, so the head has wrapped
+        // to 19 % 4.
+        assert_eq!(cache.ring_head, Some(3));
+    }
+
+    /// A snapshot is replayed as a *positional* prefix, so the prefix cache
+    /// must never see a rotated buffer. `snapshot_clone` linearizes; the live
+    /// cache keeps its rotation.
+    #[test]
+    fn snapshot_clone_unrotates_the_ring() {
+        let window = 4;
+        let mut cache = SteppingKeyValueCache::with_decode_window(64_000, window);
+        let prefill: Vec<f32> = (0..6).map(|i| i as f32).collect();
+        let pk = Array::from_slice(&prefill, &[1, 1, 6, 1]);
+        let _ = cache.update_and_fetch(pk.clone(), pk).unwrap();
+        for v in 6..9 {
+            let (k, vv) = make_kv(1, v as f32);
+            let _ = cache.update_and_fetch(k, vv).unwrap();
+        }
+        assert!(cache.ring_head.is_some());
+
+        let snap = cache.snapshot_clone();
+        assert!(snap.ring_head.is_none(), "snapshot leaves ring mode");
+        assert_eq!(
+            sorted(time_axis(&snap)),
+            vec![5.0, 6.0, 7.0, 8.0],
+            "same keys"
+        );
+        assert_eq!(
+            time_axis(&snap),
+            vec![5.0, 6.0, 7.0, 8.0],
+            "in chronological order"
+        );
+        assert!(
+            cache.ring_head.is_some(),
+            "taking a snapshot must not disturb the live cache"
+        );
+    }
+
+    /// A multi-token write means prefill, which needs chronological storage.
+    /// Landing one on a cache that already decoded must linearize first, then
+    /// append — not interleave new keys into ring slots.
+    #[test]
+    fn multi_token_write_after_ring_linearizes_first() {
+        let window = 4;
+        let mut cache = SteppingKeyValueCache::with_decode_window(64_000, window);
+        let prefill: Vec<f32> = (0..6).map(|i| i as f32).collect();
+        let pk = Array::from_slice(&prefill, &[1, 1, 6, 1]);
+        let _ = cache.update_and_fetch(pk.clone(), pk).unwrap();
+        for v in 6..9 {
+            let (k, vv) = make_kv(1, v as f32);
+            let _ = cache.update_and_fetch(k, vv).unwrap();
+        }
+        assert!(cache.ring_head.is_some());
+
+        let more = Array::from_slice(&[9.0_f32, 10.0], &[1, 1, 2, 1]);
+        let _ = cache.update_and_fetch(more.clone(), more).unwrap();
+
+        assert!(cache.ring_head.is_none(), "multi-token write leaves the ring");
+        assert_eq!(cache.stored_len(), 6, "4 windowed keys + 2 appended");
+        assert_eq!(
+            time_axis(&cache),
+            vec![5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+            "chronological after linearize + append"
+        );
+    }
+
+    /// `trim_by` drops the *newest* n tokens, which is a positional claim, so a
+    /// rotated buffer has to be linearized before the tail slice means anything.
+    #[test]
+    fn trim_by_after_ring_drops_the_newest_keys() {
+        let window = 4;
+        let mut cache = SteppingKeyValueCache::with_decode_window(64_000, window);
+        let prefill: Vec<f32> = (0..6).map(|i| i as f32).collect();
+        let pk = Array::from_slice(&prefill, &[1, 1, 6, 1]);
+        let _ = cache.update_and_fetch(pk.clone(), pk).unwrap();
+        for v in 6..9 {
+            let (k, vv) = make_kv(1, v as f32);
+            let _ = cache.update_and_fetch(k, vv).unwrap();
+        }
+        // Ring holds {5,6,7,8} rotated.
+        cache.trim_by(2);
+        assert!(cache.ring_head.is_none());
+        assert_eq!(cache.stored_len(), 2);
+        assert_eq!(time_axis(&cache), vec![5.0, 6.0]);
+    }
+
+    /// Degenerate window of 1: the ring is a single slot that every decode
+    /// token overwrites.
+    #[test]
+    fn ring_window_of_one_keeps_only_the_newest_key() {
+        let mut cache = SteppingKeyValueCache::with_decode_window(64_000, 1);
+        let prefill: Vec<f32> = (0..4).map(|i| i as f32).collect();
+        let pk = Array::from_slice(&prefill, &[1, 1, 4, 1]);
+        let _ = cache.update_and_fetch(pk.clone(), pk).unwrap();
+        for v in 4..8 {
+            let (k, vv) = make_kv(1, v as f32);
+            let _ = cache.update_and_fetch(k, vv).unwrap();
+            assert_eq!(cache.stored_len(), 1);
+            assert_eq!(time_axis(&cache), vec![v as f32]);
+        }
     }
 
     /// Buffer capacity should double per grow event, capped at `max_cap`.

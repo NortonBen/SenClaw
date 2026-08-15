@@ -731,6 +731,31 @@ pub struct LocalModelSettings {
     /// `None` defaults to **`1.15`** for Gemma‑3 and **`1.0`** for other architectures on native MLX.
     #[serde(default)]
     pub repetition_penalty: Option<f32>,
+    /// Keep only the `top_k` highest-probability tokens before sampling.
+    /// **`0` = disabled** (draw over the whole vocabulary).
+    ///
+    /// `None` falls back to the checkpoint's own `generation_config.json`
+    /// (Gemma 4 ships **64**), then to disabled. Ignored at `temperature = 0`,
+    /// which is greedy and cannot be changed by truncation.
+    #[serde(default)]
+    pub top_k: Option<u32>,
+    /// Nucleus sampling: keep the shortest set of most-likely tokens whose
+    /// probabilities sum to `top_p`. **`1.0` = disabled.**
+    ///
+    /// `None` falls back to the checkpoint's own `generation_config.json`
+    /// (Gemma 4 ships **0.95**), then to disabled. Evaluated on the model's
+    /// untempered distribution, so it keeps its meaning as `temperature` moves.
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    /// Tokens per chunk during prompt prefill (MLX native). `None` → **512**.
+    /// Clamped to 32–4096.
+    ///
+    /// Exposed for sweeping: chunk size is a scheduling regime rather than a
+    /// constant factor, and its sweet spot moves with the machine, the model's
+    /// activation width, and the prompt length. Ignored by SSM-only
+    /// architectures, which must consume the sequence in one pass.
+    #[serde(default)]
+    pub prefill_chunk_tokens: Option<u32>,
     /// Pass `enable_thinking` to the chat template. `None` = let the template decide (model
     /// default). `false` = disable thinking (Qwen3 pre-fills `<think>\n\n</think>` to skip
     /// the reasoning block). Defaults to `false` to avoid unbounded thinking overhead.
@@ -809,6 +834,9 @@ impl Default for LocalModelSettings {
             max_new_tokens: None,
             temperature: None,
             repetition_penalty: None,
+            top_k: None,
+            top_p: None,
+            prefill_chunk_tokens: None,
             enable_thinking: default_enable_thinking(),
             tq_activate_at: None,
             max_kv_tokens: None,

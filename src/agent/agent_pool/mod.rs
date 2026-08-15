@@ -8,6 +8,9 @@ pub mod engine;
 pub mod pool;
 pub(crate) mod reflection;
 pub(crate) mod state;
+// Gated: the file's helpers (fakes, tempdir fixtures) reach for dev-dependencies
+// that a plain `cargo check --lib` doesn't link.
+#[cfg(test)]
 mod tests;
 pub mod traits;
 pub mod types;

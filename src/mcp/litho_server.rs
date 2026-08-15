@@ -130,9 +130,18 @@ struct LithoReadDocParams {
 // ===== MCP stdio server =====
 
 #[derive(Clone)]
-struct McpLithoServer {}
+pub struct McpLithoServer {}
 
-#[rmcp::tool_router(server_handler)]
+impl McpLithoServer {
+    /// Always available — every setting is read per call from
+    /// `SENCLAW_LITHO_*`, so there is nothing to capture at construction.
+    /// Returns `Option` only to match the other children.
+    pub fn from_env() -> anyhow::Result<Option<Self>> {
+        Ok(Some(Self {}))
+    }
+}
+
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpLithoServer {
     #[rmcp::tool(
         description = "Run Litho (deepwiki-rs) to generate C4 architecture markdown docs from a codebase. May take several minutes; ensure MCP timeout is large enough."

@@ -146,7 +146,7 @@ struct WikiMkdirParams {
 // ===== MCP stdio server =====
 
 #[derive(Clone)]
-struct McpWikiServer {
+pub struct McpWikiServer {
     inner: Arc<WikiMcpCore>,
 }
 
@@ -154,9 +154,24 @@ impl McpWikiServer {
     fn inner(&self) -> &WikiMcpCore {
         &self.inner
     }
+
+    /// Build from `SENCLAW_WIKI_DIR`, or `None` when that var is absent.
+    ///
+    /// `None` is how the aggregated `senclaw-core` server learns this child
+    /// was not configured for the current agent — it is not an error.
+    pub async fn from_env() -> anyhow::Result<Option<Self>> {
+        let Ok(wiki_dir) = std::env::var("SENCLAW_WIKI_DIR") else {
+            return Ok(None);
+        };
+        let core = WikiMcpCore::new(PathBuf::from(&wiki_dir));
+        core.wiki.ensure_init().await?;
+        Ok(Some(Self {
+            inner: Arc::new(core),
+        }))
+    }
 }
 
-#[rmcp::tool_router(server_handler)]
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpWikiServer {
     #[rmcp::tool(description = "Show wiki root path and summary statistics (git-backed)")]
     fn wiki_status(&self) -> String {
@@ -237,17 +252,10 @@ pub async fn run_stdio_server() -> anyhow::Result<()> {
         )
         .try_init();
 
-    let wiki_dir = std::env::var("SENCLAW_WIKI_DIR").context("SENCLAW_WIKI_DIR not set")?;
-    let path = PathBuf::from(&wiki_dir);
-    let core = WikiMcpCore::new(path);
-    if let Err(e) = core.wiki.ensure_init().await {
-        tracing::error!("[WikiMcp] ensure_init failed: {e}");
-        return Err(e.into());
-    }
-
-    let server = McpWikiServer {
-        inner: Arc::new(core),
-    };
+    let server = McpWikiServer::from_env()
+        .await
+        .inspect_err(|e| tracing::error!("[WikiMcp] init failed: {e}"))?
+        .context("SENCLAW_WIKI_DIR not set")?;
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
     Ok(())

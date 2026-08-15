@@ -169,6 +169,21 @@ pub trait CoreApi: Send + Sync {
         Ok(())
     }
 
+    /// Send user input whose turn also carries image attachments.
+    ///
+    /// The caller has already checked that the model resolved for `jid` accepts
+    /// images — a backend must not be handed image blocks it can't send.
+    /// Defaults to the text-only path so backends without vision stay valid.
+    fn process_user_input_with_images(
+        &self,
+        jid: &str,
+        prompt: &str,
+        images: Vec<crate::zen_core::ImageSource>,
+    ) -> Result<()> {
+        let _ = images;
+        self.process_user_input(jid, prompt)
+    }
+
     /// Queue an input into the engine's pending queue ONLY if that agent is
     /// mid-turn (the input then rides the running turn's tool results or the
     /// next chained turn). Returns `false` when idle or no engine exists —

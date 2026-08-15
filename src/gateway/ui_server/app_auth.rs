@@ -41,9 +41,7 @@ use axum::{
     Json,
 };
 
-use crate::apps::token::{
-    self, HEADER_API_VERSION, HEADER_APP_TOKEN, MIN_API_VERSION, TokenMode,
-};
+use crate::apps::token::{self, TokenMode, HEADER_API_VERSION, HEADER_APP_TOKEN, MIN_API_VERSION};
 
 use super::core::UiState;
 
@@ -112,12 +110,14 @@ pub fn split_app_path(path: &str) -> Option<(String, String)> {
     // "updates".
     if matches!(
         id,
-        "updates" | "register" | "register-local" | "install-zip" | "sandbox-overview"
+        "updates" | "register" | "register-local" | "install-zip" | "sandbox-overview" | "status"
     ) {
         return None;
     }
     Some((
-        urlencoding::decode(id).map(|c| c.into_owned()).unwrap_or_else(|_| id.to_string()),
+        urlencoding::decode(id)
+            .map(|c| c.into_owned())
+            .unwrap_or_else(|_| id.to_string()),
         suffix.to_string(),
     ))
 }
@@ -135,8 +135,14 @@ pub fn presented_token(headers: &HeaderMap, query: Option<&str>) -> Option<Strin
             return Some(v.to_string());
         }
     }
-    if let Some(v) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
-        if let Some(t) = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")) {
+    if let Some(v) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(t) = v
+            .strip_prefix("Bearer ")
+            .or_else(|| v.strip_prefix("bearer "))
+        {
             let t = t.trim();
             if token::looks_like_app_token(t) {
                 return Some(t.to_string());
@@ -193,8 +199,10 @@ pub fn looks_like_daemon_ui(headers: &HeaderMap) -> bool {
         .iter()
         .filter_map(|v| v.to_str().ok())
         .any(|s| {
-            s.split(';')
-                .any(|p| p.trim().starts_with(&format!("{}=", super::auth::AUTH_COOKIE)))
+            s.split(';').any(|p| {
+                p.trim()
+                    .starts_with(&format!("{}=", super::auth::AUTH_COOKIE))
+            })
         })
 }
 
@@ -338,7 +346,6 @@ pub async fn app_auth_mw(State(s): State<Arc<UiState>>, req: Request, next: Next
 
     let mut req = req;
     let presented = presented_token(req.headers(), req.uri().query());
-    let mode = s.config.space_app_token_mode;
 
     // 2. and 3. — whose token is it, and may a tokenless call proceed.
     let Some(db) = s.db.as_deref() else {
@@ -347,8 +354,15 @@ pub async fn app_auth_mw(State(s): State<Arc<UiState>>, req: Request, next: Next
         // the caller's.
         return next.run(req).await;
     };
-    let is_ui = req.extensions().get::<TrustedOperator>().is_some()
-        || looks_like_daemon_ui(req.headers());
+    // Read live, not from the startup config: the operator can change this in
+    // the UI and expects it to take effect without restarting the daemon.
+    let (mode, _) = token::effective_mode(
+        db,
+        s.config.space_app_token_mode,
+        s.config.space_app_token_mode_from_env,
+    );
+    let is_ui =
+        req.extensions().get::<TrustedOperator>().is_some() || looks_like_daemon_ui(req.headers());
     match decide(
         mode,
         &app_id,
@@ -373,7 +387,10 @@ pub async fn app_auth_mw(State(s): State<Arc<UiState>>, req: Request, next: Next
     // Every app-scoped answer states the contract it was served under, so an
     // SDK can notice a daemon upgrade without a separate probe.
     let mut res = next.run(req).await;
-    if let Ok(v) = daemon_version.to_string().parse::<axum::http::HeaderValue>() {
+    if let Ok(v) = daemon_version
+        .to_string()
+        .parse::<axum::http::HeaderValue>()
+    {
         res.headers_mut().insert(HEADER_API_VERSION, v);
     }
     res
@@ -445,6 +462,7 @@ mod tests {
         assert_eq!(split_app_path("/api/space/apps/updates"), None);
         assert_eq!(split_app_path("/api/space/apps/sandbox-overview"), None);
         assert_eq!(split_app_path("/api/space/apps/register"), None);
+        assert_eq!(split_app_path("/api/space/apps/status"), None);
     }
 
     #[test]
@@ -498,22 +516,37 @@ mod tests {
         // resolve, and 401 every remote request.
         let daemon_token = "a".repeat(64);
         assert_eq!(
-            presented_token(&headers(&[("authorization", &format!("Bearer {daemon_token}"))]), None),
+            presented_token(
+                &headers(&[("authorization", &format!("Bearer {daemon_token}"))]),
+                None
+            ),
             None
         );
     }
 
     #[test]
     fn browser_requests_are_recognised_as_the_daemon_ui() {
-        assert!(looks_like_daemon_ui(&headers(&[("sec-fetch-site", "same-origin")])));
-        assert!(looks_like_daemon_ui(&headers(&[("origin", "http://127.0.0.1:18788")])));
-        assert!(looks_like_daemon_ui(&headers(&[("referer", "http://localhost:5173/apps")])));
+        assert!(looks_like_daemon_ui(&headers(&[(
+            "sec-fetch-site",
+            "same-origin"
+        )])));
+        assert!(looks_like_daemon_ui(&headers(&[(
+            "origin",
+            "http://127.0.0.1:18788"
+        )])));
+        assert!(looks_like_daemon_ui(&headers(&[(
+            "referer",
+            "http://localhost:5173/apps"
+        )])));
         assert!(looks_like_daemon_ui(&headers(&[(
             "cookie",
             "senclaw_token=abc; other=1"
         )])));
         // A bare server-side HTTP client — what an app's SDK looks like.
-        assert!(!looks_like_daemon_ui(&headers(&[("accept", "application/json")])));
+        assert!(!looks_like_daemon_ui(&headers(&[(
+            "accept",
+            "application/json"
+        )])));
         // A LAN page is not the daemon's UI.
         assert!(!looks_like_daemon_ui(&headers(&[(
             "origin",
@@ -557,7 +590,14 @@ mod tests {
         // POST /api/space/apps/alpha/bridge — a full tool-enabled agent — and
         // read alpha's config, where its API keys live.
         for mode in [TokenMode::Off, TokenMode::Warn, TokenMode::Strict] {
-            let d = decide(mode, "alpha", "/bridge", Some(&beta_token()), owner_of, false);
+            let d = decide(
+                mode,
+                "alpha",
+                "/bridge",
+                Some(&beta_token()),
+                owner_of,
+                false,
+            );
             match d {
                 Decision::Deny(status, code, _) => {
                     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -594,14 +634,28 @@ mod tests {
             Decision::Allow(None)
         );
         assert_eq!(
-            decide(TokenMode::Warn, "alpha", "/sqlite/query", None, owner_of, false),
+            decide(
+                TokenMode::Warn,
+                "alpha",
+                "/sqlite/query",
+                None,
+                owner_of,
+                false
+            ),
             Decision::Allow(None)
         );
     }
 
     #[test]
     fn strict_mode_refuses_a_tokenless_data_call() {
-        match decide(TokenMode::Strict, "alpha", "/config/key", None, owner_of, false) {
+        match decide(
+            TokenMode::Strict,
+            "alpha",
+            "/config/key",
+            None,
+            owner_of,
+            false,
+        ) {
             Decision::Deny(status, code, msg) => {
                 assert_eq!(status, StatusCode::UNAUTHORIZED);
                 assert_eq!(code, "app_token_required");
@@ -628,7 +682,13 @@ mod tests {
         // Starting an app, opening its iframe, and loading its static assets
         // are the operator's, not the app's — gating them on a token the
         // browser does not have would just break the UI.
-        for suffix in ["/start", "/stop", "/runtime", "/proxy/api/notes", "/static/index.html"] {
+        for suffix in [
+            "/start",
+            "/stop",
+            "/runtime",
+            "/proxy/api/notes",
+            "/static/index.html",
+        ] {
             assert_eq!(
                 decide(TokenMode::Strict, "alpha", suffix, None, owner_of, false),
                 Decision::Allow(None),

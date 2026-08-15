@@ -402,6 +402,13 @@ impl MessageRouter {
     }
 
     fn store_message(&self, msg: &IncomingMessage) {
+        // Attachments ride the stored row: `run_agent` rebuilds the turn from
+        // history, so media dropped here can never reach the agent.
+        let attachments = if msg.attachments.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&msg.attachments).ok()
+        };
         let stored = StoredMessage {
             message_id: msg.id.clone(),
             chat_jid: msg.chat_jid.clone(),
@@ -412,8 +419,8 @@ impl MessageRouter {
             is_from_me: msg.is_from_me,
             is_bot_reply: false,
             reply_to_id: None,
-            media_type: None,
-            attachments: None,
+            media_type: msg.attachments.first().map(|a| a.mime_type.clone()),
+            attachments,
         };
         let limit = self.config.agent.max_messages_per_group;
         // Raw platform message log
@@ -444,19 +451,28 @@ pub struct DispatchTaskCallbacks {
 
 async fn run_agent(agent_api: Arc<dyn AgentApi>, db: Arc<Db>, jid: String, group: GroupBinding) {
     let prompt_built_at = chrono_now();
-    let (prompt, last_msg_timestamp) = build_prompt_for_group(&db, &jid);
+    let built = crate::agent::session_bridge::build_group_prompt(&db, &jid);
 
-    if prompt.is_empty() {
+    if built.prompt.is_empty() {
         tracing::warn!("[MessageRouter] Empty prompt for {jid}, skipping");
         return;
     }
 
-    let cursor = match last_msg_timestamp {
+    let cursor = match built.last_timestamp {
         Some(ref last_ts) if last_ts.as_str() > prompt_built_at.as_str() => Some(last_ts.clone()),
         _ => Some(prompt_built_at),
     };
 
-    if let Err(e) = agent_api.process_and_wait(&jid, &group, &prompt).await {
+    if !built.attachments.is_empty() {
+        tracing::info!(
+            "[MessageRouter] {jid} turn carries {} attachment(s) from channel messages",
+            built.attachments.len()
+        );
+    }
+    if let Err(e) = agent_api
+        .process_and_wait_with_attachments(&jid, &group, &built.prompt, &built.attachments)
+        .await
+    {
         tracing::error!("[MessageRouter] Agent error for {jid}: {e:#}");
     }
 

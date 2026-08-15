@@ -43,11 +43,18 @@ struct QueryParams {
 // ───────────────────────── MCP server ─────────────────────────
 
 #[derive(Clone)]
-struct McpUsageServer {
+pub struct McpUsageServer {
     db: Arc<Db>,
 }
 
 impl McpUsageServer {
+    /// Build from `SENCLAW_DB_PATH`, or `None` when it is absent. See
+    /// [`crate::mcp::wiki_server::McpWikiServer::from_env`] for why an
+    /// unconfigured child is `None` rather than an error.
+    pub fn from_env() -> Result<Option<Self>> {
+        Ok(crate::mcp::helper::shared_env_db()?.map(|db| Self { db }))
+    }
+
     fn overview_impl(&self) -> Result<String> {
         let now = chrono::Utc::now();
         let until = now.timestamp_millis() + 60_000;
@@ -72,7 +79,11 @@ impl McpUsageServer {
 
     fn breakdown_impl(&self, p: BreakdownParams) -> Result<String> {
         let by_raw = p.by.unwrap_or_else(|| "model".into());
-        let by = if by_raw == "app" { "app_id" } else { by_raw.as_str() };
+        let by = if by_raw == "app" {
+            "app_id"
+        } else {
+            by_raw.as_str()
+        };
         anyhow::ensure!(
             BREAKDOWN_KEYS.contains(&by),
             "by phải là model|source|jid|app"
@@ -105,7 +116,7 @@ fn err_json(e: anyhow::Error) -> String {
     serde_json::json!({ "error": e.to_string() }).to_string()
 }
 
-#[rmcp::tool_router(server_handler)]
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpUsageServer {
     #[rmcp::tool(
         description = "Tổng token in/out + chi phí ước tính (USD) hôm nay / 7 ngày / 30 ngày, \
@@ -153,12 +164,7 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let db_path = std::env::var("SENCLAW_DB_PATH").context("SENCLAW_DB_PATH not set")?;
-    let mut config = crate::config::Config::from_env();
-    config.paths.db_path = std::path::PathBuf::from(&db_path);
-    let db = Arc::new(Db::open(&config).context("open usage DB")?);
-
-    let server = McpUsageServer { db };
+    let server = McpUsageServer::from_env()?.context("SENCLAW_DB_PATH not set")?;
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
     Ok(())

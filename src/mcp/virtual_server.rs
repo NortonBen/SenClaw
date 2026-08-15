@@ -185,13 +185,33 @@ struct RunPersonaParams {
 }
 
 #[derive(Clone)]
-struct McpVirtualServer {
+pub struct McpVirtualServer {
     agents_config_dir: PathBuf,
     admin_folder: String,
     default_workspace: PathBuf,
 }
 
-#[rmcp::tool_router(server_handler)]
+impl McpVirtualServer {
+    /// Build from the virtual-agent env trio, or `None` when any is absent. See
+    /// [`crate::mcp::wiki_server::McpWikiServer::from_env`] for why an
+    /// unconfigured child is `None` rather than an error.
+    pub fn from_env() -> Result<Option<Self>> {
+        let (Ok(agents_config_dir), Ok(admin_folder), Ok(default_workspace)) = (
+            std::env::var("SENCLAW_AGENTS_CONFIG_DIR"),
+            std::env::var("SENCLAW_ADMIN_FOLDER"),
+            std::env::var("SENCLAW_DEFAULT_WORKSPACE"),
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            agents_config_dir: PathBuf::from(agents_config_dir),
+            admin_folder,
+            default_workspace: PathBuf::from(default_workspace),
+        }))
+    }
+}
+
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpVirtualServer {
     #[rmcp::tool(description = "List available virtual personas")]
     fn list_personas(&self) -> String {
@@ -233,18 +253,9 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let agents_config_dir =
-        std::env::var("SENCLAW_AGENTS_CONFIG_DIR").context("SENCLAW_AGENTS_CONFIG_DIR not set")?;
-    let admin_folder =
-        std::env::var("SENCLAW_ADMIN_FOLDER").context("SENCLAW_ADMIN_FOLDER not set")?;
-    let default_workspace =
-        std::env::var("SENCLAW_DEFAULT_WORKSPACE").context("SENCLAW_DEFAULT_WORKSPACE not set")?;
-
-    let server = McpVirtualServer {
-        agents_config_dir: PathBuf::from(agents_config_dir),
-        admin_folder,
-        default_workspace: PathBuf::from(default_workspace),
-    };
+    let server = McpVirtualServer::from_env()?.context(
+        "SENCLAW_AGENTS_CONFIG_DIR / SENCLAW_ADMIN_FOLDER / SENCLAW_DEFAULT_WORKSPACE not set",
+    )?;
 
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;

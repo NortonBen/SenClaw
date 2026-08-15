@@ -74,29 +74,158 @@ pub const API_VERSION: u32 = 2;
 pub const MIN_API_VERSION: u32 = 1;
 
 /// How the daemon treats an app-scoped request that carries **no** token.
+///
+/// A token that *is* present is verified and scoped in every mode — a wrong or
+/// foreign token is refused whatever this says. The mode only decides what
+/// happens when there is no token at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenMode {
-    /// Serve it, exactly as before this feature existed. A token that *is*
-    /// present is still verified and still scoped — a wrong or foreign token
-    /// is refused in every mode. This is the default: apps built before the
-    /// token existed keep working, and an operator opts in when their fleet
-    /// has caught up.
+    /// Serve it, exactly as before this feature existed. The escape hatch for
+    /// an app that reaches the daemon with its own HTTP client and has not been
+    /// taught to send the token.
     Off,
-    /// Serve it, but log it once per app so the operator can see who has not
-    /// adopted the token yet before turning on `strict`.
+    /// Serve it, but log it once per app — the way to find out which apps would
+    /// break under [`Self::Strict`] without breaking them first.
     Warn,
     /// Refuse it. Only requests carrying this app's token — or coming from the
     /// daemon's own UI (see `gateway::ui_server::app_auth`) — reach app-scoped
-    /// data routes.
+    /// data routes. **The default.**
     Strict,
 }
 
+/// What the daemon uses when `SENCLAW_APP_TOKEN_MODE` is unset or unreadable.
+///
+/// Requiring the token is the safe end: an app that reaches the daemon over
+/// loopback without proving who it is gets refused rather than served. Every
+/// SDK sends the token on its own, and the daemon's proxy stamps it on
+/// everything it forwards, so the apps that break are the ones hand-rolling an
+/// HTTP client to `/api/space/apps/<id>/…` — and those break loudly, with a
+/// 401 that names the variable to set.
+pub const DEFAULT_TOKEN_MODE: TokenMode = TokenMode::Strict;
+
+/// Where the mode in force actually came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeSource {
+    /// The operator chose it in the UI; stored in the database.
+    Ui,
+    /// `SENCLAW_APP_TOKEN_MODE` in the daemon's environment.
+    Env,
+    /// Neither — [`DEFAULT_TOKEN_MODE`].
+    Default,
+}
+
+impl ModeSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ui => "ui",
+            Self::Env => "env",
+            Self::Default => "default",
+        }
+    }
+}
+
+/// KV key holding the operator's chosen mode.
+///
+/// `router_state` rather than a table of its own: this is one scalar, and a
+/// migration for one scalar is a migration to maintain forever. The `space:`
+/// prefix keeps it out of the router's own `lastAgent:` namespace.
+const MODE_KEY: &str = "space:appTokenMode";
+
+/// The chosen mode, cached. `None` = not read yet; `Some(None)` = read, and the
+/// operator has chosen nothing, so the environment decides.
+///
+/// Cached because the middleware asks on every app-scoped request, and this
+/// answer changes only when someone clicks a button.
+fn mode_cache() -> &'static RwLock<Option<Option<TokenMode>>> {
+    static C: OnceLock<RwLock<Option<Option<TokenMode>>>> = OnceLock::new();
+    C.get_or_init(|| RwLock::new(None))
+}
+
+/// The mode the operator chose, or `None` to follow the environment.
+pub fn mode_override(db: &Db) -> Option<TokenMode> {
+    if let Ok(c) = mode_cache().read() {
+        if let Some(cached) = *c {
+            return cached;
+        }
+    }
+    let found = db
+        .get_router_state(MODE_KEY)
+        .ok()
+        .flatten()
+        .and_then(|raw| TokenMode::parse_opt(&raw));
+    if let Ok(mut c) = mode_cache().write() {
+        *c = Some(found);
+    }
+    found
+}
+
+/// Choose a mode, or pass `None` to hand the decision back to the environment.
+pub fn set_mode_override(db: &Db, mode: Option<TokenMode>) -> Result<()> {
+    match mode {
+        Some(m) => db.set_router_state(MODE_KEY, m.as_str())?,
+        None => db.delete_router_state(MODE_KEY)?,
+    }
+    if let Ok(mut c) = mode_cache().write() {
+        *c = Some(mode);
+    }
+    Ok(())
+}
+
+/// The mode in force, and where it came from.
+///
+/// `env_mode` is what [`crate::config::Config`] read at startup; pass
+/// `env_present` so a value that merely *equals* the default is not reported as
+/// having been configured.
+pub fn effective_mode(db: &Db, env_mode: TokenMode, env_present: bool) -> (TokenMode, ModeSource) {
+    match mode_override(db) {
+        Some(m) => (m, ModeSource::Ui),
+        None if env_present => (env_mode, ModeSource::Env),
+        None => (env_mode, ModeSource::Default),
+    }
+}
+
+/// Forget the cached choice. Tests only — the daemon has one database.
+#[cfg(test)]
+fn mode_cache_clear() {
+    if let Ok(mut c) = mode_cache().write() {
+        *c = None;
+    }
+}
+
 impl TokenMode {
-    pub fn parse(raw: &str) -> Self {
+    /// Parse an explicitly written mode. `None` for anything unrecognised —
+    /// the caller decides, and [`Self::from_env_value`] is what the daemon uses.
+    pub fn parse_opt(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
-            "strict" | "on" | "require" | "required" => Self::Strict,
-            "warn" | "log" => Self::Warn,
-            _ => Self::Off,
+            "strict" | "on" | "require" | "required" => Some(Self::Strict),
+            "warn" | "log" => Some(Self::Warn),
+            "off" | "none" | "disabled" | "false" | "0" => Some(Self::Off),
+            _ => None,
+        }
+    }
+
+    /// The mode for a raw `SENCLAW_APP_TOKEN_MODE` value, empty or not.
+    ///
+    /// An unrecognised value falls back to [`DEFAULT_TOKEN_MODE`] and says so.
+    /// It must never fall back to [`Self::Off`]: `SENCLAW_APP_TOKEN_MODE=of`
+    /// would then read as "disable app isolation", and a typo that silently
+    /// turns a security control off is the failure this whole feature exists
+    /// to avoid.
+    pub fn from_env_value(raw: &str) -> Self {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return DEFAULT_TOKEN_MODE;
+        }
+        match Self::parse_opt(raw) {
+            Some(m) => m,
+            None => {
+                tracing::warn!(
+                    "[app-auth] SENCLAW_APP_TOKEN_MODE={raw:?} is not one of off|warn|strict — \
+                     using {} (the default)",
+                    DEFAULT_TOKEN_MODE.as_str()
+                );
+                DEFAULT_TOKEN_MODE
+            }
         }
     }
 
@@ -135,7 +264,9 @@ pub fn looks_like_app_token(raw: &str) -> bool {
     let raw = raw.trim();
     raw.len() == TOKEN_PREFIX.len() + 64
         && raw.starts_with(TOKEN_PREFIX)
-        && raw[TOKEN_PREFIX.len()..].bytes().all(|b| b.is_ascii_hexdigit())
+        && raw[TOKEN_PREFIX.len()..]
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit())
 }
 
 /// Constant-time compare. `==` on a secret short-circuits at the first
@@ -145,7 +276,10 @@ pub fn ct_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 // ===== Store =====
@@ -379,7 +513,10 @@ mod tests {
         // two apart by shape is what keeps `Authorization: Bearer` unambiguous.
         assert!(!looks_like_app_token(&"a".repeat(64)));
         assert!(!looks_like_app_token("sca_short"));
-        assert!(!looks_like_app_token(&format!("{TOKEN_PREFIX}{}", "z".repeat(64))));
+        assert!(!looks_like_app_token(&format!(
+            "{TOKEN_PREFIX}{}",
+            "z".repeat(64)
+        )));
         assert!(!looks_like_app_token(""));
     }
 
@@ -414,7 +551,11 @@ mod tests {
         assert_ne!(old, new);
         assert!(!verify(&db, "alpha", &old));
         assert!(verify(&db, "alpha", &new));
-        assert_eq!(resolve(&db, &old), None, "the cache must not keep serving it");
+        assert_eq!(
+            resolve(&db, &old),
+            None,
+            "the cache must not keep serving it"
+        );
         assert_eq!(resolve(&db, &new).as_deref(), Some("alpha"));
         // The reverse map feeds the proxy, which stamps this on every forward.
         // Left stale, the daemon would keep handing apps a token it no longer
@@ -445,14 +586,84 @@ mod tests {
     }
 
     #[test]
-    fn mode_parsing_defaults_to_off() {
-        assert_eq!(TokenMode::parse("strict"), TokenMode::Strict);
-        assert_eq!(TokenMode::parse("  STRICT "), TokenMode::Strict);
-        assert_eq!(TokenMode::parse("warn"), TokenMode::Warn);
-        assert_eq!(TokenMode::parse("off"), TokenMode::Off);
-        // Anything unrecognised must not silently enable enforcement.
-        assert_eq!(TokenMode::parse("yes-please"), TokenMode::Off);
-        assert_eq!(TokenMode::parse(""), TokenMode::Off);
+    fn mode_parsing_reads_what_the_operator_wrote() {
+        assert_eq!(TokenMode::from_env_value("strict"), TokenMode::Strict);
+        assert_eq!(TokenMode::from_env_value("  STRICT "), TokenMode::Strict);
+        assert_eq!(TokenMode::from_env_value("warn"), TokenMode::Warn);
+        assert_eq!(TokenMode::from_env_value("off"), TokenMode::Off);
+        assert_eq!(TokenMode::from_env_value("disabled"), TokenMode::Off);
+    }
+
+    #[test]
+    fn an_unset_or_misspelled_mode_still_requires_the_token() {
+        // Unset is the fleet's normal state — it must be the safe end.
+        assert_eq!(TokenMode::from_env_value(""), TokenMode::Strict);
+        assert_eq!(TokenMode::from_env_value("   "), TokenMode::Strict);
+        // And a typo must NOT read as "turn app isolation off". `off` has to be
+        // spelled correctly to disable enforcement; anything else keeps it on.
+        assert_eq!(TokenMode::from_env_value("of"), TokenMode::Strict);
+        assert_eq!(TokenMode::from_env_value("no"), TokenMode::Strict);
+        assert_eq!(TokenMode::from_env_value("yes-please"), TokenMode::Strict);
+        assert_eq!(TokenMode::parse_opt("of"), None);
+    }
+
+    #[test]
+    fn the_ui_choice_wins_over_the_environment_and_can_be_handed_back() {
+        let (db, _guard) = test_db();
+        mode_cache_clear();
+
+        // Nothing chosen: the environment decides, and the UI is told whether
+        // that was a real setting or just the built-in default.
+        assert_eq!(
+            effective_mode(&db, TokenMode::Warn, true),
+            (TokenMode::Warn, ModeSource::Env)
+        );
+        assert_eq!(
+            effective_mode(&db, DEFAULT_TOKEN_MODE, false),
+            (DEFAULT_TOKEN_MODE, ModeSource::Default)
+        );
+
+        // The operator turns enforcement off from the UI — it must win even
+        // over an explicit env var, or the switch would appear to do nothing on
+        // a machine that sets one.
+        set_mode_override(&db, Some(TokenMode::Off)).unwrap();
+        assert_eq!(
+            effective_mode(&db, TokenMode::Strict, true),
+            (TokenMode::Off, ModeSource::Ui)
+        );
+
+        // And handing the decision back restores the environment's answer
+        // rather than freezing the last choice.
+        set_mode_override(&db, None).unwrap();
+        assert_eq!(
+            effective_mode(&db, TokenMode::Strict, true),
+            (TokenMode::Strict, ModeSource::Env)
+        );
+    }
+
+    #[test]
+    fn a_stored_choice_survives_a_restart() {
+        let (db, _guard) = test_db();
+        mode_cache_clear();
+        set_mode_override(&db, Some(TokenMode::Warn)).unwrap();
+        // A restart is a cold cache reading the same row back.
+        mode_cache_clear();
+        assert_eq!(mode_override(&db), Some(TokenMode::Warn));
+    }
+
+    #[test]
+    fn a_corrupted_stored_value_falls_back_rather_than_disabling() {
+        let (db, _guard) = test_db();
+        mode_cache_clear();
+        db.set_router_state(MODE_KEY, "gibberish").unwrap();
+        // Unreadable must mean "no choice recorded", so the environment/default
+        // applies. Reading it as Off would let a bad write silently switch app
+        // isolation off.
+        assert_eq!(mode_override(&db), None);
+        assert_eq!(
+            effective_mode(&db, DEFAULT_TOKEN_MODE, false).0,
+            DEFAULT_TOKEN_MODE
+        );
     }
 
     #[test]

@@ -599,6 +599,17 @@ impl CoreApi for ZenCoreApi {
         Ok(())
     }
 
+    fn process_user_input_with_images(
+        &self,
+        jid: &str,
+        prompt: &str,
+        images: Vec<crate::zen_core::ImageSource>,
+    ) -> Result<()> {
+        let engine = self.ensure_engine(jid);
+        engine.process_user_input_with_images(prompt, None, images)?;
+        Ok(())
+    }
+
     fn queue_input_if_processing(&self, jid: &str, prompt: &str) -> bool {
         // No ensure_engine: if no engine exists yet, nothing is processing.
         let engine = self.engines.lock().unwrap().get(jid).cloned();

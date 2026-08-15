@@ -33,6 +33,10 @@ pub struct IncomingMessage {
     pub bot_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_msg_id: Option<String>,
+    /// Media the adapter downloaded for this message (photos, files). Empty for
+    /// text-only messages and for adapters that don't fetch media.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<MessageAttachment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +132,45 @@ pub struct BindingWithRelations {
 
 // ===== Agent API trait =====
 
+/// A file riding along with a chat message.
+///
+/// One shape for every producer — the web composer, the desktop picker, and
+/// channel adapters that download media — and the shape persisted in
+/// [`StoredMessage::attachments`]. Field names are the JSON the clients already
+/// send; `name` is absent for pasted images, which have no filename.
+///
+/// Images and documents share this type deliberately: the routing decision
+/// belongs to the agent pool (which knows the model's capabilities), not to
+/// whichever surface happened to accept the upload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageAttachment {
+    /// `data:<mime>;base64,…`, an http(s) URL, or an absolute local path.
+    #[serde(rename = "dataUrl")]
+    pub data_url: String,
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    /// Original filename, when the source had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl MessageAttachment {
+    /// Whether this attachment takes the image route (vision blocks or OCR)
+    /// rather than the document route (text extraction).
+    pub fn is_image(&self) -> bool {
+        self.mime_type.starts_with("image/")
+    }
+
+    /// Filename to show the model, falling back to a generic label.
+    pub fn display_name(&self) -> &str {
+        self.name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("(unnamed)")
+    }
+}
+
 /// Operations that the message router and cowork manager need from the agent pool.
 #[async_trait]
 pub trait AgentApi: Send + Sync {
@@ -137,13 +180,14 @@ pub trait AgentApi: Send + Sync {
     /// Process a prompt through the agent. Blocks until the agent finishes.
     async fn process_and_wait(&self, jid: &str, group: &GroupBinding, prompt: &str) -> Result<()>;
 
-    /// Process a prompt with image attachments through the agent. Blocks until the agent finishes.
-    async fn process_and_wait_with_images(
+    /// Process a prompt with attachments through the agent. Blocks until the
+    /// agent finishes.
+    async fn process_and_wait_with_attachments(
         &self,
         jid: &str,
         group: &GroupBinding,
         prompt: &str,
-        _attachments: &[crate::agent::input_builder::ImageAttachment],
+        _attachments: &[MessageAttachment],
     ) -> Result<()> {
         // Default implementation: ignore attachments and call the basic version
         self.process_and_wait(jid, group, prompt).await
@@ -190,8 +234,32 @@ pub struct StoredMessage {
     pub is_bot_reply: bool,
     pub reply_to_id: Option<String>,
     pub media_type: Option<String>,
-    /// JSON-serialized array of image attachments (data_url, mime_type)
+    /// JSON-serialized `Vec<MessageAttachment>`.
     pub attachments: Option<String>,
+}
+
+impl StoredMessage {
+    /// Parse [`Self::attachments`], tolerating rows written before the column
+    /// existed and rows a future client wrote in a shape we can't read: history
+    /// must keep loading either way.
+    pub fn parsed_attachments(&self) -> Vec<MessageAttachment> {
+        let Some(raw) = self.attachments.as_deref().map(str::trim) else {
+            return Vec::new();
+        };
+        if raw.is_empty() {
+            return Vec::new();
+        }
+        match serde_json::from_str::<Vec<MessageAttachment>>(raw) {
+            Ok(list) => list,
+            Err(e) => {
+                tracing::warn!(
+                    "[StoredMessage] unreadable attachments on {}: {e}",
+                    self.message_id
+                );
+                Vec::new()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -42,17 +42,26 @@ struct OcrBatchParams {
 // ── MCP server ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct McpOcrServer {
+pub struct McpOcrServer {
     bridge_base: String,
 }
 
 impl McpOcrServer {
+    /// Build from `SENCLAW_OCR_BRIDGE_URL`, or `None` when it is absent. See
+    /// [`crate::mcp::wiki_server::McpWikiServer::from_env`] for why an
+    /// unconfigured child is `None` rather than an error.
+    pub fn from_env() -> Result<Option<Self>> {
+        Ok(std::env::var("SENCLAW_OCR_BRIDGE_URL")
+            .ok()
+            .map(|bridge_base| Self { bridge_base }))
+    }
+
     fn inner(&self) -> OcrBridge {
         OcrBridge::new(&self.bridge_base)
     }
 }
 
-#[rmcp::tool_router(server_handler)]
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpOcrServer {
     #[rmcp::tool(
         description = "Extract text from an image file using on-device OCR (PaddleOCR + MNN). Returns recognized text and per-block bounding boxes."
@@ -92,10 +101,7 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let bridge_base =
-        std::env::var("SENCLAW_OCR_BRIDGE_URL").context("SENCLAW_OCR_BRIDGE_URL not set")?;
-
-    let server = McpOcrServer { bridge_base };
+    let server = McpOcrServer::from_env()?.context("SENCLAW_OCR_BRIDGE_URL not set")?;
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
     Ok(())

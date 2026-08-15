@@ -5,4 +5,5 @@ pub mod cache;
 pub mod error;
 pub mod models;
 pub mod prefix_cache;
+pub mod sampling;
 pub mod utils;

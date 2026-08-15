@@ -176,3 +176,278 @@ fn cached_todos_empty_by_default() {
     let pool = AgentPool::new(Arc::new(ZenCoreApi::new(None)));
     assert!(pool.get_all_cached_todos().is_empty());
 }
+
+// ── Image attachment routing ────────────────────────────────────────────────
+
+/// A `CoreApi` that records which dispatch path the pool chose and with what.
+#[derive(Default)]
+struct RecordingCore {
+    text_calls: std::sync::Mutex<Vec<String>>,
+    image_calls: std::sync::Mutex<Vec<(String, usize)>>,
+}
+
+impl super::traits::CoreApi for RecordingCore {
+    fn process_user_input(&self, _jid: &str, prompt: &str) -> anyhow::Result<()> {
+        self.text_calls.lock().unwrap().push(prompt.to_string());
+        Ok(())
+    }
+
+    fn process_user_input_with_images(
+        &self,
+        _jid: &str,
+        prompt: &str,
+        images: Vec<crate::zen_core::ImageSource>,
+    ) -> anyhow::Result<()> {
+        self.image_calls
+            .lock()
+            .unwrap()
+            .push((prompt.to_string(), images.len()));
+        Ok(())
+    }
+}
+
+fn one_image() -> Vec<crate::zen_core::ImageSource> {
+    vec![crate::zen_core::ImageSource {
+        source_type: "base64".into(),
+        media_type: "image/png".into(),
+        data: "QUJD".into(),
+    }]
+}
+
+/// Build a pool whose config points at a throwaway `config.json` holding a
+/// single LLM config with the given model name.
+fn pool_with_model(model: &str) -> (Arc<AgentPool>, Arc<RecordingCore>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("config.json");
+    crate::gateway::group_manager::save_llm_config(
+        &config_path,
+        &crate::gateway::group_manager::LlmConfig {
+            id: "llm_1".into(),
+            label: "Test".into(),
+            provider: "openai".into(),
+            base_url: "https://example.invalid/v1".into(),
+            api_key: "k".into(),
+            model_name: model.into(),
+            adapt: "openai".into(),
+            max_tokens: 4096,
+            context_length: 128_000,
+            vision: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    crate::gateway::group_manager::set_active_llm_config(&config_path, Some("llm_1")).unwrap();
+
+    let core = Arc::new(RecordingCore::default());
+    let pool = AgentPool::new(core.clone() as Arc<dyn super::traits::CoreApi>);
+    let mut cfg = crate::config::Config::from_env();
+    cfg.paths.global_config_path = config_path;
+    // Point OCR at an empty dir so the no-vision path takes its "unavailable"
+    // branch deterministically instead of picking up a real installed model.
+    cfg.paths.ocr_models_dir = dir.path().join("ocr-models");
+    // Keep attachment writes inside the tempdir, never the real ~/.senclaw.
+    cfg.paths.uploads_dir = dir.path().join("uploads");
+    pool.set_config(Arc::new(cfg));
+    (pool, core, dir)
+}
+
+#[tokio::test]
+async fn vision_model_receives_the_image_blocks() {
+    // The regression: the pool used to flatten the built input to its text
+    // blocks, so an attached image never reached the model at all.
+    let (pool, core, _dir) = pool_with_model("gpt-4o");
+    pool.dispatch_user_input(
+        "web:1",
+        &fake_binding("web:1"),
+        "Ảnh này là gì?",
+        one_image(),
+    )
+    .await
+    .unwrap();
+
+    let images = core.image_calls.lock().unwrap();
+    assert_eq!(images.len(), 1, "should take the vision path");
+    assert_eq!(images[0].0, "Ảnh này là gì?", "prompt travels unchanged");
+    assert_eq!(images[0].1, 1, "the image block must survive");
+    assert!(core.text_calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn text_only_model_gets_an_ocr_notice_instead_of_image_blocks() {
+    let (pool, core, _dir) = pool_with_model("deepseek-chat");
+    pool.dispatch_user_input(
+        "web:1",
+        &fake_binding("web:1"),
+        "Ảnh này là gì?",
+        one_image(),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        core.image_calls.lock().unwrap().is_empty(),
+        "image blocks must never reach a text-only endpoint"
+    );
+    let texts = core.text_calls.lock().unwrap();
+    assert_eq!(texts.len(), 1);
+    assert!(texts[0].starts_with("Ảnh này là gì?"));
+    assert!(texts[0].contains("[attached-images: 1]"));
+    // No OCR model installed here, so the model must be told not to guess.
+    assert!(texts[0].contains("Do NOT guess"));
+}
+
+#[tokio::test]
+async fn imageless_turns_keep_the_plain_text_path() {
+    let (pool, core, _dir) = pool_with_model("gpt-4o");
+    pool.dispatch_user_input("web:1", &fake_binding("web:1"), "chào", Vec::new())
+        .await
+        .unwrap();
+
+    assert!(core.image_calls.lock().unwrap().is_empty());
+    assert_eq!(core.text_calls.lock().unwrap().as_slice(), ["chào"]);
+}
+
+#[tokio::test]
+async fn group_model_override_decides_the_route() {
+    // Active config is vision-capable; the group pins a text-only one. The
+    // turn runs on the group's model, so the routing must follow it.
+    let (pool, core, dir) = pool_with_model("gpt-4o");
+    let config_path = dir.path().join("config.json");
+    crate::gateway::group_manager::save_llm_config(
+        &config_path,
+        &crate::gateway::group_manager::LlmConfig {
+            id: "llm_text".into(),
+            label: "Text".into(),
+            provider: "openai".into(),
+            base_url: "https://example.invalid/v1".into(),
+            api_key: "k".into(),
+            model_name: "deepseek-chat".into(),
+            adapt: "openai".into(),
+            max_tokens: 4096,
+            context_length: 128_000,
+            vision: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let mut group = fake_binding("web:1");
+    group.llm_config_id = Some("llm_text".into());
+    pool.dispatch_user_input("web:1", &group, "Ảnh này là gì?", one_image())
+        .await
+        .unwrap();
+
+    assert!(core.image_calls.lock().unwrap().is_empty());
+    assert_eq!(core.text_calls.lock().unwrap().len(), 1);
+}
+
+// ── Document attachments ────────────────────────────────────────────────────
+
+fn doc(name: &str, mime: &str, body: &str) -> crate::types::MessageAttachment {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    crate::types::MessageAttachment {
+        data_url: format!("data:{mime};base64,{}", STANDARD.encode(body)),
+        mime_type: mime.into(),
+        name: Some(name.into()),
+    }
+}
+
+fn image_att() -> crate::types::MessageAttachment {
+    crate::types::MessageAttachment {
+        data_url: "data:image/png;base64,QUJD".into(),
+        mime_type: "image/png".into(),
+        name: None,
+    }
+}
+
+/// Drive the attachment pipeline the way a real turn does: prepare, then
+/// dispatch. Skips the surrounding process-and-wait machinery, which needs a
+/// daemon-initialised memory manager.
+async fn run_turn(
+    pool: &Arc<AgentPool>,
+    group: &GroupBinding,
+    prompt: &str,
+    attachments: &[crate::types::MessageAttachment],
+) {
+    let (text, images) = pool
+        .prepare_turn_input(&group.jid, prompt, attachments)
+        .await;
+    pool.dispatch_user_input(&group.jid, group, &text, images)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn document_text_reaches_the_prompt_and_the_file_lands_on_disk() {
+    let (pool, core, dir) = pool_with_model("gpt-4o");
+    run_turn(
+        &pool,
+        &fake_binding("web:1"),
+        "Tóm tắt file này",
+        &[doc("ghi-chu.txt", "text/plain", "nội dung quan trọng")],
+    )
+    .await;
+
+    let texts = core.text_calls.lock().unwrap();
+    let prompt = texts.first().expect("core should have received a turn");
+    assert!(prompt.contains("Tóm tắt file này"));
+    assert!(prompt.contains("[attached-files: 1]"));
+    assert!(prompt.contains("nội dung quan trọng"));
+    assert!(prompt.contains("saved at: "));
+    // No image blocks — a document is not an image even on a vision model.
+    assert!(core.image_calls.lock().unwrap().is_empty());
+
+    let saved = std::fs::read_dir(dir.path().join("uploads").join("web_1"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .count();
+    assert_eq!(
+        saved, 1,
+        "the attachment should be written under the jid dir"
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_document_still_reaches_the_model_as_a_path() {
+    // The point of saving before extracting: a format we can't parse is still
+    // something the agent can open with its own tools.
+    let (pool, core, _dir) = pool_with_model("gpt-4o");
+    run_turn(
+        &pool,
+        &fake_binding("web:1"),
+        "File này nói gì?",
+        &[doc(
+            "bao-cao.pdf",
+            "application/pdf",
+            "%PDF-1.4 binary junk",
+        )],
+    )
+    .await;
+
+    let texts = core.text_calls.lock().unwrap();
+    let prompt = texts.first().unwrap();
+    assert!(prompt.contains("could not extract text"));
+    assert!(prompt.contains("bao-cao.pdf"));
+    assert!(prompt.contains("saved at: "));
+    assert!(prompt.contains("Never invent contents"));
+}
+
+#[tokio::test]
+async fn images_and_documents_on_one_turn_take_their_own_routes() {
+    let (pool, core, _dir) = pool_with_model("gpt-4o");
+    run_turn(
+        &pool,
+        &fake_binding("web:1"),
+        "Xem hai thứ này",
+        &[image_att(), doc("a.md", "text/markdown", "# tiêu đề")],
+    )
+    .await;
+
+    // The image goes as a block, the document as text — in the same turn.
+    let images = core.image_calls.lock().unwrap();
+    assert_eq!(images.len(), 1, "vision model should get the image block");
+    assert_eq!(images[0].1, 1);
+    assert!(images[0].0.contains("[attached-files: 1]"));
+    assert!(images[0].0.contains("# tiêu đề"));
+    assert!(core.text_calls.lock().unwrap().is_empty());
+}

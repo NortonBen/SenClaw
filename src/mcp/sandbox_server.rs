@@ -19,7 +19,6 @@ use serde_json::{json, Value};
 use crate::sandbox::db::{Db, Run};
 use crate::sandbox::{caps, code, files, fsmode, monitor, mounts, policy, ports, runner, settings};
 
-
 fn ok_json(v: Value) -> String {
     serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".into())
 }
@@ -317,22 +316,34 @@ struct RunsParams {
 // ── Server ───────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct McpSandboxServer {
+pub struct McpSandboxServer {
     db: Db,
 }
 
 impl McpSandboxServer {
+    /// Build from the shared sandbox DB, or `None` when the data dir cannot be
+    /// opened. Unlike the other children this has no env gate — the sandbox is
+    /// either usable on this machine or it isn't.
+    pub fn from_env() -> Result<Option<Self>> {
+        Ok(crate::sandbox::shared_db().map(|db| Self { db }))
+    }
+
     fn sandbox(&self, id: &str) -> std::result::Result<crate::sandbox::db::Sandbox, String> {
         self.db.sandbox(id.trim()).map_err(|e| e.to_string())
     }
 }
 
-#[rmcp::tool_router(server_handler)]
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpSandboxServer {
     #[rmcp::tool(
         description = "Check what kind of sandbox this machine can actually run: docker (needs a live daemon) or direct execution confined by the operating system (macOS Seatbelt / Linux bubblewrap / Windows AppContainer). Call it before creating a sandbox if unsure, and again right after the user has started Docker."
     )]
-    async fn sbx_capabilities(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<CapabilitiesParams>) -> String {
+    async fn sbx_capabilities(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            CapabilitiesParams,
+        >,
+    ) -> String {
         let c = caps::probe(p.refresh.unwrap_or(false)).await;
         ok_json(json!({
             "os": c.os,
@@ -349,7 +360,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Run a snippet in a throwaway sandbox and delete it afterwards. This is the tool for almost every 'run this Python for me' request. The network is OFF by default. Languages: python, javascript, typescript, bash, sh, ruby, perl, php."
     )]
-    async fn sbx_run(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<RunOnceParams>) -> String {
+    async fn sbx_run(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            RunOnceParams,
+        >,
+    ) -> String {
         if p.language.trim().is_empty() || p.code.trim().is_empty() {
             return err_json("`language` and `code` are required");
         }
@@ -371,7 +387,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Create a long-lived sandbox for several commands in a row (files and installed packages persist between runs). Use it for multi-step work; for a single snippet use sbx_run instead."
     )]
-    async fn sbx_create(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<CreateParams>) -> String {
+    async fn sbx_create(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            CreateParams,
+        >,
+    ) -> String {
         let ports = match ports::validate(
             &p.listen_ports.unwrap_or_default(),
             &p.connect_ports.unwrap_or_default(),
@@ -423,7 +444,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Run a shell command in an existing sandbox. The command reaches the shell on stdin, so quotes inside it survive untouched."
     )]
-    async fn sbx_exec(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<ExecParams>) -> String {
+    async fn sbx_exec(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ExecParams,
+        >,
+    ) -> String {
         if p.command.trim().is_empty() {
             return err_json("`command` is required");
         }
@@ -452,13 +478,25 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Run a snippet inside an existing sandbox, keeping its state. Languages: python, javascript, typescript, bash, sh, ruby, perl, php."
     )]
-    async fn sbx_run_in(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<RunInParams>) -> String {
+    async fn sbx_run_in(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            RunInParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
         };
-        match runner::run_code(&self.db, &sb, &p.language, &p.code, p.timeout_ms, env_map(p.env))
-            .await
+        match runner::run_code(
+            &self.db,
+            &sb,
+            &p.language,
+            &p.code,
+            p.timeout_ms,
+            env_map(p.env),
+        )
+        .await
         {
             Ok(run) => ok_json(run_summary(&run)),
             Err(e) => err_json(e),
@@ -468,7 +506,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Install packages into a sandbox with pip, npm or apt. The sandbox must have the network on — use sbx_update to turn it on first."
     )]
-    async fn sbx_install(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<InstallParams>) -> String {
+    async fn sbx_install(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            InstallParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -482,7 +525,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Change a sandbox: network on/off, CPU/RAM limits, run deadline. On the docker backend, changing the network or resources recreates the container (files are kept)."
     )]
-    async fn sbx_update(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<UpdateParams>) -> String {
+    async fn sbx_update(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            UpdateParams,
+        >,
+    ) -> String {
         let before = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -517,7 +565,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Delete a sandbox. Files are KEPT by default; pass purge=true to delete them as well."
     )]
-    async fn sbx_delete(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<DeleteParams>) -> String {
+    async fn sbx_delete(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            DeleteParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -534,7 +587,12 @@ impl McpSandboxServer {
     }
 
     #[rmcp::tool(description = "List files in the sandbox by relative path.")]
-    fn sbx_files(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<FilesParams>) -> String {
+    fn sbx_files(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            FilesParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -546,7 +604,12 @@ impl McpSandboxServer {
     }
 
     #[rmcp::tool(description = "Read a text file from the sandbox.")]
-    fn sbx_file_read(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<FileReadParams>) -> String {
+    fn sbx_file_read(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            FileReadParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -560,7 +623,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Write a text file into the sandbox (parent folders are created). Use it to hand data to the code."
     )]
-    fn sbx_file_write(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<FileWriteParams>) -> String {
+    fn sbx_file_write(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            FileWriteParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -574,7 +642,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "How much CPU and RAM the sandbox is using, with the processes running inside it (pid, %CPU, RAM, elapsed, command). Use it when the user asks whether something is still running, why the machine feels slow, or before deciding what to stop."
     )]
-    async fn sbx_stats(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<StatsParams>) -> String {
+    async fn sbx_stats(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            StatsParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -585,7 +658,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Stop processes in a sandbox. Omit `pid` to stop EVERYTHING it is running. Only processes belonging to that sandbox can be stopped — nothing else on the machine."
     )]
-    async fn sbx_kill(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<KillParams>) -> String {
+    async fn sbx_kill(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            KillParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -605,7 +683,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Mount a real folder from this machine into a sandbox so the code can read and write actual data. It is READ-WRITE by default — pass readOnly=true when reading is enough, and prefer readOnly whenever the code is not yet trusted. The home directory, system directories and credential folders cannot be mounted."
     )]
-    async fn sbx_mount(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<MountParams>) -> String {
+    async fn sbx_mount(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            MountParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -629,7 +712,9 @@ impl McpSandboxServer {
                 if sb.backend == "docker" && sb.status == "running" {
                     let _ = runner::stop(&self.db, &sb).await;
                     note = match runner::ensure_started(&self.db, &sb).await {
-                        Ok(_) => " The container was recreated so the new folder is visible.".into(),
+                        Ok(_) => {
+                            " The container was recreated so the new folder is visible.".into()
+                        }
                         Err(e) => format!(" NOTE: recreating the container failed: {e}"),
                     };
                 }
@@ -648,21 +733,32 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Unmount a folder from a sandbox. This only removes the link; it does NOT delete anything in the real folder."
     )]
-    async fn sbx_unmount(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<UnmountParams>) -> String {
+    async fn sbx_unmount(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            UnmountParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
         };
         let next = mounts::remove(&sb.mounts, &p.target);
         if next.len() == sb.mounts.len() {
-            return err_json(format!("the sandbox has no folder mounted at `{}`", p.target));
+            return err_json(format!(
+                "the sandbox has no folder mounted at `{}`",
+                p.target
+            ));
         }
         match self.db.set_mounts(&sb.id, &next) {
             Ok(sb) => {
                 // Remove the symlink so the file browser stops showing a broken
                 // entry. This never touches the real folder.
                 let link = std::path::Path::new(&sb.workdir).join(&p.target);
-                if std::fs::symlink_metadata(&link).map(|m| m.is_symlink()).unwrap_or(false) {
+                if std::fs::symlink_metadata(&link)
+                    .map(|m| m.is_symlink())
+                    .unwrap_or(false)
+                {
                     let _ = std::fs::remove_file(&link);
                 }
                 if sb.backend == "docker" && sb.status == "running" {
@@ -678,9 +774,17 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Change a sandbox's disk READ isolation: `strict` (only the sandbox and its mounts), `allowlist` (plus the folders declared in settings), `open` (the whole disk). Takes effect on the next run. Not applicable to the docker backend — a container is already fully isolated."
     )]
-    fn sbx_fs_mode(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<FsModeParams>) -> String {
+    fn sbx_fs_mode(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            FsModeParams,
+        >,
+    ) -> String {
         let Some(mode) = fsmode::FsMode::parse(&p.fs_mode) else {
-            return err_json(format!("invalid mode `{}` (strict, allowlist, open)", p.fs_mode));
+            return err_json(format!(
+                "invalid mode `{}` (strict, allowlist, open)",
+                p.fs_mode
+            ));
         };
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
@@ -693,7 +797,9 @@ impl McpSandboxServer {
             }));
         }
         match self.db.set_fs_mode(&sb.id, mode) {
-            Ok(sb) => ok_json(json!({ "ok": true, "sandbox": sb.name, "fsMode": mode.as_str(), "label": mode.label() })),
+            Ok(sb) => ok_json(
+                json!({ "ok": true, "sandbox": sb.name, "fsMode": mode.as_str(), "label": mode.label() }),
+            ),
             Err(e) => err_json(e),
         }
     }
@@ -701,7 +807,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Read or change the sandbox defaults: the read-isolation new sandboxes start with, the folders readable in `allowlist` mode, and the default network/CPU/RAM/deadline. Call it with no arguments just to read them."
     )]
-    fn sbx_settings(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<SettingsParams>) -> String {
+    fn sbx_settings(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            SettingsParams,
+        >,
+    ) -> String {
         let cur = settings::load(&self.db);
         let touched = p.default_fs_mode.is_some()
             || p.allowlist.is_some()
@@ -733,7 +844,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Open specific ports for a sandbox while the rest of the network stays closed. `listen` = ports the sandbox may serve on, reachable from this machine at 127.0.0.1:<port> — this is how you run an app inside a sandbox. `connect` = the only remote ports it may dial out to, so `connect:[443]` means HTTPS and nothing else — note it is per PORT, not per host: it cannot mean 'only this website'. `loopback` = services on THIS machine the sandbox may call; empty (the default) means none, which is what stops sandboxed code from reaching SenClaw's own unauthenticated API. Sending empty lists closes everything again. On macOS all three are enforced exactly; on docker and Linux opening a port grants the sandbox a network, and the reply says so."
     )]
-    async fn sbx_ports(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<PortsParams>) -> String {
+    async fn sbx_ports(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            PortsParams,
+        >,
+    ) -> String {
         let before = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -768,7 +884,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Turn activity tracing on or off, for testing: it records file reads and writes, process launches, and which addresses were contacted. OFF by default. Turn it on, run the code again, then read the result with sbx_events. NOTE: this is an observation tool for testing, NOT security evidence — the hook runs inside the sandbox, so code that deliberately hides can evade it. What actually stops hostile code is the sandbox itself (read/write/network isolation), not this."
     )]
-    fn sbx_trace(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<TraceParams>) -> String {
+    fn sbx_trace(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            TraceParams,
+        >,
+    ) -> String {
         match self.db.set_trace(p.sandbox_id.trim(), p.enabled) {
             Ok(sb) => ok_json(json!({
                 "ok": true,
@@ -785,7 +906,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Read the traced events: which files were read or written, which processes were launched, which addresses were contacted (including hostnames looked up). Filter with `kind` = file | proc | net, or with `runId` for a single run."
     )]
-    fn sbx_events(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<EventsParams>) -> String {
+    fn sbx_events(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            EventsParams,
+        >,
+    ) -> String {
         let sb = match self.sandbox(&p.sandbox_id) {
             Ok(sb) => sb,
             Err(e) => return err_json(e),
@@ -813,7 +939,12 @@ impl McpSandboxServer {
     #[rmcp::tool(
         description = "Run history: command, exit code, duration, and the isolation actually applied."
     )]
-    fn sbx_runs(&self, rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<RunsParams>) -> String {
+    fn sbx_runs(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            RunsParams,
+        >,
+    ) -> String {
         match self.db.list_runs(
             p.sandbox_id.as_deref().filter(|s| !s.is_empty()),
             p.limit.unwrap_or(20),
@@ -833,9 +964,8 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let db = crate::sandbox::shared_db()
+    let server = McpSandboxServer::from_env()?
         .ok_or_else(|| anyhow::anyhow!("sandbox engine unavailable (cannot open data dir/db)"))?;
-    let server = McpSandboxServer { db };
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
     Ok(())

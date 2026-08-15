@@ -189,12 +189,32 @@ fn builtin_defs() -> Vec<WidgetDef> {
         enabled: true,
     };
     vec![
-        mk("chart", "Biểu đồ", "Bar/line/area/pie/scatter chart từ series số liệu"),
-        mk("image", "Ảnh", "Hiển thị một ảnh (url hoặc dataUrl) kèm caption"),
+        mk(
+            "chart",
+            "Biểu đồ",
+            "Bar/line/area/pie/scatter chart từ series số liệu",
+        ),
+        mk(
+            "image",
+            "Ảnh",
+            "Hiển thị một ảnh (url hoặc dataUrl) kèm caption",
+        ),
         mk("clock", "Đồng hồ", "Đồng hồ sống theo timezone"),
-        mk("weather", "Thời tiết", "Thẻ thời tiết hiện tại + dự báo ngày"),
-        mk("video", "Video", "Phát video từ một http(s) URL ngay trong chat"),
-        mk("audio", "Âm thanh", "Phát audio từ một http(s) URL ngay trong chat"),
+        mk(
+            "weather",
+            "Thời tiết",
+            "Thẻ thời tiết hiện tại + dự báo ngày",
+        ),
+        mk(
+            "video",
+            "Video",
+            "Phát video từ một http(s) URL ngay trong chat",
+        ),
+        mk(
+            "audio",
+            "Âm thanh",
+            "Phát audio từ một http(s) URL ngay trong chat",
+        ),
     ]
 }
 
@@ -440,7 +460,13 @@ pub fn render_text_fallback(template: &str, params: &Value) -> String {
 pub fn fallback_text(spec: &WidgetSpec) -> String {
     let title = spec.title.as_deref().unwrap_or("").trim();
     let d = &spec.data;
-    let s = |key: &str| d.get(key).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let s = |key: &str| {
+        d.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
     match spec.kind.as_str() {
         "chart" => {
             let n = d
@@ -448,11 +474,19 @@ pub fn fallback_text(spec: &WidgetSpec) -> String {
                 .and_then(|v| v.as_array())
                 .map(|a| a.len())
                 .unwrap_or(0);
-            let t = if title.is_empty() { "Biểu đồ" } else { title };
+            let t = if title.is_empty() {
+                "Biểu đồ"
+            } else {
+                title
+            };
             format!("📊 {t} ({n} chuỗi số liệu) — xem trên SenClaw Web/Desktop")
         }
         "image" => {
-            let cap = if !s("caption").is_empty() { s("caption") } else { title.to_string() };
+            let cap = if !s("caption").is_empty() {
+                s("caption")
+            } else {
+                title.to_string()
+            };
             let url = s("url");
             match (cap.is_empty(), url.is_empty()) {
                 (false, false) => format!("🖼 {cap}: {url}"),
@@ -462,7 +496,11 @@ pub fn fallback_text(spec: &WidgetSpec) -> String {
             }
         }
         "clock" => {
-            let label = if !s("label").is_empty() { s("label") } else { s("tz") };
+            let label = if !s("label").is_empty() {
+                s("label")
+            } else {
+                s("tz")
+            };
             if label.is_empty() {
                 "🕐 Đồng hồ — xem trên SenClaw Web/Desktop".to_string()
             } else {
@@ -485,11 +523,17 @@ pub fn fallback_text(spec: &WidgetSpec) -> String {
                     )
                 })
                 .unwrap_or_default();
-            format!("🌤 Thời tiết {loc}: {temp}° {cond}").trim().to_string()
+            format!("🌤 Thời tiết {loc}: {temp}° {cond}")
+                .trim()
+                .to_string()
         }
         "video" | "audio" => {
             let icon = if spec.kind == "video" { "🎬" } else { "🎵" };
-            let cap = if !s("caption").is_empty() { s("caption") } else { title.to_string() };
+            let cap = if !s("caption").is_empty() {
+                s("caption")
+            } else {
+                title.to_string()
+            };
             let url = s("url");
             if cap.is_empty() {
                 format!("{icon} {url}")
@@ -570,7 +614,10 @@ mod tests {
         m["runtime"]["url"] = json!("http://127.0.0.1:4390");
         let defs = parse_manifest_widgets("crm", &m);
         let d = &defs[0];
-        assert_eq!(d.entry.as_deref(), Some("http://127.0.0.1:4390/widget/board.html"));
+        assert_eq!(
+            d.entry.as_deref(),
+            Some("http://127.0.0.1:4390/widget/board.html")
+        );
         assert_eq!(d.surfaces, vec!["chat", "dashboard"]);
         assert!(d.params.is_some());
         assert_eq!(d.text_fallback.as_deref(), Some("Bảng giai đoạn {stage}"));

@@ -115,6 +115,9 @@ pub(crate) fn process_ws_event(
         mentions_bot_username: Some(is_mentioned),
         bot_token: Some(app_id.to_string()),
         native_msg_id: Some(message.message_id.clone()),
+        // No media download in this adapter yet — see `telegram.rs` for the
+        // photo path a channel needs to feed images to the agent.
+        attachments: Vec::new(),
     };
 
     let handler_guard = match handlers.read() {

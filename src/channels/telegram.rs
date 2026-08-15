@@ -36,6 +36,59 @@ fn chat_id_to_jid(chat_id: i64, chat_type: &str, bot_user_id: u64) -> String {
     format!("tg:{bot_user_id}:{suffix}")
 }
 
+/// Cap on a downloaded Telegram photo, before base64. Telegram itself serves
+/// bot downloads up to 20 MB; this keeps a single message from turning into a
+/// prompt no provider will accept.
+const MAX_MEDIA_BYTES: u32 = 8 * 1024 * 1024;
+
+/// Download one Telegram file into a `data:` URL.
+///
+/// Two steps: `getFile` resolves the opaque `file_id` to a path, then teloxide's
+/// own `download_file` fetches it — which keeps the bot token out of a URL we'd
+/// otherwise build (and risk logging) by hand.
+///
+/// Returns `None` on any failure. A photo we can't fetch has to degrade to a
+/// text-only message; dropping the user's message instead would be worse.
+async fn download_media(
+    bot: &Bot,
+    file_id: String,
+    size: u32,
+    mime_type: &str,
+) -> Option<crate::types::MessageAttachment> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use teloxide::net::Download;
+
+    if size > MAX_MEDIA_BYTES {
+        tracing::warn!(
+            "[TelegramChannel] skipping {size}-byte media, over the {MAX_MEDIA_BYTES} limit"
+        );
+        return None;
+    }
+    let file = match bot.get_file(file_id).send().await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!("[TelegramChannel] getFile failed: {e}");
+            return None;
+        }
+    };
+    let mut bytes: Vec<u8> = Vec::with_capacity(size as usize);
+    if let Err(e) = bot.download_file(&file.path, &mut bytes).await {
+        tracing::warn!("[TelegramChannel] media download failed: {e}");
+        return None;
+    }
+    tracing::info!(
+        "[TelegramChannel] downloaded {} bytes of {mime_type} media",
+        bytes.len()
+    );
+    Some(crate::types::MessageAttachment {
+        data_url: format!("data:{mime_type};base64,{}", STANDARD.encode(&bytes)),
+        mime_type: mime_type.to_string(),
+        name: std::path::Path::new(&file.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string()),
+    })
+}
+
 fn jid_to_chat_id(jid: &str) -> Option<i64> {
     let re = regex::Regex::new(r"^tg:(?:\d+:)?(?:user|group):(-?\d+)$").unwrap();
     re.captures(jid)
@@ -432,13 +485,69 @@ async fn listen_loop(
                 _ => continue,
             };
 
-            // Only handle text messages for now
-            let text = match &tg_msg.kind {
-                MessageKind::Common(common) => match &common.media_kind {
-                    MediaKind::Text(t) => t.text.clone(),
-                    _ => continue,
-                },
+            // Text, or a photo/image-document with its caption. Anything else
+            // (audio, video, stickers) is still skipped — nothing downstream
+            // can read it.
+            let MessageKind::Common(common) = &tg_msg.kind else {
+                continue;
+            };
+            let (text, media) = match &common.media_kind {
+                MediaKind::Text(t) => (t.text.clone(), None),
+                MediaKind::Photo(p) => {
+                    // Telegram ships several rescaled copies; the last is the
+                    // largest, which is what a vision model or OCR wants.
+                    let Some(largest) = p.photo.last() else {
+                        continue;
+                    };
+                    (
+                        p.caption.clone().unwrap_or_default(),
+                        Some((
+                            largest.file.id.clone(),
+                            largest.file.size,
+                            "image/jpeg".to_string(),
+                        )),
+                    )
+                }
+                // An image sent "as file" arrives as a Document, not a Photo —
+                // uncompressed, which is the better source when it is one.
+                MediaKind::Document(d)
+                    if d.document
+                        .mime_type
+                        .as_ref()
+                        .is_some_and(|m| m.type_() == "image") =>
+                {
+                    let mime = d
+                        .document
+                        .mime_type
+                        .as_ref()
+                        .map(|m| m.to_string())
+                        .unwrap_or_else(|| "image/jpeg".to_string());
+                    (
+                        d.caption.clone().unwrap_or_default(),
+                        Some((d.document.file.id.clone(), d.document.file.size, mime)),
+                    )
+                }
                 _ => continue,
+            };
+
+            let attachments = match media {
+                Some((file_id, size, mime)) => {
+                    match download_media(&bot, file_id, size, &mime).await {
+                        Some(a) => vec![a],
+                        // Download failed: carry on with the caption alone
+                        // rather than swallowing the user's message entirely.
+                        None => Vec::new(),
+                    }
+                }
+                None => Vec::new(),
+            };
+
+            // A caption-less photo would otherwise reach the agent as an empty
+            // turn, which reads as "the user said nothing".
+            let text = if text.trim().is_empty() && !attachments.is_empty() {
+                "[Ảnh đính kèm]".to_string()
+            } else {
+                text
             };
 
             let chat_id = tg_msg.chat.id.0;
@@ -482,12 +591,9 @@ async fn listen_loop(
                 }
             }
 
-            // Mention detection
-            let entities = match &tg_msg.kind {
-                MessageKind::Common(common) => match &common.media_kind {
-                    MediaKind::Text(t) => t.entities.clone(),
-                    _ => vec![],
-                },
+            // Mention detection — only text messages carry entities.
+            let entities = match &common.media_kind {
+                MediaKind::Text(t) => t.entities.clone(),
                 _ => vec![],
             };
             let mentions_bot = check_mention(&text, &entities, &bot_username);
@@ -510,6 +616,7 @@ async fn listen_loop(
                 mentions_bot_username: Some(mentions_bot),
                 bot_token: Some(token.clone()),
                 native_msg_id: Some(tg_msg.id.to_string()),
+                attachments,
             };
 
             tracing::debug!(

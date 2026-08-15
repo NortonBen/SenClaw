@@ -20,13 +20,37 @@ struct WorkspaceSwitchParams {
 }
 
 #[derive(Clone)]
-struct McpWorkspaceServer {
+pub struct McpWorkspaceServer {
     state_file: PathBuf,
     default_workspace: PathBuf,
     allowed_work_dirs: Option<Vec<String>>,
 }
 
 impl McpWorkspaceServer {
+    /// Build from the workspace env pair, or `None` when either is absent.
+    /// See [`crate::mcp::wiki_server::McpWikiServer::from_env`] for why an
+    /// unconfigured child is `None` rather than an error.
+    pub fn from_env() -> Result<Option<Self>> {
+        let (Ok(state_file), Ok(default_workspace)) = (
+            std::env::var("SENCLAW_WORKSPACE_STATE_FILE"),
+            std::env::var("SENCLAW_DEFAULT_WORKSPACE"),
+        ) else {
+            return Ok(None);
+        };
+        // Empty is a real setting ("switching disabled"), not a missing var.
+        let allowed_raw = std::env::var("SENCLAW_ALLOWED_WORK_DIRS").unwrap_or_default();
+        let allowed_work_dirs: Option<Vec<String>> = if allowed_raw.is_empty() {
+            None
+        } else {
+            Some(serde_json::from_str(&allowed_raw).context("parse SENCLAW_ALLOWED_WORK_DIRS")?)
+        };
+        Ok(Some(Self {
+            state_file: PathBuf::from(state_file),
+            default_workspace: PathBuf::from(default_workspace),
+            allowed_work_dirs,
+        }))
+    }
+
     fn inner(&self) -> WorkspaceServer {
         WorkspaceServer::new(
             &self.state_file,
@@ -36,7 +60,7 @@ impl McpWorkspaceServer {
     }
 }
 
-#[rmcp::tool_router(server_handler)]
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpWorkspaceServer {
     #[rmcp::tool(description = "Switch the agent workspace directory")]
     fn workspace_switch(
@@ -69,22 +93,8 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let state_file = std::env::var("SENCLAW_WORKSPACE_STATE_FILE")
-        .context("SENCLAW_WORKSPACE_STATE_FILE not set")?;
-    let default_workspace =
-        std::env::var("SENCLAW_DEFAULT_WORKSPACE").context("SENCLAW_DEFAULT_WORKSPACE not set")?;
-    let allowed_raw = std::env::var("SENCLAW_ALLOWED_WORK_DIRS").unwrap_or_default();
-    let allowed_work_dirs: Option<Vec<String>> = if allowed_raw.is_empty() {
-        None
-    } else {
-        Some(serde_json::from_str(&allowed_raw).context("parse SENCLAW_ALLOWED_WORK_DIRS")?)
-    };
-
-    let server = McpWorkspaceServer {
-        state_file: PathBuf::from(state_file),
-        default_workspace: PathBuf::from(default_workspace),
-        allowed_work_dirs,
-    };
+    let server = McpWorkspaceServer::from_env()?
+        .context("SENCLAW_WORKSPACE_STATE_FILE / SENCLAW_DEFAULT_WORKSPACE not set")?;
 
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;

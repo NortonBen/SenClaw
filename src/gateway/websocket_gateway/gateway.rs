@@ -20,7 +20,7 @@ pub trait WsGatewayApi: Send + Sync {
         _group_jid: &str,
         _group: &GroupBinding,
         _text: &str,
-        _attachments: &[crate::agent::input_builder::ImageAttachment],
+        _attachments: &[crate::types::MessageAttachment],
     ) {
     }
     /// Resolve a pending permission request.

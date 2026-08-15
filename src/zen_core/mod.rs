@@ -1226,6 +1226,21 @@ pub struct ZenCoreHandlers {
 pub trait ZenCore: Send + Sync {
     fn create_session(&self, session_id: Option<&str>) -> Result<()>;
     fn process_user_input(&self, prompt: &str, original_input: Option<&str>) -> Result<()>;
+    /// Same as [`Self::process_user_input`], but the user turn also carries
+    /// image blocks (chat attachments, pasted screenshots).
+    ///
+    /// Callers must only pass images when the resolved model actually accepts
+    /// them — this layer does no vision capability check of its own. The default
+    /// drops the images so implementors that never see attachments stay valid.
+    fn process_user_input_with_images(
+        &self,
+        prompt: &str,
+        original_input: Option<&str>,
+        images: Vec<ImageSource>,
+    ) -> Result<()> {
+        let _ = images;
+        self.process_user_input(prompt, original_input)
+    }
     fn pause_session(&self);
     fn interrupt_session(&self, target_state: SessionState);
     fn dispose(&self);

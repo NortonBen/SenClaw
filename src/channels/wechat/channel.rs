@@ -204,6 +204,10 @@ impl WeChatChannel {
                                 mentions_bot_username: Some(false),
                                 bot_token: Some(self.account_id.clone()),
                                 native_msg_id: None,
+                                // No media download in this adapter yet — see
+                                // `telegram.rs` for the photo path a channel
+                                // needs to feed images to the agent.
+                                attachments: Vec::new(),
                             };
 
                             if let Ok(guard) = self.handlers.read() {

@@ -501,7 +501,7 @@ fn format_snapshot_response(
 // ===== MCP Server wrapper =====
 
 #[derive(Clone)]
-struct McpBrowserServer {
+pub struct McpBrowserServer {
     /// Gateway's WebSocket port.
     ws_port: u16,
     /// Identity of the agent this subprocess serves (SENCLAW_AGENT_ID).
@@ -511,6 +511,21 @@ struct McpBrowserServer {
 }
 
 impl McpBrowserServer {
+    /// Build from `SENCLAW_WS_PORT`, or `None` when it is absent. Reachability
+    /// of the gateway is deliberately *not* checked here: connections are
+    /// opened per call, so an extension that starts later still works.
+    pub fn from_env() -> Result<Option<Self>> {
+        let Ok(raw_port) = std::env::var("SENCLAW_WS_PORT") else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            ws_port: raw_port.parse().context("invalid SENCLAW_WS_PORT")?,
+            agent_id: std::env::var("SENCLAW_AGENT_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
+        }))
+    }
+
     fn request_id() -> String {
         Uuid::new_v4().to_string()
     }
@@ -590,7 +605,7 @@ impl McpBrowserServer {
 
 // ===== MCP tool implementations =====
 
-#[rmcp::tool_router(server_handler)]
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpBrowserServer {
     // ===== Navigation =====
 
@@ -1475,20 +1490,13 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let ws_port: u16 = std::env::var("SENCLAW_WS_PORT")
-        .context("SENCLAW_WS_PORT not set")?
-        .parse()
-        .context("invalid SENCLAW_WS_PORT")?;
-
-    let agent_id = std::env::var("SENCLAW_AGENT_ID")
-        .ok()
-        .filter(|s| !s.is_empty());
-    if let Some(aid) = &agent_id {
+    let server = McpBrowserServer::from_env()?.context("SENCLAW_WS_PORT not set")?;
+    if let Some(aid) = &server.agent_id {
         tracing::info!("[BrowserServer] Serving agent: {aid}");
     }
 
     // Verify the gateway is reachable
-    let test_url = format!("ws://127.0.0.1:{ws_port}/browser-mcp");
+    let test_url = format!("ws://127.0.0.1:{}/browser-mcp", server.ws_port);
     match tokio_tungstenite::connect_async(&test_url).await {
         Ok((mut ws, _)) => {
             let _ = ws.close(None).await;
@@ -1501,7 +1509,6 @@ pub async fn run_stdio_server() -> Result<()> {
     }
 
     // Start MCP stdio server — each tool call will open a fresh WS connection
-    let server = McpBrowserServer { ws_port, agent_id };
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
 

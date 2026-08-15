@@ -182,6 +182,64 @@ struct Loaded {
     /// with the rest of `Loaded` on idle unload (cache is rebuilt on the
     /// first turn after reload).
     prefix_cache: super::mlx_lm::prefix_cache::PrefixCache,
+    /// Sampling knobs the checkpoint itself ships in `generation_config.json`.
+    /// Used only where the user left the corresponding setting unset.
+    gen_defaults: GenerationDefaults,
+}
+
+/// The sampling defaults a checkpoint publishes in `generation_config.json`.
+///
+/// These are the values the model was tuned and evaluated with — Gemma 4, for
+/// instance, ships `{"temperature": 1.0, "top_k": 64, "top_p": 0.95}` — so
+/// reading them beats a per-architecture table in this file: a new checkpoint
+/// gets its own recommended sampling with no code change, and a checkpoint
+/// that ships nothing simply leaves every field `None` and falls through to
+/// the existing hardcoded fallbacks.
+///
+/// Missing file, unparseable JSON, and wrong-typed fields are all "no
+/// opinion", never an error: sampling defaults must not be able to fail a load.
+#[derive(Debug, Clone, Copy, Default)]
+struct GenerationDefaults {
+    temperature: Option<f32>,
+    top_k: Option<i32>,
+    top_p: Option<f32>,
+}
+
+impl GenerationDefaults {
+    fn from_model_dir(model_dir: &Path) -> Self {
+        let Ok(raw) = std::fs::read_to_string(model_dir.join("generation_config.json")) else {
+            return Self::default();
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return Self::default();
+        };
+        // `do_sample: false` means the checkpoint asks for greedy decoding, in
+        // which case its temperature/top_k/top_p are decoration and must not be
+        // promoted into a sampling config.
+        if v.get("do_sample").and_then(|d| d.as_bool()) == Some(false) {
+            return Self {
+                temperature: Some(0.0),
+                ..Self::default()
+            };
+        }
+        Self {
+            temperature: v
+                .get("temperature")
+                .and_then(|t| t.as_f64())
+                .map(|t| t as f32)
+                .filter(|t| *t >= 0.0),
+            top_k: v
+                .get("top_k")
+                .and_then(|k| k.as_i64())
+                .map(|k| k as i32)
+                .filter(|k| *k > 0),
+            top_p: v
+                .get("top_p")
+                .and_then(|p| p.as_f64())
+                .map(|p| p as f32)
+                .filter(|p| *p > 0.0 && *p <= 1.0),
+        }
+    }
 }
 
 /// **Process-wide serialization for ALL heavy MLX/Metal work.**
@@ -734,6 +792,7 @@ fn load_state(model_dir: &Path, model_id: &str) -> anyhow::Result<Loaded> {
         head_dim,
         n_kv_heads,
         prefix_cache,
+        gen_defaults: GenerationDefaults::from_model_dir(model_dir),
     })
 }
 
@@ -911,23 +970,40 @@ fn mlx_recent_decode_push(buf: &mut VecDeque<u32>, tok: u32, window: usize) {
     }
 }
 
+/// Truncation applied before the draw: `top_k` / `top_p`, resolved once per
+/// turn from the user's settings falling back to the checkpoint's own
+/// `generation_config.json`. `None` on both fields = the untruncated
+/// full-vocabulary draw this engine used to do unconditionally.
+#[derive(Debug, Clone, Copy, Default)]
+struct SamplingTruncation {
+    top_k: Option<i32>,
+    top_p: Option<f32>,
+}
+
 fn sample_decode_token_id(
     last_logits: &mlx_rs::Array,
     temperature: f32,
     repetition_penalty: f32,
+    truncation: SamplingTruncation,
     recent_decode_ids: &VecDeque<u32>,
     forbidden_ids: &[u32],
 ) -> anyhow::Result<mlx_rs::Array> {
     use mlx_rs::ops::which;
     use mlx_rs::{Array, Dtype};
 
-    let mlx_sample = super::mlx_lm::models::qwen3::sample;
+    let mlx_sample = |logits: &Array| {
+        super::mlx_lm::sampling::sample_with(
+            logits,
+            temperature,
+            truncation.top_k,
+            truncation.top_p,
+        )
+    };
 
     let apply_penalty = repetition_penalty > 1.0 && !recent_decode_ids.is_empty();
     // Fast path: nothing to adjust — sample the raw logits directly.
     if forbidden_ids.is_empty() && !apply_penalty {
-        return mlx_sample(last_logits, temperature)
-            .map_err(|e| anyhow::anyhow!("mlx sample: {e:?}"));
+        return mlx_sample(last_logits).map_err(|e| anyhow::anyhow!("mlx sample: {e:?}"));
     }
     if !forbidden_ids.is_empty() {
         tracing::debug!(
@@ -995,7 +1071,7 @@ fn sample_decode_token_id(
             .map_err(|e| anyhow::anyhow!("forbidden scatter: {e:?}"))?;
     }
 
-    mlx_sample(&logits, temperature).map_err(|e| anyhow::anyhow!("mlx sample: {e:?}"))
+    mlx_sample(&logits).map_err(|e| anyhow::anyhow!("mlx sample: {e:?}"))
 }
 
 /// Synchronous generation entry. Runs on a blocking worker, holding the
@@ -1754,6 +1830,23 @@ fn generate_with_cache(
             }
             _ => 1.0_f32,
         });
+    // Top-k / top-p truncation. Precedence is user setting → checkpoint's own
+    // `generation_config.json` → off. "Off" is the historical behaviour (an
+    // untruncated draw over the whole vocabulary), so a checkpoint that
+    // publishes nothing and a user who sets nothing get exactly what they got
+    // before. Gemma 4 publishes `top_k: 64, top_p: 0.95`, so it now samples
+    // the way its own checkpoint asks to be sampled.
+    //
+    // A setting of `0` (top_k) or `1.0` (top_p) is an explicit "disable" and
+    // must beat the checkpoint default, which is why the `unwrap_or_else` sits
+    // outside the validity filter — `sample_with` treats those values as off.
+    let decode_truncation = SamplingTruncation {
+        top_k: gen_opt
+            .top_k
+            .map(|k| k as i32)
+            .or(state.gen_defaults.top_k),
+        top_p: gen_opt.top_p.or(state.gen_defaults.top_p),
+    };
     let mut recent_decode_ids: VecDeque<u32> = VecDeque::new();
 
     // Structural tool-call enforcement state — Qwen3 family only. When we see
@@ -1803,7 +1896,19 @@ fn generate_with_cache(
     //
     // 512 is a sweet spot on M-series: small enough that activations fit in
     // GPU caches, large enough that per-chunk dispatch overhead amortizes.
-    const PREFILL_CHUNK: usize = 512;
+    //
+    // Overridable via `prefill_chunk_tokens` in settings.json so the value can
+    // be swept without a rebuild. It is worth sweeping: chunk size is a whole
+    // scheduling regime, not a constant factor, and the sweet spot moves with
+    // the machine, the model's activation width, and the prompt length. Clamped
+    // to a sane band because both ends fail badly — tiny chunks pay per-chunk
+    // dispatch on every one of them, huge chunks materialize an activation
+    // graph the GPU has to hold at once.
+    const PREFILL_CHUNK_DEFAULT: usize = 512;
+    let prefill_chunk = gen_opt
+        .prefill_chunk_tokens
+        .map(|c| (c as usize).clamp(32, 4096))
+        .unwrap_or(PREFILL_CHUNK_DEFAULT);
     // SSM-only architectures consume the full sequence at once via the
     // sequential scan; chunking would force re-doing the scan and break
     // their convolution windows. Skip for Mamba / Falcon-Mamba.
@@ -1848,7 +1953,7 @@ fn generate_with_cache(
     // which would re-walk positions [0..prefill_start] that are already
     // populated by the restored KV state. Chunked path slices the prompt
     // from `prefill_start` onwards, only doing work for the new suffix.
-    let logits = if (!chunked_supported || prompt.len() <= PREFILL_CHUNK) && prefill_start == 0 {
+    let logits = if (!chunked_supported || prompt.len() <= prefill_chunk) && prefill_start == 0 {
         // Small prompt or SSM arch — single forward pass.
         match &mut state.model {
             ModelKind::Qwen3(m) => {
@@ -1923,18 +2028,18 @@ fn generate_with_cache(
         }
     } else {
         let to_prefill = prompt.len() - prefill_start;
-        let chunk_count = to_prefill.div_ceil(PREFILL_CHUNK).max(1);
+        let chunk_count = to_prefill.div_ceil(prefill_chunk).max(1);
         tracing::info!(
             "[local-mlx-native] chunked prefill: {} tokens (skipping {} restored) in {} chunks of ≤{}",
             to_prefill,
             prefill_start,
             chunk_count,
-            PREFILL_CHUNK,
+            prefill_chunk,
         );
         let mut chunk_logits: Option<mlx_rs::Array> = None;
         let mut cursor = prefill_start;
         while cursor < prompt.len() {
-            let mut end = (cursor + PREFILL_CHUNK).min(prompt.len());
+            let mut end = (cursor + prefill_chunk).min(prompt.len());
             // Break the chunk exactly at the recurrent snapshot boundary so the
             // SSM/conv state can be captured aligned to the cache key.
             if let Some(b) = recurrent_snap_at {
@@ -2057,7 +2162,7 @@ fn generate_with_cache(
                 // intermediates) to keep transient peak memory bounded.
                 // Each call is a sync barrier (~2-5 ms) but reclaims
                 // hundreds of MB → net win on memory-constrained machines.
-                if cursor > 0 && (cursor / PREFILL_CHUNK) % 8 == 7 {
+                if cursor > 0 && (cursor / prefill_chunk) % 8 == 7 {
                     unsafe {
                         mlx_sys::mlx_clear_cache();
                     }
@@ -2067,7 +2172,7 @@ fn generate_with_cache(
         }
         chunk_logits.expect("at least one chunk processed")
     };
-    if (!chunked_supported || prompt.len() <= PREFILL_CHUNK) && prefill_start == 0 {
+    if (!chunked_supported || prompt.len() <= prefill_chunk) && prefill_start == 0 {
         rope_offset += prompt.len();
         eval_all_caches(&mut cache)
             .map_err(|e| anyhow::anyhow!("prefill cache eval failed: {e:?}"))?;
@@ -2085,6 +2190,7 @@ fn generate_with_cache(
         &last_logits,
         decode_temperature,
         decode_repetition_penalty,
+        decode_truncation,
         &recent_decode_ids,
         forbidden_now,
     )?;
@@ -2324,6 +2430,7 @@ fn generate_with_cache(
                 &src,
                 decode_temperature,
                 decode_repetition_penalty,
+                decode_truncation,
                 &recent_decode_ids,
                 forbidden_for(inside_tool_call),
             )?;
@@ -2350,6 +2457,7 @@ fn generate_with_cache(
                     &src,
                     decode_temperature,
                     decode_repetition_penalty,
+                    decode_truncation,
                     &recent_decode_ids,
                     forbidden_for(inside_tool_call),
                 )?;
@@ -2388,6 +2496,7 @@ fn generate_with_cache(
                         src,
                         decode_temperature,
                         decode_repetition_penalty,
+                        decode_truncation,
                         &recent_decode_ids,
                         forbidden_for(inside_tool_call),
                     )?;
@@ -2510,6 +2619,7 @@ fn generate_with_cache(
                 &last_logits,
                 decode_temperature,
                 decode_repetition_penalty,
+                decode_truncation,
                 &recent_decode_ids,
                 forbidden_now,
             )?;
@@ -4152,6 +4262,67 @@ mod tests {
         );
         let err = eng.ensure_installed().await.unwrap_err().to_string();
         assert!(err.contains("model directory not found"), "got: {err}");
+    }
+
+    /// A checkpoint's own recommended sampling is read from
+    /// `generation_config.json`, so a new model gets it with no code change.
+    #[test]
+    fn generation_defaults_read_the_checkpoints_own_sampling() {
+        let dir = tempfile::tempdir().unwrap();
+        // The real `mlx-community/gemma-4-e2b-it-4bit` file, verbatim.
+        std::fs::write(
+            dir.path().join("generation_config.json"),
+            r#"{"bos_token_id":2,"do_sample":true,"eos_token_id":[1,106,50],
+                "pad_token_id":0,"temperature":1.0,"top_k":64,"top_p":0.95}"#,
+        )
+        .unwrap();
+        let d = GenerationDefaults::from_model_dir(dir.path());
+        assert_eq!(d.top_k, Some(64));
+        assert_eq!(d.top_p, Some(0.95));
+        assert_eq!(d.temperature, Some(1.0));
+    }
+
+    /// Every failure mode is "no opinion", never an error — sampling defaults
+    /// must not be able to fail a model load.
+    #[test]
+    fn generation_defaults_degrade_to_no_opinion() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Missing file.
+        let d = GenerationDefaults::from_model_dir(dir.path());
+        assert_eq!((d.top_k, d.top_p, d.temperature), (None, None, None));
+
+        // Unparseable.
+        std::fs::write(dir.path().join("generation_config.json"), "{not json").unwrap();
+        let d = GenerationDefaults::from_model_dir(dir.path());
+        assert_eq!((d.top_k, d.top_p, d.temperature), (None, None, None));
+
+        // Present but wrong-typed / out of range: `as_i64` on a string reads
+        // exactly like an absent key, and a top_p above 1 is meaningless.
+        std::fs::write(
+            dir.path().join("generation_config.json"),
+            r#"{"top_k":"64","top_p":1.5,"temperature":-1}"#,
+        )
+        .unwrap();
+        let d = GenerationDefaults::from_model_dir(dir.path());
+        assert_eq!((d.top_k, d.top_p, d.temperature), (None, None, None));
+    }
+
+    /// `do_sample: false` means the checkpoint asks for greedy decoding; its
+    /// temperature/top_k/top_p are then decoration and must not be promoted
+    /// into a sampling config.
+    #[test]
+    fn generation_defaults_honour_do_sample_false() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("generation_config.json"),
+            r#"{"do_sample":false,"temperature":0.7,"top_k":50,"top_p":0.9}"#,
+        )
+        .unwrap();
+        let d = GenerationDefaults::from_model_dir(dir.path());
+        assert_eq!(d.temperature, Some(0.0));
+        assert_eq!(d.top_k, None);
+        assert_eq!(d.top_p, None);
     }
 
     #[test]

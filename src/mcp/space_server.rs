@@ -39,13 +39,17 @@ pub fn sanitize_event_link(raw: &str) -> Result<String, String> {
     // Reject anything that could resolve off-origin: a scheme, a
     // protocol-relative `//host`, or a backslash the browser normalises to `/`.
     if s.contains(':') && !s.starts_with("/space/app/") {
-        return Err(format!("link phải là đường dẫn nội bộ /space/app/…, nhận được: {s}"));
+        return Err(format!(
+            "link phải là đường dẫn nội bộ /space/app/…, nhận được: {s}"
+        ));
     }
     if s.starts_with("//") || s.contains('\\') {
         return Err("link không được trỏ ra ngoài ứng dụng".into());
     }
     if !s.starts_with("/space/app/") {
-        return Err(format!("link phải bắt đầu bằng /space/app/, nhận được: {s}"));
+        return Err(format!(
+            "link phải bắt đầu bằng /space/app/, nhận được: {s}"
+        ));
     }
     let path = s.split(['?', '#']).next().unwrap_or("");
     if path.contains("..") {
@@ -337,16 +341,72 @@ struct RecurringUpdateParams {
     model_id: Option<String>,
 }
 
+// ─── Space App management params ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct AppListParams {
+    /// Lọc theo tên hoặc id (khớp một phần, không phân biệt hoa thường).
+    #[serde(default)]
+    query: Option<String>,
+    /// "all" (mặc định) | "running" | "stopped".
+    #[serde(default)]
+    status: Option<String>,
+    /// true = hỏi thẳng cổng của từng app xem có trả lời không (chậm hơn,
+    /// chính xác hơn). Mặc định false: chỉ đọc sổ sách của daemon.
+    #[serde(default)]
+    probe: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct AppIdParams {
+    /// Id app đã cài, lấy từ `space_app_list` (vd "kanban", "luna-calendar").
+    app_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct AppMcpListParams {
+    /// Chỉ xem một app. Bỏ trống = toàn bộ app có khai báo MCP.
+    #[serde(default)]
+    app_id: Option<String>,
+    /// Kèm tên từng tool. Mặc định: có khi hỏi một app, không khi liệt kê tất cả.
+    #[serde(default)]
+    include_tools: Option<bool>,
+}
+
 // ─── MCP server struct ────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct McpSpaceServer {
+pub struct McpSpaceServer {
     db: Arc<Db>,
     group_folder: String,
     chat_jid: String,
+    /// Talks to the daemon's REST API for the `space_app_*` tools; see
+    /// [`crate::mcp::space_apps`] for why app lifecycle cannot be done in-process.
+    apps: Arc<crate::mcp::space_apps::SpaceAppsClient>,
 }
 
 impl McpSpaceServer {
+    /// Build from the DB + chat env trio, or `None` when any is absent. See
+    /// [`crate::mcp::wiki_server::McpWikiServer::from_env`] for why an
+    /// unconfigured child is `None` rather than an error.
+    pub fn from_env() -> Result<Option<Self>> {
+        let (Ok(group_folder), Ok(chat_jid)) = (
+            std::env::var("SENCLAW_GROUP_FOLDER"),
+            std::env::var("SENCLAW_CHAT_JID"),
+        ) else {
+            return Ok(None);
+        };
+        let Some(db) = crate::mcp::helper::shared_env_db()? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            db,
+            group_folder,
+            chat_jid,
+            apps: Arc::new(crate::mcp::space_apps::SpaceAppsClient::from_env()),
+        }))
+    }
+
     fn inner(&self) -> SpaceServer {
         SpaceServer {
             db: self.db.clone(),
@@ -354,7 +414,7 @@ impl McpSpaceServer {
     }
 }
 
-#[rmcp::tool_router(server_handler)]
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpSpaceServer {
     // ── Notes ──────────────────────────────────────────────────────────────
 
@@ -859,6 +919,85 @@ VD: prompt='Tìm giá vàng SJC hôm nay', time_local='07:00', frequency='daily'
         >,
     ) -> String {
         self.inner().recurring_delete(&p.id).content
+    }
+
+    // ── Space App lifecycle ────────────────────────────────────────────────
+
+    #[rmcp::tool(description = "Liệt kê Space App đã cài kèm trạng thái chạy. \
+List installed Space Apps with lifecycle state: id, name, kind, mode, running, userStopped, port, launches, idle. \
+Dùng tool này TRƯỚC khi start/stop để lấy đúng `app_id`. \
+Lưu ý: app `session` KHÔNG chạy là trạng thái bình thường — nó tự bật khi được mở hoặc khi một tool của nó được gọi; \
+chỉ app `background` mới được daemon giữ chạy liên tục. \
+`running` là sổ sách của daemon; đặt probe=true để hỏi thẳng cổng xem app có thực sự trả lời.")]
+    async fn space_app_list(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            AppListParams,
+        >,
+    ) -> String {
+        self.apps
+            .list(p.query, p.status, p.probe.unwrap_or(false))
+            .await
+            .content
+    }
+
+    #[rmcp::tool(description = "Bật (khởi động) một Space App ngay và chờ nó trả lời. \
+Start a Space App's server process now and wait until it is healthy. \
+Cũng đăng ký lại MCP server của app, và xoá cờ 'người dùng đã tắt' nếu có. \
+Không sao nếu app đang chạy sẵn. Nếu khởi động lỗi, kết quả kèm phần đuôi log của app.")]
+    async fn space_app_start(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            AppIdParams,
+        >,
+    ) -> String {
+        self.apps.start(&p.app_id).await.content
+    }
+
+    #[rmcp::tool(
+        description = "Tắt một Space App ngay. Stop a Space App's server process now. \
+App `session` sẽ tự bật lại khi được mở hoặc khi tool của nó được gọi — tắt chỉ là làm sớm việc bộ dọn rác sẽ làm. \
+App `background` sẽ NẰM IM cho tới khi start lại, kể cả sau khi daemon khởi động lại theo chu kỳ giám sát; \
+nếu app đó đang trực một kênh (poll tin nhắn, chạy lịch), việc trực sẽ dừng. \
+Hãy xác nhận với người dùng trước khi tắt một app `background`."
+    )]
+    async fn space_app_stop(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            AppIdParams,
+        >,
+    ) -> String {
+        self.apps.stop(&p.app_id).await.content
+    }
+
+    #[rmcp::tool(
+        description = "Khởi động lại một Space App: giết tiến trình cũ (kể cả tiến trình mồ côi đang giữ cổng), \
+đợi cổng được nhả, rồi chạy lại và đăng ký lại MCP. Restart a Space App. \
+Chạy được cả khi app đang tắt. Dùng khi app treo, trả lời sai, hoặc vừa được cập nhật."
+    )]
+    async fn space_app_restart(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            AppIdParams,
+        >,
+    ) -> String {
+        self.apps.restart(&p.app_id).await.content
+    }
+
+    #[rmcp::tool(
+        description = "Liệt kê MCP server theo từng Space App: tên server, trạng thái kết nối, số tool (và tên tool khi hỏi một app). \
+List the MCP server each Space App registers, with connection status and tool count. \
+Đây là cách tra tên tool đầy đủ để gọi: `mcp__<mcpName>__<tool>` (vd `mcp__ssh-manager-mcp__ssh_execute_command`). \
+Tên server lấy từ manifest của app, KHÔNG suy ra từ id app. \
+App đang tắt vẫn giữ tool trong danh sách — lần gọi đầu tiên sẽ tự bật app."
+    )]
+    async fn space_app_mcp_list(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            AppMcpListParams,
+        >,
+    ) -> String {
+        self.apps.mcp_list(p.app_id, p.include_tools).await.content
     }
 }
 
@@ -2197,20 +2336,8 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let db_path = std::env::var("SENCLAW_DB_PATH").context("SENCLAW_DB_PATH not set")?;
-    let group_folder =
-        std::env::var("SENCLAW_GROUP_FOLDER").context("SENCLAW_GROUP_FOLDER not set")?;
-    let chat_jid = std::env::var("SENCLAW_CHAT_JID").context("SENCLAW_CHAT_JID not set")?;
-
-    let mut config = crate::config::Config::from_env();
-    config.paths.db_path = std::path::PathBuf::from(&db_path);
-    let db = Arc::new(Db::open(&config).context("open space DB")?);
-
-    let server = McpSpaceServer {
-        db,
-        group_folder,
-        chat_jid,
-    };
+    let server = McpSpaceServer::from_env()?
+        .context("SENCLAW_DB_PATH / SENCLAW_GROUP_FOLDER / SENCLAW_CHAT_JID not set")?;
 
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
@@ -2481,7 +2608,10 @@ mod event_link_tests {
 
         let list = srv.event_list(0, i64::MAX);
         let rows: Vec<serde_json::Value> = serde_json::from_str(&list.content).unwrap();
-        assert!(rows.is_empty(), "a rejected link must not leave a half-made event");
+        assert!(
+            rows.is_empty(),
+            "a rejected link must not leave a half-made event"
+        );
     }
 
     #[test]
@@ -2506,7 +2636,15 @@ mod event_link_tests {
 
         let ok = srv.event_update(
             id.clone(),
-            None, None, None, None, None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             Some("/space/app/study?session=two".into()),
             None,
             false,
@@ -2516,7 +2654,15 @@ mod event_link_tests {
 
         let bad = srv.event_update(
             id,
-            None, None, None, None, None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
             Some("javascript:alert(1)".into()),
             None,
             false,

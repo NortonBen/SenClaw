@@ -30,7 +30,7 @@ struct SendFileParams {
 }
 
 #[derive(Clone)]
-struct McpSendServer {
+pub struct McpSendServer {
     bridge_port: u16,
     own_chat_jid: String,
     bot_token: Option<String>,
@@ -38,6 +38,26 @@ struct McpSendServer {
 }
 
 impl McpSendServer {
+    /// Build from the bridge + chat env pair, or `None` when either is absent.
+    /// See [`crate::mcp::wiki_server::McpWikiServer::from_env`] for why an
+    /// unconfigured child is `None` rather than an error.
+    pub fn from_env() -> Result<Option<Self>> {
+        let (Ok(bridge_raw), Ok(chat_jid)) = (
+            std::env::var("SENCLAW_SEND_BRIDGE_PORT"),
+            std::env::var("SENCLAW_CHAT_JID"),
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            bridge_port: bridge_raw
+                .parse()
+                .context("invalid SENCLAW_SEND_BRIDGE_PORT")?,
+            own_chat_jid: chat_jid,
+            bot_token: std::env::var("SENCLAW_BOT_TOKEN").ok(),
+            db_path: std::env::var("SENCLAW_DB_PATH").ok(),
+        }))
+    }
+
     fn open_db(&self) -> Option<Db> {
         let path = self.db_path.as_ref()?;
         let mut cfg = crate::config::Config::from_env();
@@ -56,27 +76,15 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let bridge_port: u16 = std::env::var("SENCLAW_SEND_BRIDGE_PORT")
-        .context("SENCLAW_SEND_BRIDGE_PORT not set")?
-        .parse()
-        .context("invalid SENCLAW_SEND_BRIDGE_PORT")?;
-    let chat_jid = std::env::var("SENCLAW_CHAT_JID").context("SENCLAW_CHAT_JID not set")?;
-    let bot_token = std::env::var("SENCLAW_BOT_TOKEN").ok();
-    let db_path = std::env::var("SENCLAW_DB_PATH").ok();
-
-    let server = McpSendServer {
-        bridge_port,
-        own_chat_jid: chat_jid,
-        bot_token,
-        db_path,
-    };
+    let server = McpSendServer::from_env()?
+        .context("SENCLAW_SEND_BRIDGE_PORT / SENCLAW_CHAT_JID not set")?;
 
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;
     Ok(())
 }
 
-#[rmcp::tool_router(server_handler)]
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpSendServer {
     #[rmcp::tool(description = "Send a text message to a chat")]
     async fn send_message(

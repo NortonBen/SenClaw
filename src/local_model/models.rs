@@ -77,6 +77,19 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         native_supported: true,
         vision: false,
     },
+    // A different Gemma-4 shape, not a bigger E2B: 128 routed experts per layer
+    // (top-8) beside a dense shared FFN, no Per-Layer Embeddings, no cross-layer
+    // KV sharing, and full-attention layers that derive V from the raw K
+    // projection. Text-only weights are ~14.3 GB, so it needs a machine that can
+    // hold them — there is no expert streaming on this path.
+    KnownModel {
+        id: "mlx-community/gemma-4-26b-a4b-it-4bit",
+        label: "Gemma 4 26B-A4B-it 4-bit — MoE (128 experts, top-8), text-only",
+        approx_size_gb: 14.3,
+        context_length: 262_144,
+        native_supported: true,
+        vision: false,
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static KnownModel> {

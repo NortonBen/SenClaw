@@ -41,13 +41,35 @@ struct TaskActionParams {
 }
 
 #[derive(Clone)]
-struct McpScheduleServer {
+pub struct McpScheduleServer {
     db: Arc<Db>,
     group_folder: String,
     chat_jid: String,
 }
 
-#[rmcp::tool_router(server_handler)]
+impl McpScheduleServer {
+    /// Build from the DB + chat env trio, or `None` when any is absent. See
+    /// [`crate::mcp::wiki_server::McpWikiServer::from_env`] for why an
+    /// unconfigured child is `None` rather than an error.
+    pub fn from_env() -> Result<Option<Self>> {
+        let (Ok(group_folder), Ok(chat_jid)) = (
+            std::env::var("SENCLAW_GROUP_FOLDER"),
+            std::env::var("SENCLAW_CHAT_JID"),
+        ) else {
+            return Ok(None);
+        };
+        let Some(db) = crate::mcp::helper::shared_env_db()? else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            db,
+            group_folder,
+            chat_jid,
+        }))
+    }
+}
+
+#[rmcp::tool_router(server_handler, vis = "pub")]
 impl McpScheduleServer {
     #[rmcp::tool(
         description = "Schedule a new task. schedule_type is one of: 'cron' (recurring, schedule_value is a cron expr), 'interval' (recurring, schedule_value is milliseconds), 'once' (fire once at the ISO-8601 schedule_value, then keep the row marked completed), or 'once_delete' (fire once at the ISO-8601 schedule_value, then delete the task entirely)"
@@ -157,20 +179,8 @@ pub async fn run_stdio_server() -> Result<()> {
         )
         .try_init();
 
-    let db_path = std::env::var("SENCLAW_DB_PATH").context("SENCLAW_DB_PATH not set")?;
-    let group_folder =
-        std::env::var("SENCLAW_GROUP_FOLDER").context("SENCLAW_GROUP_FOLDER not set")?;
-    let chat_jid = std::env::var("SENCLAW_CHAT_JID").context("SENCLAW_CHAT_JID not set")?;
-
-    let mut config = crate::config::Config::from_env();
-    config.paths.db_path = std::path::PathBuf::from(&db_path);
-    let db = Arc::new(Db::open(&config).context("open schedule DB")?);
-
-    let server = McpScheduleServer {
-        db,
-        group_folder,
-        chat_jid,
-    };
+    let server = McpScheduleServer::from_env()?
+        .context("SENCLAW_DB_PATH / SENCLAW_GROUP_FOLDER / SENCLAW_CHAT_JID not set")?;
 
     let service = server.serve(rmcp::transport::io::stdio()).await?;
     service.waiting().await?;

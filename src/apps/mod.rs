@@ -20,6 +20,6 @@ pub mod requirements;
 pub mod sandbox_decl;
 pub mod token;
 
-pub use manifest::{RunMode, Runner, Requires, RuntimeSpec, SandboxDecl};
+pub use manifest::{Requires, RunMode, Runner, RuntimeSpec, SandboxDecl};
 pub use requirements::{CheckResult, RequirementsReport};
 pub use token::{TokenMode, API_VERSION, ENV_API_VERSION, ENV_APP_TOKEN};

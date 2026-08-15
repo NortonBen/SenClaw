@@ -59,6 +59,10 @@ async fn main() {
         usage_recorder: None,
         ws_port: 0,
         ws_token: String::new(),
+        // The harness binds loopback, which is exactly the case the daemon
+        // itself leaves unauthenticated — no token to fetch before poking the
+        // alias page by hand.
+        api_auth: Arc::new(senclaw::gateway::ui_server::auth::ApiAuth::disabled()),
     });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:18988")

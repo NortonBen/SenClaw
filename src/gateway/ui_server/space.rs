@@ -834,6 +834,163 @@ pub(crate) async fn space_apps_list(
 }
 
 #[derive(Deserialize)]
+pub(crate) struct AppStatusQuery {
+    /// Also ask each server app's port whether it is *answering*, not merely
+    /// tracked. Off by default: a probe is a network round-trip per app, and the
+    /// common caller (a chat agent listing apps) only needs the bookkeeping.
+    #[serde(default)]
+    probe: Option<u8>,
+}
+
+/// One lifecycle row per installed app, for the whole fleet, in one call.
+///
+/// `/apps` answers "what is installed" and `/apps/:id/runtime` answers "what is
+/// this one process doing"; between them there was nothing that answered "which
+/// of my fifty apps are up" without fifty requests. That is the question an
+/// agent asks before it starts or stops anything, so it gets one endpoint.
+///
+/// Everything here is read from memory (the launcher's maps) plus one DB read,
+/// so it stays cheap enough to call on every turn of a conversation. `probe=1`
+/// opts into the expensive, accurate answer.
+pub(crate) async fn space_apps_status(
+    State(s): State<Arc<UiState>>,
+    Query(q): Query<AppStatusQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let db = db(&s)?;
+    let rows: Vec<(String, serde_json::Value, bool)> = db
+        .with_conn(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT id, manifest, enabled FROM space_apps ORDER BY id")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i32>(2)? != 0,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .filter_map(|(id, raw, enabled)| {
+                    serde_json::from_str::<serde_json::Value>(&raw)
+                        .ok()
+                        .map(|m| (id, m, enabled))
+                })
+                .collect::<Vec<_>>();
+            Ok(rows)
+        })
+        .map_err(internal)?;
+
+    let launcher = s.space_mcp_launcher.as_ref();
+    let probe = q.probe.unwrap_or(0) != 0;
+
+    let mut apps = Vec::with_capacity(rows.len());
+    let (mut running, mut server_count) = (0usize, 0usize);
+    for (id, manifest, enabled) in rows {
+        apps.push(app_status_row(launcher, &id, &manifest, enabled, probe).await);
+        let row = apps.last().expect("just pushed");
+        if row["kind"] == "server" {
+            server_count += 1;
+            if row["running"] == serde_json::Value::Bool(true) {
+                running += 1;
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "apps": apps,
+        "total": apps.len(),
+        "serverApps": server_count,
+        "running": running,
+        "probed": probe,
+    })))
+}
+
+/// The per-app shape `/apps/status` answers with.
+async fn app_status_row(
+    launcher: Option<&Arc<super::space_mcp::SpaceMcpLauncher>>,
+    id: &str,
+    manifest: &serde_json::Value,
+    enabled: bool,
+    probe: bool,
+) -> serde_json::Value {
+    let spec = crate::apps::RuntimeSpec::parse(manifest);
+    let name = manifest
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(id)
+        .to_string();
+    let kind = manifest
+        .get("runtime")
+        .and_then(|r| r.get("kind"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("static")
+        .to_string();
+    let mcp_name = manifest
+        .get("mcp")
+        .filter(|v| v.is_object())
+        .map(|m| super::space_mcp::mcp_server_name(m, id));
+
+    // A non-server app is served by the daemon itself: it has no process, so
+    // "running" is the honest answer only if it means "usable", which it is.
+    if !spec.is_server {
+        return serde_json::json!({
+            "id": id,
+            "name": name,
+            "enabled": enabled,
+            "kind": kind,
+            "mode": "none",
+            "running": true,
+            "userStopped": false,
+            "mcpName": mcp_name,
+            "note": "Served by the daemon — nothing to start or stop.",
+        });
+    }
+
+    let port = manifest
+        .get("runtime")
+        .and_then(|r| r.get("port"))
+        .and_then(|p| p.as_u64())
+        .map(|p| p as u16)
+        .filter(|p| *p > 0)
+        .unwrap_or(spec.port);
+
+    let Some(launcher) = launcher else {
+        return serde_json::json!({
+            "id": id, "name": name, "enabled": enabled, "kind": kind,
+            "mode": spec.mode.as_str(), "port": port, "mcpName": mcp_name,
+            "running": false,
+            "note": "App runtime not available in this daemon.",
+        });
+    };
+
+    let info = launcher.runtime_info(id).await;
+    let ready = if probe {
+        Some(launcher.is_answering(port, &spec.health_path).await)
+    } else {
+        None
+    };
+
+    serde_json::json!({
+        "id": id,
+        "name": name,
+        "enabled": enabled,
+        "kind": kind,
+        "mode": spec.mode.as_str(),
+        "port": port,
+        "mcpName": mcp_name,
+        // Bookkeeping: does this daemon track a live pid for the app. False for
+        // an app running outside this daemon — which is why `ready` exists.
+        "running": launcher.is_running(id).await,
+        "ready": ready,
+        "userStopped": launcher.is_user_stopped(id).await,
+        "launches": launcher.launch_count(id).await,
+        "pid": info.as_ref().map(|i| i.pid),
+        "idleSecs": info.as_ref().map(|i| i.idle_secs),
+        "idleTimeoutSecs": spec.idle_timeout_secs,
+    })
+}
+
+#[derive(Deserialize)]
 pub(crate) struct AppRegisterBody {
     manifest_url: String,
 }
@@ -1612,7 +1769,11 @@ pub(crate) async fn space_apps_ready(
 
 /// The shape both `/start` and `/ready` answer with. `ready` is a health probe,
 /// never merely "we have a pid": see `SpaceMcpLauncher::is_answering`.
-async fn app_readiness(s: &Arc<UiState>, id: &str, manifest: &serde_json::Value) -> serde_json::Value {
+async fn app_readiness(
+    s: &Arc<UiState>,
+    id: &str,
+    manifest: &serde_json::Value,
+) -> serde_json::Value {
     let spec = crate::apps::RuntimeSpec::parse(manifest);
     // A non-server app is served by the daemon itself, so it is always ready —
     // saying "not ready" would strand static and esm apps behind a gate that
@@ -1850,7 +2011,7 @@ notes: chi tiết hỗ trợ ngắn, hoặc chuỗi rỗng. Không thêm chữ n
         (r.text, "vision")
     } else {
         // No vision — OCR the image, feed the text to a plain completion.
-        let text = super::ocr::ocr_text_from_bytes(&s, bytes)
+        let text = super::ocr::ocr_text_from_bytes(&s.config, bytes)
             .await
             .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
         let Some(text) = text.filter(|t| !t.trim().is_empty()) else {
@@ -2458,6 +2619,71 @@ pub(crate) async fn space_app_token_rotate(
         "stopped": restarted,
         "apiVersion": s.config.space_api_version,
     })))
+}
+
+/// `GET /api/space/app-token-mode` — the app-isolation switch, for the UI.
+///
+/// Reports what is in force *and where it came from*, because the three sources
+/// behave differently when the operator tries to change it: a UI choice is
+/// theirs to undo, an `SENCLAW_APP_TOKEN_MODE` in the environment is not (it
+/// comes back on the next daemon start), and the default is what "Follow the
+/// environment" falls back to.
+pub(crate) async fn space_app_token_mode_get(
+    State(s): State<Arc<UiState>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (mode, source) = crate::apps::token::effective_mode(
+        db(&s)?,
+        s.config.space_app_token_mode,
+        s.config.space_app_token_mode_from_env,
+    );
+    Ok(Json(serde_json::json!({
+        "mode": mode.as_str(),
+        "source": source.as_str(),
+        // What the daemon would fall back to if the UI choice were cleared —
+        // the label the "follow the environment" option needs to show.
+        "envMode": s.config.space_app_token_mode.as_str(),
+        "envSet": s.config.space_app_token_mode_from_env,
+        "defaultMode": crate::apps::token::DEFAULT_TOKEN_MODE.as_str(),
+        "apiVersion": s.config.space_api_version,
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct TokenModeBody {
+    /// `off` | `warn` | `strict`, or absent/null to follow the environment.
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+/// `PUT /api/space/app-token-mode` — change it, live.
+///
+/// No restart: the middleware reads this on every request, so the next call an
+/// app makes is judged by the new setting. That is the point of storing it here
+/// rather than in the environment.
+pub(crate) async fn space_app_token_mode_put(
+    State(s): State<Arc<UiState>>,
+    Json(body): Json<TokenModeBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let chosen = match body
+        .mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        None => None,
+        Some(raw) => Some(
+            crate::apps::token::TokenMode::parse_opt(raw).ok_or_else(|| {
+                // Never silently coerce: a typo here would set an isolation level
+                // the operator did not ask for and believes they did.
+                AppError(
+                    StatusCode::BAD_REQUEST,
+                    format!("Unknown mode {raw:?} — expected off, warn or strict"),
+                )
+            })?,
+        ),
+    };
+    crate::apps::token::set_mode_override(db(&s)?, chosen).map_err(internal)?;
+    space_app_token_mode_get(State(s)).await
 }
 
 /// One app's sandbox settings, plus what this machine will actually enforce.
@@ -3279,10 +3505,9 @@ pub(crate) async fn space_apps_proxy(
     // that opts into checking it (every SDK ships the guard) is then reachable
     // only via this proxy, which is the only caller that can prove which app it
     // is addressing.
-    let app_token = s
-        .db
-        .as_deref()
-        .and_then(|db| crate::apps::token::ensure(db, &id).ok());
+    let app_token =
+        s.db.as_deref()
+            .and_then(|db| crate::apps::token::ensure(db, &id).ok());
     let api_version = s.config.space_api_version.to_string();
 
     let forward = |port: u16| {

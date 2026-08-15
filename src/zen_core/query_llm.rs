@@ -1786,7 +1786,11 @@ mod sse_tests {
     fn reassembles_a_line_split_across_three_chunks() {
         let mut lines = SseLines::default();
         let mut out = Vec::new();
-        for part in [b"data: {\"tex".as_ref(), b"t\":\"hel".as_ref(), b"lo\"}\n\n".as_ref()] {
+        for part in [
+            b"data: {\"tex".as_ref(),
+            b"t\":\"hel".as_ref(),
+            b"lo\"}\n\n".as_ref(),
+        ] {
             out.extend(lines.push(part));
         }
         assert_eq!(out, vec!["data: {\"text\":\"hello\"}", ""]);
@@ -1832,6 +1836,53 @@ mod tests {
             vision: None,
             ..Default::default()
         }
+    }
+
+    /// A user turn shaped like a chat attachment: image first, question after —
+    /// the order `ZenEngine::start_query` builds.
+    fn user_turn_with_image() -> Message {
+        create_user_message(vec![
+            ContentBlock::Image {
+                source: ImageSource {
+                    source_type: "base64".into(),
+                    media_type: "image/jpeg".into(),
+                    data: "QUJD".into(),
+                },
+            },
+            ContentBlock::Text {
+                text: "Ảnh này là gì?".into(),
+            },
+        ])
+    }
+
+    #[test]
+    fn openai_user_turn_carries_the_image_as_image_url() {
+        let msgs = openai_messages_for_api(&[user_turn_with_image()], "").unwrap();
+        let parts = msgs[0]["content"]
+            .as_array()
+            .expect("a turn with an image must send content parts, not a bare string");
+        let img = parts
+            .iter()
+            .find(|p| p["type"] == "image_url")
+            .expect("image part missing");
+        // OpenAI-compatible endpoints want the whole data URL, mime included.
+        assert_eq!(img["image_url"]["url"], "data:image/jpeg;base64,QUJD");
+        assert!(parts.iter().any(|p| p["text"] == "Ảnh này là gì?"));
+    }
+
+    #[test]
+    fn anthropic_user_turn_carries_the_image_as_a_base64_source() {
+        let parts = anthropic_content_blocks(&user_turn_with_image().message.content);
+        let img = parts
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["type"] == "image")
+            .expect("image block missing");
+        // Anthropic wants the raw base64 — a `data:` prefix here is a 400.
+        assert_eq!(img["source"]["type"], "base64");
+        assert_eq!(img["source"]["media_type"], "image/jpeg");
+        assert_eq!(img["source"]["data"], "QUJD");
     }
 
     /// Build a request through `apply_auth` and read back its headers.
