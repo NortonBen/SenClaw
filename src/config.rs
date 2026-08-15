@@ -126,6 +126,9 @@ pub struct PathsConfig {
     /// Optional bundled-skills dir; empty when unset (TS treats blank as disabled).
     pub bundled_skills_dir: Option<PathBuf>,
     pub workspace_templates_dir: PathBuf,
+    /// Git clones of the scaffold templates `senclaw create` renders from.
+    /// A cache, not state: deleting it costs one clone on the next create.
+    pub scaffold_templates_dir: PathBuf,
     /// Marketplace configuration path
     pub marketplace_config_path: PathBuf,
     /// Marketplace state path
@@ -550,6 +553,10 @@ impl Config {
                 workspace_templates_dir: env_path(
                     "SENCLAW_WORKSPACE_TEMPLATES_DIR",
                     senclaw_data.join("workspace-templates"),
+                ),
+                scaffold_templates_dir: env_path(
+                    "SENCLAW_TEMPLATES_DIR",
+                    senclaw_home.join("templates"),
                 ),
                 marketplace_config_path: env_path(
                     "SENCLAW_MARKETPLACE_CONFIG_PATH",

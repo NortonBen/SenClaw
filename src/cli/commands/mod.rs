@@ -2,6 +2,7 @@ pub mod agent_task;
 pub mod channel;
 pub mod clawhub;
 pub mod cognitive;
+pub mod create;
 pub mod distrib;
 pub mod hub;
 pub mod marketplace;

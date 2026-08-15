@@ -174,6 +174,59 @@ Project-level [`.mcp.json`](.mcp.json) template (one entry per server needed):
 
 The `<domain>-server` subcommand list is in `src/main.rs` (e.g. `browser-server`, `memory-server`, `schedule-server`, ...). After editing `.mcp.json`, the user must restart Claude Code and approve the server in the prompt.
 
+## Scaffolding: `senclaw create`
+
+`senclaw create app|skill|sub-agent <name>` renders a working project from a
+template. Templates live in a git repo (`NortonBen/senclaw-templates`, cloned to
+`~/.senclaw/templates/repo`) **and** are compiled into the binary from
+`assets/templates/` — git wins when reachable, the bundled copy is what keeps the
+command working offline. Four app languages: `rust` (default), `go`, `node`,
+`python`. Engine in [`src/scaffold/`](src/scaffold/), CLI in
+[`src/cli/commands/create.rs`](src/cli/commands/create.rs).
+
+Rules for Claude:
+
+- **The rendered project is validated before anything is written**, and the
+  checks are the silent-failure ones: a misspelled `runtime.mode` (falls back to
+  `session`, so a background poller quietly stops), a `runtime.kind` that is not
+  exactly `"server"` or a missing `start` (the app installs and never launches),
+  a wrong-typed field (`as_str`/`as_u64` read a wrong type exactly like an absent
+  one, so `"port": "4800"` would reach the daemon as port 0), and a port above
+  65535 (cast `as u16`, so 70000 becomes 4464). Adding a template means those
+  checks must still pass — `cargo test` renders every bundled template and runs
+  them ([`src/scaffold/create.rs`](src/scaffold/create.rs) `validate`).
+- **The wildcard-bind rule runs on the template's own source, not the rendered
+  output** (`check_bind_host`). After substitution a user's `--desc "never binds
+  0.0.0.0"` is indistinguishable from code. It catches the literal *and* the
+  hostless forms that contain no literal — `server.listen(PORT)`, `":"+port`,
+  `(("", PORT))`, bare `next start` — and strips comments first, since every
+  template documents the rule. This is now the only in-repo enforcement of the
+  bind-loopback rule for Space App code, since `apps/` moved to its own repo.
+- **Adding a bundled template is dropping a directory into `assets/templates/`.**
+  `build.rs` walks it into an `include_bytes!` table; there is no list to update.
+- **The render syntax is `{{lower_snake}}` only.** Everything else in braces
+  (`{{.Name}}`, `{{ item.title }}`, `{{#each}}`) passes through untouched, so a
+  template may ship Go/Vue/handlebars syntax. An unknown `{{placeholder}}` is
+  left verbatim and warned about, never blanked. **Substituted values are
+  escaped for their destination** — JSON, a markdown file's YAML frontmatter
+  (but not its prose), or HTML — because `--desc`/`--icon`/`--var` are arbitrary
+  user text: unescaped, one can inject a second `id` key that serde prefers, or
+  a second `name:` that the persona registry prefers.
+- **A template that calls `/bridge` must send `action`, not `capability`**, and
+  must treat a `200` carrying `{"status":"error"}` as a failure. Both are
+  enforced by tests over the bundled templates
+  ([`src/scaffold/bundled.rs`](src/scaffold/bundled.rs)) because both fail in a
+  way that looks exactly like the app degrading gracefully with no daemon.
+- **Only the id folds diacritics.** `"Quản lý Kho"` → id `quan-ly-kho`, display
+  name still `Quản lý Kho`. Folding shares the table in
+  [`src/security/replication.rs`](src/security/replication.rs) `fold`.
+- Ports auto-pick from **4800** (bundled apps own 4300–4799), skipping ports
+  declared by installed manifests *and* ports currently listening.
+- `postCreate` steps are **printed, never executed**.
+
+Full guide, including how to author a template for the repo:
+[docs/senclaw-create.md](docs/senclaw-create.md).
+
 ## Space App lifecycle: background vs session
 
 Every server Space App is one of two things, declared as `runtime.mode`:

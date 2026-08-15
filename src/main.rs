@@ -40,6 +40,11 @@ enum Command {
     },
     /// Security-scan a plugin directory or Space App zip without installing it
     Scan(senclaw::cli::commands::scan::ScanCmd),
+    /// Scaffold a Space App, a skill or a sub-agent from a template
+    Create {
+        #[command(subcommand)]
+        cmd: senclaw::cli::commands::create::CreateCmd,
+    },
     /// Manage Feishu wiki
     Wiki {
         #[command(subcommand)]
@@ -236,6 +241,7 @@ async fn main() -> Result<()> {
         Command::Hub { cmd } => senclaw::cli::commands::hub::run(cmd).await,
         Command::Marketplace { cmd } => senclaw::cli::commands::marketplace::run(cmd).await,
         Command::Scan(cmd) => senclaw::cli::commands::scan::run(cmd).await,
+        Command::Create { cmd } => senclaw::cli::commands::create::run(cmd).await,
         Command::Wiki { cmd } => senclaw::cli::commands::wiki::run(cmd).await,
         Command::Channel { cmd } => senclaw::cli::commands::channel::run(cmd).await,
         Command::AgentTask(cmd) => senclaw::cli::commands::agent_task::run(cmd).await,
