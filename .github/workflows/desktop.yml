@@ -10,7 +10,6 @@ on:
     paths:
       - "src/**"
       - "desktop_app/**"
-      - "apps/**"
       - "app-space-sdk/**"
       - "web/**"
       - "Cargo.toml"
@@ -22,7 +21,6 @@ on:
     paths:
       - "src/**"
       - "desktop_app/**"
-      - "apps/**"
       - "app-space-sdk/**"
       - "web/**"
       - "Cargo.toml"
@@ -407,7 +405,7 @@ jobs:
           cat release-artifacts/latest.json
 
           # Release-page body. `generate_release_notes` only fills a release
-          # softprops CREATES — when a sibling workflow (hub/extension/apps)
+          # softprops CREATES — when a sibling workflow (hub/extension)
           # uploads its asset first, the release already exists with an empty
           # body and would stay empty (v0.3.0 and the first v0.4.0 did). An
           # explicit body_path is applied on update as well, so the changelog
