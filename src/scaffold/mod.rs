@@ -108,7 +108,9 @@ pub fn run(
     v.insert("description".into(), description(req, &id, kind));
     v.insert(
         "icon".into(),
-        req.icon.clone().unwrap_or_else(|| default_icon(kind, tpl.spec.lang)),
+        req.icon
+            .clone()
+            .unwrap_or_else(|| default_icon(kind, tpl.spec.lang)),
     );
     v.insert("mcp_name".into(), format!("{id}-mcp"));
     v.insert("author".into(), author());
@@ -255,7 +257,12 @@ pub fn default_template_name(kind: Kind, lang: Option<Lang>) -> String {
 /// on them before installing. Skills and personas are plain markdown with no
 /// build, so they go straight to the directories the daemon reads — creating
 /// one and then having to copy it somewhere is a step with no purpose.
-fn destination(req: &CreateRequest, id: &str, kind: Kind, config: &crate::config::Config) -> PathBuf {
+fn destination(
+    req: &CreateRequest,
+    id: &str,
+    kind: Kind,
+    config: &crate::config::Config,
+) -> PathBuf {
     if let Some(d) = &req.dir {
         return expand_tilde(&d.to_string_lossy());
     }
@@ -521,7 +528,10 @@ mod tests {
         let a_v2 = git_source(&cfg, Some("https://x/one".into()), Some("v2".into()));
         assert_ne!(a.cache_dir, b.cache_dir, "hai repo khác nhau");
         assert_ne!(a.cache_dir, a_v2.cache_dir, "hai ref khác nhau");
-        assert_eq!(a.cache_dir, git_source(&cfg, Some("https://x/one".into()), None).cache_dir);
+        assert_eq!(
+            a.cache_dir,
+            git_source(&cfg, Some("https://x/one".into()), None).cache_dir
+        );
         // Readable in `ls`, not just a hash.
         assert!(a.cache_dir.to_string_lossy().contains("one"));
     }
@@ -570,8 +580,8 @@ mod tests {
             let mut r = req(Kind::App);
             r.lang = Some(lang);
             r.port = Some(4802);
-            let rep = run(&r, &cfg, &mut |_| {})
-                .unwrap_or_else(|e| panic!("{} lỗi: {e}", lang.as_str()));
+            let rep =
+                run(&r, &cfg, &mut |_| {}).unwrap_or_else(|e| panic!("{} lỗi: {e}", lang.as_str()));
             assert_eq!(rep.kind, Kind::App);
             assert!(
                 rep.warnings.is_empty(),
