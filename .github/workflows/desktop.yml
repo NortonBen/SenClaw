@@ -136,11 +136,10 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             platform: macos
-            # Full Apple-Silicon daemon feature set — keep in sync with the
-            # Makefile's DAEMON_FEATURES. Without local-mlx-tts /
-            # local-mlx-whisper the released daemon silently falls back to the
-            # macOS voice for TTS and has no local STT at all.
-            daemon_features: "local-mlx,local-embed-metal,local-embed,local-mlx-whisper,local-mlx-tts,ocr-paddle-metal,tts-vieneu"
+            # Keep in sync with the Makefile's DAEMON_FEATURES. The daemon no
+            # longer has MLX features: local LLM lives in apps/mlx-lm, and
+            # Whisper ASR in the senclaw-media sidecar built below.
+            daemon_features: "local-embed-metal,local-embed,ocr-paddle-metal,tts-vieneu"
           # x86_64-apple-darwin (macos-13, Intel) temporarily disabled —
           # re-enable when an Intel build is actually needed.
           - os: windows-latest
@@ -216,6 +215,14 @@ jobs:
             cargo build --release --bin senclaw --target ${{ matrix.target }}
           fi
 
+      # The speech sidecar ships beside the daemon on every platform. On macOS
+      # it carries the whole MLX stack (this is the slow step now, not the
+      # daemon); on Linux/Windows the MLX dependencies are target-gated away and
+      # it builds in seconds into a binary that answers 501 for ASR.
+      - name: Build senclaw-media sidecar
+        shell: bash
+        run: cargo build --release -p senclaw-media --target ${{ matrix.target }}
+
       - name: Resolve release version
         id: ver
         shell: bash
@@ -258,18 +265,18 @@ jobs:
             macos)
               APP="desktop_app/build/macos/Build/Products/Release/SenClaw Desktop.app"
               cp "$BIN_DIR/senclaw" "$APP/Contents/Resources/senclaw"
+              cp "$BIN_DIR/senclaw-media" "$APP/Contents/Resources/senclaw-media"
               cp "$UPD_DIR/update_desktop" "$APP/Contents/Resources/update_desktop"
               # MLX resolves mlx.metallib next to the executable; the compiled-in
               # METAL_PATH fallback points into the CI runner's target dir and
-              # does not exist on user machines — without this copy every MLX
-              # call (TTS/STT/local LLM) aborts with "Failed to load the
-              # default metallib".
+              # does not exist on user machines. Only the sidecar needs it now,
+              # and it sits in the same Resources directory as the daemon.
               METALLIB=$(find "target/${{ matrix.target }}/release/build" -name mlx.metallib | head -1)
               if [ -n "$METALLIB" ]; then
                 cp "$METALLIB" "$APP/Contents/Resources/mlx.metallib"
                 cp "$METALLIB" "dist-artifacts/mlx-${{ matrix.target }}.metallib"
               else
-                echo "::warning::mlx.metallib not found — MLX features will not work in the packaged app"
+                echo "::error::mlx.metallib not found — the senclaw-media sidecar cannot run" && exit 1
               fi
               # zip the .app for upload
               ditto -c -k --keepParent "$APP" "dist-artifacts/SenClaw-${{ matrix.target }}.app.zip"
@@ -278,6 +285,9 @@ jobs:
             windows)
               REL="desktop_app/build/windows/x64/runner/Release"
               cp "$BIN_DIR/senclaw.exe" "$REL/senclaw.exe"
+              # ASR-less build of the sidecar (MLX is target-gated to macOS);
+              # it answers 501 for transcription so the failure is explicit.
+              cp "$BIN_DIR/senclaw-media.exe" "$REL/senclaw-media.exe"
               cp "$UPD_DIR/update_desktop.exe" "$REL/update_desktop.exe"
               powershell -Command "Compress-Archive -Path '$REL/*' -DestinationPath 'dist-artifacts/SenClaw-${{ matrix.target }}.zip'"
               cp "$BIN_DIR/senclaw.exe" "dist-artifacts/senclaw-${{ matrix.target }}.exe"
@@ -285,6 +295,8 @@ jobs:
             linux)
               REL="desktop_app/build/linux/x64/release/bundle"
               cp "$BIN_DIR/senclaw" "$REL/senclaw"
+              # ASR-less build of the sidecar (MLX is target-gated to macOS).
+              cp "$BIN_DIR/senclaw-media" "$REL/senclaw-media"
               cp "$UPD_DIR/update_desktop" "$REL/update_desktop"
               tar -C "$REL" -czf "dist-artifacts/SenClaw-${{ matrix.target }}.tar.gz" .
               cp "$BIN_DIR/senclaw" "dist-artifacts/senclaw-${{ matrix.target }}"

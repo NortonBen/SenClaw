@@ -532,6 +532,14 @@ async fn main() -> anyhow::Result<()> {
     let mut tt = ttfts.clone();
     let (tmin, tmed, _, tmax) = stats(&mut tt);
     eprintln!("  ttft (s)      min={tmin:.2}  median={tmed:.2}  max={tmax:.2}");
+    // Allocator figures alongside throughput, not just in memory mode: RSS
+    // alone cannot separate "MLX is holding weights and KV" from "the process
+    // mapped a file", and the resource harness
+    // (`scripts/mlx_resource_bench.py`) scrapes this line.
+    {
+        let (a, c, pk) = mlx_mem_mib();
+        eprintln!("  memory        rss={:.0} MiB | mlx active={a:.0} cache={c:.0} peak={pk:.0} MiB", rss_mib());
+    }
     eprintln!(
         "  determinism:  {}",
         if identical {

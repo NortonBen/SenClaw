@@ -28,6 +28,7 @@ pub mod kanban;
 pub mod local_model;
 pub mod marketplace;
 pub mod mcp;
+pub mod media_sidecar;
 pub mod memory;
 pub mod plugins;
 pub mod providers;
@@ -1799,6 +1800,14 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     let space_mcp_launcher = Arc::new(
         gateway::ui_server::space_mcp::SpaceMcpLauncher::with_api_version(cfg.space_api_version),
     );
+    // Load the app-provided model registry synchronously, before anything can
+    // resolve a model profile. The auto-register pass below refreshes it, but it
+    // runs in the background and can take a minute — and a turn that starts
+    // first would find the user's selected model missing and silently fall back
+    // to a different one.
+    if let Err(e) = apps::llm_provider::refresh(&db) {
+        tracing::warn!("[app-llm] provider registry not loaded at boot: {e}");
+    }
     {
         let apps_dir = cfg.paths.workspace_dir.join("space-apps");
         let base_url = format!("http://127.0.0.1:{}", cfg.ui_server.port);
@@ -2987,12 +2996,10 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     }
 
     // 7c. UI HTTP server
-    #[cfg(any(feature = "local-candle", feature = "local-mlx"))]
-    {
-        crate::gateway::ui_server::local_models::spawn_idle_unload_worker(
-            cfg.paths.local_models_dir.clone(),
-        );
-    }
+    // The idle-unload worker went with the engines. Local model weights are now
+    // held by `apps/mlx-lm` / `apps/candle`, each of which drops its own after
+    // `idle_unload_secs` — and a session app is stopped outright once idle, at
+    // which point the memory returns to the OS without anyone sweeping for it.
     {
         struct RealUiApi {
             agent_pool: Arc<agent::agent_pool::AgentPool>,
@@ -3161,6 +3168,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // Stop every Space App process FIRST: they are what outlives the daemon,
     // and the window before SIGKILL is short (~800 ms from the desktop app).
     space_mcp_launcher.shutdown().await;
+    // The media sidecar too — it holds a fixed port, so an orphan would make
+    // the next daemon adopt a process from a build it no longer matches.
+    media_sidecar::shutdown().await;
 
     // Flush in-flight workflow run state (running orphans reconcile on next boot)
     workflow_service.flush();

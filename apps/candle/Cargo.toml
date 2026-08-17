@@ -1,0 +1,52 @@
+[package]
+name = "candle"
+version = "0.1.0"
+edition = "2021"
+description = "Local LLM inference via Candle (pure Rust, cross-platform), served to SenClaw as an LLM provider"
+
+[[bin]]
+name = "candle"
+path = "src/main.rs"
+
+[dependencies]
+app-space-sdk = { path = "../../app-space-sdk" }
+local-model-core = { path = "../local-model-core" }
+
+tokio = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+dotenvy = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+regex = { workspace = true }
+
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+tokenizers = { workspace = true }
+minijinja = { workspace = true }
+minijinja-contrib = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+default = []
+# Apple Silicon GPU. Measured *slower* than the Accelerate CPU path for
+# single-token decode — Metal's GEMM tile wastes most of its threads at M=1 —
+# so it is opt-in rather than the default on macOS.
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
+# Apple Accelerate BLAS: forces the CPU device and F32, which reaches roughly
+# 70% of memory bandwidth on an M4 Pro. The fastest Candle path on a Mac.
+accelerate = [
+    "candle-core/accelerate",
+    "candle-nn/accelerate",
+    "candle-transformers/accelerate",
+]
+# NVIDIA.
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]

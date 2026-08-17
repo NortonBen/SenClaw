@@ -135,22 +135,24 @@ function lookupModelLimits(modelName: string): { maxTokens: number; contextLengt
 
 // ===== Vision Support =====
 
-// Vision patterns matching sema-core util/vision.ts inference rules
+// Vision patterns — keep in sync with src/zen_core/vision.rs. The daemon uses
+// its copy to decide whether a chat attachment travels as an image block or
+// goes through OCR, so a badge that disagrees with it is actively misleading.
 const VISION_PATTERNS: RegExp[] = [
   /^gpt-4o/i,
   /^gpt-4(\.\d+)?-vision/i,
-  /^gpt-5/i,
-  /^o1/i,
-  /^o3/i,
+  /^gpt-[5-9]/i,
+  /^o[1-9]/i,
   /^chatgpt-4o/i,
-  /^claude-3/i,
-  /^claude-(opus|sonnet|haiku)-[34]/i,
-  /^anthropic\/claude-3/i,
+  /claude-[3-9]/i,
+  /claude-(opus|sonnet|haiku|fable)-[3-9]/i,
   /qwen.*-vl/i,
   /qwen2(\.\d+)?-vl/i,
+  /qwen3(\.\d+)?-plus/i,
   /qvq/i,
   /moonshot-v1-.*-vision/i,
   /kimi.*vision/i,
+  /^kimi-k2\.6/i,
   /kimi-latest/i,
   /glm-4v/i,
   /glm-4\.\d+v/i,
@@ -158,7 +160,7 @@ const VISION_PATTERNS: RegExp[] = [
   /gemini.*pro/i,
   /gemini.*flash/i,
   /gemini-1\.5/i,
-  /gemini-2/i,
+  /gemini-[2-9]/i,
   /llama-3\.2.*vision/i,
   /-vl-/i,
   /-vision/i,

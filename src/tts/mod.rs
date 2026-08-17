@@ -1,32 +1,43 @@
 //! Text-to-speech subsystem.
 //!
-//! Pure-Rust TTS — no Python, no external runtimes. Multiple backends register
-//! under a single [`TtsBackend`] interface; the HTTP layer in
-//! [`crate::gateway::ui_server::tts`] calls [`synthesize`] which picks the
-//! right backend by `model_id`.
+//! No Python and no MLX. Backends register under a single [`TtsBackend`]
+//! interface; the HTTP layer in [`crate::gateway::ui_server::tts`] calls
+//! [`synthesize`], which picks one by `model_id`.
 //!
 //! ## Backends today
 //! - [`macos`] — native macOS `/usr/bin/say` (Vietnamese voice = Linh).
-//! - [`mms_vits`] — pure-Rust MLX port of `facebook/mms-tts-*` (VITS). Full
-//!   synthesis path behind the `local-mlx-tts` feature; honest 501 stub
-//!   without it.
-//! - [`zipvoice`] — pure-Rust MLX port of `k2-fsa/ZipVoice` (foundation built,
-//!   synthesis path WIP — returns 501 until the encoder/flow-decoder/vocoder
-//!   are wired).
+//! - [`vieneu`] — VieNeu-TTS v3 Turbo through ONNX Runtime on the CPU: 48 kHz,
+//!   14 Vietnamese presets, En–Vi code-switching. The default, and the only
+//!   backend that works off macOS.
+//!
+//! ## What was removed, and why it is not coming back here
+//!
+//! Two MLX backends used to live in this module. **ZipVoice** never
+//! synthesized anything — the port stopped at the foundation and every request
+//! fell through to the macOS voice — and had already been dropped from the
+//! model catalog. **MMS-VITS** did work, but it was the last thing in the
+//! daemon keeping `mlx-rs` on the TTS path, for a voice that was not selected
+//! on any machine we looked at, and that VieNeu covers at higher quality.
+//!
+//! Removing them is what lets this whole subsystem stay in the daemon: TTS now
+//! needs ONNX on the CPU and nothing else, so it compiles everywhere and adds
+//! no MLX to `make app-build`.
 //!
 //! ## Adding a backend
 //! 1. Add a module under `src/tts/<name>/` implementing [`TtsBackend`].
 //! 2. Add a match arm in [`select_backend`] that recognises its `model_id`.
 //! 3. Add an integration test in [`crate::gateway::ui_server::tts::synth_tests`].
+//!
+//! An MLX backend does **not** belong here — it belongs in the media sidecar,
+//! which is where the MLX runtime lives now.
 
 use std::path::Path;
 
 use axum::http::StatusCode;
 
+pub mod chunk;
 pub mod macos;
-pub mod mms_vits;
 pub mod vieneu;
-pub mod zipvoice;
 
 /// Encode f32 samples as a 16-bit PCM mono WAV blob (shared by the native
 /// backends).
@@ -145,19 +156,44 @@ pub fn select_backend_for(model_id: &str, model_dir: Option<&Path>) -> Option<Bo
     match model_id {
         "macos-speech" => Some(Box::new(macos::MacosSpeech::VIETNAMESE)),
         "macos-speech-en" => Some(Box::new(macos::MacosSpeech::ENGLISH)),
-        // Whole MMS family: `facebook/mms-tts-<lang>` (vie, eng, …). The
-        // checkpoint itself defines the language.
-        id if id.starts_with("facebook/mms-tts-") => {
-            mms_vits::MmsVitsBackend::for_model_id(id).map(|b| Box::new(b) as Box<dyn TtsBackend>)
-        }
-        // VieNeu-TTS v3 Turbo (ONNX sidecar, 48 kHz Vietnamese).
+        // VieNeu-TTS v3 Turbo (ONNX on the CPU, 48 kHz, 14 Vietnamese presets
+        // with En–Vi code-switching).
         id if id.starts_with("pnnbao-ump/VieNeu-TTS") => Some(Box::new(vieneu::VieNeuBackend)),
-        id if model_dir.is_some_and(mms_vits::dir_is_vits_model) => {
-            Some(Box::new(mms_vits::MmsVitsBackend::for_custom(id)))
-        }
-        // Any other id is assumed to be a HuggingFace ZipVoice-family model.
-        // When more TTS families land their explicit ids go above this arm.
-        _ => Some(Box::new(zipvoice::ZipVoiceBackend)),
+        // Anything else: a voice this build cannot speak. It reports
+        // `NotImplemented`, which `synthesize_with_fallback` turns into the
+        // macOS voice plus a `fallback_reason` the UI shows.
+        //
+        // Deliberately not `None`. The MLX voices were removed from this
+        // module, but they are still selected in configs on machines that had
+        // them — `facebook/mms-tts-vie` is downloaded on the machine this was
+        // written on. `None` would turn those into a hard 400 the next time
+        // someone pressed play; this way they degrade to a working voice and
+        // say why.
+        _ => Some(Box::new(Unsupported(model_id.to_string()))),
+    }
+}
+
+/// A voice no backend in this build can speak.
+///
+/// Exists so an unknown — or newly removed — model id degrades through the
+/// normal fallback chain instead of failing the request outright.
+struct Unsupported(String);
+
+impl TtsBackend for Unsupported {
+    fn id(&self) -> &str {
+        &self.0
+    }
+
+    fn label(&self) -> &str {
+        "Unsupported voice"
+    }
+
+    fn synthesize(&self, _req: &SynthesisRequest<'_>) -> Result<Vec<u8>, TtsError> {
+        Err(TtsError::NotImplemented(format!(
+            "no TTS backend in this build speaks `{}` — the MLX voices moved out; \
+             pick VieNeu-TTS or a system voice in Settings → Text-to-Speech",
+            self.0
+        )))
     }
 }
 
@@ -278,43 +314,44 @@ pub fn synthesize_with_fallback(
 mod tests {
     use super::*;
 
+
+
+
+
+
+
+
+
+    /// Direct call to macos-speech must NOT report a fallback — it served the
+    /// request itself.
+    #[cfg(target_os = "macos")]
     #[test]
-    fn unknown_id_routes_to_zipvoice_then_501() {
-        // No backend bails — we route HF-ish ids to ZipVoice. Until it lands,
-        // any non-macOS id surfaces as 501 from the ZipVoice stub.
-        let backend = select_backend("totally/unknown-tts").expect("dispatch");
-        assert_eq!(backend.id(), zipvoice::ZipVoiceBackend.id());
+    fn no_fallback_when_macos_handles_directly() {
+        let outcome = synthesize_with_fallback("macos-speech", None, "Xin chào.", "vi", None, 1.0)
+            .expect("macos-speech should succeed");
+        assert_eq!(outcome.used_backend, "macos-speech");
+        assert!(outcome.fallback_reason.is_none());
     }
 
-    /// A custom checkpoint dir with a VitsModel config routes to the MMS-VITS
-    /// backend (community finetunes); anything else stays on the default.
     #[test]
-    fn custom_vits_model_dir_routes_to_mms_backend() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            dir.path().join("config.json"),
-            r#"{"architectures":["VitsModel"],"model_type":"vits"}"#,
-        )
-        .unwrap();
-        let b = select_backend_for("dvd1503/mms-tts-vie-finetuned", Some(dir.path()))
-            .expect("dispatch");
-        assert!(b.label().contains("VITS"), "got: {}", b.label());
-        assert_eq!(b.id(), "dvd1503/mms-tts-vie-finetuned");
-
-        // Non-VITS config → default (ZipVoice) backend.
-        std::fs::write(
-            dir.path().join("config.json"),
-            r#"{"architectures":["SomethingElse"]}"#,
-        )
-        .unwrap();
-        let b = select_backend_for("someone/other-model", Some(dir.path())).expect("dispatch");
-        assert_eq!(b.id(), zipvoice::ZipVoiceBackend.id());
-
-        // Missing dir → default backend, no panic.
-        let b = select_backend_for("someone/other-model", None).expect("dispatch");
-        assert_eq!(b.id(), zipvoice::ZipVoiceBackend.id());
+    fn tts_error_maps_to_http_status() {
+        assert_eq!(
+            TtsError::NotImplemented("x".into()).status(),
+            StatusCode::NOT_IMPLEMENTED
+        );
+        assert_eq!(
+            TtsError::Unavailable("x".into()).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            TtsError::BadInput("x".into()).status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            TtsError::Internal("x".into()).status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
-
     #[test]
     fn macos_speech_id_dispatches_to_macos_backend() {
         let backend = select_backend("macos-speech").expect("dispatch");
@@ -326,37 +363,6 @@ mod tests {
         let backend = select_backend("macos-speech-en").expect("dispatch");
         assert_eq!(backend.id(), "macos-speech-en");
         assert!(backend.label().contains("English"));
-    }
-
-    #[test]
-    fn mms_vits_id_dispatches_to_dedicated_backend() {
-        let backend = select_backend("facebook/mms-tts-vie").expect("dispatch");
-        assert_eq!(backend.id(), "facebook/mms-tts-vie");
-        assert!(backend.label().contains("MMS-VITS"));
-    }
-
-    /// MMS-VITS fallback should produce audio via Vietnamese macOS preset
-    /// (since the request language is `vi`) AND the reason must name MMS-VITS
-    /// — not ZipVoice — so logs/headers are honest about which stub triggered.
-    /// Only without `local-mlx-tts`: with the feature the backend is real and
-    /// no fallback occurs.
-    #[cfg(all(target_os = "macos", not(feature = "local-mlx-tts")))]
-    #[test]
-    fn mms_vits_fallback_is_distinct_from_zipvoice_reason() {
-        let outcome =
-            synthesize_with_fallback("facebook/mms-tts-vie", None, "Xin chào.", "vi", None, 1.0)
-                .expect("fallback should succeed via macos-speech");
-        assert_eq!(outcome.used_backend, "macos-speech");
-        let reason = outcome.fallback_reason.expect("must explain fallback");
-        let lower = reason.to_lowercase();
-        assert!(
-            lower.contains("mms-vits"),
-            "fallback reason must name MMS-VITS, got: {reason}"
-        );
-        assert!(
-            !lower.contains("zipvoice"),
-            "fallback reason must NOT name ZipVoice for an MMS request, got: {reason}"
-        );
     }
 
     /// Fallback must respect the request language — English text falling back
@@ -402,34 +408,4 @@ mod tests {
         assert_eq!(&outcome.wav[0..4], b"RIFF");
     }
 
-    /// Direct call to macos-speech must NOT report a fallback — it served the
-    /// request itself.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn no_fallback_when_macos_handles_directly() {
-        let outcome = synthesize_with_fallback("macos-speech", None, "Xin chào.", "vi", None, 1.0)
-            .expect("macos-speech should succeed");
-        assert_eq!(outcome.used_backend, "macos-speech");
-        assert!(outcome.fallback_reason.is_none());
-    }
-
-    #[test]
-    fn tts_error_maps_to_http_status() {
-        assert_eq!(
-            TtsError::NotImplemented("x".into()).status(),
-            StatusCode::NOT_IMPLEMENTED
-        );
-        assert_eq!(
-            TtsError::Unavailable("x".into()).status(),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
-        assert_eq!(
-            TtsError::BadInput("x".into()).status(),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            TtsError::Internal("x".into()).status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
 }

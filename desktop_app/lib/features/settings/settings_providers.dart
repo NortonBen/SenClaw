@@ -23,54 +23,9 @@ final cognitiveConfigProvider = FutureProvider<Map<String, dynamic>>((ref) async
   return _asMap(r['saved'] ?? r['effective'] ?? r);
 });
 
-class LocalModel {
-  final String id;
-  final String label;
-  final double sizeGb;
-  final bool installed;
-  final bool loaded;
-  final String? downloadStatus; // downloading | error | cancelled | done | null
-  final double? downloadProgress; // 0..1 when downloading
-  const LocalModel(this.id, this.label, this.sizeGb, this.installed,
-      this.loaded, this.downloadStatus, this.downloadProgress);
 
-  bool get downloading => downloadStatus == 'downloading';
-
-  factory LocalModel.fromJson(Map<String, dynamic> j) {
-    final d = (j['download'] as Map?)?.cast<String, dynamic>();
-    double? prog;
-    if (d != null) {
-      final got = (d['downloaded_bytes'] as num?)?.toDouble();
-      final tot = (d['total_bytes'] as num?)?.toDouble();
-      if (got != null && tot != null && tot > 0) prog = (got / tot).clamp(0, 1);
-    }
-    return LocalModel(
-      '${j['id'] ?? ''}',
-      '${j['label'] ?? j['id'] ?? ''}',
-      (j['approx_size_gb'] as num?)?.toDouble() ?? 0,
-      j['installed'] == true,
-      j['loaded'] == true,
-      d?['status'] as String?,
-      prog,
-    );
-  }
-}
-
-final localModelsProvider = FutureProvider<List<LocalModel>>((ref) async {
-  final r = await ref.read(apiClientProvider).get('/api/local-models');
-  final list = (r is Map ? r['models'] : r) as List? ?? const [];
-  return list
-      .whereType<Map>()
-      .map((m) => LocalModel.fromJson(m.cast<String, dynamic>()))
-      .toList();
-});
 
 /// Local inference runtime info: {platform, local_models_dir, feature_metal…}.
-final localModelsRuntimeProvider =
-    FutureProvider<Map<String, dynamic>>((ref) async {
-  final r = await ref.read(apiClientProvider).get('/api/local-models/runtime');
-  return r is Map ? r.cast<String, dynamic>() : <String, dynamic>{};
-});
 
 /// A downloadable media model (whisper / tts / ocr — same JSON shape).
 class MediaModel {

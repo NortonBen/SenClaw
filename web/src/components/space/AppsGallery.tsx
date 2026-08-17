@@ -16,7 +16,7 @@ interface SpaceApp {
   name: string;
   description?: string;
   icon?: string;
-  integration: { type: 'iframe' | 'esm'; url: string };
+  integration: { type: 'iframe' | 'esm'; url: string; launcher?: boolean };
   enabled: boolean;
   manifest?: any;
 }
@@ -59,8 +59,12 @@ export function AppsGallery({ groupFolder, onAppsChanged, onOpenApp }: Props) {
     fetch('/api/space/apps')
       .then(r => r.ok ? r.json() : [])
       .then((rows: Array<{ id: string; manifest: any; enabled: boolean }>) => {
-        const loaded = rows.map(normalizeApp);
-        setApps(loaded);
+        // `integration.launcher: false` keeps an app out of the launcher
+        // without pretending it has no UI. The engine apps (mlx-lm, candle)
+        // use it: their screen is a settings panel, reached from Settings →
+        // Models, and a tile that opened a model-management page from the app
+        // grid would be a second, competing entry point to the same thing.
+        setApps(rows.map(normalizeApp).filter(a => a.integration?.launcher !== false));
       })
       .catch(() => {});
   }, []);

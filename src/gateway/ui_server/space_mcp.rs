@@ -365,6 +365,14 @@ impl SpaceMcpLauncher {
             // an app update that tightens it takes effect without a reinstall.
             crate::apps::sandbox_decl::apply(&app_id, &manifest);
 
+            // From the cache, without starting anything. An app that is about to
+            // be launched below re-registers from its live `/v1/models`; doing it
+            // here first is what covers the two paths that never reach
+            // `run_and_register` — a session app whose MCP came from cache, and
+            // an app that declares an `llm` block and no `mcp` block at all.
+            self.register_llm(db, &app_id, &app_dir, &manifest, base_url, false)
+                .await;
+
             let spec = RuntimeSpec::parse(&manifest);
             if spec.is_server && !spec.mode.is_background() {
                 session += 1;
@@ -411,6 +419,99 @@ impl SpaceMcpLauncher {
             "[space-mcp] boot pass: {bg} background app(s) launched, {session} session app(s) \
              registered on demand"
         );
+    }
+
+    /// Register this app as an LLM provider, if it declares one.
+    ///
+    /// `live` says whether the app is running *now*: if it is, its `/v1/models`
+    /// is asked and the answer cached, so a later boot can register the same
+    /// models without starting anything. A stopped app is registered from that
+    /// cache — which is the whole reason it exists. Without it a session app's
+    /// models would be absent from the picker while it is stopped, so nobody
+    /// would select one, so nothing would ever call the app, so it would never
+    /// start and never populate the cache.
+    ///
+    /// Best-effort: an app that cannot be registered as a provider is still a
+    /// perfectly good app, and taking its screen and its MCP tools down over it
+    /// would be a worse outcome than a missing model.
+    async fn register_llm(
+        &self,
+        db: &Db,
+        app_id: &str,
+        app_dir: &Path,
+        manifest: &Value,
+        base_url: &str,
+        live: bool,
+    ) {
+        use crate::apps::llm_provider::{self, AppProvider};
+
+        let decl = match crate::apps::manifest::LlmDecl::parse(manifest) {
+            Ok(Some(d)) => d,
+            Ok(None) => return,
+            // Loud, and naming the field: these are the spellings that would
+            // otherwise register a provider which fails at turn time with an
+            // error mentioning neither the app nor the manifest.
+            Err(e) => {
+                tracing::warn!("[app-llm] '{app_id}': invalid `llm` block — {e}");
+                return;
+            }
+        };
+        if !decl.auto_register {
+            return;
+        }
+
+        // Always the proxy, even for a background app with a port of its own.
+        // See `crate::apps::llm_provider` — a recorded port is stale after a
+        // restart and may be held by an orphan, while the proxy resolves the
+        // live process, starts a stopped one, and marks the app as in use so the
+        // idle reaper does not stop it mid-conversation.
+        let endpoint = format!("{}{}", session_mcp_origin(base_url, app_id), decl.path);
+
+        let mut models = Vec::new();
+        if live {
+            match llm_provider::fetch_models(&self.http, &endpoint).await {
+                Ok(m) if !m.is_empty() => {
+                    write_models_cache(app_dir, &m);
+                    models = m;
+                }
+                Ok(_) => tracing::warn!("[app-llm] '{app_id}': /models returned nothing"),
+                Err(e) => tracing::warn!("[app-llm] '{app_id}': /models failed ({e})"),
+            }
+        }
+        if models.is_empty() {
+            models = llm_provider::read_models_cache(app_dir);
+        }
+        if models.is_empty() {
+            tracing::info!(
+                "[app-llm] '{app_id}' declares an llm block but no models are known yet — it will \
+                 register the first time it runs"
+            );
+            return;
+        }
+
+        let label = decl
+            .display_name
+            .clone()
+            .or_else(|| {
+                manifest
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| app_id.to_string());
+
+        let provider = AppProvider {
+            app_id: app_id.to_string(),
+            label,
+            adapt: decl.adapt.clone(),
+            base_url: endpoint,
+            models,
+        };
+        let count = provider.models.len();
+        match llm_provider::register(db, &provider) {
+            Ok(()) => tracing::info!("[app-llm] '{app_id}': registered {count} model(s)"),
+            Err(e) => tracing::warn!("[app-llm] '{app_id}': registration failed ({e})"),
+        }
     }
 
     /// Register a session app's MCP without starting it.
@@ -643,6 +744,11 @@ impl SpaceMcpLauncher {
             origin.clone()
         };
 
+        // Before the `mcp` early-returns below: an app may serve models and no
+        // MCP tools at all, and it must still be registered.
+        self.register_llm(db, app_id, app_dir, &manifest, base_url, origin.is_some())
+            .await;
+
         // Auto-register the MCP server, if declared.
         let mcp = match manifest.get("mcp") {
             Some(v) if v.is_object() => v.clone(),
@@ -873,6 +979,16 @@ impl SpaceMcpLauncher {
             .env("SENCLAW_BASE_URL", base_url)
             .env("SENCLAW_SPACE_APP_ID", app_id)
             .env("SENCLAW_SPACE_LOG_FILE", &log_path)
+            // The shared local-model root, for the engine apps. Passed
+            // explicitly rather than left to the app's own `~/.senclaw`
+            // fallback: the daemon's copy is overridable
+            // (`SENCLAW_LOCAL_MODELS_DIR`), and an app that guessed would build
+            // a *second* model library — tens of gigabytes, re-downloaded,
+            // while the first one sits unused and invisible.
+            .env(
+                "SENCLAW_LOCAL_MODELS_DIR",
+                crate::config::Config::from_env().paths.local_models_dir,
+            )
             .stdin(Stdio::null())
             // Placeholder so the two SenClaw identity variables are always set
             // in the child, even on the error path below — an app that reads
@@ -1554,6 +1670,24 @@ fn write_tool_cache(app_dir: &Path, tools: &[McpToolDef]) {
     }
     if let Ok(json) = serde_json::to_string_pretty(tools) {
         let _ = std::fs::write(path, json);
+    }
+}
+
+/// Cache what a running app answered on `/v1/models`.
+///
+/// The app writes this itself through `app_space_sdk::llm::publish_models`, but
+/// an app that does not call it would never be registerable while stopped. So
+/// the daemon writes it too, from the answer it just received.
+///
+/// Empty never overwrites, for the same reason as [`write_tool_cache`]: a failed
+/// fetch would otherwise erase the list the next boot registers from, and the
+/// app's models would silently leave the picker.
+fn write_models_cache(app_dir: &Path, models: &[crate::apps::llm_provider::ModelCard]) {
+    if models.is_empty() {
+        return;
+    }
+    if let Err(e) = app_space_sdk::llm::publish_models(app_dir, models) {
+        tracing::debug!("[app-llm] model cache not written to {app_dir:?}: {e}");
     }
 }
 

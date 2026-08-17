@@ -115,9 +115,14 @@ impl ZenEngine {
             options.skip_mcp_tool_permission,
         );
 
+        // A **read** timeout, not a total one: this client only ever carries LLM
+        // requests, and a total deadline is a ceiling on how long a generation
+        // may legitimately take — which a local engine exceeds honestly at
+        // 8192 tokens. `query_llm::post_authed` re-applies a total deadline for
+        // remote providers, where a hung endpoint is the likelier failure.
         let http_client = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(30))
-            .timeout(std::time::Duration::from_secs(180))
+            .read_timeout(query_llm::STREAM_STALL_TIMEOUT)
             .build()
             .expect("Failed to create HTTP client");
 

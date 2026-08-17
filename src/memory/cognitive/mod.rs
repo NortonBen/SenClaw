@@ -28,8 +28,6 @@ pub mod gnn_sage;
 pub mod graph_store;
 pub mod llm;
 pub mod llm_anthropic;
-pub mod llm_local_candle;
-pub mod llm_local_mlx;
 pub mod llm_openai;
 pub mod ltp;
 pub mod maintenance;
@@ -63,8 +61,6 @@ pub use graph_store::{
 };
 pub use llm::{LlmClient, RawTriplet};
 pub use llm_anthropic::AnthropicLlm;
-pub use llm_local_candle::LocalCandleLlm;
-pub use llm_local_mlx::LocalMlxLlm;
 pub use llm_openai::{create_cognitive_llm, OpenAiCompatLlm};
 pub use ltp::{detect_ltp_status, LtpStatus};
 pub use maintenance::{

@@ -191,7 +191,6 @@ export function AgentCommandInput({
               type="file"
               onChange={handleFileChange}
               style={{ display: 'none' }}
-              accept="image/*"
               multiple
             />
             <button

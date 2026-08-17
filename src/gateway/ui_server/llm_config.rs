@@ -78,8 +78,23 @@ pub(crate) struct UpdateLlmConfigBody {
 /// GET /api/llm-config — list all configs
 pub(crate) async fn llm_config_list(State(s): State<Arc<UiState>>) -> Json<serde_json::Value> {
     let stored = load_llm_configs(&s.config.paths.global_config_path);
+    // `appId` marks the rows that come from a Space App, so the UI can render
+    // them read-only instead of offering Edit and Delete buttons that answer
+    // 409. Serialized alongside the config rather than inside it: `LlmConfig` is
+    // also what gets written to `config.json`, and this is not a stored field.
+    let configs: Vec<serde_json::Value> = stored
+        .configs
+        .iter()
+        .map(|c| {
+            let mut v = serde_json::to_value(c).unwrap_or_default();
+            if let Some((app_id, _)) = crate::apps::llm_provider::parse_config_id(&c.id) {
+                v["appId"] = serde_json::json!(app_id);
+            }
+            v
+        })
+        .collect();
     Json(serde_json::json!({
-        "configs": stored.configs,
+        "configs": configs,
         "activeId": stored.active_id,
         "activeQuickId": stored.active_quick_id,
         "activeCognitiveId": stored.active_cognitive_id,
@@ -135,6 +150,13 @@ pub(crate) async fn llm_config_delete(
     if id.is_empty() {
         return StatusCode::BAD_REQUEST;
     }
+    // An app's model is not in `config.json`, so removing it there would succeed
+    // silently and change nothing — the row would still be in the picker on the
+    // next read, which reads as a broken Delete button. It goes away when the
+    // app is uninstalled, and only then.
+    if crate::apps::llm_provider::is_app_config(&id) {
+        return StatusCode::CONFLICT;
+    }
     let _ = remove_llm_config(&s.config.paths.global_config_path, &id);
     StatusCode::NO_CONTENT
 }
@@ -148,6 +170,16 @@ pub(crate) async fn llm_config_update(
     let id = id.trim().to_string();
     if id.is_empty() {
         return Err(AppError(StatusCode::BAD_REQUEST, "Invalid ID".to_string()));
+    }
+    // A `vision` override on an app's model would be silently reverted the next
+    // time the app registers — and the app's own answer is the better one: it
+    // read the checkpoint's config, while this would be a user's guess.
+    if crate::apps::llm_provider::is_app_config(&id) {
+        return Err(AppError(
+            StatusCode::CONFLICT,
+            "This model is provided by a Space App and is configured in the app, not here."
+                .to_string(),
+        ));
     }
 
     // Load existing configs
@@ -257,6 +289,33 @@ fn pick_config<'a>(
         .and_then(|id| configs.iter().find(|c| c.id == id))
         .or_else(|| configs.first())
         .ok_or_else(|| "No LLM configured in SenClaw (Settings → Models)".to_string())
+}
+
+/// Refuse a completion that would be routed straight back to the app asking for
+/// it.
+///
+/// A Space App can serve models *and* use the bridge to ask SenClaw for one. If
+/// the selected model is one the caller itself serves, the request goes app →
+/// daemon → proxy → same app, and the app's provider — which is what issued the
+/// bridge call — waits on its own answer. It does not fail; it hangs, and takes
+/// a connection and a request slot with it each time.
+///
+/// This is not hypothetical for the obvious wrong implementation: an app whose
+/// `LlmProvider::chat` "just forwards to the daemon" builds exactly this loop
+/// and looks correct until it is the active model. Refused with a message
+/// naming both sides, rather than quietly answered by a different model than the
+/// user selected.
+fn reject_self_routing(cfg: &LlmConfig, caller_app: Option<&str>) -> Result<(), String> {
+    let Some(caller) = caller_app else {
+        return Ok(());
+    };
+    match crate::apps::llm_provider::parse_config_id(&cfg.id) {
+        Some((owner, model)) if owner == caller => Err(format!(
+            "model '{model}' is served by app '{caller}' itself — a completion on it would route \
+             back into the caller. Pick another model, or pass `profile` naming one."
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Everything a one-shot completion produced. `usage` is the provider-reported
@@ -422,16 +481,21 @@ async fn dispatch_completion(
     })
 }
 
+/// `caller_app` is the Space App on whose behalf this runs, when there is one.
+/// It exists only for [`reject_self_routing`]; pass `None` from anywhere that is
+/// not an app's bridge call.
 pub(crate) async fn chat_completion(
     config_path: &std::path::Path,
     profile: Option<&str>,
     system: &str,
     user: &str,
     max_tokens: u32,
+    caller_app: Option<&str>,
 ) -> Result<ChatCompletionResult, String> {
     let started = std::time::Instant::now();
     let stored = load_llm_configs(config_path);
     let cfg = pick_config(&stored.configs, stored.active_id.as_deref(), profile)?;
+    reject_self_routing(cfg, caller_app)?;
 
     let client = reqwest::Client::new();
     let is_anthropic = cfg.adapt == "anthropic" && cfg.base_url.contains("anthropic.com");
@@ -572,10 +636,12 @@ pub(crate) async fn chat_completion_vision(
     image_b64: &str,
     media_type: &str,
     max_tokens: u32,
+    caller_app: Option<&str>,
 ) -> Result<ChatCompletionResult, String> {
     let started = std::time::Instant::now();
     let stored = load_llm_configs(config_path);
     let cfg = pick_config(&stored.configs, stored.active_id.as_deref(), profile)?;
+    reject_self_routing(cfg, caller_app)?;
 
     let client = reqwest::Client::new();
     let is_anthropic = cfg.adapt == "anthropic" && cfg.base_url.contains("anthropic.com");
@@ -909,6 +975,7 @@ mod tests {
             // thinking first, and a cap that small comes back with no text at
             // all — which reads as a failure of the path under test.
             512,
+            None,
         )
         .await
         .expect("the active profile must complete");

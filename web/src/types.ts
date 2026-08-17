@@ -46,9 +46,15 @@ export interface UpdateGroupPayload {
 
 // ===== Message types =====
 
+/** A file riding along with a chat message. Images go to the model as vision
+ *  blocks (or through OCR); anything else is saved server-side and its text
+ *  extracted into the prompt. Named `ImageAttachment` for historical reasons —
+ *  it carries documents too. */
 export interface ImageAttachment {
   dataUrl: string;
   mimeType: string;
+  /** Original filename. Absent for pasted images, which have none. */
+  name?: string;
 }
 
 export interface TextMessage {

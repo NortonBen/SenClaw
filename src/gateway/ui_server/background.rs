@@ -188,6 +188,7 @@ Quy tắc: \"mỗi sáng 9h\"→cron \"0 9 * * *\"; \"mỗi 30 phút\"→interva
         &system,
         text,
         500,
+        None,
     )
     .await
     .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;

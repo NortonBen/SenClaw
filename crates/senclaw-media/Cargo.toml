@@ -1,0 +1,51 @@
+[package]
+name = "senclaw-media"
+version = "0.1.0"
+edition = "2021"
+description = "Speech-to-text sidecar: Whisper on MLX (Apple Silicon) or Candle (everywhere else), spawned by the SenClaw daemon over loopback"
+
+[[bin]]
+name = "senclaw-media"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+dotenvy = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# ── Cross-platform ASR ────────────────────────────────────────────────────────
+# The audio front-end (decode any container → mono f32 16 kHz → log-mel) and
+# the Candle Whisper backend are pure Rust and build everywhere. They are what a
+# Windows or Linux sidecar transcribes with — and the reason those builds are
+# real transcribers rather than 501 stubs.
+tokenizers = { workspace = true }
+symphonia = { workspace = true }
+rubato = { workspace = true }
+realfft = { workspace = true }
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+
+# ── macOS only: the MLX runtime ───────────────────────────────────────────────
+# On Linux and Windows none of this is fetched, built or linked — that absence
+# is the point of the target gate, and of this crate's existence. The MLX
+# backend stays the macOS default because it is several times faster than the
+# CPU path on the same checkpoint.
+[target.'cfg(target_os = "macos")'.dependencies]
+mlx-rs = { workspace = true }
+mlx-sys = { workspace = true }
+half = { workspace = true }
+safetensors = { workspace = true }
+libc = { workspace = true }
+# Whisper's MLX checkpoints ship their tiktoken vocabulary gzipped.
+flate2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

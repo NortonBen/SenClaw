@@ -6,6 +6,7 @@ import {
   Form,
   Input,
   message,
+  Modal,
   Popconfirm,
   Space,
   Tag,
@@ -14,13 +15,14 @@ import {
   theme,
 } from 'antd';
 import {
-  AppstoreOutlined, CloudDownloadOutlined, DeleteOutlined, InfoCircleOutlined,
+  AppstoreOutlined, CloudDownloadOutlined, DeleteOutlined, InfoCircleOutlined, SettingOutlined,
   LinkOutlined, PlayCircleOutlined, PoweroffOutlined, SafetyCertificateOutlined,
   SyncOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import { SpaceAppDetailModal, type DetailApp } from '../space/SpaceAppDetailModal';
 import ScanReportDialog, { readScanError, type ScanReport } from '../security/ScanReportDialog';
 import SpaceAppSandboxModal from './SpaceAppSandboxModal';
+import AppTokenModeCard from './AppTokenModeCard';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -54,6 +56,11 @@ export const SpaceAppsSettings: React.FC = () => {
   } | null>(null);
   const [registering, setRegistering] = useState(false);
   const [detailApp, setDetailApp] = useState<DetailApp | null>(null);
+  // App whose backend-settings page is open in the iframe modal — the way an
+  // app hidden from the launcher (`integration.launcher: false`) exposes its
+  // management UI. The iframe goes through the daemon's app proxy, which also
+  // starts a stopped session app on the first request.
+  const [settingsApp, setSettingsApp] = useState<{ id: string; name: string } | null>(null);
   const [updates, setUpdates] = useState<Record<string, UpdateStatus>>({});
   const [checking, setChecking] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
@@ -226,6 +233,8 @@ export const SpaceAppsSettings: React.FC = () => {
         </Space>
       </Space>
 
+      <AppTokenModeCard />
+
       <Alert
         type="info"
         showIcon
@@ -322,6 +331,17 @@ export const SpaceAppsSettings: React.FC = () => {
                 </Tag>
                 <Tag>{integration.url ?? 'no url'}</Tag>
                 {manifest.bridge?.postMessage && <Tag color="cyan">SenClaw bridge</Tag>}
+                {integration.settings === true && (
+                  <Button
+                    size="small"
+                    type="primary"
+                    ghost
+                    icon={<SettingOutlined />}
+                    onClick={() => setSettingsApp({ id: app.id, name: detail.name })}
+                  >
+                    Model & cài đặt
+                  </Button>
+                )}
                 <Button
                   size="small"
                   icon={<InfoCircleOutlined />}
@@ -373,6 +393,24 @@ export const SpaceAppsSettings: React.FC = () => {
         onClose={() => setDetailApp(null)}
       />
 
+            <Modal
+        title={settingsApp ? `${settingsApp.name} — Model & cài đặt` : ''}
+        open={!!settingsApp}
+        onCancel={() => setSettingsApp(null)}
+        footer={null}
+        width="min(960px, 94vw)"
+        destroyOnClose
+        styles={{ body: { padding: 0, height: '72vh' } }}
+      >
+        {settingsApp && (
+          <iframe
+            title={settingsApp.name}
+            src={`/api/space/apps/${encodeURIComponent(settingsApp.id)}/proxy/`}
+            style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+            sandbox="allow-scripts allow-same-origin allow-forms"
+          />
+        )}
+      </Modal>
       <SpaceAppSandboxModal
         appId={sandboxApp?.id ?? null}
         appName={sandboxApp?.name}

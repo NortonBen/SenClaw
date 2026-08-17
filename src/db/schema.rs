@@ -681,6 +681,21 @@ pub(crate) fn apply_space_tables(conn: &Connection) -> Result<()> {
             rotated_at  INTEGER
         );
 
+        -- Space Apps that serve models. One row per app, holding the resolved
+        -- endpoint and the model list read from the app's /v1/models (or from
+        -- the cache it wrote at startup, while it is stopped). Rebuilt into a
+        -- process-global registry at boot, which is what `load_llm_configs`
+        -- appends to the user's own configs.
+        -- See src/apps/llm_provider.rs.
+        CREATE TABLE IF NOT EXISTS space_app_llm_providers (
+            app_id      TEXT PRIMARY KEY,
+            label       TEXT NOT NULL,
+            adapt       TEXT NOT NULL,
+            base_url    TEXT NOT NULL,
+            models      TEXT NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS space_app_config (
             app_id      TEXT NOT NULL,
             key         TEXT NOT NULL,

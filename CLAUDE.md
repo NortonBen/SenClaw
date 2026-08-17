@@ -253,6 +253,196 @@ Project-level [`.mcp.json`](.mcp.json) template (one entry per server needed):
 
 The `<domain>-server` subcommand list is in `src/main.rs` (e.g. `browser-server`, `memory-server`, `schedule-server`, ...). After editing `.mcp.json`, the user must restart Claude Code and approve the server in the prompt.
 
+## Local models left the daemon
+
+`src/local_model/` went from 30 121 lines to an OCR module. Everything model-
+shaped now lives in one of two places, and the distinction is deliberate:
+
+| | what | why this shape |
+|---|---|---|
+| [`apps/mlx-lm`](apps/mlx-lm) | LLM on Apple Silicon (`mlx-rs`) | **Space App** — optional, installed by choice, in the model picker only when present |
+| [`apps/candle`](apps/candle) | LLM, cross-platform pure Rust | **Space App** — same |
+| [`apps/local-model-core`](apps/local-model-core) | shared model root, HF downloader, `settings.json`, `/api/local-models/*` REST | library both engine apps mount |
+| [`crates/senclaw-media`](crates/senclaw-media) | Whisper ASR (MLX) | **sidecar** — ships beside the daemon, spawned on demand, never in any app list |
+
+**App vs sidecar is about absence.** A Space App can be uninstalled, and the
+daemon must treat that as normal. Speech-to-text backs voice chat and the
+transcribe endpoint — a missing binary there is a broken build, not an
+uninstalled feature — so `senclaw-media` is a plain binary next to the daemon,
+supervised by [`src/media_sidecar.rs`](src/media_sidecar.rs): fixed port 18790,
+spawned on the first transcription, adopted if already running, killed on
+daemon shutdown. `SENCLAW_MEDIA_BIN` points it at `target/` during development.
+
+**What stayed in `src/` stayed because it has no MLX in it.** TTS is VieNeu
+(ONNX on the CPU) plus the macOS `say` presets — the MLX voices are gone, not
+relocated: ZipVoice never synthesized anything, and MMS-VITS was the last thing
+keeping `mlx-rs` on the TTS path for a voice no machine had selected. OCR is
+MNN. Neither justifies a process hop.
+
+The daemon **compiles no MLX at all**. `DAEMON_FEATURES` is
+`local-embed-metal,local-embed,ocr-paddle-metal,tts-vieneu`; the `local-mlx*`,
+`local-candle*`, `whisper-audio` and `cognitive-mlx-embed` features no longer
+exist. `make app-build` builds the daemon without touching `mlx-sys`, then
+builds and bundles `senclaw-media` (with `mlx.metallib` beside it — MLX
+resolves the metallib relative to the executable, and a missing copy is a
+hard error in CI, not a warning).
+
+Rules for Claude:
+
+- **Do not reintroduce an MLX dependency into the daemon.** The measurement
+  that unlocked this split: two MLX processes generating concurrently on the
+  same `Device(gpu, 0)` run clean — Metal isolates command queues per process.
+  In-process concurrency is still unsafe; each MLX binary keeps its own
+  process-wide serial lock (`mlx_serial`).
+- **A removed voice must degrade, not 400.** `select_backend_for`'s catch-all
+  is an `Unsupported` backend returning `NotImplemented`, which the fallback
+  chain turns into the macOS voice plus a `fallback_reason`. Machines still
+  have `facebook/mms-tts-vie` selected in config; `None` would hard-fail their
+  next play button.
+- **Symphonia probes audio by file extension.** The sidecar's transcribe
+  endpoint takes a `filename` query param and the temp file keeps that
+  extension — writing `.audio` breaks decoding of perfectly good files.
+- **An app-provided config has an empty `api_key` on purpose** (the app proxy
+  needs no credential). Anything that skips a config for an empty key must
+  exempt `llm_provider::is_app_config` first, or the local model silently
+  becomes unusable — `memory::cognitive::llm_openai` had exactly that bug.
+- **Everything model-storing shares `~/.senclaw/local-models/`**, injected as
+  `SENCLAW_LOCAL_MODELS_DIR`. Never point an engine at `space-app-data/`: the
+  directory is tens of gigabytes and relocating it means everyone re-downloads.
+- **`settings.json` is snake_case, and apps and daemon read the same file.**
+  A `rename_all` on `local_model_core::settings::Settings` would parse every
+  existing file into all-`None` silently. A test pins the exact daemon file.
+- **Weights load on the first request, never in `main`.** Health gates are
+  30 s with 5 s probes; both the apps and the sidecar answer `/health` before
+  reading a byte of weights.
+- **`idleTimeoutSecs` is 300 for the engine apps** (not the Space-App default
+  60); the sidecar is not reaped at all — it drops weights after each use and
+  an idle process costs a few megabytes.
+- `ModelCard::vision` is **required and comes from the checkpoint's config**. A
+  local id like `mlx-community/Qwen3.5-2B-OptiQ-4bit` matches no pattern in
+  `src/zen_core/vision.rs`, so a name-based guess is right or wrong by accident
+  — and the wrong direction is a hard 400 that fails the whole turn.
+- **Engine apps declare `integration.launcher: false`**: they have a UI (model
+  management), but it is reached from Settings — the launcher grid and Space
+  sidebar filter them out. Absent means visible, so older apps keep their tile.
+- **Workspace:** `default-members = [".", "app-space-sdk"]` keeps bare
+  `cargo build`/`test` off the engines. `[workspace.dependencies]` pins shared
+  versions — above all `mlx-rs`/`mlx-sys`, which `apps/mlx-lm` and
+  `crates/senclaw-media` both build: on the same tag they share every compiled
+  artifact in `target/`; drifted, the workspace pays for two full MLX builds.
+
+## Space Apps that serve models (`llm` manifest block)
+
+An app declaring an `llm` block becomes an LLM provider: its models appear in
+the same picker as OpenAI and Anthropic, and turns route to its own
+`/v1/chat/completions` over loopback.
+
+```json
+"llm": { "autoRegister": true, "path": "/v1", "adapt": "openai", "displayName": "MLX" }
+```
+
+The app speaks **OpenAI** — `GET /v1/models`, `POST /v1/chat/completions` (SSE
+and JSON) — so the daemon reuses `adapt: "openai"` and needs **no new adapter**.
+`app_space_sdk::llm::openai_router` renders the wire from a semantic
+`LlmProvider` trait, so an app emits `Chunk::{Text, Reasoning, ToolCall, Usage}`
+and never hand-writes the JSON.
+
+Registration mirrors `mcp.autoRegister` exactly: session apps are addressed
+through `/api/space/apps/<id>/proxy/v1`, and the model list is cached at
+`<app>/.senclaw/llm-models.json` so a **stopped** app still has models in the
+picker — without which nobody would select one, so nothing would call the app,
+so it would never start.
+
+Rules for Claude:
+
+- **`LlmDecl::parse` returns `Result`, unlike every other parser in
+  `src/apps/manifest.rs`.** The others fall back to a default because the
+  failure is survivable. Here it is not: an `adapt` the daemon does not route
+  means every turn gets an OpenAI body and fails upstream with an error naming
+  neither the app nor the field, and `adapt: "local-mlx"` routes the turn to an
+  in-process engine so the app is registered and *never called*.
+- **`APP_DECLARABLE_ADAPTERS` is narrower than `ROUTED_ADAPTERS`** — `openai`
+  and `anthropic` only. Do not widen it to whatever `query_llm` happens to
+  dispatch.
+- **App configs are never written to `config.json`.** They are rebuilt from
+  `space_app_llm_providers` on every `load_llm_configs`. `save_llm_config`
+  refuses an `app:` id; a frozen copy would outlive the app.
+- **Merging happens inside `load_llm_configs`, not at the HTTP layer.** That
+  function is the single seam the picker, `resolve_model_profile_at` and
+  `model_accepts_images` all go through.
+- **`REQUEST_TIMEOUT` no longer applies to a loopback endpoint.**
+  `DEFAULT_MAX_NEW_TOKENS` is 8192, which at ~60 tok/s is over two minutes of
+  legitimate output — a total deadline would cut it mid-sentence. Stalls are
+  caught by the client's `read_timeout`, which resets on every byte. Never
+  reintroduce a total timeout for a local provider.
+
+Model in [`src/apps/llm_provider.rs`](src/apps/llm_provider.rs) and
+[`src/apps/manifest.rs`](src/apps/manifest.rs) `LlmDecl`; SDK in
+[`app-space-sdk/src/llm.rs`](app-space-sdk/src/llm.rs); registration in
+[`src/gateway/ui_server/space_mcp.rs`](src/gateway/ui_server/space_mcp.rs)
+`register_llm`. Design record:
+[docs/space-app-llm-provider-sdk.md](docs/space-app-llm-provider-sdk.md).
+
+## Gemma 4 on the native MLX path
+
+Sliding-window layers keep a decode-time KV **ring**
+([`cache.rs`](src/local_model/mlx_lm/cache.rs) `ring_head`): decode writes one
+row via `slice_update` instead of evicting with a tail slice and re-growing,
+which the pre-ring path did on every token past the window. Measured on both
+Gemma-4 E2B and E4B it is **neutral, not an optimization** (<1% decode, no CPU
+or GPU change), so treat it as a simpler eviction path, not a fast one.
+Rotation is safe because
+attention is permutation-invariant along the key axis — but *only* while these
+layers pass **no mask** on decode, which `Gemma4TextModel::forward` does at
+`seq <= 1`. Three paths need chronological order back and call `unrotate` first:
+a multi-token write on a cache that already decoded, `trim_by`, and
+`snapshot_clone` (the prefix cache replays a snapshot as a positional prefix).
+Reordering the key axis changes floating-point accumulation order, so the
+contract is **token parity, not bit identity**.
+
+Sampling goes through [`sampling.rs`](src/local_model/mlx_lm/sampling.rs)
+`sample_with` (top-k then nucleus on the survivors). Defaults come from the
+**checkpoint's own `generation_config.json`**, never a per-architecture table:
+precedence is user setting → checkpoint → off, where off is the historical
+untruncated full-vocabulary draw. This moves sampled output for **every** local
+checkpoint shipping those fields, not just Gemma — Qwen3 ships `top_k: 20`,
+Qwen3.5 ships `20 / 0.80`. Greedy is untouched (`argmax` short-circuits before
+either filter), so prefix-cache determinism is unaffected.
+
+Rules for Claude:
+
+- **`MLX_BENCH_EXT_DETERMINISM=1` is only meaningful with `temperature: 0`
+  pinned in the bench cell's own `settings.json`.** At the Gemma default of 0.65
+  it reports "OUTPUTS DIFFER" for every build including unmodified ones — that
+  is the sampler being stochastic, not a determinism regression.
+- **Never claim a decode win from a single ordered pair of runs, and generate
+  enough tokens to see past the noise.** At 400-token generations the KV-ring
+  A/B spread 2–6% and read as inconclusive; at 1500 tokens the spread collapsed
+  to ~1% and the answer appeared — flat.
+- **Measure RAM as well as tok/s, and on more than one model.** The KV ring
+  looked neutral on throughput, then appeared to cost ~68 MiB of peak RSS on
+  E2B — consistently, across six runs. On E4B that gap did not reproduce at all,
+  which is what demoted it from "a real cost" to "an E2B artifact". A finding
+  from one checkpoint is a hypothesis. Use
+  [`scripts/mlx_resource_bench.py`](scripts/mlx_resource_bench.py) (CPU + GPU +
+  RAM, no root needed); the record is
+  [docs/mlx-resource-benchmark.md](docs/mlx-resource-benchmark.md).
+- **E4B needs no code of its own.** `gemma-4-e4b-it-4bit` is the same dense
+  Gemma-4 path as E2B (42 layers, hidden 2560, 2 KV heads, 18 KV-shared) and
+  loads with zero unmatched keys — ~1.7× slower than E2B for ~1.5 GB more peak
+  MLX memory.
+- **TurboQuant 4-bit KV for Gemma-4 is rejected, not missing.** The `Exception`
+  in `gemma4.rs` is a decision: measured against a windowed FP16 cache it is
+  slower, saves ~82 MiB at 4 K, grows *larger* at long context, and fails
+  quality (top-1 agreement −5.08 pp).
+- **`gemma-4-26b-a4b` is implemented but never run.** Config parsing is tested;
+  the forward pass, loader key matching and expert matmul shapes are unverified
+  on real tensors (~14.3 GB, not downloaded).
+
+Full record, including what transfers from
+[drumih/turbo-fieldfare](https://github.com/drumih/turbo-fieldfare) and what
+does not: [docs/gemma4-local-optimizations.md](docs/gemma4-local-optimizations.md).
+
 ## Scaffolding: `senclaw create`
 
 `senclaw create app|skill|sub-agent <name>` renders a working project from a

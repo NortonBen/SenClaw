@@ -15,6 +15,7 @@ import 'package:http/http.dart' as http;
 import '../chat/audio_service.dart' show audioServiceProvider;
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../core/daemon/daemon_provider.dart';
+import '../../widgets/embedded_web.dart';
 import '../../core/daemon/daemon_supervisor.dart';
 import '../../core/prefs.dart';
 import '../../core/i18n/l10n.dart';
@@ -45,7 +46,6 @@ const _sections = [
   ('rules', 'Tool Rules', Icons.rule_folder_outlined),
   ('llm', 'LLM Models', Icons.smart_toy_outlined),
   ('signin', 'Provider Sign-in', Icons.link),
-  ('local', 'Local Models', Icons.memory),
   ('embedding', 'Embedding', Icons.scatter_plot_outlined),
   ('memory', 'Knowledge', Icons.account_tree_outlined),
   ('whisper', 'Speech-to-Text', Icons.mic_none_outlined),
@@ -106,7 +106,6 @@ class SettingsScreen extends ConsumerWidget {
             'rules' => const _ToolRulesSection(),
             'llm' => const _LlmSection(),
             'signin' => const ProviderSignInSection(),
-            'local' => const _LocalModelsSection(),
             'embedding' => const _EmbeddingSection(),
             'memory' => const _MemorySection(),
             'whisper' => _MediaModelsSection(
@@ -3455,312 +3454,7 @@ class _LlmEditorState extends ConsumerState<_LlmEditor> {
 }
 
 // ── Local models ──────────────────────────────────────────────────────────
-class _LocalModelsSection extends ConsumerStatefulWidget {
-  const _LocalModelsSection();
-  @override
-  ConsumerState<_LocalModelsSection> createState() =>
-      _LocalModelsSectionState();
-}
 
-class _LocalModelsSectionState extends ConsumerState<_LocalModelsSection> {
-  Timer? _poll;
-
-  @override
-  void dispose() {
-    _poll?.cancel();
-    super.dispose();
-  }
-
-  // Poll the list every ~1.5s while any model is downloading; stop otherwise.
-  void _syncPoll(bool anyDownloading) {
-    if (anyDownloading && _poll == null) {
-      _poll = Timer.periodic(const Duration(milliseconds: 1500), (_) {
-        ref.invalidate(localModelsProvider);
-      });
-    } else if (!anyDownloading && _poll != null) {
-      _poll!.cancel();
-      _poll = null;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    final models = ref.watch(localModelsProvider);
-    final list = models.valueOrNull ?? const [];
-    _syncPoll(list.any((m) => m.downloading));
-    final runtime = ref.watch(localModelsRuntimeProvider);
-    return SettingsBody(
-      title: context.tr('Local Models'),
-      children: [
-        const _LocalInferenceSettings(),
-        const SizedBox(height: AppTokens.s16),
-        // Runtime environment (platform + models dir) — web LocalModelsSettings.
-        runtime.maybeWhen(
-          orElse: () => const SizedBox.shrink(),
-          data: (rt) {
-            final platform = '${rt['platform'] ?? ''}';
-            final dir = '${rt['local_models_dir'] ?? ''}';
-            final isMac = platform == 'macos';
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (!isMac && platform.isNotEmpty)
-                  Container(
-                    padding: const EdgeInsets.all(AppTokens.s12),
-                    margin: const EdgeInsets.only(bottom: AppTokens.s8),
-                    decoration: BoxDecoration(
-                      color: AppTokens.warning.withValues(alpha: 0.12),
-                      border: Border.all(color: AppTokens.warning),
-                      borderRadius: BorderRadius.circular(AppTokens.rMd),
-                    ),
-                    child: Row(children: [
-                      const Icon(Icons.warning_amber_rounded,
-                          size: 16, color: AppTokens.warning),
-                      const SizedBox(width: AppTokens.s8),
-                      Expanded(
-                        child: Text(
-                          context.trArgs(
-                              'Platform: {platform} — local MLX inference only runs '
-                              'on macOS (Apple Silicon).',
-                              {'platform': platform}),
-                          style: TextStyle(
-                              color: c.textSecondary, fontSize: 12),
-                        ),
-                      ),
-                    ]),
-                  ),
-                if (dir.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: AppTokens.s12),
-                    child: Row(children: [
-                      Icon(Icons.folder_outlined,
-                          size: 14, color: c.textMuted),
-                      const SizedBox(width: AppTokens.s6),
-                      Expanded(
-                        child: SelectableText(
-                          dir,
-                          maxLines: 1,
-                          style: TextStyle(
-                              color: c.textMuted,
-                              fontSize: 11,
-                              fontFamily: AppTokens.fontMono),
-                        ),
-                      ),
-                    ]),
-                  ),
-              ],
-            );
-          },
-        ),
-        _HfAddModelCard(
-          key: const ValueKey('hf-add-local'),
-          apiBase: '/api/local-models',
-          onDownloaded: () => ref.invalidate(localModelsProvider),
-        ),
-        const SizedBox(height: AppTokens.s12),
-        models.when(
-          loading: () => const LinearProgressIndicator(),
-          error: (e, _) => Text('$e'),
-          data: (list) => Column(
-            children: [
-              for (final m in list)
-                Container(
-                  margin: const EdgeInsets.only(bottom: AppTokens.s8),
-                  padding: const EdgeInsets.all(AppTokens.s12),
-                  decoration: BoxDecoration(
-                    color: c.surface,
-                    border: Border.all(color: c.border),
-                    borderRadius: BorderRadius.circular(AppTokens.rMd),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        m.loaded
-                            ? Icons.bolt
-                            : m.installed
-                                ? Icons.download_done
-                                : Icons.cloud_outlined,
-                        size: 18,
-                        color: m.loaded
-                            ? AppTokens.success
-                            : m.installed
-                                ? c.accent
-                                : c.textMuted,
-                      ),
-                      const SizedBox(width: AppTokens.s12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(m.label,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(color: c.textPrimary)),
-                            if (m.downloading) ...[
-                              const SizedBox(height: 4),
-                              ClipRRect(
-                                borderRadius:
-                                    BorderRadius.circular(AppTokens.rSm),
-                                child: LinearProgressIndicator(
-                                    value: m.downloadProgress,
-                                    minHeight: 4,
-                                    backgroundColor: c.surfaceAlt),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                  m.downloadProgress == null
-                                      ? context.tr('Downloading…')
-                                      : context.trArgs('Downloading {pct}%', {
-                                          'pct': (m.downloadProgress! * 100)
-                                              .toStringAsFixed(0)
-                                        }),
-                                  style: TextStyle(
-                                      color: c.accent, fontSize: 11)),
-                            ] else
-                              Text('${m.sizeGb.toStringAsFixed(1)} GB',
-                                  style: TextStyle(
-                                      color: c.textMuted, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: AppTokens.s8),
-                      _modelAction(ref, m),
-                    ],
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _modelAction(WidgetRef ref, LocalModel m) {
-    // Resolved up front: the toasts below fire after an await, and reaching
-    // through `context` there would be a use across an async gap.
-    final l10n = L10n.of(context);
-    Future<void> hit(String action) async {
-      // Model ids are HF repos with slashes — encode so they don't break the
-      // URL path (matches the web `encodeURIComponent`).
-      try {
-        await ref
-            .read(apiClientProvider)
-            .post('/api/local-models/${Uri.encodeComponent(m.id)}/$action');
-      } catch (e) {
-        // State context — guard with the State's own `mounted` (the analyzer
-        // flags `context.mounted` here as an unrelated check).
-        if (mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text('$e')));
-        }
-      }
-      ref.invalidate(localModelsProvider);
-    }
-
-    if (m.downloading) {
-      return TextButton.icon(
-        onPressed: () => hit('cancel'),
-        icon: const Icon(Icons.close, size: 16, color: AppTokens.danger),
-        label: Text(context.tr('Cancel'),
-            style: const TextStyle(color: AppTokens.danger)),
-      );
-    }
-    if (!m.installed) {
-      return TextButton.icon(
-        onPressed: () => hit('download'),
-        icon: const Icon(Icons.download, size: 16),
-        label: Text(context.tr('Download')),
-      );
-    }
-    void toast(String msg) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(msg)));
-      }
-    }
-
-    /// `preferred_backend` from the inference settings — decides `/load` vs
-    /// `/load-mlx` and the `?backend=` hint on use-as-llm (web parity).
-    Future<String?> preferredBackend() async {
-      try {
-        final s = await ref.read(apiClientProvider).get(
-              '/api/local-models/settings',
-            );
-        if (s is Map) return s['preferred_backend'] as String?;
-      } catch (_) {}
-      return null;
-    }
-
-    Future<void> useAsLlm() async {
-      try {
-        final backend = await preferredBackend();
-        // Ids are HF repos with slashes: encode, or the path gains an extra
-        // segment, misses the `:id/use-as-llm` route and silently falls
-        // through to the SPA handler — the button appears to do nothing.
-        final res = await ref.read(apiClientProvider).post(
-              '/api/local-models/${Uri.encodeComponent(m.id)}/use-as-llm'
-              '${backend == null ? '' : '?backend=$backend'}',
-            );
-        final label = (res is Map && res['config'] is Map)
-            ? '${(res['config'] as Map)['label']}'
-            : m.label;
-        if (res is Map && res['existed'] == true) {
-          toast(
-              l10n.tArgs('Already in LLM Models: {label}', {'label': label}));
-        } else if (res is Map && res['active'] == true) {
-          toast(l10n.tArgs('Added as LLM profile and set active: {label}',
-              {'label': label}));
-        } else {
-          toast(l10n.tArgs('Added as LLM profile: {label}', {'label': label}));
-        }
-      } catch (e) {
-        toast(l10n.tArgs('Failed to add as LLM: {e}', {'e': e}));
-      }
-      ref.invalidate(localModelsProvider);
-      ref.invalidate(llmConfigsProvider);
-    }
-
-    Future<void> load() async {
-      // `/load` is Candle-only; MLX has its own endpoint.
-      final useMlx = await preferredBackend() == 'mlx';
-      await hit(useMlx ? 'load-mlx' : 'load');
-    }
-
-    Future<void> remove() async {
-      try {
-        await ref
-            .read(apiClientProvider)
-            .delete('/api/local-models/${Uri.encodeComponent(m.id)}');
-        toast(l10n.tArgs('Removed {label}', {'label': m.label}));
-      } catch (e) {
-        toast(l10n.tArgs('Delete failed: {e}', {'e': e}));
-      }
-      ref.invalidate(localModelsProvider);
-    }
-
-    // Installed: load/unload + use-as-LLM + delete (web LocalModelsSettings).
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        TextButton(
-          onPressed: useAsLlm,
-          child: Text(context.tr('Use as LLM')),
-        ),
-        TextButton(
-          onPressed: () => m.loaded ? hit('unload') : load(),
-          child: Text(context.tr(m.loaded ? 'Unload' : 'Load')),
-        ),
-        IconButton(
-          tooltip: context.tr('Delete'),
-          icon: const Icon(Icons.delete_outline, size: 16,
-              color: AppTokens.danger),
-          onPressed: remove,
-        ),
-      ],
-    );
-  }
-}
 
 // ── Media models (whisper / tts / ocr) ────────────────────────────────────
 class _MediaModelsSection extends ConsumerStatefulWidget {
@@ -4810,6 +4504,40 @@ class SpaceAppsSection extends ConsumerWidget {
                                 ],
                               ),
                             ),
+                            // Apps hidden from the launcher
+                            // (`integration.launcher: false`) expose their
+                            // management UI here instead — the engine apps'
+                            // model download / sampling settings page. Through
+                            // the daemon proxy on purpose: it starts a stopped
+                            // session app, where the app's own port would
+                            // render a blank rectangle.
+                            if ((a.manifest['integration']
+                                    as Map?)?['settings'] ==
+                                true)
+                              TextButton.icon(
+                                icon: const Icon(Icons.tune, size: 16),
+                                label: Text(context.tr('Models')),
+                                onPressed: () {
+                                  final base = ref
+                                      .read(appConfigProvider)
+                                      .httpBase;
+                                  final url =
+                                      '$base/api/space/apps/${a.id}/proxy/';
+                                  showDialog(
+                                    context: context,
+                                    builder: (ctx) => Dialog(
+                                      insetPadding:
+                                          const EdgeInsets.all(AppTokens.s24),
+                                      child: SizedBox(
+                                        width: 960,
+                                        height: 640,
+                                        child: embeddedWebView(url,
+                                            title: a.name),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
                             IconButton(
                               tooltip: context.tr('Details'),
                               icon: const Icon(Icons.info_outline, size: 16),
@@ -5368,336 +5096,12 @@ class _MiniTag extends StatelessWidget {
       );
 }
 
-/// Inference settings for local (MLX) models — idle unload, KV cache, etc.
-/// GET/PUT /api/local-models/settings, mirrors the web LocalModelsSettings.
-class _LocalInferenceSettings extends ConsumerStatefulWidget {
-  const _LocalInferenceSettings();
-  @override
-  ConsumerState<_LocalInferenceSettings> createState() =>
-      _LocalInferenceSettingsState();
-}
 
-class _LocalInferenceSettingsState
-    extends ConsumerState<_LocalInferenceSettings> {
-  bool _loaded = false;
-  bool _saving = false;
-
-  // Numeric fields (empty = server default).
-  final _idleUnload = TextEditingController();
-  final _tqActivate = TextEditingController();
-  final _maxPrompt = TextEditingController();
-  final _maxNew = TextEditingController();
-  final _maxKvTokens = TextEditingController();
-  final _temperature = TextEditingController();
-  final _repPenalty = TextEditingController();
-
-  // Choice fields. _backend: auto|mlx|candle. _kvBits: -1=auto/0/3/4.
-  // _mlxKvBits: -1=off/4/8.
-  String _backend = 'auto';
-  int _kvBits = -1;
-  int _mlxKvBits = -1;
-  bool _enableThinking = false;
-  bool _releaseCache = false;
-
-  @override
-  void initState() {
-    super.initState();
-    ref.read(apiClientProvider).get('/api/local-models/settings').then((r) {
-      if (r is! Map || !mounted) return;
-      setState(() {
-        _loaded = true;
-        String s(String k) => r[k] == null ? '' : '${r[k]}';
-        _idleUnload.text = s('idle_unload_secs');
-        _tqActivate.text = s('tq_activate_at');
-        _maxPrompt.text = s('max_prompt_tokens');
-        _maxNew.text = s('max_new_tokens');
-        _maxKvTokens.text = s('max_kv_tokens');
-        _temperature.text = s('temperature');
-        _repPenalty.text = s('repetition_penalty');
-        _backend = (r['preferred_backend'] as String?) ?? 'auto';
-        _kvBits = (r['kv_cache_bits'] as num?)?.toInt() ?? -1;
-        _mlxKvBits = (r['mlx_kv_cache_bits'] as num?)?.toInt() ?? -1;
-        _enableThinking = r['enable_thinking'] == true;
-        _releaseCache = r['release_cache_after_session'] == true;
-      });
-    }).catchError((_) {
-      if (mounted) setState(() => _loaded = true);
-    });
-  }
-
-  @override
-  void dispose() {
-    _idleUnload.dispose();
-    _tqActivate.dispose();
-    _maxPrompt.dispose();
-    _maxNew.dispose();
-    _maxKvTokens.dispose();
-    _temperature.dispose();
-    _repPenalty.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    setState(() => _saving = true);
-    int? n(TextEditingController c) => int.tryParse(c.text.trim());
-    double? d(TextEditingController c) => double.tryParse(c.text.trim());
-    try {
-      await ref.read(apiClientProvider).put('/api/local-models/settings', body: {
-        'preferred_backend': _backend == 'auto' ? null : _backend,
-        'idle_unload_secs': n(_idleUnload),
-        'kv_cache_bits': _kvBits < 0 ? null : _kvBits,
-        'mlx_kv_cache_bits': _mlxKvBits < 0 ? null : _mlxKvBits,
-        'tq_activate_at': n(_tqActivate),
-        'enable_thinking': _enableThinking,
-        'max_prompt_tokens': n(_maxPrompt),
-        'max_new_tokens': n(_maxNew),
-        'max_kv_tokens': n(_maxKvTokens),
-        'temperature': d(_temperature),
-        'repetition_penalty': d(_repPenalty),
-        'release_cache_after_session': _releaseCache,
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(context.tr('Inference settings saved'))));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(context.trArgs('Save failed: {e}', {'e': e}))));
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.colors;
-    if (!_loaded) return const LinearProgressIndicator();
-    return Container(
-      padding: const EdgeInsets.all(AppTokens.s16),
-      decoration: BoxDecoration(
-        color: c.surface,
-        border: Border.all(color: c.border),
-        borderRadius: BorderRadius.circular(AppTokens.rMd),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(context.tr('Inference settings'),
-              style: TextStyle(
-                  color: c.textPrimary, fontWeight: FontWeight.w700)),
-          const SizedBox(height: AppTokens.s12),
-          _choiceRow<String>(
-            context.tr('Inference backend'),
-            context.tr(
-                'Engine for Load / Use as LLM. MLX is Apple-Silicon-only & fastest.'),
-            _backend,
-            const [
-              ('auto', 'Auto'),
-              ('mlx', 'MLX native (~60–100 tok/s)'),
-              ('candle', 'Candle (~12 tok/s)'),
-            ],
-            (v) => setState(() => _backend = v),
-          ),
-          _NumberRow(
-              label: context.tr('Idle unload (secs)'),
-              desc: context.tr(
-                  '0 = never; ≥60 to free RAM after inactivity. Default 60.'),
-              controller: _idleUnload),
-          _choiceRow<int>(
-            context.tr('KV TurboQuant bits'),
-            context.tr('Quantize KV cache to save RAM on long generation.'),
-            _kvBits,
-            const [
-              (-1, 'Auto (4-bit for 4-bit models)'),
-              (4, 'TQ4 — 4-bit total'),
-              (3, 'TQ3 — 3-bit total'),
-              (0, 'Off — FP16'),
-            ],
-            (v) => setState(() => _kvBits = v),
-          ),
-          _choiceRow<int>(
-            context.tr('MLX packed KV (Metal)'),
-            context.tr(
-                'MLX-native GPU KV quantization. Reload the model after changing.'),
-            _mlxKvBits,
-            const [
-              (-1, 'Off — FP16'),
-              (4, '4-bit packed'),
-              (8, '8-bit packed'),
-            ],
-            (v) => setState(() => _mlxKvBits = v),
-          ),
-          _NumberRow(
-              label: context.tr('TQ activate after (tokens)'),
-              desc: context.tr(
-                  'Cached tokens before TurboQuant kicks in. Default 16384.'),
-              controller: _tqActivate),
-          _NumberRow(
-              label: context.tr('Max prompt tokens'),
-              desc: context.tr(
-                  'Hard cap on prompt length (512–262144). Default 128000.'),
-              controller: _maxPrompt),
-          _NumberRow(
-              label: context.tr('Max new tokens'),
-              desc: context.tr(
-                  'Max tokens generated per request (1–8192). Default 8192.'),
-              controller: _maxNew),
-          _NumberRow(
-              label: context.tr('Max KV tokens'),
-              desc: context
-                  .tr('KV-cache sliding window (128–262144). Default 16384.'),
-              controller: _maxKvTokens),
-          _NumberRow(
-              label: context.tr('Temperature (MLX)'),
-              desc: context
-                  .tr('0 = greedy. Empty = server default (Gemma ≈0.65).'),
-              controller: _temperature),
-          _NumberRow(
-              label: context.tr('Repetition penalty (MLX)'),
-              desc: context
-                  .tr('1 = off. Empty = server default (Gemma ≈1.15).'),
-              controller: _repPenalty),
-          _switchRow(
-            context.tr('Thinking mode (Qwen3)'),
-            context.tr('Chain-of-thought before answering. Off is faster.'),
-            _enableThinking,
-            (v) => setState(() => _enableThinking = v),
-          ),
-          _switchRow(
-            context.tr('Release cache after session (MLX)'),
-            context.tr(
-                'Drop per-session KV/prefix cache when a chat ends. Weights stay.'),
-            _releaseCache,
-            (v) => setState(() => _releaseCache = v),
-          ),
-          const SizedBox(height: AppTokens.s8),
-          Row(children: [
-            FilledButton.icon(
-              onPressed: _saving ? null : _save,
-              icon: _saving
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.save_outlined, size: 16),
-              label: Text(context.tr('Save')),
-            ),
-            const SizedBox(width: AppTokens.s8),
-            OutlinedButton.icon(
-              onPressed: () async {
-                await ref
-                    .read(apiClientProvider)
-                    .post('/api/local-models/unload-all');
-                ref.invalidate(localModelsProvider);
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                      content: Text(context.tr('Unloaded all models'))));
-                }
-              },
-              icon: const Icon(Icons.memory_outlined, size: 16),
-              label: Text(context.tr('Unload all now')),
-            ),
-          ]),
-        ],
-      ),
-    );
-  }
-
-  /// A label + description on the left, a dropdown of [options] on the right.
-  Widget _choiceRow<T>(String label, String desc, T value,
-      List<(T, String)> options, ValueChanged<T> onChanged) {
-    final c = context.colors;
-    return Container(
-      margin: const EdgeInsets.only(bottom: AppTokens.s8),
-      padding: const EdgeInsets.symmetric(
-          horizontal: AppTokens.s16, vertical: AppTokens.s8),
-      decoration: BoxDecoration(
-        color: c.surface,
-        border: Border.all(color: c.border),
-        borderRadius: BorderRadius.circular(AppTokens.rMd),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: TextStyle(
-                        color: c.textPrimary, fontWeight: FontWeight.w600)),
-                Text(desc,
-                    style: TextStyle(color: c.textMuted, fontSize: 12)),
-              ],
-            ),
-          ),
-          const SizedBox(width: AppTokens.s12),
-          SizedBox(
-            width: 230,
-            child: DropdownButtonFormField<T>(
-              initialValue: value,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(
-                    horizontal: AppTokens.s12, vertical: AppTokens.s8),
-              ),
-              items: [
-                for (final (v, l) in options)
-                  DropdownMenuItem(
-                      value: v,
-                      child: Text(context.tr(l),
-                          maxLines: 1, overflow: TextOverflow.ellipsis)),
-              ],
-              onChanged: (v) {
-                if (v != null) onChanged(v);
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// A label + description on the left, a switch on the right.
-  Widget _switchRow(
-      String label, String desc, bool value, ValueChanged<bool> onChanged) {
-    final c = context.colors;
-    return Container(
-      margin: const EdgeInsets.only(bottom: AppTokens.s8),
-      padding: const EdgeInsets.symmetric(
-          horizontal: AppTokens.s16, vertical: AppTokens.s4),
-      decoration: BoxDecoration(
-        color: c.surface,
-        border: Border.all(color: c.border),
-        borderRadius: BorderRadius.circular(AppTokens.rMd),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: TextStyle(
-                        color: c.textPrimary, fontWeight: FontWeight.w600)),
-                Text(desc,
-                    style: TextStyle(color: c.textMuted, fontSize: 12)),
-              ],
-            ),
-          ),
-          Switch(value: value, onChanged: onChanged),
-        ],
-      ),
-    );
-  }
-}
 
 /// "Add model from Hugging Face" card with pre-download compatibility check.
 ///
 /// Works for any domain whose API exposes `GET  $apiBase/:id/validate` and
-/// `POST $apiBase/:id/download` (tts, whisper, local-models). The Check step
+/// `POST $apiBase/:id/download` (tts, whisper). The Check step
 /// asks the daemon to inspect the repo's config.json + file tree against the
 /// actual native loader BEFORE anything heavy is fetched; Download is only
 /// offered when the model is supported (or when the check was inconclusive —

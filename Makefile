@@ -46,7 +46,7 @@ build-extension:
 # / web. Requires the Flutter SDK on PATH.
 DESKTOP_DIR := desktop_app
 # Full Apple-Silicon feature set — keep in sync with `run-release`.
-DAEMON_FEATURES := local-mlx,local-embed-metal,local-embed,local-mlx-whisper,local-mlx-tts,ocr-paddle-metal,tts-vieneu
+DAEMON_FEATURES := local-embed-metal,local-embed,ocr-paddle-metal,tts-vieneu
 
 app-dev:
 	cd $(DESKTOP_DIR) && flutter run -d macos
@@ -58,12 +58,18 @@ app-build:
 	cd $(DESKTOP_DIR) && flutter build macos --release
 	cp target/release/senclaw \
 	    "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app/Contents/Resources/senclaw"
-	@# Bundle MLX's compiled Metal kernels NEXT TO the binary. Without this the
-	@# installed daemon resolves mlx.metallib via the METAL_PATH compiled into
-	@# the build (a target/ path) — a later `cargo clean` then aborts every MLX
-	@# call with "Failed to load the default metallib" (TTS/STT/LLM all die).
+	@# The media sidecar ships beside the daemon: `media_sidecar::binary_path`
+	@# looks for it next to `current_exe()`. Without this copy speech-to-text
+	@# reports "binary not found" on an otherwise complete install.
+	cargo build --release -p senclaw-media
+	cp target/release/senclaw-media \
+	    "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app/Contents/Resources/senclaw-media"
+	@# MLX resolves mlx.metallib relative to the *executable*, and the compiled-in
+	@# METAL_PATH points into target/ — which a later `cargo clean` removes,
+	@# silently killing every MLX call. The sidecar sits in the same Resources
+	@# directory as the daemon, so one copy serves it.
 	@lib=$$(find target/release/build -name mlx.metallib 2>/dev/null | head -1); \
-	    test -n "$$lib" || (echo "[app-build] ERROR: mlx.metallib not found under target/release/build" && exit 1); \
+	    test -n "$$lib" || (echo "[app-build] ERROR: mlx.metallib not found — senclaw-media cannot run" && exit 1); \
 	    cp "$$lib" "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app/Contents/Resources/mlx.metallib"; \
 	    echo "[app-build] bundled $$lib"
 	@echo "[app-build] bundled daemon into 'SenClaw Desktop.app/Contents/Resources/senclaw'"

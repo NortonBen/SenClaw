@@ -20,6 +20,74 @@ use super::*;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long a response may go **silent** before the connection is considered
+/// dead. Unlike a total deadline this resets on every byte received, so it
+/// bounds a stalled provider without bounding a long generation.
+pub(crate) const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The total-deadline timeout for one LLM request, or `None` for no deadline.
+///
+/// [`REQUEST_TIMEOUT`] exists to bound a remote provider that has stopped
+/// answering. But a total deadline is *also* a ceiling on how long a generation
+/// may legitimately take, and a local engine blows through it honestly:
+/// `DEFAULT_MLX_MAX_NEW_TOKENS` is 8192, which at ~60 tok/s is over two minutes
+/// of steady output — before prefill, and before a cold weight load. Cutting
+/// that off looks exactly like the model dying mid-sentence.
+///
+/// So a loopback endpoint gets no deadline. Nothing is lost: a local engine
+/// that hangs is caught by the client's `read_timeout`
+/// ([`STREAM_STALL_TIMEOUT`]), which resets on every byte — silence kills, a
+/// slow-but-moving stream does not. This covers Ollama and LM Studio as much as
+/// it covers a SenClaw local model.
+fn total_request_timeout(profile: &ModelProfile) -> Option<Duration> {
+    if is_loopback_endpoint(&profile.base_url) {
+        None
+    } else {
+        Some(REQUEST_TIMEOUT)
+    }
+}
+
+/// Does this base URL point at this machine?
+///
+/// Hand-rolled rather than pulled through a URL parser because the answer must
+/// be conservative in one specific direction: `http://127.0.0.1.evil.com/` is
+/// **not** loopback, and a prefix test would say it is. The host is isolated
+/// first (scheme, userinfo, port, path all stripped), then matched whole.
+fn is_loopback_endpoint(base_url: &str) -> bool {
+    let rest = base_url.split_once("://").map_or(base_url, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // `user:pass@host` — the last `@` wins, since userinfo may contain one.
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+
+    let host = if let Some(after) = authority.strip_prefix('[') {
+        // IPv6 literal: `[::1]:8080`. No closing bracket means malformed, and
+        // malformed is not loopback.
+        match after.split_once(']') {
+            Some((h, _)) => h,
+            None => return false,
+        }
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    let host = host.trim().to_ascii_lowercase();
+
+    // RFC 6761: `localhost` and anything under `.localhost` resolve to loopback.
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    if host == "::1" || host == "0:0:0:0:0:0:0:1" {
+        return true;
+    }
+    // The whole 127.0.0.0/8 block, not just 127.0.0.1 — all four labels must be
+    // numeric, so `127.0.0.1.evil.com` (five labels) is rejected.
+    let labels: Vec<&str> = host.split('.').collect();
+    labels.len() == 4
+        && labels[0] == "127"
+        && labels
+            .iter()
+            .all(|l| !l.is_empty() && l.chars().all(|c| c.is_ascii_digit()))
+}
+
 /// Sink for assistant text as it streams off the provider — called once per
 /// text delta, in arrival order, while the turn is still running.
 ///
@@ -110,12 +178,16 @@ pub(crate) async fn post_authed(
 ) -> Result<reqwest::Response> {
     let mut token = profile.api_key.clone();
 
+    // No total deadline for a loopback engine — see `total_request_timeout`.
+    // The client's `read_timeout` is what catches a stall in that case.
+    let deadline = total_request_timeout(profile);
+
     for attempt in 0..2 {
-        let request = apply_auth(
-            client.post(url).timeout(REQUEST_TIMEOUT).json(body),
-            profile,
-            &token,
-        );
+        let mut builder = client.post(url).json(body);
+        if let Some(d) = deadline {
+            builder = builder.timeout(d);
+        }
+        let request = apply_auth(builder, profile, &token);
         let response = request.send().await.context("LLM request failed")?;
 
         let unauthorized = matches!(response.status().as_u16(), 401 | 403);
@@ -242,23 +314,6 @@ pub async fn query_llm(
             )
             .await
         }
-        "local-candle-native" => {
-            query_local_candle_native(messages, system_prompt, tools, cancel, profile, on_delta)
-                .await
-        }
-        "local-mlx" => {
-            query_local_mlx(
-                client,
-                messages,
-                system_prompt,
-                tools,
-                cancel,
-                profile,
-                stream,
-                on_delta,
-            )
-            .await
-        }
         _ => {
             query_openai(
                 client,
@@ -314,6 +369,26 @@ pub async fn query_llm(
     }
     result
 }
+
+/// Adapter names [`query_llm`] dispatches to explicitly. Anything not here hits
+/// the catch-all and is sent an OpenAI `chat/completions` body.
+pub const ROUTED_ADAPTERS: &[&str] = &[
+    "anthropic",
+    "codex",
+    "antigravity",
+    "local-candle-native",
+    "local-mlx",
+    "openai",
+];
+
+/// The subset of [`ROUTED_ADAPTERS`] a Space App may declare for itself.
+///
+/// Deliberately narrower. `local-mlx` and `local-candle-native` are in-process
+/// engines — naming one routes the turn away from HTTP entirely, so the app
+/// would be registered and then never called. `codex` and `antigravity` are
+/// bespoke wire formats bound to a specific OAuth transport. What is left is the
+/// two formats an app can actually serve over its own port.
+pub const APP_DECLARABLE_ADAPTERS: &[&str] = &["openai", "anthropic"];
 
 /// Auto-detect adapter from provider name.
 fn resolve_adapter(provider: &str) -> &str {
@@ -412,102 +487,7 @@ pub(crate) fn effective_adapter(profile: &ModelProfile) -> &str {
 }
 
 // ============================================================================
-// Local Candle native adapter (in-process, CPU / Metal)
-// ============================================================================
 
-/// Run inference through the local Candle engine.
-///
-/// Uses the same OpenAI-shaped `messages` / `tools` for chat-template rendering;
-/// parses Qwen-style `<tool_call>…</tool_call>` from the generated text.
-#[allow(unused_variables)]
-/// NOTE on `_on_delta`: the local backends stream RAW model tokens, still
-/// carrying the dialect's thinking/tool markers (`<think>`, harmony channels).
-/// Those are only stripped at the end by `stream_parser::parse_complete`, so
-/// forwarding them live would push `<think>` fragments into the chat bubble —
-/// and into the TTS pipeline, which would read them out loud. Local turns
-/// therefore stay non-incremental until the parser can run streaming.
-async fn query_local_candle_native(
-    messages: &[Message],
-    system_prompt: &str,
-    tools: &[Arc<dyn Tool>],
-    cancel: &CancellationToken,
-    profile: &ModelProfile,
-    _on_delta: Option<&TextDeltaSink>,
-) -> Result<Message> {
-    #[cfg(not(feature = "local-candle"))]
-    {
-        bail!(
-            "local-candle-native adapter requires the `local-candle` cargo feature; \
-             rebuild with `cargo build --features local-candle` \
-             (or `local-candle-metal` for Apple Silicon Metal acceleration)"
-        );
-    }
-
-    #[cfg(feature = "local-candle")]
-    {
-        use crate::config::Config;
-        use crate::local_model::LocalModelRuntime;
-
-        let api_msgs = openai_messages_for_api(messages, system_prompt)?;
-        let tool_objs = build_hf_style_tools(tools);
-
-        let cfg = Config::from_env();
-        let model_key =
-            crate::gateway::ui_server::local_models::canonical_local_model_id(&profile.model_name);
-        let safe = model_key.replace('/', "__");
-        let model_dir = cfg.paths.local_models_dir.join(safe);
-
-        // Global registry: one CandleEngine per model_id, weights cached in memory.
-        let engine = crate::gateway::ui_server::local_models::get_or_create_loaded_engine(
-            &model_key, &model_dir,
-        );
-        let _idle_gen =
-            crate::gateway::ui_server::local_models::CandleInferenceGuard::new(&model_key);
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
-
-        let engine_clone = engine.clone();
-        let msgs_clone = api_msgs.clone();
-        let tools_clone = tool_objs.clone();
-        let gen_handle = tokio::spawn(async move {
-            engine_clone
-                .generate_stream(msgs_clone, tools_clone, tx)
-                .await
-        });
-
-        let mut text_buf = String::new();
-        loop {
-            tokio::select! {
-                chunk = rx.recv() => match chunk {
-                    Some(c) => text_buf.push_str(&c),
-                    None => break,
-                },
-                _ = cancel.cancelled() => {
-                    gen_handle.abort();
-                    bail!("local-candle-native: cancelled");
-                }
-            }
-        }
-        gen_handle
-            .await
-            .context("local-candle-native: generation task panicked")??;
-        debug!("[local-candle-native] generated {} chars", text_buf.len());
-
-        // Same canonical normalizer as `query_local_mlx` — keeps both local
-        // backends emitting identical OpenAI-shaped events to the display
-        // handler. See `stream_parser` for the dialect dispatch.
-        let dialect = crate::local_model::stream_parser::dialect_for_model_id(&profile.model_name);
-        let (clean_text, reasoning, tool_calls_from_text) =
-            crate::local_model::stream_parser::parse_complete(&text_buf, dialect);
-        // Real tokenizer counts from the engine (cost 0, but context math and
-        // accounting want true numbers, not the chars/4 estimate fallback).
-        let usage = engine.last_usage().map(|(p, g)| RawUsage {
-            input_tokens: Some(p as u64),
-            output_tokens: Some(g as u64),
-            ..Default::default()
-        });
-        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text, usage)
-    }
-}
 
 // ============================================================================
 // OpenAI adapter
@@ -772,142 +752,7 @@ pub(crate) fn openai_messages_for_api(
 }
 
 // ============================================================================
-// Local MLX adapter — auto-starts mlx_lm.server, routes via OpenAI HTTP
-// ============================================================================
 
-/// Run inference through the local MLX engine (mlx_lm.server sidecar).
-///
-/// In-process MLX native inference via mlx-rs.
-///
-/// Performance vs Candle on M4 Pro (Qwen3-0.6B):
-/// - MLX native: ~60–100 tok/s decode (BF16 GEMV kernels, full GPU memory bandwidth)
-/// - Candle Accelerate: ~12 tok/s (F32 BLAS on CPU)
-/// - Candle Metal: ~7 tok/s (BM=32 GEMM tile, 3% GPU occupancy at M=1)
-#[allow(unused_variables)]
-async fn query_local_mlx(
-    _client: &Client,
-    messages: &[Message],
-    system_prompt: &str,
-    tools: &[Arc<dyn Tool>],
-    cancel: &CancellationToken,
-    profile: &ModelProfile,
-    _stream: bool,
-    // See `query_local_candle_native` — raw local tokens are not safe to
-    // forward incrementally.
-    _on_delta: Option<&TextDeltaSink>,
-) -> Result<Message> {
-    #[cfg(not(feature = "local-mlx"))]
-    {
-        bail!(
-            "local-mlx adapter requires the `local-mlx` cargo feature; \
-             rebuild with `cargo build --features local-mlx` (Apple Silicon only)"
-        );
-    }
-
-    #[cfg(feature = "local-mlx")]
-    {
-        use crate::config::Config;
-        use crate::local_model::LocalModelRuntime;
-
-        let api_msgs = openai_messages_for_api(messages, system_prompt)?;
-        let tool_objs = build_hf_style_tools(tools);
-
-        let cfg = Config::from_env();
-        let model_key =
-            crate::gateway::ui_server::local_models::canonical_local_model_id(&profile.model_name);
-        let safe = model_key.replace('/', "__");
-        let model_dir = cfg.paths.local_models_dir.join(safe);
-
-        // Global registry: one MlxNativeEngine per model_id, weights cached in memory.
-        let engine = crate::gateway::ui_server::local_models::get_or_create_mlx_engine(
-            &model_key, &model_dir,
-        );
-        let _idle_gen = crate::gateway::ui_server::local_models::MlxInferenceGuard::new(&model_key);
-
-        // warm_up() loads weights if not yet loaded.
-        let engine_wu = engine.clone();
-        tokio::task::spawn_blocking(move || engine_wu.warm_up())
-            .await
-            .context("mlx warm_up task panicked")??;
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(32);
-
-        let engine_clone = engine.clone();
-        let msgs_clone = api_msgs.clone();
-        let tools_clone = tool_objs.clone();
-        let gen_handle = tokio::spawn(async move {
-            engine_clone
-                .generate_stream(msgs_clone, tools_clone, tx)
-                .await
-        });
-
-        let mut text_buf = String::new();
-        loop {
-            tokio::select! {
-                chunk = rx.recv() => match chunk {
-                    Some(c) => text_buf.push_str(&c),
-                    None => break,
-                },
-                _ = cancel.cancelled() => {
-                    gen_handle.abort();
-                    bail!("local-mlx: cancelled");
-                }
-            }
-        }
-        gen_handle
-            .await
-            .context("local-mlx: generation task panicked")??;
-        debug!("[local-mlx] generated {} chars", text_buf.len());
-
-        // Canonical normalizer — runs the raw token stream through the model's
-        // OWN parser config (loaded from its `tokenizer_config.json` at warm-up)
-        // and emits OpenAI-shaped events (visible / reasoning / tool_call). The
-        // display handler / conversation layer sees the SAME shape regardless
-        // of arch; harmony markers never leak past this point. Fallback to a
-        // model-id-derived dialect preset only when the engine couldn't surface
-        // its loaded config (shouldn't happen post-warm-up).
-        let (clean_text, reasoning, tool_calls_from_text) = match engine.parser_config() {
-            Ok(cfg) => {
-                crate::local_model::stream_parser::parse_complete_with_config(&text_buf, &cfg)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "[local-mlx] parser_config unavailable ({e}); falling back to dialect preset"
-                );
-                let dialect =
-                    crate::local_model::stream_parser::dialect_for_model_id(&profile.model_name);
-                crate::local_model::stream_parser::parse_complete(&text_buf, dialect)
-            }
-        };
-
-        // Session-end cache cleanup (opt-in via `release_cache_after_session` in
-        // settings.json). A tool-call-free turn is the terminal turn of the
-        // agentic loop — the session is done — so drop the per-session prefix /
-        // KV cache now (weights stay loaded). Turns that DO make tool calls keep
-        // the cache so the within-session prefix hits survive.
-        if tool_calls_from_text.is_empty() {
-            let settings = crate::gateway::ui_server::local_models::load_settings_blocking(
-                &cfg.paths.local_models_dir,
-            );
-            if settings.release_cache_after_session.unwrap_or(false) {
-                let engine_rel = engine.clone();
-                // MLX (Metal) call off the async reactor; generation has already
-                // finished (gen_handle awaited) so there's no concurrent access.
-                let _ = tokio::task::spawn_blocking(move || engine_rel.release_kv_cache()).await;
-                debug!("[local-mlx] release_cache_after_session: dropped per-session KV");
-            }
-        }
-
-        // Real tokenizer counts from the engine (cost 0, but context math and
-        // accounting want true numbers, not the chars/4 estimate fallback).
-        let usage = engine.last_usage().map(|(p, g)| RawUsage {
-            input_tokens: Some(p as u64),
-            output_tokens: Some(g as u64),
-            ..Default::default()
-        });
-        build_assistant_message(&clean_text, &reasoning, &tool_calls_from_text, usage)
-    }
-}
 
 async fn query_openai(
     client: &Client,
@@ -1759,9 +1604,11 @@ fn extract_http_status(msg: &str) -> Option<u16> {
 // ============================================================================
 
 pub fn create_llm_client() -> Result<Client> {
+    // See `ZenEngine::new` — read timeout, not total. The per-request deadline
+    // that still applies to remote providers is set in `post_authed`.
     Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
+        .read_timeout(STREAM_STALL_TIMEOUT)
         .build()
         .context("Failed to create HTTP client")
 }
@@ -1820,10 +1667,63 @@ mod sse_tests {
 }
 
 #[cfg(test)]
+mod loopback_tests {
+    use super::{is_loopback_endpoint, total_request_timeout, REQUEST_TIMEOUT};
+
+    #[test]
+    fn recognises_every_shape_a_local_engine_is_configured_with() {
+        for url in [
+            "http://127.0.0.1:18788/api/space/apps/mlx-llm/proxy/v1",
+            "http://127.0.0.1:11434/v1",  // Ollama
+            "http://localhost:1234/v1",   // LM Studio
+            "http://LOCALHOST:8080/v1",   // case is not significant in a host
+            "http://[::1]:8080/v1",       // IPv6 literal
+            "http://127.1.2.3:8080/v1",   // the whole 127.0.0.0/8 block
+            "http://app.localhost:3000",  // RFC 6761
+            "http://user:pass@127.0.0.1:8080/v1",
+            "http://127.0.0.1:8080",      // no path at all
+        ] {
+            assert!(is_loopback_endpoint(url), "{url} should be loopback");
+        }
+    }
+
+    /// The direction this must not get wrong. A prefix or `contains` test says
+    /// yes to every one of these, and each would silently drop the deadline on
+    /// a remote endpoint an attacker chose the hostname of.
+    #[test]
+    fn rejects_hosts_that_merely_look_local() {
+        for url in [
+            "https://api.openai.com/v1",
+            "http://127.0.0.1.evil.com/v1",
+            "http://localhost.evil.com/v1",
+            "https://not-localhost.example.com/v1",
+            "http://12.7.0.1:8080/v1",
+            "http://127.0.0.1x:8080/v1",
+            "http://[::1:8080/v1", // malformed IPv6 — never assume local
+            "",
+        ] {
+            assert!(!is_loopback_endpoint(url), "{url} must NOT be loopback");
+        }
+    }
+
+    #[test]
+    fn a_loopback_profile_gets_no_total_deadline() {
+        let mut p = super::tests::profile("openai", "gpt-4");
+        p.base_url = "https://api.openai.com/v1".into();
+        assert_eq!(total_request_timeout(&p), Some(REQUEST_TIMEOUT));
+
+        // 8192 tokens at ~60 tok/s is over two minutes of legitimate output;
+        // a total deadline would cut it mid-sentence.
+        p.base_url = "http://127.0.0.1:11434/v1".into();
+        assert_eq!(total_request_timeout(&p), None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn profile(provider: &str, model: &str) -> ModelProfile {
+    pub(super) fn profile(provider: &str, model: &str) -> ModelProfile {
         ModelProfile {
             name: "test".into(),
             provider: provider.into(),
@@ -1942,16 +1842,20 @@ mod tests {
         assert!(!ua.contains("claude-cli"), "{ua}");
     }
 
-    /// Adapter names `query_llm` dispatches to explicitly. Anything not here
-    /// hits the catch-all and is sent an OpenAI chat/completions body.
-    const ROUTED_ADAPTERS: &[&str] = &[
-        "anthropic",
-        "codex",
-        "antigravity",
-        "local-candle-native",
-        "local-mlx",
-        "openai",
-    ];
+    #[test]
+    fn an_app_may_only_declare_adapters_that_are_actually_routed() {
+        for a in APP_DECLARABLE_ADAPTERS {
+            assert!(
+                ROUTED_ADAPTERS.contains(a),
+                "`{a}` is offered to Space Apps but query_llm does not route it"
+            );
+        }
+        // The in-process engines must stay out: naming one sends the turn to a
+        // local engine instead of the app's port, so the app would be
+        // registered and then never called.
+        assert!(!APP_DECLARABLE_ADAPTERS.contains(&"local-mlx"));
+        assert!(!APP_DECLARABLE_ADAPTERS.contains(&"local-candle-native"));
+    }
 
     #[test]
     fn every_signin_provider_routes_to_a_real_adapter() {
@@ -2141,28 +2045,6 @@ mod tests {
         );
     }
 
-    /// Integration check that `query_local_mlx` / `query_local_candle_native`
-    /// both route the model's raw output through the unified stream parser and
-    /// produce the same OpenAI-shaped `(visible, reasoning, tool_calls)` tuple.
-    /// Detailed dialect coverage lives in `local_model::stream_parser::tests`.
-    #[test]
-    // Tool-call body parsers live in mlx_lm::models (local-mlx only).
-    #[cfg(feature = "local-mlx")]
-    fn local_mlx_path_yields_canonical_shape_for_gemma4() {
-        use crate::local_model::stream_parser::{
-            dialect_for_model_id, parse_complete, LocalDialect,
-        };
-        let raw = "<|channel>thought\nthink<channel|>\
-                   <|tool_call>call:Skill{skill:<|\"|>agent-browser<|\"|>}<tool_call|>\
-                   Visible answer.";
-        let dialect = dialect_for_model_id("mlx-community/gemma-4-e2b-it-4bit");
-        assert_eq!(dialect, LocalDialect::Gemma4);
-        let (vis, reas, tcs) = parse_complete(raw, dialect);
-        assert_eq!(vis, "Visible answer.");
-        assert_eq!(reas, "think");
-        assert_eq!(tcs.len(), 1);
-        assert_eq!(tcs[0]["function"]["name"], "Skill");
-    }
 
     #[test]
     fn resolve_adapter_detects_anthropic() {
@@ -2248,100 +2130,6 @@ mod tests {
         assert_eq!(extract_http_status("no status here"), None);
     }
 
-    // ── Qwen pipeline (routed through the unified stream parser) ─────────
-    // These guard the production behaviour of `query_local_mlx` /
-    // `query_local_candle_native` after they were migrated to
-    // `stream_parser::parse_complete` (single source of truth for both Qwen and
-    // Gemma-4 wire formats). Each test feeds a raw model buffer and asserts the
-    // canonical `(visible, reasoning, tool_calls)` tuple — i.e. exactly what
-    // `build_assistant_message` receives.
-
-    fn qwen_pipeline(raw: &str) -> (String, String, Vec<Value>) {
-        use crate::local_model::stream_parser::{parse_complete, LocalDialect};
-        let (vis, reas, tcs) = parse_complete(raw, LocalDialect::Qwen);
-        (reas, vis, tcs)
-    }
-
-    #[test]
-    // Tool-call body parsers live in mlx_lm::models (local-mlx only).
-    #[cfg(feature = "local-mlx")]
-    fn qwen_tool_call_json_form_yields_openai_shape() {
-        let raw = "OK.\n<tool_call>\n{\"name\": \"weather\", \"arguments\": {\"city\": \"HN\"}}\n</tool_call>\n";
-        let (_, text, tc) = qwen_pipeline(raw);
-        assert_eq!(text.trim(), "OK.");
-        assert_eq!(tc.len(), 1);
-        assert_eq!(tc[0]["function"]["name"], "weather");
-        assert!(tc[0]["function"]["arguments"]
-            .as_str()
-            .unwrap()
-            .contains("HN"));
-    }
-
-    #[test]
-    fn qwen35_think_then_answer_pipeline() {
-        // enable_thinking=true → prefilled open, dangling close.
-        let raw = "<think>User said hi, I should ask 1-4 related questions in a single turn.</think>\n\nHi! What are your questions?";
-        let (reasoning, clean, tcs) = qwen_pipeline(raw);
-        assert_eq!(
-            reasoning,
-            "User said hi, I should ask 1-4 related questions in a single turn."
-        );
-        assert_eq!(clean, "Hi! What are your questions?");
-        assert!(
-            !clean.contains("</think>"),
-            "stray closing tag leaked: {clean:?}"
-        );
-        assert!(tcs.is_empty());
-    }
-
-    #[test]
-    fn qwen35_unclosed_thinking_no_leak() {
-        // enable_thinking=true, a long chain-of-thought that never closes within
-        // the token budget. Reasoning must NOT leak into the visible answer.
-        let raw = "<think>\nStep 1: analyze. Step 2: still reasoning, never finished";
-        let (reasoning, clean, tcs) = qwen_pipeline(raw);
-        assert!(reasoning.contains("Step 1: analyze"));
-        assert_eq!(
-            clean, "",
-            "unclosed reasoning leaked into answer: {clean:?}"
-        );
-        assert!(tcs.is_empty());
-    }
-
-    #[test]
-    // Tool-call body parsers live in mlx_lm::models (local-mlx only).
-    #[cfg(feature = "local-mlx")]
-    fn qwen35_think_then_xml_tool_call_pipeline() {
-        let raw = "<think>I should look up the weather for the user.</think>\n\n<tool_call>\n<function=get_weather>\n<parameter=city>\nHanoi\n</parameter>\n<parameter=days>\n3\n</parameter>\n</function>\n</tool_call>";
-        let (reasoning, clean, tcs) = qwen_pipeline(raw);
-        assert_eq!(reasoning, "I should look up the weather for the user.");
-        assert!(
-            !clean.contains("<tool_call>") && !clean.contains("</think>"),
-            "tags leaked: {clean:?}"
-        );
-        assert_eq!(tcs.len(), 1, "tool call not parsed");
-        assert_eq!(tcs[0]["function"]["name"], "get_weather");
-        let args = tcs[0]["function"]["arguments"].as_str().unwrap();
-        assert!(args.contains("\"city\":\"Hanoi\""), "args: {args}");
-        assert!(args.contains("\"days\":3"), "days→number coercion: {args}");
-    }
-
-    #[test]
-    // Tool-call body parsers live in mlx_lm::models (local-mlx only).
-    #[cfg(feature = "local-mlx")]
-    fn split_qwen35_xml_tool_call() {
-        let raw = "Sure.\n<tool_call>\n<function=weather>\n<parameter=city>\nHN\n</parameter>\n<parameter=days>\n3\n</parameter>\n</function>\n</tool_call>";
-        let (_, text, tc) = qwen_pipeline(raw);
-        assert_eq!(text.trim(), "Sure.");
-        assert_eq!(tc.len(), 1);
-        assert_eq!(tc[0]["function"]["name"], "weather");
-        let args = tc[0]["function"]["arguments"].as_str().unwrap();
-        assert!(args.contains("\"city\":\"HN\""), "args: {args}");
-        assert!(
-            args.contains("\"days\":3"),
-            "days should be coerced to number: {args}"
-        );
-    }
 
     #[test]
     fn openai_messages_expand_tool_use_and_tool_results() {

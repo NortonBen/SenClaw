@@ -40,7 +40,7 @@ jobs:
           # a feature mismatch compiles (and caches) different dependency sets.
           - os: macos-latest
             target: aarch64-apple-darwin
-            daemon_features: "local-mlx,local-embed-metal,local-embed,local-mlx-whisper,local-mlx-tts,ocr-paddle-metal,tts-vieneu"
+            daemon_features: "local-embed-metal,local-embed,ocr-paddle-metal,tts-vieneu"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             daemon_features: ""

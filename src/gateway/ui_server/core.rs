@@ -27,16 +27,12 @@ use super::code_artifacts::{
 };
 use super::config_handler::{admin_perms_get, admin_perms_set, config_handler, thinking_handler};
 use super::embedding_config::{embedding_config_get, embedding_config_save};
-use super::hf_validate::{local_models_validate, tts_validate, whisper_validate};
+// `local_models_validate` is gone with the local-model routes; Whisper and TTS
+// still validate a HuggingFace repo before spending a download on it.
+use super::hf_validate::{tts_validate, whisper_validate};
 use super::llm_config::{
     llm_config_create, llm_config_delete, llm_config_fetch_models, llm_config_list,
     llm_config_set_active, llm_config_test, llm_config_update,
-};
-use super::local_models::{
-    local_models_cancel, local_models_delete, local_models_download, local_models_list,
-    local_models_load, local_models_load_mlx, local_models_loaded_list, local_models_runtime,
-    local_models_settings_get, local_models_settings_put, local_models_status, local_models_unload,
-    local_models_unload_all, local_models_use_as_llm,
 };
 use super::marketplace::{
     marketplace_hub_install, marketplace_mcp_status, marketplace_mcp_use_tools,
@@ -530,36 +526,9 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             "/api/provider-catalog",
             get(super::oauth::provider_catalog_list),
         )
-        // Local model management (MLX/HF download)
-        .route("/api/local-models", get(local_models_list))
-        .route("/api/local-models/runtime", get(local_models_runtime))
-        .route(
-            "/api/local-models/settings",
-            get(local_models_settings_get).put(local_models_settings_put),
-        )
-        .route(
-            "/api/local-models/:id/download",
-            post(local_models_download),
-        )
-        .route("/api/local-models/:id/validate", get(local_models_validate))
-        .route("/api/local-models/:id/status", get(local_models_status))
-        .route("/api/local-models/:id/cancel", post(local_models_cancel))
-        .route("/api/local-models/:id", delete(local_models_delete))
-        .route("/api/local-models/:id/load", post(local_models_load))
-        .route(
-            "/api/local-models/:id/load-mlx",
-            post(local_models_load_mlx),
-        )
-        .route("/api/local-models/:id/unload", post(local_models_unload))
-        .route(
-            "/api/local-models/unload-all",
-            post(local_models_unload_all),
-        )
-        .route("/api/local-models/loaded", get(local_models_loaded_list))
-        .route(
-            "/api/local-models/:id/use-as-llm",
-            post(local_models_use_as_llm),
-        )
+        // Local model management moved to the engine Space Apps
+        // (`apps/mlx-lm`, `apps/candle`): they own the download, the model
+        // list and the settings, and reach the daemon only as LLM providers.
         // Whisper ASR management + transcription
         .route("/api/whisper/models", get(whisper_models_list))
         .route(

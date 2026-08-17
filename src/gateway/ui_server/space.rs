@@ -1584,6 +1584,17 @@ pub(crate) async fn space_apps_delete(
         tracing::warn!("[space] '{id}': access token was not revoked on uninstall: {e}");
     }
 
+    // Take the app's models out of the picker, and clear any active-model
+    // pointer into them. A dangling selection is worse than a missing one:
+    // `resolve_model_profile_at` falls back to the first config when the
+    // selected id is gone, so the user keeps chatting — to a different model
+    // than the UI is showing.
+    if let Err(e) =
+        crate::apps::llm_provider::unregister(&db, &id, &s.config.paths.global_config_path)
+    {
+        tracing::warn!("[space] '{id}': LLM provider was not unregistered on uninstall: {e}");
+    }
+
     db.with_conn(|conn| {
         conn.execute("DELETE FROM space_apps WHERE id=?1", params![id])?;
         Ok(())
@@ -2004,6 +2015,7 @@ notes: chi tiết hỗ trợ ngắn, hoặc chuỗi rỗng. Không thêm chữ n
             &b64,
             "image/png",
             400,
+            None,
         )
         .await
         .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
@@ -2024,7 +2036,7 @@ sẵn sàng. Chọn model có vision trong Settings → Models, hoặc cài OCR.
         };
         let user =
             format!("Văn bản trích từ ảnh chụp màn hình:\n\n{text}\n\nTrích tiêu đề và ghi chú.");
-        let r = super::llm_config::chat_completion(cfg_path, None, system, &user, 400)
+        let r = super::llm_config::chat_completion(cfg_path, None, system, &user, 400, None)
             .await
             .map_err(|e| AppError(StatusCode::BAD_GATEWAY, e))?;
         super::llm_config::record_completion(&s.usage_recorder, "web:screenshot-note", "", &r);
@@ -2281,6 +2293,8 @@ pub(crate) async fn space_apps_bridge(
                 system,
                 &prompt,
                 max_tokens,
+                // The caller is this app: refuse a model it serves itself.
+                Some(id.as_str()),
             )
             .await
             {

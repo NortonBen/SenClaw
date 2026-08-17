@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io' show File, Platform;
 
 import 'package:file_picker/file_picker.dart';
@@ -18,6 +17,7 @@ import 'agents_provider.dart';
 import 'audio_service.dart';
 import 'conversation_provider.dart';
 import 'groups_provider.dart';
+import 'image_attachment.dart';
 import 'mini_chat_screen.dart' show subWindowIdProvider;
 import 'widgets/slash_mention_input.dart';
 
@@ -151,8 +151,9 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
   }
 
   Future<void> _attach() async {
+    // Any file: images take the vision/OCR route, everything else is saved by
+    // the daemon and its text extracted into the prompt.
     final res = await FilePicker.platform.pickFiles(
-      type: FileType.image,
       allowMultiple: true,
       withData: true,
     );
@@ -160,12 +161,22 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
     for (final f in res.files) {
       final bytes = f.bytes;
       if (bytes == null) continue;
-      final ext = (f.extension ?? 'png').toLowerCase();
-      final mime = ext == 'jpg' || ext == 'jpeg' ? 'image/jpeg' : 'image/$ext';
-      setState(() => _attachments.add({
-            'mimeType': mime,
-            'dataUrl': 'data:$mime;base64,${base64Encode(bytes)}',
-          }));
+      final Map<String, String> att;
+      if (isImageExtension(f.extension)) {
+        att = await buildImageAttachment(bytes, mimeForExtension(f.extension));
+      } else {
+        if (bytes.length > kMaxDocBytes) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('${f.name} > ${kMaxDocBytes ~/ (1024 * 1024)}MB'),
+          ));
+          continue;
+        }
+        att = buildDocumentAttachment(
+            bytes, documentMimeForExtension(f.extension), f.name);
+      }
+      if (!mounted) return;
+      setState(() => _attachments.add(att));
     }
   }
 
@@ -868,12 +879,21 @@ class _NewChatScreenState extends ConsumerState<NewChatScreen> {
                           runSpacing: AppTokens.s8,
                           children: [
                             for (var i = 0; i < _attachments.length; i++)
+                              // Documents show their filename; a picked image
+                              // has none, so it stays numbered.
                               Chip(
                                 label: Text(
-                                    context.trArgs('image {n}', {'n': i + 1}),
+                                    _attachments[i]['name'] ??
+                                        context.trArgs(
+                                            'image {n}', {'n': i + 1}),
                                     style: const TextStyle(fontSize: 12)),
-                                avatar:
-                                    const Icon(Icons.image_outlined, size: 14),
+                                avatar: Icon(
+                                  (_attachments[i]['mimeType'] ?? '')
+                                          .startsWith('image/')
+                                      ? Icons.image_outlined
+                                      : Icons.description_outlined,
+                                  size: 14,
+                                ),
                                 onDeleted: () => setState(
                                     () => _attachments.removeAt(i)),
                               ),

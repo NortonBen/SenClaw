@@ -26,7 +26,6 @@ mod embedding_config;
 mod embedding_models;
 mod hf_validate;
 mod llm_config;
-pub mod local_models;
 mod marketplace;
 mod mcp;
 mod oauth;
