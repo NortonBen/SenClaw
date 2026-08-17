@@ -12,7 +12,19 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-: "${SENCLAW_HUB_TOKEN:?no publish token — add the SENCLAW_HUB_TOKEN secret (scope: publish) from https://senclaw.bacnd.com/settings/tokens}"
+# The token is a repo secret the operator mints by hand (scope: publish,
+# https://senclaw.bacnd.com/settings/tokens). Until it exists every green build
+# would die right here — so its absence is a loud SKIP, not a failure: the
+# builds and the release-attach job stay usable, and the summary says exactly
+# what did not happen. A hub outage or a bad token still fails properly below.
+if [[ -z "${SENCLAW_HUB_TOKEN:-}" ]]; then
+  echo "::warning::SENCLAW_HUB_TOKEN secret is not set — hub publish SKIPPED. Mint a publish-scope token at https://senclaw.bacnd.com/settings/tokens and add it in Settings → Secrets."
+  [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && {
+    echo "## Hub publish skipped"
+    echo "No \`SENCLAW_HUB_TOKEN\` secret — nothing was pushed to the hub."
+  } >> "$GITHUB_STEP_SUMMARY"
+  exit 0
+fi
 export SENCLAW_HUB_URL="${SENCLAW_HUB_URL:-https://senclaw.bacnd.com}"
 
 # Platforms are published in this order; the first is the one guaranteed to land
