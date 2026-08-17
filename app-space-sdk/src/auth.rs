@@ -29,14 +29,14 @@
 //!   anything is ever proxied.
 
 use axum::{
+    Json,
     extract::Request,
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
-    Json,
 };
 
-use crate::bridge::{app_token_from_env, HEADER_APP_TOKEN};
+use crate::bridge::{HEADER_APP_TOKEN, app_token_from_env};
 
 /// Constant-time compare — `==` on a secret short-circuits at the first
 /// differing byte and leaks the matched prefix length through timing.
@@ -45,12 +45,19 @@ fn ct_eq(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 /// The token a request presents, from the header or `?app_token=`.
 fn presented(req: &Request) -> Option<String> {
-    if let Some(v) = req.headers().get(HEADER_APP_TOKEN).and_then(|v| v.to_str().ok()) {
+    if let Some(v) = req
+        .headers()
+        .get(HEADER_APP_TOKEN)
+        .and_then(|v| v.to_str().ok())
+    {
         let v = v.trim();
         if !v.is_empty() {
             return Some(v.to_string());
@@ -154,7 +161,11 @@ mod tests {
 
     #[test]
     fn only_the_daemons_own_request_passes() {
-        assert!(authorized(&req("/api/notes", Some(TOKEN)), Some(TOKEN), &[]));
+        assert!(authorized(
+            &req("/api/notes", Some(TOKEN)),
+            Some(TOKEN),
+            &[]
+        ));
         // What the guard exists to stop: another local process on the port.
         assert!(!authorized(&req("/api/notes", None), Some(TOKEN), &[]));
         assert!(!authorized(
@@ -168,7 +179,11 @@ mod tests {
     fn exempt_paths_match_exactly_or_by_prefix() {
         let skip = ["/health", "/public/*"];
         assert!(authorized(&req("/health", None), Some(TOKEN), &skip));
-        assert!(authorized(&req("/public/logo.png", None), Some(TOKEN), &skip));
+        assert!(authorized(
+            &req("/public/logo.png", None),
+            Some(TOKEN),
+            &skip
+        ));
         // A prefix must not leak into a sibling path.
         assert!(!authorized(&req("/publicity", None), Some(TOKEN), &skip));
     }
