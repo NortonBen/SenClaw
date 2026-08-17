@@ -18,7 +18,13 @@ set -euo pipefail
 runner_for() {
   case "$1" in
     linux-x64)    echo ubuntu-22.04 ;;
-    darwin-arm64) echo macos-14 ;;
+    # macos-latest, NOT macos-14 (the senclaw-app fleet's choice): mlx-lm
+    # compiles the MLX C++ runtime, whose cmake dies on the macos-14 image's
+    # older Xcode — deterministically, ~6 min in, cargo exit 101 — while the
+    # same tree builds clean on macos-latest (desktop.yml builds mlx-sys there
+    # for the senclaw-media sidecar). The other repo's 49 apps build no MLX,
+    # which is why macos-14 never hurt it.
+    darwin-arm64) echo macos-latest ;;
     windows-x64)  echo windows-2022 ;;
     *) echo "::error::unknown platform '$1'" >&2; exit 1 ;;
   esac
