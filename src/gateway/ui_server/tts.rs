@@ -73,25 +73,6 @@ static CATALOG: &[TtsCatalogEntry] = &[
         description: "Zero-dependency macOS native voice. English (Samantha).",
     },
     TtsCatalogEntry {
-        id: "facebook/mms-tts-vie",
-        label: "MMS-VITS Vietnamese (Meta)",
-        approx_size_gb: 0.3,
-        languages: &["vi"],
-        default_language: "vi",
-        description: "Meta Massively Multilingual Speech VITS (Vietnamese) — native pure-Rust MLX synthesis, no Python. Download once (~290 MB), then speaks Vietnamese fully offline. Requires a daemon built with the local-mlx-tts feature; otherwise falls back to macOS voice (X-TTS-Fallback header).",
-    },
-    // NOTE: community finetunes like dvd1503/mms-tts-vie-finetuned are no
-    // longer pinned in the catalog — any HF VitsModel repo still installs via
-    // "Add model from Hugging Face" (generic VitsModel routing).
-    TtsCatalogEntry {
-        id: "facebook/mms-tts-eng",
-        label: "MMS-VITS English (Meta)",
-        approx_size_gb: 0.3,
-        languages: &["en"],
-        default_language: "en",
-        description: "Meta MMS VITS English — native pure-Rust MLX synthesis, fully offline after download. Same runtime as the Vietnamese model.",
-    },
-    TtsCatalogEntry {
         id: "pnnbao-ump/VieNeu-TTS-v3-Turbo",
         label: "VieNeu-TTS v3 Turbo (48 kHz, 14 giọng)",
         approx_size_gb: 0.31,
@@ -99,11 +80,12 @@ static CATALOG: &[TtsCatalogEntry] = &[
         default_language: "vi",
         description: "VieNeu-TTS v3 Turbo (Phạm Nguyễn Ngọc Bảo) — 48 kHz, 14 preset Vietnamese voices, En–Vi code-switching, emotion cues ([cười], [thở dài]). Runs the official ONNX path on CPU (daemon built with tts-vieneu). Set the Voice field to a preset name (default: Phạm Tuyên). Composite download: ONNX graphs + MOSS codec + voices + phoneme dictionary.",
     },
-    // NOTE: ZipVoice (mlx-community/zipvoice-vietnamese) was dropped from the
-    // catalog — the pure-Rust port is still WIP (never synthesized; always
-    // fell back to the macOS voice) and VieNeu now covers high-quality
-    // Vietnamese. The `crate::tts::zipvoice` port work remains for when the
-    // synthesis path lands.
+    // NOTE: the MLX voices are gone, not hidden. ZipVoice never synthesized
+    // anything and had already been dropped from this catalog; MMS-VITS worked
+    // but was the last thing keeping `mlx-rs` on the TTS path, for a voice no
+    // machine had selected. VieNeu covers Vietnamese at higher quality, and
+    // TTS now needs ONNX on the CPU and nothing else — which is why it stayed
+    // in the daemon while the MLX runtime moved out.
 ];
 
 fn catalog_get(id: &str) -> Option<&'static TtsCatalogEntry> {
@@ -947,25 +929,6 @@ mod synth_tests {
         );
     }
 
-    /// Direct-backend stub contract: invoking `ZipVoiceBackend` returns
-    /// `NotImplemented` until the native synthesis path lands. Complements the
-    /// dispatch-level test below.
-    #[test]
-    fn zipvoice_backend_is_not_implemented_stub() {
-        use crate::tts::{SynthesisRequest, TtsBackend, TtsError};
-        let r = crate::tts::zipvoice::ZipVoiceBackend.synthesize(&SynthesisRequest {
-            text: "Xin chào.",
-            language: "vi",
-            voice: None,
-            speed: 1.0,
-            model_dir: None,
-        });
-        match r {
-            Err(TtsError::NotImplemented(_)) => {}
-            Err(other) => panic!("expected NotImplemented, got {other:?}"),
-            Ok(_) => panic!("ZipVoice stub should error until implemented"),
-        }
-    }
 
     /// Synthesis must be pure Rust — no external runtime should ever be spawned
     /// for a non-`macos-speech` model. Calling `synthesize_blocking` with the HF

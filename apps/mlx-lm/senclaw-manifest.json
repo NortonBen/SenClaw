@@ -1,0 +1,31 @@
+{
+  "id": "mlx-lm",
+  "name": "MLX · Local models",
+  "description": "Chạy model ngôn ngữ ngay trên máy bằng MLX (Apple Silicon). Tải checkpoint từ HuggingFace, quản lý bộ nhớ, và phục vụ model cho SenClaw như một provider bình thường.",
+  "icon": "🍎",
+  "runtime": {
+    "kind": "server",
+    "mode": "session",
+    "start": "./mlx-lm",
+    "healthPath": "/health",
+    "port": 4832,
+    "idleTimeoutSecs": 300
+  },
+  "requires": {
+    "os": [
+      "macos"
+    ]
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/",
+    "launcher": false,
+    "settings": true
+  },
+  "llm": {
+    "autoRegister": true,
+    "path": "/v1",
+    "adapt": "openai",
+    "displayName": "MLX"
+  }
+}

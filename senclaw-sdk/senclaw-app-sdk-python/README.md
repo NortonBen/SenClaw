@@ -149,6 +149,63 @@ serve(routes={**dispatch_routes(Store()), ("GET", "/api/status"): status})
 camelCase là bị bỏ im lặng, và nó hiện ra dưới dạng một phụ thuộc không bao giờ
 có hiệu lực chứ không phải một lỗi.
 
+## App làm model (`senclaw_space.llm`)
+
+Chiều ngược của `space.llm()`: thay vì app hỏi daemon một câu trả lời, **app
+chính là model**. App khai một khối `llm` trong manifest, daemon đăng ký mọi
+model app quảng cáo vào **cùng picker với OpenAI/Anthropic**, và lượt của agent
+gửi tới qua HTTP dưới dạng request OpenAI `chat/completions`.
+
+```json
+"llm": { "autoRegister": true, "path": "/v1", "adapt": "openai", "displayName": "MLX" }
+```
+
+App nói **OpenAI** (`GET /v1/models`, `POST /v1/chat/completions`), nên daemon
+dùng lại `adapt: "openai"` — không cần adapter mới. Provider chỉ phát **sự kiện
+ngữ nghĩa** (`Text` / `Reasoning` / `ToolCall` / `Usage`); SDK lo phần render ra
+wire.
+
+```python
+from senclaw_space import serve
+from senclaw_space.llm import (
+    ChatRequest, ChunkSink, LlmProvider, ModelCard, llm_routes, publish_models,
+)
+
+class Mlx(LlmProvider):
+    def models(self):
+        # `vision` là BẮT BUỘC — daemon dựa vào nó để chọn gửi ảnh thật hay
+        # rơi về OCR. Đừng đoán từ tên model.
+        return [ModelCard("gemma-4-e2b-it-4bit", 128_000, 8192, vision=True)]
+
+    def chat(self, req: ChatRequest, sink: ChunkSink) -> None:
+        # Nạp weights ở đây (lười), KHÔNG nạp lúc khởi động — daemon
+        # health-check trong 30s, nạp GB trước khi bind cổng = "app chết".
+        sink.text("xin chào")
+
+provider = Mlx()
+publish_models(".", provider.models())   # để app ĐANG DỪNG vẫn hiện trong picker
+serve(
+    routes={**llm_routes(provider), ("GET", "/health"): lambda r: {"ok": True}},
+    health_path="/health",
+)
+```
+
+Bốn chỗ dễ sập:
+
+- **`vision` bắt buộc, không suy diễn.** Endpoint text-only trả **400 cứng** cho
+  một khối ảnh và hỏng cả lượt; OCR chỉ làm giảm chất lượng — hậu quả bất đối
+  xứng nên đoán sai là đắt. App đang mở `config.json` của model, app biết.
+- **Nhiều tool call phải ra ở các `index` KHÁC nhau.** Adapter OpenAI cộng dồn
+  `function.name`/`arguments` theo `index`, nên dùng lại `index 0` sẽ hàn
+  `get_weatherget_time` dính vào nhau. Cứ phát `ToolCall` **nguyên khối** —
+  `llm_routes` tự cấp index mới tăng dần, không tự tay viết JSON delta.
+- **`ChunkSink` ở đây *gom* chứ không *stream*.** Harness `serve()` của Python
+  là đồng bộ + đệm: route chạy `chat()` xong mới render. `is_closed()` luôn
+  `False` (không có tín hiệu client ngắt), stream luôn kết thúc bằng
+  `data: [DONE]` — cả khi lỗi (một error chunk rồi `[DONE]`, không cắt im lặng).
+- **`publish_models` từ chối danh sách rỗng** và ghi kiểu write-then-rename: một
+  lần khởi động hỏng không được xoá cache tốt đang có trong picker.
+
 ## Những gì SDK lo hộ
 
 | | |
@@ -160,6 +217,7 @@ có hiệu lực chứ không phải một lỗi.
 | `space.sqlite(...)` | DB riêng của app, luôn tham số hoá |
 | `space.get_config` / `set_config` | Cùng KV mà UI của app đọc/ghi — không phải file trong thư mục app (update sẽ đè) |
 | `McpServer` | JSON-RPC `initialize` / `tools/list` / `tools/call`, không cần MCP SDK |
+| `llm_routes(...)` | Biến app thành model: `/v1/models` + `/v1/chat/completions` OpenAI, render `ToolCall`/`Usage` đúng shape wire |
 
 ## Token truy cập của app
 

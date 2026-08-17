@@ -67,6 +67,26 @@ static CATALOG: &[CatalogEntry] = &[
         tokenizer_repo: "openai/whisper-large-v3-turbo",
         default_language: "vi",
     },
+    // ── HF-layout checkpoints, for the Candle backend ────────────────────────
+    // The sidecar's two decoders read different serializations of the same
+    // weights: MLX loads the `mlx-community/*` entries above, Candle (the
+    // backend every non-mac platform uses) loads these. A Windows daemon that
+    // offered only the MLX entries would download a checkpoint its own sidecar
+    // cannot open.
+    CatalogEntry {
+        id: "openai/whisper-large-v3-turbo",
+        label: "Whisper large-v3-turbo (HF — for Windows/Linux, CPU)",
+        approx_size_gb: 1.6,
+        tokenizer_repo: "openai/whisper-large-v3-turbo",
+        default_language: "vi",
+    },
+    CatalogEntry {
+        id: "openai/whisper-tiny",
+        label: "Whisper tiny (HF — small & fast, lower accuracy)",
+        approx_size_gb: 0.15,
+        tokenizer_repo: "openai/whisper-tiny",
+        default_language: "vi",
+    },
 ];
 
 fn catalog_get(id: &str) -> Option<&'static CatalogEntry> {
@@ -611,33 +631,27 @@ async fn run_whisper_download(
     Ok(())
 }
 
-// ── Engine cache + transcription bridge ──────────────────────────────────────
+// ── Transcription bridge: the daemon asks the `senclaw-media` sidecar ────────
+//
+// Whisper used to run in this process, behind a cache of `WhisperEngine`s and a
+// `local-mlx-whisper` feature flag. It moved to `crates/senclaw-media` — a
+// binary that ships beside the daemon and is spawned on demand — which is what
+// lets the daemon stop compiling `mlx-rs` at all.
+//
+// Everything above this line is unchanged: `/api/whisper/models`, the download
+// and validate routes, the settings — the daemon still owns model storage. Only
+// the decode moved, and the sidecar is handed the resolved model directory
+// rather than a model id it would have to resolve a second time.
 
-#[cfg(feature = "local-mlx-whisper")]
-static ENGINES: Lazy<Mutex<HashMap<String, Arc<crate::local_model::WhisperEngine>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
-#[cfg(feature = "local-mlx-whisper")]
-fn get_or_create_engine(dir: &PathBuf) -> Arc<crate::local_model::WhisperEngine> {
-    let key = dir.to_string_lossy().to_string();
-    let mut map = ENGINES.lock().unwrap();
-    map.entry(key)
-        .or_insert_with(|| Arc::new(crate::local_model::WhisperEngine::new(dir.clone())))
-        .clone()
-}
 
-#[cfg(feature = "local-mlx-whisper")]
-fn drop_engine(dir: &PathBuf) {
-    ENGINES
-        .lock()
-        .unwrap()
-        .remove(&dir.to_string_lossy().to_string());
-}
-
-#[cfg(not(feature = "local-mlx-whisper"))]
+/// Dropping a cached engine is the app's business now.
+///
+/// Kept as a no-op rather than removed because the callers are the delete and
+/// re-download paths, where "make sure nothing is holding this directory open"
+/// is still the right *intent* — it is simply already true here.
 fn drop_engine(_dir: &PathBuf) {}
 
-#[cfg(feature = "local-mlx-whisper")]
 async fn transcribe_impl(
     dir: PathBuf,
     filename: String,
@@ -656,60 +670,68 @@ async fn transcribe_impl(
             language
         );
     }
-    // Persist the upload to a temp file so symphonia can probe by extension.
-    let ext = std::path::Path::new(&filename)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("bin");
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    let tmp = std::env::temp_dir().join(format!(
-        "senclaw-whisper-{}-{nonce}.{ext}",
-        std::process::id()
-    ));
-    tokio::fs::write(&tmp, &bytes)
-        .await
-        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let engine = get_or_create_engine(&dir);
-    let tmp_for_task = tmp.clone();
-    let (text, stats) = tokio::task::spawn_blocking(move || {
-        let res = engine.transcribe_file_timed(&tmp_for_task, language.as_deref());
-        // Unload the model immediately after transcription to free ~2GB RAM.
-        // It will be lazily reloaded on the next request.
-        engine.unload();
-        res
-    })
-    .await
-    .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let _ = tokio::fs::remove_file(&tmp).await;
-    if debug {
-        crate::safe_eprintln!(
-            "[whisper-debug] api transcribe response chars={} chunks={} tokens={} no_speech_prob={:.3} avg_logprob={:.3} total_ms={:.1}",
-            text.chars().count(),
-            stats.n_chunks,
-            stats.tokens,
-            stats.no_speech_prob,
-            stats.avg_logprob,
-            stats.total_ms
-        );
+    // Starts the sidecar if it is not up yet. It answers /health before
+    // reading any weights, so this returns in milliseconds on a warm process
+    // and about a second on a cold one — the model load happens inside the
+    // request below.
+    let base = crate::media_sidecar::ensure_running()
+        .await
+        .map_err(|e| AppError(StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
+    let mut url = format!(
+        "{base}/v1/audio/transcriptions?model_dir={}&timestamps=true&filename={}",
+        urlencoding::encode(&dir.to_string_lossy()),
+        // The decoder probes the container by extension — see the sidecar's
+        // `TranscribeQuery::filename`.
+        urlencoding::encode(&filename),
+    );
+    if let Some(lang) = language.as_deref().filter(|l| !l.trim().is_empty()) {
+        url.push_str(&format!("&language={}", urlencoding::encode(lang)));
     }
 
-    Ok(Json(json!({ "ok": true, "text": text })))
-}
+    // No total timeout: a first call pays a cold app start plus a weight load,
+    // and an hour of audio is minutes of decode. A hung app is caught by the
+    // read timeout, which resets on every byte received.
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-#[cfg(not(feature = "local-mlx-whisper"))]
-async fn transcribe_impl(
-    _dir: PathBuf,
-    _filename: String,
-    _bytes: Vec<u8>,
-    _language: Option<String>,
-) -> Result<axum::response::Json<serde_json::Value>, AppError> {
-    Err(AppError(
-        StatusCode::NOT_IMPLEMENTED,
-        "Whisper transcription requires building with `--features local-mlx-whisper`".into(),
-    ))
+    let res = client
+        .post(&url)
+        .header("content-type", "application/octet-stream")
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|e| {
+            AppError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("senclaw-media unreachable ({e})"),
+            )
+        })?;
+
+    let status = res.status();
+    let body: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|e| AppError(StatusCode::BAD_GATEWAY, format!("speech app: {e}")))?;
+    if !status.is_success() {
+        let msg = body["error"]["message"]
+            .as_str()
+            .unwrap_or("transcription failed")
+            .to_string();
+        return Err(AppError(StatusCode::BAD_GATEWAY, msg));
+    }
+
+    let text = body["text"].as_str().unwrap_or_default().to_string();
+    if debug {
+        crate::safe_eprintln!(
+            "[whisper-debug] api transcribe response chars={} decode_ms={} audio_secs={}",
+            text.chars().count(),
+            body["decode_ms"],
+            body["audio_secs"],
+        );
+    }
+    Ok(Json(json!({ "ok": true, "text": text })))
 }

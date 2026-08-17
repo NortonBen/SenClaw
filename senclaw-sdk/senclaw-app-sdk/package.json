@@ -1,7 +1,7 @@
 {
   "name": "@senclaw/space-sdk",
-  "version": "0.3.0",
-  "description": "Build a SenClaw Space App in TypeScript: daemon API, AI bridge, MCP server harness, and the lifecycle helpers an on-demand app needs.",
+  "version": "0.4.0",
+  "description": "Build a SenClaw Space App in TypeScript: daemon API, AI bridge, MCP server harness, an OpenAI-compatible LLM-provider router, and the lifecycle helpers an on-demand app needs.",
   "keywords": [
     "senclaw",
     "space-app",
@@ -40,6 +40,10 @@
     "./dispatch": {
       "types": "./dist/dispatch.d.ts",
       "default": "./dist/dispatch.js"
+    },
+    "./llm": {
+      "types": "./dist/llm.d.ts",
+      "default": "./dist/llm.js"
     }
   },
   "bin": {

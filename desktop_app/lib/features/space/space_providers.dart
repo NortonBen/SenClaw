@@ -170,6 +170,20 @@ class SpaceApp {
 
   String get version => '${manifest['version'] ?? ''}';
 
+  /// Should this app get a tile in the launcher grid?
+  ///
+  /// `integration.launcher: false` says no *without* claiming the app has no
+  /// UI. The engine apps (`mlx-lm`, `candle`) use it: their screen is a model
+  /// management panel that belongs under Settings → Models, and a launcher tile
+  /// opening the same page would be a second, competing entry point.
+  ///
+  /// Absent means yes, so every app written before this field keeps its tile.
+  bool get showInLauncher {
+    final integ = manifest['integration'];
+    if (integ is Map && integ['launcher'] == false) return false;
+    return true;
+  }
+
   /// Widget definitions declared in the manifest.
   List<AppWidgetDef> get widgets {
     final raw = manifest['widgets'];

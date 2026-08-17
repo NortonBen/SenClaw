@@ -63,6 +63,9 @@ from .server import Request, Response, serve
 # only needs if it opts into being driven by the dispatcher, and importing it
 # eagerly would put its dataclasses in every app's import path for nothing.
 # Reach it as `from senclaw_space.dispatch import DispatchProvider`.
+#
+# `llm` is left out for the same reason: only an app that *becomes* a model
+# needs it. Reach it as `from senclaw_space.llm import LlmProvider, llm_routes`.
 
 __all__ = [
     "API_VERSION",
@@ -89,4 +92,4 @@ __all__ = [
     "to_content",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

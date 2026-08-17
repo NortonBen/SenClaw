@@ -250,12 +250,7 @@ impl SpaceClient {
             .map_err(|e| anyhow!("invalid bridge response: {e}"))?;
         match v.get("status").and_then(|x| x.as_str()) {
             Some("ok") => {
-                let s = |k: &str| {
-                    v.get(k)
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .to_string()
-                };
+                let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
                 let usage = v.get("usage").filter(|u| u.is_object()).map(|u| {
                     let n = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
                     LlmUsage {

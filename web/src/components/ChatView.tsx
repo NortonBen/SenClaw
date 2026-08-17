@@ -37,6 +37,16 @@ interface Props {
 
 const PAGE_SIZE = 5;
 
+/** Longest edge an attached image is downscaled to before upload. Matches the
+ *  size the Anthropic API resizes to internally, and keeps a phone photo under
+ *  the 5 MB per-image request limit. */
+const MAX_IMAGE_EDGE = 1568;
+
+/** Largest non-image attachment accepted. Matches the daemon's own cap
+ *  (`MAX_DOC_BYTES` in src/agent/documents.rs); rejecting here just gives the
+ *  user the error before a 40MB base64 crosses the socket. */
+const MAX_DOC_BYTES = 32 * 1024 * 1024;
+
 /** Encode mono Float32 PCM as a 16-bit PCM WAV blob for the Whisper endpoint. */
 function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
@@ -219,66 +229,77 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
     }
   };
 
+  /** Normalize one picked/pasted image and queue it as a pending attachment.
+   *  Shared by paste and the file picker so both get EXIF rotation and the
+   *  size cap. */
+  const addImageFile = (file: Blob, srcMime: string) => {
+    // createImageBitmap with imageOrientation:'from-image' applies EXIF rotation before drawing
+    createImageBitmap(file, { imageOrientation: 'from-image' } as ImageBitmapOptions)
+      .then(bitmap => {
+        // Cap the long edge. A phone photo is ~4000px and encodes to several MB
+        // of base64 — over Anthropic's 5 MB per-image limit, which fails the
+        // whole request. 1568px is what the API downscales to anyway, so this
+        // costs no detail the model would have seen.
+        const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(bitmap.width * scale);
+        canvas.height = Math.round(bitmap.height * scale);
+        canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        bitmap.close();
+        // Keep PNG for screenshots; use JPEG for photos to reduce payload size
+        const outMime = srcMime === 'image/png' ? 'image/png' : 'image/jpeg';
+        const dataUrl = canvas.toDataURL(outMime, outMime === 'image/jpeg' ? 0.92 : undefined);
+        setPendingImages(prev => [...prev, { dataUrl, mimeType: outMime }]);
+      })
+      .catch(() => {
+        // Fallback: no EXIF normalization or resize, but at least something shows up
+        const reader = new FileReader();
+        reader.onload = () => {
+          setPendingImages(prev => [...prev, { dataUrl: reader.result as string, mimeType: srcMime }]);
+        };
+        reader.readAsDataURL(file);
+      });
+  };
+
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const imageItems = Array.from(e.clipboardData.items).filter(item => item.type.startsWith('image/'));
     if (imageItems.length === 0) return;
-    
+
     for (const item of imageItems) {
       const file = item.getAsFile();
       if (!file) continue;
-      const srcMime = item.type;
-      
-      // createImageBitmap with imageOrientation:'from-image' applies EXIF rotation before drawing
-      createImageBitmap(file, { imageOrientation: 'from-image' } as ImageBitmapOptions)
-        .then(bitmap => {
-          const canvas = document.createElement('canvas');
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-          canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
-          bitmap.close();
-          // Keep PNG for screenshots; use JPEG for photos to reduce payload size
-          const outMime = srcMime === 'image/png' ? 'image/png' : 'image/jpeg';
-          const dataUrl = canvas.toDataURL(outMime, outMime === 'image/jpeg' ? 0.92 : undefined);
-          setPendingImages(prev => [...prev, { dataUrl, mimeType: outMime }]);
-        })
-        .catch(() => {
-          // Fallback: no EXIF normalization, but at least something shows up
-          const reader = new FileReader();
-          reader.onload = () => {
-            setPendingImages(prev => [...prev, { dataUrl: reader.result as string, mimeType: srcMime }]);
-          };
-          reader.readAsDataURL(file);
-        });
+      addImageFile(file, item.type);
     }
+  };
+
+  /** Queue a non-image file as-is. The daemon saves it, extracts what text it
+   *  can, and hands the agent the path — so no client-side parsing here. */
+  const addDocumentFile = (file: File) => {
+    if (file.size > MAX_DOC_BYTES) {
+      message.error(`${file.name} quá lớn (tối đa ${MAX_DOC_BYTES / (1024 * 1024)}MB)`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPendingImages(prev => [...prev, {
+        dataUrl: reader.result as string,
+        // Browsers leave `type` empty for extensions they don't know; the
+        // daemon falls back to the filename, so send something non-empty.
+        mimeType: file.type || 'application/octet-stream',
+        name: file.name,
+      }]);
+    };
+    reader.onerror = () => message.error(`Không đọc được ${file.name}`);
+    reader.readAsDataURL(file);
   };
 
   const handleFileSelect = (files: File[]) => {
     for (const file of files) {
-      if (!file.type.startsWith('image/')) continue; // Only handle images for now
-      
-      const srcMime = file.type;
-      
-      // createImageBitmap with imageOrientation:'from-image' applies EXIF rotation before drawing
-      createImageBitmap(file, { imageOrientation: 'from-image' } as ImageBitmapOptions)
-        .then(bitmap => {
-          const canvas = document.createElement('canvas');
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-          canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
-          bitmap.close();
-          // Keep PNG for screenshots; use JPEG for photos to reduce payload size
-          const outMime = srcMime === 'image/png' ? 'image/png' : 'image/jpeg';
-          const dataUrl = canvas.toDataURL(outMime, outMime === 'image/jpeg' ? 0.92 : undefined);
-          setPendingImages(prev => [...prev, { dataUrl, mimeType: outMime }]);
-        })
-        .catch(() => {
-          // Fallback: no EXIF normalization, but at least something shows up
-          const reader = new FileReader();
-          reader.onload = () => {
-            setPendingImages(prev => [...prev, { dataUrl: reader.result as string, mimeType: srcMime }]);
-          };
-          reader.readAsDataURL(file);
-        });
+      if (file.type.startsWith('image/')) {
+        addImageFile(file, file.type);
+      } else {
+        addDocumentFile(file);
+      }
     }
   };
 
@@ -673,18 +694,36 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
       {/* Pending image previews */}
       {pendingImages.length > 0 && (
         <div className="px-6 py-2 flex flex-wrap gap-2 backdrop-blur-xl flex-shrink-0" style={{ background: `${token.colorBgContainer}cc`, borderColor: token.colorBorderSecondary }}>
-          {pendingImages.map((img, i) => (
+          {pendingImages.map((att, i) => (
             <div key={i} className="relative group flex-shrink-0">
-              <img
-                src={img.dataUrl}
-                alt=""
-                className="w-16 h-16 object-cover rounded-xl border shadow-sm"
-                style={{ borderColor: token.colorBorderSecondary }}
-              />
+              {att.mimeType.startsWith('image/') ? (
+                <img
+                  src={att.dataUrl}
+                  alt=""
+                  className="w-16 h-16 object-cover rounded-xl border shadow-sm"
+                  style={{ borderColor: token.colorBorderSecondary }}
+                />
+              ) : (
+                /* Documents have no thumbnail — show the name so the user can
+                   tell two attachments apart before sending. */
+                <div
+                  className="w-16 h-16 rounded-xl border shadow-sm flex flex-col items-center justify-center gap-1 px-1 overflow-hidden"
+                  style={{ borderColor: token.colorBorderSecondary, background: token.colorFillQuaternary }}
+                  title={att.name}
+                >
+                  <span style={{ fontSize: 18, lineHeight: 1 }}>📄</span>
+                  <span
+                    className="w-full text-center truncate"
+                    style={{ fontSize: 9, color: token.colorTextSecondary }}
+                  >
+                    {att.name ?? 'file'}
+                  </span>
+                </div>
+              )}
               <button
                 onClick={() => setPendingImages(prev => prev.filter((_, j) => j !== i))}
                 className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-gray-700 hover:bg-gray-900 text-white text-xs leading-none flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                aria-label="Remove image"
+                aria-label="Remove attachment"
               >
                 ×
               </button>

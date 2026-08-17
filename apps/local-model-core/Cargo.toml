@@ -1,0 +1,20 @@
+[package]
+name = "local-model-core"
+version = "0.1.0"
+edition = "2021"
+description = "Model storage, HuggingFace downloads and inference settings, shared by the mlx-lm and candle Space Apps"
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+dirs = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

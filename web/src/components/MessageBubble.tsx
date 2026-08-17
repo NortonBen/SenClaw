@@ -175,17 +175,31 @@ function MarkdownContent({ content, isDarkMode }: { content: string, isDarkMode:
 
 function ImageAttachments({ attachments }: { attachments: ImageAttachment[] }) {
   if (!attachments || attachments.length === 0) return null;
-  
+
   return (
     <div className="flex flex-wrap gap-2 mt-2">
-      {attachments.map((img, i) => (
-        <img
-          key={i}
-          src={img.dataUrl}
-          alt=""
-          className="max-w-[200px] max-h-[200px] object-cover rounded-lg border"
-        />
-      ))}
+      {attachments.map((att, i) =>
+        att.mimeType.startsWith('image/') ? (
+          <img
+            key={i}
+            src={att.dataUrl}
+            alt=""
+            className="max-w-[200px] max-h-[200px] object-cover rounded-lg border"
+          />
+        ) : (
+          /* A document has no thumbnail; the data URL still makes a working
+             download link, so the user can reopen what they sent. */
+          <a
+            key={i}
+            href={att.dataUrl}
+            download={att.name ?? 'attachment'}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg border text-xs no-underline"
+          >
+            <span>📄</span>
+            <span className="truncate max-w-[180px]">{att.name ?? att.mimeType}</span>
+          </a>
+        )
+      )}
     </div>
   );
 }

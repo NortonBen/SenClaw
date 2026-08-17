@@ -191,7 +191,7 @@ mod native {
         let gap = vec![0.0f32; (SAMPLE_RATE as usize) * 15 / 100]; // 150 ms
         let mut samples: Vec<f32> = Vec::new();
         let mut spoke_any = false;
-        for chunk in crate::tts::mms_vits::chunk_text(req.text, MAX_CHUNK_CHARS) {
+        for chunk in crate::tts::chunk::chunk_text(req.text, MAX_CHUNK_CHARS) {
             let wav = engine
                 .infer_text(&chunk, &preset)
                 .map_err(|e| TtsError::Internal(format!("VieNeu synthesis: {e:#}")))?;

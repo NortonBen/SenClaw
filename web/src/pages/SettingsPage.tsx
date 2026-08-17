@@ -28,7 +28,6 @@ import { LLMSettings } from '../components/settings/LLMSettings';
 import { OAuthSettings } from '../components/settings/OAuthSettings';
 import { ToolRulesSettings } from '../components/settings/ToolRulesSettings';
 import { EmbeddingSettings } from '../components/settings/EmbeddingSettings';
-import { LocalModelsSettings } from '../components/settings/LocalModelsSettings';
 import { CognitiveSettings } from '../components/settings/CognitiveSettings';
 import { WhisperSettings } from '../components/settings/WhisperSettings';
 import { TtsSettings } from '../components/settings/TtsSettings';
@@ -47,7 +46,6 @@ type SettingsSection =
   | 'llm'
   | 'provider-signin'
   | 'embedding'
-  | 'local-models'
   | 'whisper'
   | 'tts'
   | 'ocr'
@@ -76,7 +74,6 @@ export const SettingsPage: React.FC = () => {
       { key: 'llm', icon: <ThunderboltOutlined />, label: 'LLM' },
       { key: 'provider-signin', icon: <LinkOutlined />, label: 'Provider Sign-in' },
       { key: 'embedding', icon: <DatabaseOutlined />, label: 'Embedding' },
-      { key: 'local-models', icon: <CloudDownloadOutlined />, label: 'Local Models' },
       { key: 'whisper', icon: <AudioOutlined />, label: 'Whisper ASR' },
       { key: 'tts', icon: <SoundOutlined />, label: 'Text-to-Speech' },
       { key: 'ocr', icon: <ScanOutlined />, label: 'OCR' },
@@ -121,8 +118,6 @@ export const SettingsPage: React.FC = () => {
         return <OAuthSettings />;
       case 'embedding':
         return <EmbeddingSettings />;
-      case 'local-models':
-        return <LocalModelsSettings />;
       case 'whisper':
         return <WhisperSettings />;
       case 'tts':

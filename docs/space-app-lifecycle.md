@@ -245,13 +245,49 @@ file Web UI đang hiển thị sẵn.
 | `POST /api/space/apps/:id/stop` | Dừng ngay. App `session`: làm sớm việc reaper sẽ làm. App `background`: là **override**, supervisor tôn trọng đến khi start lại |
 | `POST /api/space/apps/:id/start` | Chạy + đăng ký lại MCP. Xoá cờ "người dùng đã dừng" |
 | `POST /api/space/apps/:id/restart` | Như cũ: kill + đòi cổng + spawn lại |
+| `GET /api/space/apps/status` | **Ảnh chụp cả đội, một request.** Mỗi app một dòng: `kind`, `mode`, `running`, `userStopped`, `port`, `launches`, `idleSecs`, `mcpName`. `?probe=1` hỏi thẳng cổng từng app (`ready`) — mặc định tắt vì tốn một round-trip mỗi app |
 | `GET /api/space/apps/:id/requirements` | Chính bài kiểm launcher chạy, để xem trước khi app fail |
 | `GET /api/space/apps/:id/runtime` | Thêm khối `lifecycle` (`mode`, `runner`, `idleSecs`, `idleTimeoutSecs`, `stoppedByUser`) và `requirements` |
 | `GET /api/space/apps/sandbox-overview` | Thêm `mode` mỗi dòng và `config.forced` |
 | `PUT /api/space/apps/:id/sandbox` | 409 nếu định tắt sandbox của app `force` |
 
+`status` là **anh em ruột của `:id`** trong router, nên nó phải nằm trong danh
+sách literal của `app_auth::split_app_path` — thiếu là nó bị hiểu thành một app
+tên "status".
+
 Web UI: Settings → Space Apps có nhãn **always on / on demand** và nút
 **Start** / **Stop** cho từng app server.
+
+### Quản lý app từ khung chat (MCP)
+
+Cùng những việc đó, agent làm được qua `senclaw-space`:
+
+| Tool | |
+|---|---|
+| `space_app_list` | App đã cài + trạng thái. `query` lọc theo id/tên, `status` = `all`/`running`/`stopped`, `probe` = hỏi cổng thật |
+| `space_app_start` | Bật một app và chờ nó trả lời. Lỗi thì kèm đuôi log của app |
+| `space_app_stop` | Tắt một app. Kết quả nói rõ "tắt" nghĩa là gì theo `mode` |
+| `space_app_restart` | Kill + đòi cổng + spawn lại, chạy được cả khi app đang tắt |
+| `space_app_mcp_list` | MCP server theo từng app: `mcpName`, trạng thái kết nối, số tool (kèm tên tool khi hỏi một app) |
+
+Chúng là **client HTTP loopback gọi ngược về daemon**
+([`src/mcp/space_apps.rs`](../src/mcp/space_apps.rs)), không phải đọc DB như
+phần notes/calendar của cùng server đó — vì thứ chúng động vào (`SpaceMcpLauncher`)
+là bản đồ tiến trình con nằm trong bộ nhớ của tiến trình daemon, không phải một
+bảng trong SQLite. Daemon miễn token cho peer loopback nên bình thường không cần
+credential; `SENCLAW_SPACE_API_URL` (do `space_mcp_config` đặt) trỏ tới daemon, và
+`SENCLAW_API_TOKEN` được chuyển tiếp nếu có.
+
+Ba điều đáng lưu ý khi agent dùng những tool này:
+
+- **`running: false` của app `session` không phải lỗi** — mô tả tool nói thẳng
+  điều đó, vì nếu không agent sẽ "sửa" một cái đang chạy đúng thiết kế.
+- **Tắt một app `background` là dừng cả việc trực của nó** (poll kênh, chạy
+  lịch). Mô tả `space_app_stop` yêu cầu hỏi người dùng trước.
+- **`space_app_start` có thể mất hàng phút** ở lần đầu (`npm ci`, tạo venv).
+  Quá 120 giây client trả về "daemon vẫn đang xử lý, kiểm tra lại bằng
+  `space_app_list`" — **không** phải "thất bại", vì hết giờ ở phía client không
+  huỷ việc phía daemon.
 
 ### Biến môi trường
 

@@ -314,39 +314,26 @@ pub fn create_cognitive_llm(
                 "[cognitive] LLM resolved from Settings"
             );
 
-            // ───── Local in-process runtimes ─────
-            // These don't speak HTTP, so empty `api_key`/`base_url` is
-            // expected (the UI form may leave both blank for local
-            // profiles). Dispatch BEFORE the http-fields validation.
-            if adapt_lc == "local-mlx" {
-                match super::llm_local_mlx::LocalMlxLlm::new(&cfg.model_name) {
-                    Ok(c) => return Some(std::sync::Arc::new(c)),
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "[cognitive] local-mlx adapter unavailable; trying next candidate"
-                        );
-                        continue;
-                    }
-                }
-            }
-            if adapt_lc == "local-candle-native" {
-                match super::llm_local_candle::LocalCandleLlm::new(&cfg.model_name) {
-                    Ok(c) => return Some(std::sync::Arc::new(c)),
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "[cognitive] local-candle-native adapter unavailable; trying next candidate"
-                        );
-                        continue;
-                    }
-                }
-            }
-
+            // A local model is no longer an in-process runtime: `apps/mlx-lm`
+            // and `apps/candle` serve one over loopback HTTP, registered as an
+            // ordinary provider with `adapt: "openai"`. So it needs no special
+            // case here — it falls through to the HTTP adapter below, where its
+            // empty `api_key` is fine because the endpoint is the daemon's own
+            // app proxy.
             // ───── HTTP adapters ─────
             let key = cfg.api_key.trim();
             let base = cfg.base_url.trim();
-            if key.is_empty() || base.is_empty() {
+            if base.is_empty() {
+                continue;
+            }
+            // An empty key disqualifies a *remote* config — it cannot
+            // authenticate, and trying costs a round trip and a 401. A local
+            // one is different: a model served by `apps/mlx-lm` or
+            // `apps/candle` is reached through the daemon's own app proxy on
+            // loopback, which needs no credential and is handed none. Skipping
+            // those on an empty key would make the cognitive layer silently
+            // unable to use any local model.
+            if key.is_empty() && !crate::apps::llm_provider::is_app_config(&cfg.id) {
                 continue;
             }
             let client: Option<std::sync::Arc<dyn super::llm::LlmClient>> =
@@ -501,69 +488,59 @@ mod tests {
         assert!(create_cognitive_llm(&cfg).is_some());
     }
 
+    /// A local model now arrives as an app-provided config: a real loopback
+    /// `base_url` (the daemon's app proxy) and a deliberately **empty**
+    /// `api_key`, because that hop carries no credential. Resolution must not
+    /// treat the empty key as "unconfigured" — doing so would leave the
+    /// cognitive layer unable to use any local model at all.
     #[test]
-    #[cfg(feature = "local-mlx")]
-    fn create_picks_local_mlx_when_stored_adapt_is_local_mlx() {
-        // Without the local-mlx feature this branch returns Err from the
-        // adapter ctor and continues to the next candidate. With the
-        // feature enabled, construction is lazy (engine isn't touched
-        // until complete()), so a config alone is enough to resolve.
+    fn create_accepts_an_app_provided_config_with_no_api_key() {
         use crate::gateway::group_manager::{save_llm_config, set_active_cognitive_llm_config};
         let cfg = cfg_with_isolated_config();
+        let id = crate::apps::llm_provider::config_id("mlx-lm", "gemma-4-e2b");
         let llm_cfg = crate::gateway::group_manager::LlmConfig {
-            id: "test-mlx".into(),
-            label: "MLX test".into(),
-            provider: "local".into(),
-            // Local MLX has no http endpoint — these fields are usually
-            // empty in the UI. Resolution MUST NOT fail on that.
-            base_url: String::new(),
+            id: id.clone(),
+            label: "MLX · gemma-4-e2b".into(),
+            provider: "app:mlx-lm".into(),
+            base_url: "http://127.0.0.1:18788/api/space/apps/mlx-lm/proxy/v1".into(),
             api_key: String::new(),
-            model_name: "mlx-community/Qwen3-4B-4bit".into(),
-            adapt: "local-mlx".into(),
+            model_name: "gemma-4-e2b".into(),
+            adapt: "openai".into(),
             max_tokens: 4096,
             context_length: 32_000,
-            vision: None,
+            vision: Some(true),
             auth: None,
             oauth_account_id: None,
         };
-        save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
-        set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some("test-mlx")).unwrap();
+        // App configs are refused by `save_llm_config` on purpose, so write it
+        // the way the daemon does at runtime: through the provider registry.
+        assert!(save_llm_config(&cfg.paths.global_config_path, &llm_cfg).is_err());
+
+        let db = crate::db::Db::open_in_memory(&cfg).unwrap();
+        crate::apps::llm_provider::register(
+            &db,
+            &crate::apps::llm_provider::AppProvider {
+                app_id: "mlx-lm".into(),
+                label: "MLX".into(),
+                adapt: "openai".into(),
+                base_url: "http://127.0.0.1:18788/api/space/apps/mlx-lm/proxy/v1".into(),
+                models: vec![app_space_sdk::llm::ModelCard::new(
+                    "gemma-4-e2b",
+                    32_000,
+                    4096,
+                    true,
+                )],
+            },
+        )
+        .unwrap();
+        set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some(&id)).unwrap();
+
         assert!(
             create_cognitive_llm(&cfg).is_some(),
-            "local-mlx adapt with feature on must produce a client (regardless of empty base_url/api_key)"
+            "an app-provided local model must resolve despite an empty api_key"
         );
     }
 
-    #[test]
-    #[cfg(feature = "local-candle")]
-    fn create_picks_local_candle_when_stored_adapt_is_local_candle_native() {
-        // Same property as the local-mlx variant: in-process runtimes
-        // must resolve even with empty base_url / api_key (the LLM
-        // Settings form leaves those blank for local profiles).
-        use crate::gateway::group_manager::{save_llm_config, set_active_cognitive_llm_config};
-        let cfg = cfg_with_isolated_config();
-        let llm_cfg = crate::gateway::group_manager::LlmConfig {
-            id: "test-candle".into(),
-            label: "Candle test".into(),
-            provider: "local".into(),
-            base_url: String::new(),
-            api_key: String::new(),
-            model_name: "Qwen/Qwen3-4B-Instruct".into(),
-            adapt: "local-candle-native".into(),
-            max_tokens: 4096,
-            context_length: 32_000,
-            vision: None,
-            auth: None,
-            oauth_account_id: None,
-        };
-        save_llm_config(&cfg.paths.global_config_path, &llm_cfg).unwrap();
-        set_active_cognitive_llm_config(&cfg.paths.global_config_path, Some("test-candle"))
-            .unwrap();
-        assert!(
-            create_cognitive_llm(&cfg).is_some(),
-            "local-candle-native with feature on must produce a client (regardless of empty base_url/api_key)"
-        );
-    }
 
     #[test]
     fn create_picks_anthropic_adapter_when_stored_adapt_is_anthropic() {

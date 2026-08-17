@@ -200,6 +200,73 @@ as a dependency that never held rather than as an error. `WorkItem` marshals
 empty slices as `[]` for the same reason: serde's `Vec` rejects an explicit
 `null`.
 
+## Serving an LLM
+
+Let the app **become a model**: its models appear in the same picker as OpenAI
+and Anthropic, and agent turns route to it over HTTP. Implement `Provider` and
+merge its two routes into your own.
+
+```go
+import "github.com/NortonBen/SenClaw/senclaw-sdk/senclaw-app-sdk-go/llm"
+
+type Mlx struct{ /* … */ }
+
+func (m *Mlx) Models() []llm.ModelCard {
+	// vision is REQUIRED — the daemon sends image blocks or falls back to OCR
+	// from it, and a text-only endpoint 400s on an image. Never guess it.
+	return []llm.ModelCard{llm.NewModelCard("gemma-4-e2b-it-4bit", 128000, 8192, true)}
+}
+
+func (m *Mlx) Chat(ctx context.Context, req llm.ChatRequest, sink *llm.Sink) error {
+	sink.Text("hello")                       // visible assistant text
+	sink.Send(llm.Reasoning("thinking…"))    // shown separately, echoed back next turn
+	sink.Send(llm.ToolCall("id", "get_time", "{}"))
+	sink.Send(llm.Usage(12, 3))              // prompt, completion — at most once, at the end
+	return nil                               // an error ends the stream early
+}
+
+func main() {
+	provider := &Mlx{}
+	// Cache the model list so the picker shows it while the app is STOPPED — a
+	// session app is stopped most of the time, and a model nobody can see is a
+	// model nobody starts the app for.
+	_ = llm.PublishModels(".", provider.Models())
+
+	senclaw.Serve(senclaw.Config{
+		Routes: senclaw.MergeRoutes(llm.Routes(provider), myRoutes),
+	})
+}
+```
+
+The manifest turns the app into a provider — the daemon speaks **OpenAI** to it,
+so `adapt` is `"openai"` and no new adapter is needed:
+
+```json
+"llm": { "autoRegister": true, "path": "/v1", "adapt": "openai", "displayName": "MLX" }
+```
+
+`Routes(provider)` serves `GET /v1/models` and `POST /v1/chat/completions` (both
+SSE and non-stream). You emit **semantic** events — `Text`, `Reasoning`,
+`ToolCall`, `Usage` — and the SDK renders the exact `chat.completion.chunk` wire
+the daemon's OpenAI parser expects. Four things it gets right that a hand-rolled
+JSON body gets wrong:
+
+- **Each `ToolCall` streams as one delta at a fresh, incrementing index.** The
+  consumer accumulates `function.name`/`arguments` by concatenation keyed on
+  index, so a reused index welds `get_weatherget_time` together.
+- **`Usage` rides its own chunk** with an empty `choices` array and a top-level
+  `usage` — the only place the consumer looks.
+- **The stream always ends with `data: [DONE]`, failure included.** A mid-stream
+  failure becomes an error chunk (`finish_reason: "error"`), not a silent
+  truncation the caller cannot tell from a short answer — the status line already
+  went out and cannot become a 5xx.
+- **`PublishModels` refuses an empty list** and writes-then-renames, so a failed
+  startup never wipes a good cache out of the picker.
+
+Load weights lazily in `Chat`, never at startup: the daemon health-gates a new
+app on 30 seconds, and an app that reads gigabytes before it binds its port is
+reported as failing to start.
+
 ## What the SDK handles for you
 
 | | |
@@ -212,6 +279,7 @@ empty slices as `[]` for the same reason: serde's `Vec` rejects an explicit
 | `space.SQLite(...)` | The app's own database, always parameterised |
 | `space.GetConfig` / `SetConfig` | The same KV the app's UI reads and writes — not a file in the app directory, which an update overwrites |
 | `MCPServer` | JSON-RPC `initialize` / `tools/list` / `tools/call`, no MCP SDK needed; a panicking tool becomes a message, not a dead app |
+| `llm.Routes(...)` | The OpenAI `/v1/models` + `/v1/chat/completions` wire from semantic `Text`/`Reasoning`/`ToolCall`/`Usage` events — indexed tool calls, usage chunk, `[DONE]` terminator, all correct |
 | Static serving | Path-traversal guard plus an `index.html` fallback so a client-side router works |
 
 ## The app's access token

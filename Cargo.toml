@@ -1,12 +1,76 @@
 [workspace]
-# The Space Apps moved to their own repository. `app-space-sdk` stays: it is
-# the Rust SDK those apps build against, published from here.
-members = ["app-space-sdk"]
+# The Space Apps moved to their own repository — with three exceptions that live
+# here because they are not independent of it:
+#
+# - `app-space-sdk` is the Rust SDK those apps build against, published from
+#   here.
+# - `apps/mlx-lm` and `apps/candle` are the local-model engines, moved out of
+#   the daemon. Their source *is* the daemon's old `src/local_model/`, and they
+#   build against `app-space-sdk` by path. In the apps repo they needed a
+#   `[patch]` pointing back at this checkout, which is a sign they belong here:
+#   a change to the SDK's `llm` module or to a model architecture has to land
+#   with them, not one release later.
+# - `apps/local-model-core` is what those two share.
+members = ["app-space-sdk", "apps/local-model-core", "apps/mlx-lm", "apps/candle", "crates/senclaw-media"]
+
+# Bare `cargo build` / `cargo test` touch only the daemon.
+#
+# Without this, every `cargo test` in this repo would also compile mlx-rs and
+# candle — minutes of unrelated native build on a run meant to check a daemon
+# change, and the exact cost moving the engines out was supposed to remove.
+# Build them explicitly: `cargo build -p mlx-lm`.
+default-members = [".", "app-space-sdk"]
 resolver = "2"
+
+# ── Shared dependency versions ────────────────────────────────────────────────
+# One place per version. The one that must never drift is mlx-rs/mlx-sys:
+# `apps/mlx-lm` and `crates/senclaw-media` both build the MLX C++ runtime, and
+# on the same revision they share every compiled artifact in target/ — on
+# different revisions the workspace pays for two full MLX builds.
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["json"] }
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+async-trait = "0.1"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+regex = "1"
+libc = "0.2"
+dirs = "5"
+tempfile = "3"
+futures-util = "0.3"
+tokio-util = "0.7"
+async-stream = "0.3"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+flate2 = "1"
+unicode-normalization = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# `fancy-regex`, not `onig`: oniguruma is a C library that fails to
+# cross-compile and adds a native build step on every platform, while
+# fancy-regex is the pure-Rust engine HF ships for wasm builds — equivalent
+# behaviour, and what lets the media sidecar `cargo check` for Windows from
+# anywhere.
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+minijinja = { version = "2", features = ["serde"] }
+minijinja-contrib = { version = "2", features = ["pycompat"] }
+half = "2.4"
+safetensors = "0.4"
+mlx-rs = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", features = ["metal", "accelerate"] }
+mlx-sys = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", package = "mlx-sys" }
+symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "alac", "flac", "wav", "ogg", "vorbis", "pcm", "adpcm"] }
+rubato = "0.15"
+realfft = "3.5"
 
 [package]
 name = "senclaw"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 description = "SenClaw provides the runtime machinery around large language models: permissions, memory, scheduling, multi-agent orchestration, channel adapters, Space Apps, local model support, and a Web UI"
 license = "MIT"
@@ -157,7 +221,7 @@ swc_core = { version = "71", features = [
 candle-core = { version = "0.8", optional = true }
 candle-nn = { version = "0.8", optional = true }
 candle-transformers = { version = "0.8", optional = true }
-tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["fancy-regex"] }
 
 # Tokio utilities (CancellationToken for zen-core abort)
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -178,26 +242,18 @@ fancy-regex = { version = "0.18", optional = true }
 memmap2 = { version = "0.9", optional = true }
 
 # Native MLX inference on Apple Silicon (feature-gated; macOS-only build).
-half = { version = "2.4", optional = true }
-safetensors = { version = "0.4", optional = true }
 bytemuck = { version = "1", optional = true }
 
 # Enable via: cargo build --features local-mlx
-# ML stack: **mlx-rs** only from [oxiglade/mlx-rs](https://github.com/oxiglade/mlx-rs)
-# (aligned with upstream oxideai tag v0.25.3). Qwen3 + chat-template helpers live
-# vendored under `src/local_model/mlx_lm*` — see oxiglade examples/mistral (mlx-rs-only)
-# vs examples/lm (mlx-lm).
-mlx-rs = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", features = ["metal", "accelerate"], optional = true }
+# The MLX runtime, from [oxiglade/mlx-rs](https://github.com/oxiglade/mlx-rs)
+# (upstream oxideai tag v0.25.3). The daemon needs it for Whisper ASR, both TTS
+# backends and the cognitive embedder — the *language* models it used to run
+# live in `apps/mlx-lm` now, with their own copy of this dependency.
 # Same revision as mlx-rs — direct read of MLX allocator (`mlx_get_active_memory`, etc.).
-mlx-sys = { git = "https://github.com/oxiglade/mlx-rs", tag = "v0.25.3", package = "mlx-sys", optional = true }
-turboquant-rs = { version = "0.4.1", optional = true }
 
 # Whisper-family ASR audio front-end (pure-Rust, CPU). Decode any common
 # container/codec → mono f32 → resample 16 kHz → log-mel spectrogram.
 # Enable via the `whisper-audio` feature (no MLX/Metal required, fully testable).
-symphonia = { version = "0.5", optional = true, features = ["mp3", "aac", "isomp4", "alac", "flac", "wav", "ogg", "vorbis", "pcm", "adpcm"] }
-rubato = { version = "0.15", optional = true }
-realfft = { version = "3.5", optional = true }
 
 # Image preprocessing for Gemma-4 vision input (decode → RGB → 224×224
 # BICUBIC resize → rescale [0,1] → CHW float32). Pulled in by the
@@ -242,63 +298,16 @@ required-features = ["ocr-paddle"]
 local-embed = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]
 local-embed-metal = ["local-embed", "candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
 
-# Cognitive-layer MLX-native embedder (Apple Silicon, mlx-rs).
-# Token-embedding-table mean-pooled (Model2Vec / static-bge style). Loads
-# `model.safetensors` + `tokenizer.json` from `~/.senclaw/models/<name>/`.
-# Build: cargo build --features cognitive-mlx-embed
-cognitive-mlx-embed = ["dep:mlx-rs", "dep:mlx-sys", "dep:tokenizers", "dep:safetensors", "dep:half", "dep:bytemuck"]
 
-# Native LLM inference via candle (cross-platform: CPU + optional Metal on Apple Silicon).
-# Build: cargo build --features local-candle
-# Build with Apple Silicon Metal: cargo build --features local-candle-metal
-local-candle = [
-    "dep:candle-core",
-    "dep:candle-nn",
-    "dep:candle-transformers",
-    "dep:tokenizers",
-    "dep:minijinja",
-    "dep:minijinja-contrib",
-]
-local-candle-metal = ["local-candle", "candle-core/metal", "candle-nn/metal", "candle-transformers/metal"]
-# Apple Accelerate BLAS path: forces CPU device + F32 dtype so cblas_sgemm is used.
-# On M4 Pro, Accelerate SGEMV (M=1 decode) reaches ~70% of CPU memory bandwidth
-# (~48 GB/s effective), yielding ~45 tok/s vs ~7 tok/s with Metal's BM=32 GEMM
-# that wastes 97% of GPU threads when seq_len=1.
-# Build: cargo build --release --features local-candle-accelerate
-local-candle-accelerate = ["local-candle", "candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
+# NOTE — the `local-candle*` and LLM-side `local-mlx` model features are gone.
+# Local LLM inference moved to `apps/mlx-lm` and `apps/candle`, which carry
+# their own copies of candle / mlx-rs. `local-mlx` survives below because
+# Whisper ASR, both TTS backends and the cognitive embedder still need the MLX
+# runtime — it is no longer a *language model* feature.
 
-# Native LLM inference via mlx-rs on Apple Silicon. Includes ConcatKeyValueCache path.
-# Build: cargo build --features local-mlx
-local-mlx = [
-    "dep:mlx-rs",
-    "dep:mlx-sys",
-    "dep:turboquant-rs",
-    "dep:tokenizers",
-    "dep:minijinja",
-    "dep:minijinja-contrib",
-    "dep:half",
-    "dep:safetensors",
-    # Gemma-4 vision input: image decoding + preprocessing always available
-    # whenever the MLX model layer is. Vision tower (Phase 2) lives in the
-    # same module tree under `mlx_lm/models/gemma4_vision.rs`.
-    "dep:image",
-]
 
-# Pure-Rust audio front-end for Whisper ASR (decode + resample + log-mel).
-# Standalone & cross-platform so the preprocessing math is unit-testable
-# without compiling the MLX stack: cargo test --features whisper-audio
-whisper-audio = ["dep:symphonia", "dep:rubato", "dep:realfft"]
 
-# Full native Whisper ASR on Apple Silicon: audio front-end + MLX encoder/decoder.
-# Build: cargo build --features local-mlx-whisper
-local-mlx-whisper = ["local-mlx", "whisper-audio"]
 
-# Native ZipVoice flow-matching TTS on Apple Silicon (in progress). Brings the
-# MLX stack plus the pure-Rust audio front-end (prompt-wav features + Vocos mel
-# I/O). Foundation modules (config/tokenizer/weights/scaling) are unit-tested;
-# the pure-Rust config/tokenizer/weight-index tests need no feature flag.
-# Build: cargo build --features local-mlx-tts
-local-mlx-tts = ["local-mlx", "whisper-audio"]
 
 # VieNeu-TTS v3 Turbo (48 kHz Vietnamese TTS) via ONNX Runtime — CPU, no MLX
 # required, so this also works on Windows/Linux daemons.

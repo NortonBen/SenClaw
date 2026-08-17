@@ -24,11 +24,12 @@ Node ≥ 18. TypeScript types ship with the package.
 | `@senclaw/space-sdk/lifecycle` | bind host, port, graceful shutdown, manifest definition + validation | Node |
 | `@senclaw/space-sdk/mcp` | `serveSpaceMcp` — a working MCP server in a few lines | Node |
 | `@senclaw/space-sdk/dispatch` | be driven by the daemon's autonomous work dispatcher | Node |
+| `@senclaw/space-sdk/llm` | serve an LLM — your app *becomes* a model in the picker | Node |
 | `npx senclaw-manifest` | validate `senclaw-manifest.json` in CI | CLI |
 
 The root export touches nothing but `fetch`, so it is safe in browser app code.
-The three subpaths are Node-only — `/mcp` and `/dispatch` reach for `express`,
-and `/lifecycle` reads `process.env` and installs signal handlers.
+The four subpaths are Node-only — `/mcp`, `/dispatch` and `/llm` reach for
+`express`, and `/lifecycle` reads `process.env` and installs signal handlers.
 
 ## Quick start
 
@@ -203,6 +204,56 @@ action, body)` returns `{status, body}` for any server.
 Field names are snake_case (`depends_on`, `timeout_secs`, `item_id`) because the
 engine parses them with serde: camelCase is dropped silently, which surfaces as
 a dependency that never held rather than as an error.
+
+## Serve a model
+
+Declare an `llm` block and the app *becomes* a model: its models show up in the
+same picker as OpenAI and Anthropic, and agent turns arrive over HTTP. You emit
+**semantic** events — text, reasoning, a tool call, usage — and the SDK renders
+the OpenAI `chat.completion` wire, including the indexed, *accumulating*
+`delta.tool_calls` shape that is the easy thing to get subtly wrong.
+
+```ts
+import { openaiRouter, publishModels, modelCard, chunk } from '@senclaw/space-sdk/llm';
+import type { LlmProvider } from '@senclaw/space-sdk/llm';
+
+const provider: LlmProvider = {
+  models: () => [modelCard('gemma-4-e2b-it-4bit', 128_000, 8192, /* vision */ true)],
+  async chat(req, sink) {
+    sink.text('Hello');               // visible assistant text
+    sink.send(chunk.usage(12, 3));    // optional token counts — once, at the end
+  },
+};
+
+await publishModels(process.cwd(), provider.models());  // so a stopped app still shows in the picker
+app.use(await openaiRouter(provider));                  // GET /v1/models + POST /v1/chat/completions
+```
+
+Alongside it, the manifest block that turns registration on:
+
+```jsonc
+"llm": { "autoRegister": true, "path": "/v1", "adapt": "openai", "displayName": "MLX" }
+```
+
+Three things that bite:
+
+- **`vision` is required, never inferred.** SenClaw decides between real image
+  blocks and the OCR fallback from it, and a text-only endpoint answers an image
+  with a hard 400 that fails the whole turn. The app read the model's own
+  `config.json`; a regex over the model id would be right or wrong by accident.
+- **`adapt` must be `openai` (or `anthropic`).** Anything else registers the app
+  and never calls it — the daemon still sends an OpenAI body, which fails
+  upstream naming neither the app nor the field.
+- **`publishModels` refuses an empty list.** The daemon reads the cached list
+  while the app is *stopped* — that is what keeps a session app's models in the
+  picker so something ever starts it — so overwriting a good list with an empty
+  one during a failed startup would make the app vanish. It writes-then-renames,
+  so a concurrent daemon read sees the old list or the new one, never a
+  truncation.
+
+Not on Express? `handleChatCompletion(provider, body)` returns an `error`,
+`stream` (SSE `data:` lines) or `json` outcome for any server; `renderModels`,
+`streamSse` and `assembleNonStream` are the framework-free pieces under it.
 
 ## Manifest validation
 

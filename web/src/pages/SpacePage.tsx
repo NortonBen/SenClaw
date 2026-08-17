@@ -70,7 +70,15 @@ export function SpacePage() {
           enabled: row.enabled,
         };
       });
-      setSpaceApps(apps);
+      // Same rule as the gallery: no launcher entry for an app whose UI lives
+      // in Settings. Read off the raw manifest rows — the mapped shape above
+      // only keeps what the sidebar renders.
+      const launcherIds = new Set(
+        (rows as Array<{ id: string; manifest: any }>)
+          .filter(row => row.manifest?.integration?.launcher !== false)
+          .map(row => row.id),
+      );
+      setSpaceApps(apps.filter(a => launcherIds.has(a.id)));
 
       const withWidgets: AppWithWidgets[] = (rows as Array<{ id: string; manifest: any; enabled: boolean }>)
         .filter(row => Array.isArray(row.manifest?.widgets) && row.manifest.widgets.length > 0)

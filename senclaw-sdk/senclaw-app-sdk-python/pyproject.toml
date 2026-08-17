@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "senclaw-space-sdk"
-version = "0.1.0"
-description = "Build a SenClaw Space App in Python: daemon API, AI bridge, MCP server, HTTP host"
+version = "0.2.0"
+description = "Build a SenClaw Space App in Python: daemon API, AI bridge, MCP server, HTTP host, OpenAI-compatible LLM provider"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

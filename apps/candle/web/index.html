@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model cục bộ</title>
+<style>
+  /* Rendered both standalone and inside the SenClaw settings modal (light and
+     dark). Everything is a token so the media query swaps the palette whole —
+     a colour defined only inside the query is a colour missing in the other
+     theme. */
+  :root {
+    --bg: #f7f7f8; --panel: #fff; --line: #e3e3e7; --fg: #1a1a1e;
+    --muted: #6b6b76; --accent: #3b6fd4; --accent-fg: #fff;
+    --danger: #c0392b; --ok: #1f8a4c; --warn: #b7791f; --track: #e8e8ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17171a; --panel: #1f1f24; --line: #2e2e36; --fg: #ececf1;
+      --muted: #9a9aa6; --accent: #5b8def; --accent-fg: #0d0d10;
+      --danger: #e06c5b; --ok: #4cc98a; --warn: #e0b45b; --track: #2a2a32;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  h2 { font-size: 13px; margin: 22px 0 8px; color: var(--muted); font-weight: 600;
+       text-transform: uppercase; letter-spacing: .4px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px; margin-bottom: 10px;
+  }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; min-width: 0; }
+  .id { font-weight: 600; word-break: break-all; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .tag {
+    font-size: 11px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+  }
+  .tag.on { color: var(--ok); border-color: var(--ok); }
+  .tag.active { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .tag.off { opacity: .7; }
+  button {
+    font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 7px;
+    cursor: pointer; border: 1px solid var(--line); background: var(--panel);
+    color: var(--fg); white-space: nowrap;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button.danger { color: var(--danger); }
+  input, select {
+    font: inherit; padding: 6px 10px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  input.grow { min-width: 200px; }
+  .bar { height: 5px; background: var(--track); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  label.field b { color: var(--fg); font-weight: 600; }
+  .empty { color: var(--muted); padding: 20px; text-align: center; }
+  .err { color: var(--danger); font-size: 12px; }
+  code { background: var(--track); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .known { display: flex; gap: 8px; flex-wrap: wrap; }
+  .known button { font-size: 12px; }
+</style>
+</head>
+<body>
+<h1 id="title">Model cục bộ</h1>
+<div class="sub" id="subtitle">Đang kết nối…</div>
+
+<h2>Tải model từ HuggingFace</h2>
+<div class="card">
+  <div class="known" id="known"></div>
+  <div class="row" style="margin-top:10px">
+    <input class="grow" id="hf" placeholder="hoặc dán id / link bất kỳ: org/repo">
+    <button class="primary" id="dl">Tải về</button>
+  </div>
+  <div class="err" id="dlerr"></div>
+</div>
+
+<h2>Đã cài <span id="count" class="tag"></span>
+  <button id="unloadall" style="float:right;font-size:12px">Giải phóng toàn bộ RAM</button>
+</h2>
+<div id="models"><div class="empty">Đang tải…</div></div>
+
+<h2>Cài đặt suy luận</h2>
+<div class="card">
+  <div class="grid" id="settings"></div>
+  <div class="row" style="margin-top:12px">
+    <button class="primary" id="save">Lưu cài đặt</button>
+    <span class="meta" id="saved"></span>
+  </div>
+  <div class="meta" style="margin-top:8px">
+    Để trống nghĩa là <em>nhường</em> — dùng giá trị trong
+    <code>generation_config.json</code> của chính checkpoint. Khác với đặt
+    <code>0</code>, vốn là tắt hẳn.
+  </div>
+</div>
+
+<script>
+// ── Paths ─────────────────────────────────────────────────────────────────────
+// Every app call is RELATIVE, resolved against this page's own directory.
+// Standalone that is the app root; inside SenClaw the page is served from
+// /api/space/apps/<id>/proxy/, and a root-absolute '/api/…' would escape the
+// proxy and hit the daemon instead — which is exactly the bug that froze this
+// page at "Đang tải…" the first time it ran in the settings modal.
+const APP_BASE = new URL('.', location.href);
+const app = (p, o) => fetch(new URL(p, APP_BASE), o).then(async r => {
+  if (r.status === 204 || r.status === 202) return null;
+  const t = await r.text();
+  if (!r.ok) { let m = t; try { m = JSON.parse(t).error ?? t; } catch {} throw new Error(m || r.status); }
+  return t ? JSON.parse(t) : null;
+});
+// Daemon calls (model picker) are root-absolute and only exist when this page
+// is embedded — standalone there is no daemon on this origin.
+const IN_SENCLAW = location.pathname.includes('/proxy/');
+const APP_ID = IN_SENCLAW ? decodeURIComponent(location.pathname.split('/api/space/apps/')[1].split('/')[0]) : null;
+const daemon = (p, o) => fetch(p, o).then(async r => {
+  const t = await r.text();
+  if (!r.ok) throw new Error(t || r.status);
+  return t ? JSON.parse(t) : null;
+});
+
+const $ = (s) => document.querySelector(s);
+const pathId = (id) => id.replace('/', '__');
+const gb = (n) => n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB'
+                : n >= 1e6 ? (n / 1e6).toFixed(0) + ' MB' : (n / 1e3).toFixed(0) + ' KB';
+
+let ENGINE = '';
+let ACTIVE_ID = null;   // daemon's active LLM config id, when embedded
+const active = new Set();
+
+// Curated per engine — the "known models" strip the old daemon screen had.
+const KNOWN = {
+  mlx: [
+    'mlx-community/gemma-4-e2b-it-4bit',
+    'mlx-community/Qwen3.5-2B-OptiQ-4bit',
+    'mlx-community/Qwen2.5-0.5B-Instruct-4bit',
+    'mlx-community/DeepSeek-Coder-V2-Lite-Instruct-4bit-mlx',
+  ],
+  candle: [
+    'Qwen/Qwen2.5-0.5B-Instruct',
+    'Qwen/Qwen2.5-1.5B-Instruct',
+  ],
+};
+
+async function refreshActive() {
+  if (!IN_SENCLAW) return;
+  try {
+    const d = await daemon('/api/llm-config');
+    ACTIVE_ID = d.activeId ?? null;
+  } catch { /* daemon route unavailable — hide the active markers */ }
+}
+
+async function loadModels() {
+  const d = await app('api/local-models');
+  ENGINE = d.engine;
+  $('#title').textContent = ENGINE === 'mlx' ? 'Model cục bộ · MLX' : 'Model cục bộ · Candle';
+  $('#subtitle').innerHTML = `Lưu tại <code>${d.root}</code> — dùng chung giữa các engine.`;
+  $('#count').textContent = d.models.length;
+
+  $('#known').innerHTML = (KNOWN[ENGINE] ?? [])
+    .map(id => `<button data-known="${id}">⬇ ${id.split('/')[1]}</button>`).join('');
+  document.querySelectorAll('[data-known]').forEach(b => b.onclick = () => startDownload(b.dataset.known));
+
+  const box = $('#models');
+  if (!d.models.length) {
+    box.innerHTML = '<div class="empty">Chưa có model nào — tải một cái ở trên.</div>';
+    return;
+  }
+  box.innerHTML = d.models.map(m => {
+    const cfgId = APP_ID ? `app:${APP_ID}:${m.id}` : null;
+    const isActive = cfgId && cfgId === ACTIVE_ID;
+    return `
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <div class="id">${m.id}</div>
+          <div class="meta">
+            ${gb(m.sizeBytes)}
+            ${m.architecture ? ' · ' + m.architecture : ''}
+            ${m.contextLength ? ' · ngữ cảnh ' + m.contextLength.toLocaleString() : ''}
+          </div>
+        </div>
+        ${isActive ? '<span class="tag active">đang là LLM chính</span>' : ''}
+        ${m.loaded ? '<span class="tag on">trong RAM</span>' : ''}
+        ${m.supported ? '' : '<span class="tag off">engine này không chạy được</span>'}
+        ${m.supported && !m.loaded ? `<button data-load="${m.id}">Nạp</button>` : ''}
+        ${m.loaded ? `<button data-unload="${m.id}">Giải phóng</button>` : ''}
+        ${IN_SENCLAW && m.supported && !isActive ? `<button class="primary" data-use="${m.id}">Dùng làm LLM</button>` : ''}
+        <button class="danger" data-del="${m.id}">Xoá</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  box.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm(`Xoá ${b.dataset.del}? Không hoàn tác được — phải tải lại.`)) return;
+    b.disabled = true;
+    await app('api/local-models/' + pathId(b.dataset.del), { method: 'DELETE' });
+    loadModels();
+  });
+  box.querySelectorAll('[data-unload]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    await app('api/local-models/' + pathId(b.dataset.unload) + '/unload', { method: 'POST' });
+    loadModels();
+  });
+  box.querySelectorAll('[data-load]').forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = 'Đang nạp…';
+    await app('api/local-models/' + pathId(b.dataset.load) + '/load', { method: 'POST' });
+    // 202 — poll until `loaded` flips.
+    const id = b.dataset.load;
+    const poll = setInterval(async () => {
+      const d2 = await app('api/local-models');
+      if (d2.models.find(m => m.id === id)?.loaded) { clearInterval(poll); loadModels(); }
+    }, 1500);
+    setTimeout(() => clearInterval(poll), 120_000);
+  });
+  box.querySelectorAll('[data-use]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      await daemon('/api/llm-config/active', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: `app:${APP_ID}:${b.dataset.use}`, type: 'main' }),
+      });
+      await refreshActive();
+      loadModels();
+    } catch (e) { alert('Không đặt được model chính: ' + (e.message || e)); b.disabled = false; }
+  });
+}
+
+$('#unloadall').onclick = async () => {
+  $('#unloadall').disabled = true;
+  await app('api/local-models/unload-all', { method: 'POST' });
+  $('#unloadall').disabled = false;
+  loadModels();
+};
+
+// ── Downloads ────────────────────────────────────────────────────────────────
+async function startDownload(id) {
+  $('#dlerr').textContent = '';
+  try {
+    const s = await fetch(new URL('api/local-models/' + pathId(id) + '/download', APP_BASE), {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    }).then(r => r.json());
+    active.add(s.model_id);
+    renderProgress(s);
+  } catch (e) { $('#dlerr').textContent = String(e.message || e); }
+}
+$('#dl').onclick = () => { const id = $('#hf').value.trim(); if (id) { startDownload(id); $('#hf').value = ''; } };
+
+async function pollDownloads() {
+  if (!active.size) return;
+  const list = await app('api/local-models/downloads');
+  let finished = false;
+  for (const s of list.downloads) {
+    if (!active.has(s.model_id)) continue;
+    renderProgress(s);
+    if (['done', 'error', 'cancelled'].includes(s.status)) { active.delete(s.model_id); finished = true; }
+  }
+  // Refetch the (disk-walking) model list only when something finished.
+  if (finished) loadModels();
+}
+
+function renderProgress(s) {
+  let el = document.getElementById('p-' + pathId(s.model_id));
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'card';
+    el.id = 'p-' + pathId(s.model_id);
+    $('#models').prepend(el);
+  }
+  if (s.status === 'done') { el.remove(); return; }
+  if (s.status === 'error') {
+    el.innerHTML = `<div class="id">${s.model_id}</div><div class="err">Lỗi: ${s.error || 'không rõ'}</div>`;
+    return;
+  }
+  if (s.status === 'cancelled') { el.innerHTML = `<div class="id">${s.model_id}</div><div class="meta">Đã huỷ</div>`; return; }
+  const pct = s.total_bytes ? Math.round(s.downloaded_bytes / s.total_bytes * 100) : 0;
+  el.innerHTML = `
+    <div class="row">
+      <div class="grow">
+        <div class="id">${s.model_id}</div>
+        <div class="meta">
+          ${s.status === 'listing' ? 'Đang đọc danh sách file…'
+            : `${gb(s.downloaded_bytes)} / ${gb(s.total_bytes)} — ${s.files_done}/${s.files_total} file`}
+          ${s.current_file ? ' · ' + s.current_file : ''}
+        </div>
+      </div>
+      <button data-cancel="${s.model_id}">Huỷ</button>
+    </div>
+    <div class="bar"><i style="width:${pct}%"></i></div>`;
+  el.querySelector('[data-cancel]').onclick = () =>
+    app('api/local-models/' + pathId(s.model_id) + '/cancel', { method: 'POST' });
+}
+
+// ── Settings — the full field set of the old daemon screen ───────────────────
+const NUM_FIELDS = [
+  ['max_prompt_tokens', 'Giới hạn prompt (token)', 'Cắt bớt lịch sử từ đầu khi vượt.'],
+  ['max_new_tokens', 'Giới hạn sinh (token)', 'Trần token cho một lượt trả lời.'],
+  ['temperature', 'Temperature', '0 = greedy, tất định.'],
+  ['top_k', 'top_k', '0 = tắt cắt bớt; trống = theo checkpoint.'],
+  ['top_p', 'top_p', '1.0 = tắt; trống = theo checkpoint.'],
+  ['repetition_penalty', 'Phạt lặp', '1.0 = tắt.'],
+  ['max_kv_tokens', 'Cửa sổ KV (token)', 'Quá thì loại token cũ nhất — chặn RAM phình.'],
+  ['prefill_chunk_tokens', 'Chunk prefill', '32–4096.'],
+  ['tq_activate_at', 'TurboQuant từ (token)', '0 = ngay từ đầu; trống = 2048.'],
+  ['idle_unload_secs', 'Giải phóng sau (giây)', '0 = giữ nguyên trong RAM.'],
+];
+
+async function loadSettings() {
+  const s = await app('api/local-models/settings');
+  const num = NUM_FIELDS.map(([k, label, hint]) => `
+    <label class="field"><b>${label}</b>
+      <input data-k="${k}" type="number" step="any" value="${s[k] ?? ''}" placeholder="mặc định">
+      <span>${hint}</span>
+    </label>`).join('');
+  const sel = (k, label, opts, hint) => `
+    <label class="field"><b>${label}</b>
+      <select data-k="${k}" data-null="true">
+        ${opts.map(([v, t]) => `<option value="${v}"${String(s[k] ?? '') === v ? ' selected' : ''}>${t}</option>`).join('')}
+      </select>
+      <span>${hint}</span>
+    </label>`;
+  $('#settings').innerHTML = num
+    + sel('kv_cache_bits', 'TurboQuant KV', [['', 'Tắt (FP16)'], ['3', 'TQ3 — 3-bit'], ['4', 'TQ4 — 4-bit']],
+          'Nén KV cache khi ngữ cảnh dài. MLX.')
+    + sel('mlx_kv_cache_bits', 'KV nén trên Metal', [['', 'FP16'], ['4', '4-bit'], ['8', '8-bit']],
+          'mlx.core.quantize — tiết kiệm RAM, chỉ MLX.')
+    + sel('enable_thinking', 'Chain-of-thought', [['false', 'Tắt'], ['true', 'Bật']],
+          'Khối suy nghĩ của model (Qwen…). Mặc định tắt.')
+    + sel('release_cache_after_session', 'Xả KV sau phiên', [['false', 'Giữ'], ['true', 'Xả']],
+          'Bỏ prefix-cache khi lượt chat kết thúc.');
+}
+
+$('#save').onclick = async () => {
+  const body = {};
+  document.querySelectorAll('#settings [data-k]').forEach(el => {
+    const k = el.dataset.k;
+    if (el.tagName === 'SELECT') {
+      const v = el.value;
+      body[k] = v === '' ? null : (v === 'true' ? true : v === 'false' ? false : Number(v));
+      return;
+    }
+    // Empty = defer (null). Distinct from 0, which is an explicit override.
+    body[k] = el.value.trim() === '' ? null : Number(el.value);
+  });
+  await app('api/local-models/settings', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  $('#saved').textContent = 'Đã lưu ✓';
+  setTimeout(() => ($('#saved').textContent = ''), 2500);
+  loadSettings();
+};
+
+(async () => {
+  try {
+    await refreshActive();
+    await loadModels();
+    await loadSettings();
+  } catch (e) {
+    $('#subtitle').innerHTML = `<span class="err">Không nối được tới app: ${e.message || e}</span>`;
+  }
+})();
+setInterval(pollDownloads, 1000);
+</script>
+</body>
+</html>

@@ -181,17 +181,49 @@ pub fn save_dispatch_enabled(config_path: &Path, enabled: bool) -> Result<()> {
 
 // ===== LLM config =====
 
+/// Every model SenClaw can route a turn to: the user's own configs from
+/// `config.json`, plus the models served by installed Space Apps.
+///
+/// The app-provided half is appended **here**, not at the HTTP layer, because
+/// this is the one function every model decision goes through — the picker,
+/// `ZenEngine::resolve_model_profile_at`, and the vision check that wraps it.
+/// Merging further out would put models in the picker that fail with "config
+/// not found" as soon as one is selected.
+///
+/// App configs come last so a user's own config always wins a duplicate id, and
+/// so `configs[0]` — the fallback when no active model is set — stays the user's
+/// model rather than becoming whichever app happened to install first.
 pub fn load_llm_configs(config_path: &Path) -> LlmConfigResult {
     let cfg = load_global_config(config_path);
+    let mut configs = cfg.llm_configs.unwrap_or_default();
+    for c in crate::apps::llm_provider::configs() {
+        if !configs.iter().any(|x| x.id == c.id) {
+            configs.push(c);
+        }
+    }
     LlmConfigResult {
-        configs: cfg.llm_configs.unwrap_or_default(),
+        configs,
         active_id: cfg.active_llm_config_id,
         active_quick_id: cfg.active_quick_llm_config_id,
         active_cognitive_id: cfg.active_cognitive_llm_config_id,
     }
 }
 
+/// Persist a user-created config.
+///
+/// App-provided configs are refused. They are not stored in `config.json` at all
+/// — they are rebuilt from the app registry on every read — and writing one here
+/// would freeze a copy that outlives the app: still in the picker after an
+/// uninstall, still naming a port nothing listens on, and no longer updated when
+/// the app changes what it serves.
 pub fn save_llm_config(config_path: &Path, c: &LlmConfig) -> Result<()> {
+    if crate::apps::llm_provider::is_app_config(&c.id) {
+        anyhow::bail!(
+            "`{}` belongs to a Space App and cannot be edited here; \
+             change it in the app, or uninstall the app to remove it",
+            c.id
+        );
+    }
     let mut cfg = load_global_config(config_path);
     let configs = cfg.llm_configs.get_or_insert_with(Vec::new);
     if let Some(existing) = configs.iter_mut().find(|x| x.id == c.id) {

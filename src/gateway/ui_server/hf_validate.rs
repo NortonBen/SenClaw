@@ -11,7 +11,7 @@
 //! they download hundreds of MB. Nothing here fetches weights.
 //!
 //! The support rules deliberately mirror the real loaders:
-//! - TTS   → `crate::tts::mms_vits` (HF `VitsModel*`, single speaker,
+//! - TTS   → the HF `VitsModel*` shape (single speaker,
 //!   safetensors + vocab.json).
 //! - STT   → `crate::local_model::mlx_lm::models::whisper::ModelDimensions`
 //!   (MLX-converted config with flat `n_mels`/`n_audio_state`/… keys).
@@ -217,7 +217,11 @@ async fn validate(domain: Domain, raw_id: &str) -> Result<ValidateReport, AppErr
     })
 }
 
-/// TTS rule — mirrors `crate::tts::mms_vits` (`dir_is_vits_model` + loader).
+/// TTS rule — the HF `VitsModel` shape.
+///
+/// Kept after the MLX voices were removed: "Add model from Hugging Face" still
+/// accepts any VitsModel repo, and validating the config before spending a
+/// download is worth more than the backend that used to consume it.
 fn check_tts(
     cfg: &Value,
     has_safetensors: bool,

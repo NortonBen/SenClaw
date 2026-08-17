@@ -59,12 +59,46 @@ Middleware `app_auth_mw` hỏi ba câu, theo thứ tự:
 
 | Giá trị | Hành vi khi request **không** mang token |
 |---|---|
-| `off` *(mặc định)* | Phục vụ, y như trước khi có tính năng này. |
-| `warn` | Phục vụ, nhưng log một dòng cho mỗi app mỗi lần chạy daemon — để biết app nào chưa nâng SDK trước khi bật `strict`. |
-| `strict` | Từ chối, trừ khi request đến từ UI của chính daemon. |
+| `strict` *(mặc định)* | Từ chối, trừ khi request đến từ UI của chính daemon. |
+| `warn` | Phục vụ, nhưng log một dòng cho mỗi app mỗi lần chạy daemon — cách để biết app nào sẽ chết dưới `strict` mà chưa làm nó chết. |
+| `off` | Phục vụ, y như trước khi có tính năng này. Lối thoát cho app tự gọi daemon bằng HTTP client riêng mà không dạy được cách gửi token. |
 
-Mặc định là `off` một cách có chủ ý: cả một hạm đội app đã cài sẵn đang gọi không
-kèm token, và bật cưỡng chế lúc nâng cấp sẽ làm chết tất cả cùng lúc.
+Mặc định là `strict`: một app không chứng minh được mình là ai thì không lấy được
+dữ liệu của app khác. Mọi SDK đều tự gửi token, và proxy của daemon tự đóng dấu
+lên mọi thứ nó chuyển tiếp — nên thứ duy nhất gãy là app tự tay dựng HTTP client
+gọi `/api/space/apps/<id>/…`, và nó gãy *ồn ào*: 401 kèm đúng tên biến cần đặt.
+
+Chuỗi viết sai **không** rơi về `off`. `SENCLAW_APP_TOKEN_MODE=of` sẽ được hiểu là
+`strict` kèm một dòng cảnh báo — một lỗi gõ âm thầm tắt kiểm soát an ninh chính là
+thứ tính năng này sinh ra để tránh. Muốn tắt thì phải viết đúng `off`.
+
+Đường nâng cấp an toàn cho một hạm đội app cũ: chạy `warn` một vòng, đọc log xem
+app nào chưa gửi token, sửa hoặc để riêng chúng ở `off`, rồi bỏ biến đi để về
+mặc định.
+
+### Đổi mode trong UI
+
+**Settings → Space Apps → Token truy cập của app** (cả Web UI lẫn app desktop) —
+ba lựa chọn Bắt buộc / Chỉ cảnh báo / Tắt.
+
+Khác với công tắc bind host bên cạnh, cái này **không cần khởi động lại daemon**:
+middleware đọc nó ở từng request, nên lời gọi kế tiếp của app đã bị xử theo thiết
+lập mới. Lựa chọn nằm trong DB (`router_state`, khoá `space:appTokenMode`) và
+**đè lên** `SENCLAW_APP_TOKEN_MODE` — nếu không thì trên máy có đặt biến đó, nút
+bấm sẽ trông như không làm gì.
+
+UI hiển thị luôn *nguồn* của giá trị đang có (`ui` / `env` / `default`) vì ba
+nguồn hành xử khác nhau khi người dùng muốn đổi: lựa chọn trong UI thì họ tự gỡ
+được, biến môi trường thì không (nó quay lại ở lần khởi động sau).
+
+| | |
+|---|---|
+| `GET /api/space/app-token-mode` | `{mode, source, envMode, envSet, defaultMode, apiVersion}` |
+| `PUT /api/space/app-token-mode` | `{mode: "off"\|"warn"\|"strict"}`, hoặc `null` để trả quyền quyết định lại cho môi trường. Chuỗi lạ trả **400** chứ không tự quy về giá trị nào. |
+
+Route này cố ý **không** nằm dưới `/api/space/apps/` — mọi thứ trong đó bị
+`app_auth` siết theo từng app id, và dưới `strict` thì chính cái nút để tắt
+`strict` sẽ bị khoá sau token của một app.
 
 ### Route nào bị siết
 
@@ -179,9 +213,9 @@ Phiên bản **hợp đồng** của Space-App API, hiện là **2**.
 
 ## Bẫy
 
-- **Chạy app bằng tay dưới `strict`.** Không có env thì SDK không gửi header, và
-  daemon từ chối. Lấy token từ `GET /api/space/apps/<id>/token` rồi export:
-  `SENCLAW_TOKEN_ACCESS_APP=sca_… npm start`.
+- **Chạy app bằng tay.** `strict` là mặc định, nên `npm start` trần sẽ bị từ chối:
+  không có env thì SDK không gửi header. Lấy token rồi export:
+  `SENCLAW_TOKEN_ACCESS_APP=$(curl -s localhost:18788/api/space/apps/<id>/token | jq -r .token) npm start`.
 - **Xoay vòng mà không restart.** Tiến trình đang chạy vẫn giữ token cũ trong
   env. Endpoint rotate tự stop app vì lý do này; đừng tự tay `UPDATE` bảng.
 - **Gửi header rỗng.** Mọi SDK đều *bỏ hẳn* header khi không có token, thay vì

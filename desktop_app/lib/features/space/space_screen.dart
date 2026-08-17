@@ -1541,7 +1541,10 @@ class SpaceAppsScreen extends ConsumerWidget {
           child: apps.when(
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => Center(child: Text('$e')),
-            data: (list) => list.isEmpty
+            data: (all) {
+              final list =
+                  all.where((a) => a.showInLauncher).toList(growable: false);
+              return list.isEmpty
                 ? Center(
                     child: Text(context.tr('No apps installed'),
                         style: TextStyle(color: c.textMuted)))
@@ -1556,7 +1559,8 @@ class SpaceAppsScreen extends ConsumerWidget {
                     ),
                     itemCount: list.length,
                     itemBuilder: (_, i) => _AppTile(app: list[i]),
-                  ),
+                  );
+            },
           ),
         ),
       ],

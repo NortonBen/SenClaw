@@ -1,0 +1,26 @@
+{
+  "id": "candle",
+  "name": "Candle · Local models",
+  "description": "Chạy model ngôn ngữ ngay trên máy bằng Candle — thuần Rust, chạy được trên macOS, Linux và Windows. Tải checkpoint từ HuggingFace và phục vụ cho SenClaw như một provider bình thường.",
+  "icon": "🕯️",
+  "runtime": {
+    "kind": "server",
+    "mode": "session",
+    "start": "./candle",
+    "healthPath": "/health",
+    "port": 4840,
+    "idleTimeoutSecs": 300
+  },
+  "integration": {
+    "type": "iframe",
+    "url": "/",
+    "launcher": false,
+    "settings": true
+  },
+  "llm": {
+    "autoRegister": true,
+    "path": "/v1",
+    "adapt": "openai",
+    "displayName": "Candle"
+  }
+}

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io' show File, Platform;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
@@ -26,6 +25,7 @@ import '../../models/space_models.dart' show SpaceSchedule;
 import '../../widgets/app_markdown.dart';
 import '../../widgets/schedule_editor.dart';
 import 'groups_provider.dart';
+import 'image_attachment.dart';
 import 'mini_chat_screen.dart' show subWindowIdProvider;
 import 'new_chat_dialog.dart' show llmConfigsProvider, LlmConfig;
 import 'voice_chat_overlay.dart';
@@ -178,8 +178,9 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
   }
 
   Future<void> _attach() async {
+    // Any file: images take the vision/OCR route, everything else is saved by
+    // the daemon and its text extracted into the prompt.
     final res = await FilePicker.platform.pickFiles(
-      type: FileType.image,
       allowMultiple: true,
       withData: true,
     );
@@ -187,12 +188,22 @@ class _ConversationPaneState extends ConsumerState<ConversationPane> {
     for (final f in res.files) {
       final bytes = f.bytes;
       if (bytes == null) continue;
-      final ext = (f.extension ?? 'png').toLowerCase();
-      final mime = ext == 'jpg' || ext == 'jpeg' ? 'image/jpeg' : 'image/$ext';
-      setState(() => _attachments.add({
-            'mimeType': mime,
-            'dataUrl': 'data:$mime;base64,${base64Encode(bytes)}',
-          }));
+      final Map<String, String> att;
+      if (isImageExtension(f.extension)) {
+        att = await buildImageAttachment(bytes, mimeForExtension(f.extension));
+      } else {
+        if (bytes.length > kMaxDocBytes) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('${f.name} > ${kMaxDocBytes ~/ (1024 * 1024)}MB'),
+          ));
+          continue;
+        }
+        att = buildDocumentAttachment(
+            bytes, documentMimeForExtension(f.extension), f.name);
+      }
+      if (!mounted) return;
+      setState(() => _attachments.add(att));
     }
   }
 
@@ -659,10 +670,20 @@ class _Composer extends ConsumerWidget {
                 runSpacing: AppTokens.s8,
                 children: [
                   for (var i = 0; i < attachments.length; i++)
+                    // Documents show their filename; a pasted/picked image has
+                    // none, so it stays numbered.
                     Chip(
-                      label: Text(context.trArgs('image {n}', {'n': i + 1}),
-                          style: const TextStyle(fontSize: 12)),
-                      avatar: const Icon(Icons.image_outlined, size: 14),
+                      label: Text(
+                        attachments[i]['name'] ??
+                            context.trArgs('image {n}', {'n': i + 1}),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      avatar: Icon(
+                        (attachments[i]['mimeType'] ?? '').startsWith('image/')
+                            ? Icons.image_outlined
+                            : Icons.description_outlined,
+                        size: 14,
+                      ),
                       onDeleted: () => onRemoveAttachment(i),
                     ),
                 ],
