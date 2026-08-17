@@ -95,6 +95,8 @@ apps/*/web/node_modules/
 # Space App packaging artifacts (built by apps/*/scripts/pack.sh)
 apps/*/release/
 apps/*/*.zip
+# Root staging tree + zip output written by scripts/pack-app.sh (CI packer).
+/release/
 
 # Python build artefacts (the Space App SDK + any local venv)
 __pycache__/
@@ -102,3 +104,10 @@ __pycache__/
 *.egg-info/
 .venv/
 .pytest_cache/
+
+# Built engine binaries copied next to their manifest for `register-local`
+# during development. `mlx.metallib` must sit beside the binary — MLX resolves
+# it relative to the executable — but neither belongs in git.
+apps/mlx-lm/mlx-lm
+apps/mlx-lm/mlx.metallib
+apps/candle/candle

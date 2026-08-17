@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "category": "app",
+  "keywords": ["candle", "local-model", "llm", "provider"],
+  "permissions": {
+    "network": ["127.0.0.1"],
+    "exec": ["./candle"]
+  },
+  "updater": "none",
+  "repo_url": "https://github.com/NortonBen/SenClaw"
+}

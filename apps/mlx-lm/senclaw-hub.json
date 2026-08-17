@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "category": "app",
+  "keywords": ["mlx", "local-model", "llm", "provider", "apple-silicon"],
+  "permissions": {
+    "network": ["127.0.0.1"],
+    "exec": ["./mlx-lm"]
+  },
+  "updater": "none",
+  "repo_url": "https://github.com/NortonBen/SenClaw"
+}

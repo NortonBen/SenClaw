@@ -1,0 +1,240 @@
+name: Space Apps build & publish
+
+# Builds the local-model engine apps that ship from THIS repo — candle and
+# mlx-lm — into the installable zip you drop into SenClaw → Apps → Install, and
+# (on a push to main, a tag, or an explicit dispatch) publishes each to the
+# SenClaw hub, https://senclaw.bacnd.com. The other ~45 Space Apps live in the
+# NortonBen/senclaw-app repo and are built by its own build.yml; this workflow
+# is the two-engine cousin of that one.
+#
+# A Space App ships a native binary, so the zip has to match the machine the
+# user's daemon runs on — hence one build per platform. candle is pure Rust and
+# ships everywhere; mlx-lm links MLX and is Apple-Silicon only (its manifest
+# says requires.os = [macos]), so apps.json gives each its own `platforms`.
+#
+# mlx-lm carries an ~88 MB mlx.metallib beside its binary (MLX resolves its
+# shader library relative to the executable), so its zip is ~110 MB — well over
+# the hub's 20 MB cap. It is still built and attached to the GitHub release, but
+# the publisher SKIPS the hub upload for it rather than failing. candle's zip is
+# a few MB and publishes normally.
+#
+# Day to day only the apps whose directory changed are built. A tag builds
+# both, because a release has to be self-contained.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "apps/candle/**"
+      - "apps/mlx-lm/**"
+      # Shared by BOTH engines — a change here can break either app.
+      - "apps/local-model-core/**"
+      - "app-space-sdk/**"
+      - "apps.json"
+      # Only the CI scripts that shape a build/publish — not every file in
+      # scripts/ (this repo keeps unrelated benchmark scripts there too).
+      - "scripts/ci-plan.sh"
+      - "scripts/pack-app.sh"
+      - "scripts/publish-app.sh"
+      - "scripts/ci-publish.sh"
+      - "scripts/check-apps.py"
+      - "scripts/hub-init.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/space-apps.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/candle/**"
+      - "apps/mlx-lm/**"
+      - "apps/local-model-core/**"
+      - "app-space-sdk/**"
+      - "apps.json"
+      # Only the CI scripts that shape a build/publish — not every file in
+      # scripts/ (this repo keeps unrelated benchmark scripts there too).
+      - "scripts/ci-plan.sh"
+      - "scripts/pack-app.sh"
+      - "scripts/publish-app.sh"
+      - "scripts/ci-publish.sh"
+      - "scripts/check-apps.py"
+      - "scripts/hub-init.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/space-apps.yml"
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: "Space-separated app dirs to build (blank = all)"
+        required: false
+        default: ""
+      platforms:
+        description: "Platforms to build"
+        required: false
+        default: "all"
+        type: choice
+        options: ["all", "linux-x64", "darwin-arm64", "windows-x64"]
+      publish:
+        description: "Publish the built zips to the SenClaw hub"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: space-apps-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # A Space App zip carries no debug info and the hub caps uploads at 20 MB.
+  CARGO_PROFILE_RELEASE_DEBUG: "false"
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      any: ${{ steps.plan.outputs.any }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Runs before anything is planned so a duplicate port, a manifest/apps.json
+      # id drift or a non-semver version costs seconds rather than an hour of
+      # build time — and never reaches the hub.
+      - name: Check app invariants
+        run: python3 scripts/check-apps.py
+
+      - name: Work out what to build
+        id: plan
+        env:
+          INPUT_APPS: ${{ inputs.apps }}
+          INPUT_PLATFORMS: ${{ inputs.platforms }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          BEFORE: ${{ github.event.before }}
+        run: bash scripts/ci-plan.sh
+
+  build:
+    name: ${{ matrix.app }} · ${{ matrix.platform }}
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Caches written on a tag ref are unreadable from every other ref: they
+      # only burn the quota and evict the main-branch entries the tag build
+      # itself restores from.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}-${{ matrix.app }}
+          save-if: ${{ github.ref_type != 'tag' }}
+
+      # candle's local-model-core pulls a TLS stack for the HuggingFace
+      # downloader; pkg-config + libssl-dev keep the Linux build self-contained.
+      # macOS runners ship cmake/ninja preinstalled, which is all mlx-sys needs.
+      - name: System deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      # GitHub's Windows runners ship 7-Zip but not `zip`, which the packer
+      # reaches for first. Installing it keeps one code path on all platforms.
+      - name: Install zip (Windows)
+        if: runner.os == 'Windows'
+        run: choco install zip --no-progress -y
+
+      - name: Pack ${{ matrix.app }}
+        run: bash scripts/pack-app.sh "${{ matrix.app }}"
+
+      # `path: dist` keeps the dist/<platform>/ prefix inside the artifact, which
+      # is what lets the publish job merge every artifact into one dist/ tree
+      # without renaming anything.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zips-${{ matrix.platform }}-${{ matrix.app }}
+          path: dist
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish to senclaw.bacnd.com
+    needs: [plan, build]
+    # Every requested build must be green before anything reaches a public
+    # registry — a published name@version is immutable, so a half-built release
+    # can only be superseded, not taken back. `build` may legitimately be
+    # *skipped* (a run where nothing needs building); what must not happen is a
+    # failure.
+    if: |
+      always()
+      && needs.plan.outputs.publish == 'true'
+      && needs.build.result != 'failure' && needs.build.result != 'cancelled'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Each artifact already carries its own dist/<platform>/ prefix, so merging
+      # them yields exactly the tree the publisher walks.
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: zips-*
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          # Personal access token with the `publish` scope, minted at
+          # https://senclaw.bacnd.com/settings/tokens and stored as the repo
+          # secret SENCLAW_HUB_TOKEN. Without it ci-publish.sh stops at "no
+          # publish token" — a push that only wanted to build is unaffected
+          # because the publish job runs the script, not the build job.
+          SENCLAW_HUB_TOKEN: ${{ secrets.SENCLAW_HUB_TOKEN }}
+          SENCLAW_HUB_URL: ${{ vars.SENCLAW_HUB_URL || 'https://senclaw.bacnd.com' }}
+        run: bash scripts/ci-publish.sh
+
+  release:
+    name: Attach zips to the GitHub release
+    needs: [plan, build]
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: zips-*
+          merge-multiple: true
+
+      # A release is one flat list of assets, but candle-app.zip exists once per
+      # platform — so the platform moves from the directory into the filename, or
+      # the release would keep whichever copy uploaded last and hand a Linux user
+      # a macOS binary.
+      - name: Name each zip after its platform
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find dist -name '*.zip' -print0 | while IFS= read -r -d '' f; do
+            platform=$(basename "$(dirname "$f")")
+            cp "$f" "release-assets/${platform}--$(basename "$f")"
+          done
+          ls -la release-assets
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*.zip
+          fail_on_unmatched_files: true

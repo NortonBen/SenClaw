@@ -1,0 +1,47 @@
+{
+  "_comment": [
+    "Inventory of the Space Apps that live in THIS repo and ship to the SenClaw",
+    "hub (https://senclaw.bacnd.com). The other ~45 apps moved to the",
+    "NortonBen/senclaw-app repo, which has its own apps.json + build.yml; only the",
+    "two local-model engine apps stayed here because their source is the daemon's",
+    "old src/local_model/ and they build against app-space-sdk by path.",
+    "",
+    "Fields (a superset of the senclaw-app schema):",
+    "  id/dir/port/lang/crate/bin/zip  identity + how to build the crate",
+    "  platforms   which OS/arch a zip is built for. candle is pure Rust and",
+    "              ships everywhere; mlx-lm links MLX and is Apple-Silicon only,",
+    "              matching its manifest requires.os = [macos].",
+    "  stage       [src, dest] pairs copied beside the binary. web/ is a static",
+    "              dir (index.html) served by ServeDir from exe_dir/web, so it is",
+    "              staged as-is — there is no npm build.",
+    "  metallib    true -> stage mlx.metallib beside the binary. MLX resolves its",
+    "              shader library relative to the executable, so the engine cannot",
+    "              run without it. It is a build artifact, found under target/.",
+    "  build:false takes an app out of CI without deleting its row (see ci-plan.sh)."
+  ],
+  "apps": [
+    {
+      "id": "candle",
+      "dir": "candle",
+      "port": 4840,
+      "lang": "rust",
+      "crate": "candle",
+      "bin": "candle",
+      "zip": "candle-app.zip",
+      "platforms": ["linux-x64", "darwin-arm64", "windows-x64"],
+      "stage": [["web", "web"]]
+    },
+    {
+      "id": "mlx-lm",
+      "dir": "mlx-lm",
+      "port": 4832,
+      "lang": "rust",
+      "crate": "mlx-lm",
+      "bin": "mlx-lm",
+      "zip": "mlx-lm-app.zip",
+      "platforms": ["darwin-arm64"],
+      "stage": [["web", "web"]],
+      "metallib": true
+    }
+  ]
+}
