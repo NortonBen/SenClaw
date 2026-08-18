@@ -14,6 +14,7 @@ import WorkflowsPanel from './WorkflowsPanel';
 import AliasPanel from './AliasPanel';
 import WidgetsPanel from './WidgetsPanel';
 import { SandboxPanel } from './SandboxPanel';
+import KitsPanel from './KitsPanel';
 
 const { Text } = Typography;
 
@@ -34,6 +35,7 @@ const NAV_LABEL: Record<PluginsNavItem, string> = {
   workflows: 'Workflow',
   widgets: 'Widget',
   sandbox: 'Sandbox',
+  kits: 'Kits',
 };
 
 export default function PluginsView({ activeNav }: Props) {
@@ -56,6 +58,7 @@ export default function PluginsView({ activeNav }: Props) {
         {activeNav === 'workflows' && <WorkflowsPanel />}
         {activeNav === 'widgets' && <WidgetsPanel />}
         {activeNav === 'sandbox' && <SandboxPanel />}
+        {activeNav === 'kits' && <KitsPanel />}
       </Content>
     </Layout>
   );

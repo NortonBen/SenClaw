@@ -243,4 +243,118 @@ const Map<String, String> viPluginsScreen = {
   'Type a keyword to search ClawHub': 'Nhập từ khoá để tìm trên ClawHub',
   'Installed {slug}': 'Đã cài {slug}',
   'Install failed: {e}': 'Cài đặt thất bại: {e}',
+
+  // ── Kits (kits_panel.dart / kit_params_form.dart) ─────────────────────────
+  'This daemon does not serve /api/kits yet — rebuild and restart the daemon.':
+      'Daemon này chưa phục vụ /api/kits — cần build lại và khởi động daemon mới.',
+  'Skill': 'Skill',
+  'Hook': 'Hook',
+  'Scheduled job': 'Lịch chạy',
+  'Space App': 'Space App',
+  'created': 'đã tạo',
+  'The kit created this item.': 'Kit tạo mới mục này.',
+  'already there': 'đã có sẵn',
+  'That name already existed — the daemon left the original alone and did not overwrite it. Removing the kit will not touch it.':
+      'Tên này đã tồn tại — daemon giữ nguyên bản cũ, không ghi đè. Gỡ kit cũng không đụng tới nó.',
+  'The daemon parses this but does not install it — that subsystem has its own consent flow.':
+      'Daemon đọc được nhưng không tự cài loại này — nó có luồng đồng ý riêng.',
+  'This item failed; the remaining items were still processed.':
+      'Mục này lỗi; các mục còn lại vẫn được xử lý tiếp.',
+  'removed': 'đã gỡ',
+  'Deleted from disk / database.': 'Đã xoá khỏi ổ đĩa / cơ sở dữ liệu.',
+  'already gone': 'không còn',
+  'You had already deleted it by hand. Not an error.':
+      'Bạn đã tự xoá trước đó. Không phải lỗi.',
+  'Invalid JSON: {e}': 'JSON không hợp lệ: {e}',
+  'Kit installed': 'Đã cài kit',
+  'Kit installed with failures — see the report below':
+      'Kit cài xong nhưng có mục lỗi — xem báo cáo bên dưới',
+  'Removed kit "{name}"': 'Đã gỡ kit "{name}"',
+  'Removed with failures — the receipt was kept':
+      'Gỡ xong nhưng có mục lỗi — sổ biên nhận được giữ lại',
+  'Remove failed: {e}': 'Không gỡ được: {e}',
+  'the picker returned no file contents':
+      'hộp thoại chọn tệp không trả về nội dung',
+  'Cannot read file: {e}': 'Không đọc được tệp: {e}',
+  'A kit is one JSON manifest that installs a whole setup in a single call: personas, skills, workflows, hooks and scheduled jobs. The daemon keeps the never-overwrite rule (a name that is taken is skipped) and a receipt, so removing a kit deletes only what it created.':
+      'Một kit là một manifest JSON cài trọn bộ trong một lần gọi: persona, skill, workflow, hook và lịch chạy. Daemon giữ luật không ghi đè (tên đã có thì bỏ qua) và một sổ biên nhận, nên gỡ kit chỉ xoá đúng thứ nó tạo ra.',
+  'Installed kits': 'Kit đã cài',
+  'No kits installed — paste a manifest below to start.':
+      'Chưa cài kit nào — dán một manifest bên dưới để bắt đầu.',
+  'Install a kit from a manifest': 'Cài kit từ manifest',
+  'Choose .json file…': 'Chọn tệp .json…',
+  'Install kit': 'Cài kit',
+  'Still missing: {names}': 'Còn thiếu: {names}',
+  'Items whose name is taken are left untouched.':
+      'Mục trùng tên sẽ được giữ nguyên, không ghi đè.',
+  'Installed with:': 'Cài với:',
+  'nothing created (every item already existed)':
+      'không tạo gì (mọi mục đều đã có sẵn)',
+  'What it created': 'Đã tạo những gì',
+  'Remove kit "{name}"?': 'Gỡ kit "{name}"?',
+  'Only the items this kit created itself are deleted; anything you made yourself is left alone.':
+      'Chỉ những mục kit này tự tạo mới bị xoá; thứ bạn tự tạo được giữ nguyên.',
+  'Nothing in this manifest can be installed.':
+      'Manifest này không có mục nào cài được.',
+  'Manifest v1: only agents and jobs are read — the other lists are ignored.':
+      'Manifest v1: chỉ đọc agents và jobs — các danh sách khác bị bỏ qua.',
+  '{n} MCP server / Space App entries will NOT be installed — they have their own consent flow (MCP Servers / Marketplace).':
+      '{n} mục MCP server / Space App sẽ KHÔNG được cài — chúng có luồng đồng ý riêng (MCP Servers / Marketplace).',
+  'Removal result for "{id}"': 'Kết quả gỡ "{id}"',
+  'Install result for "{id}" (v{v})': 'Kết quả cài "{id}" (v{v})',
+  'Install parameters': 'Tham số cài đặt',
+  'This kit asks for {n} value(s) before installing. They are substituted into {{param.<key>}} in the manifest.':
+      'Kit này hỏi {n} thông tin trước khi cài. Giá trị được thay vào chỗ {{param.<key>}} trong manifest.',
+  'required': 'bắt buộc',
+  'secret': 'bí mật',
+  'Choose a folder for "{name}"': 'Chọn thư mục cho "{name}"',
+  'Kits': 'Kit',
+
+  // ── Kits: hộp thoại cài + marketplace ─────────────────────────────────────
+  'Install result': 'Kết quả cài',
+  'Marketplace': 'Marketplace',
+  'installed': 'đã cài',
+  'Reinstall': 'Cài lại',
+  'Preview': 'Xem trước',
+  'Close': 'Đóng',
+  'Choose .zip or .json file…': 'Chọn tệp .zip hoặc .json…',
+  'or paste a manifest': 'hoặc dán manifest',
+  '.zip bundle': 'gói .zip',
+  'JSON manifest': 'manifest JSON',
+  'daemon does not install': 'daemon không cài',
+  'Skills in the bundle': 'Skill trong gói',
+  'Workflows in the bundle': 'Workflow trong gói',
+  'The kit needs you to fill in': 'Kit cần bạn điền',
+  '.zip — the whole kit: kit.json declares it, with skills/, workflows/ and apps/ carrying the actual files. .json — the manifest only, which cannot carry an app.':
+      '.zip — kit đầy đủ: kit.json khai báo, kèm thư mục skills/, workflows/, apps/ chứa tệp cài đặt thật. .json — chỉ manifest, không mang theo được app.',
+  'Choose a .zip / .json file, or paste a manifest, to see what the kit contains':
+      'Chọn tệp .zip / .json, hoặc dán manifest, để xem kit chứa gì',
+  'Install again, ignoring the security warning':
+      'Cài lại, bỏ qua cảnh báo bảo mật',
+  'This kit is already installed (v{v})': 'Kit này đã cài (v{v})',
+  'Installing again will not overwrite: anything with a matching name is left as it is and reported as “already there”.':
+      'Cài lại sẽ không ghi đè: mục nào trùng tên sẽ được giữ nguyên và báo là “đã có sẵn”.',
+  'This kit installs {n} Space App(s) on your machine':
+      'Kit này cài {n} Space App vào máy',
+  'Each app goes through the pre-install security scan; a blocked app is reported on its own and the rest of the kit still installs.':
+      'Mỗi app đều qua bước quét bảo mật trước khi cài; app bị chặn sẽ báo lỗi riêng và phần còn lại của kit vẫn cài bình thường.',
+  'The catalog entry declares no file to download.':
+      'Mục trong catalog không khai báo tệp để tải.',
+  'No kits installed — use “Install kit” to add one.':
+      'Chưa cài kit nào — bấm “Cài kit” để thêm.',
+  'No marketplace source offers a kit yet. Kits are declared in the kits[] array of a source’s marketplace.json — add a source on the Marketplace page.':
+      'Chưa có marketplace source nào chào kit. Kit được khai báo trong mảng kits[] của marketplace.json ở source — thêm source tại trang Marketplace.',
+  'A kit installs a whole setup in one go: personas, skills, workflows, hooks and scheduled jobs. A .json carries only the declaration; a .zip also carries the real files of its skills and workflows, and even a Space App. The daemon keeps the never-overwrite rule (a name that is taken is skipped) and a receipt, so removing a kit deletes only what it created.':
+      'Một kit cài trọn bộ trong một lần: persona, skill, workflow, hook và lịch chạy. Dạng .json chỉ mang được phần khai báo; dạng .zip mang thêm tệp thật của skill/workflow và cả Space App. Daemon giữ luật không ghi đè (trùng tên thì bỏ qua) và một sổ biên nhận, nên gỡ kit chỉ xoá đúng thứ nó đã tạo.',
+
+  // ── Kits: danh sách từng mục trong hộp thoại ──────────────────────────────
+  'Will install': 'Sẽ cài',
+  'The kit declares nothing to install.': 'Kit không khai báo mục nào để cài.',
+  'installed paused': 'cài ở trạng thái tạm dừng',
+  'matches': 'khớp',
+  'if': 'nếu',
+  'can block the agent loop': 'có thể chặn vòng lặp agent',
+  'the daemon does not install this — use the MCP servers page':
+      'daemon không cài — cài qua trang MCP servers',
+  'file from the .zip bundle': 'tệp từ gói .zip',
 };

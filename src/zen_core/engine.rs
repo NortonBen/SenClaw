@@ -156,6 +156,14 @@ impl ZenEngine {
         });
         *engine.self_weak.lock().unwrap() = Arc::downgrade(&engine);
 
+        // The hook machinery below (matching, command/prompt executors,
+        // PreToolUse gating) was fully built but never handed a config: every
+        // engine started with `HookManager::empty()` and nothing ever called
+        // the loader, so `~/.senclaw/hooks.json` sat inert on disk. Load it
+        // here, once per engine, so hooks actually fire. Costs one stat when
+        // no hooks file exists.
+        engine.reload_hooks();
+
         // Register engine-dependent tools
         engine.register_tool(Arc::new(TodoWriteTool::new(state)));
         // When ANY skill is loaded via the `Skill` tool, run the generic skill
@@ -309,6 +317,61 @@ impl ZenEngine {
     // ============================================================
     // Tool registry
     // ============================================================
+
+    /// Load hooks from disk into this engine's [`HookManager`].
+    ///
+    /// Three sources, in the loader's own trust order:
+    ///
+    /// | source | trust |
+    /// |---|---|
+    /// | `~/.senclaw/hooks.json` | user-authored — may use `type: command` |
+    /// | `<workspace>/.senclaw/hooks.json` | user-authored |
+    /// | `<kits_dir>/hooks/*.json` (installed kits) | third-party — shell is refused unless `SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS=true` |
+    ///
+    /// Kit files ride in the `extra_files` slot precisely so they inherit that
+    /// last rule: a bundle a user installed with one tap must not be able to
+    /// register `sh -c` at daemon privilege.
+    ///
+    /// Safe to call again after installing or removing a kit. No hooks
+    /// anywhere leaves the manager empty, which is what it was before.
+    pub fn reload_hooks(&self) {
+        let config = crate::config::Config::from_env();
+        // `hooks_path` is `<senclaw home>/hooks.json`; the loader wants the
+        // directory and appends the filename itself.
+        let Some(global_dir) = config.paths.hooks_path.parent().map(|p| p.to_path_buf()) else {
+            return;
+        };
+        let workspace = self.options.read().unwrap().working_dir.clone();
+        let workspace_path = std::path::PathBuf::from(&workspace);
+        let kit_files = crate::kits::kit_hook_files(&config.paths.kits_dir);
+
+        let loaded = crate::agent::load_zen_hook_config(
+            &global_dir,
+            if workspace.is_empty() {
+                None
+            } else {
+                Some(workspace_path.as_path())
+            },
+            if kit_files.is_empty() {
+                None
+            } else {
+                Some(&kit_files)
+            },
+            crate::agent::MarketplaceHookPolicy::from_config(&config),
+        );
+
+        match loaded {
+            Some(cfg) => {
+                let events = cfg.hooks.len();
+                self.hook_manager.update_config(cfg);
+                tracing::info!("[hooks] loaded hooks for {events} event(s)");
+            }
+            // Not an error: most installs have no hooks at all.
+            None => self
+                .hook_manager
+                .update_config(crate::zen_core::hooks::HookConfig::default()),
+        }
+    }
 
     pub fn register_tool(&self, tool: Arc<dyn Tool>) {
         self.builtin_tools.write().unwrap().push(tool);

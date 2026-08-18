@@ -209,7 +209,40 @@ pub struct HubPlugin {
     pub homepage: Option<String>,
 }
 
+/// A kit offered by a marketplace source.
+///
+/// A kit is not a plugin and not an app: it installs into the daemon's own
+/// building blocks (personas, skills, workflows, hooks, jobs) through
+/// `/api/kits/install`, so it is listed separately rather than squeezed into
+/// `plugins[]` behind another `kind`. What travels is one artifact — a `.json`
+/// manifest or a `.zip` bundle — named by [`Self::url`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubKit {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Where the artifact lives. An `http(s)://` URL is downloaded; anything
+    /// else is a path inside the source's own directory, which is what lets a
+    /// git source ship its kits in the repo it is already cloning.
+    #[serde(default, alias = "source", alias = "path")]
+    pub url: Option<String>,
+    /// The kit id the manifest declares, when the catalog knows it. Lets the
+    /// list mark a kit as already installed without downloading it first.
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub author: Option<serde_json::Value>,
+    #[serde(default)]
+    pub keywords: Option<Vec<String>>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub homepage: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HubCatalog {
     #[serde(default)]
     pub name: Option<String>,
@@ -219,6 +252,10 @@ pub struct HubCatalog {
     pub description: Option<String>,
     #[serde(default)]
     pub plugins: Vec<HubPlugin>,
+    /// Kits this source offers. Absent in every catalog written before kits
+    /// existed, which is why it defaults rather than being required.
+    #[serde(default)]
+    pub kits: Vec<HubKit>,
 }
 
 impl HubPlugin {
@@ -332,7 +369,7 @@ pub fn catalog_home(url: &str) -> String {
         .to_string()
 }
 
-fn http_client() -> Result<reqwest::blocking::Client> {
+pub(crate) fn http_client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
         .user_agent(concat!("senclaw/", env!("CARGO_PKG_VERSION")))
@@ -706,12 +743,7 @@ mod tests {
     /// go instead — otherwise the UI shows a bare "missing field `source`".
     #[test]
     fn registry_entries_refuse_the_git_install_path() {
-        let mut catalog = HubCatalog {
-            name: None,
-            owner: None,
-            description: None,
-            plugins: vec![],
-        };
+        let mut catalog = HubCatalog::default();
         merge_registry(
             &mut catalog,
             vec![HubPlugin::from(

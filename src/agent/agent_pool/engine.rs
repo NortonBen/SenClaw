@@ -550,6 +550,12 @@ impl CoreApi for ZenCoreApi {
         }
     }
 
+    fn reload_hooks(&self) {
+        for engine in self.engines.lock().unwrap().values() {
+            engine.reload_hooks();
+        }
+    }
+
     fn set_runtime_config(&self, _cfg: Arc<Config>) {
         // Config is passed via environment; no-op for zen-core
     }

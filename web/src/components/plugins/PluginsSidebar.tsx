@@ -17,14 +17,15 @@ import {
   AppstoreOutlined,
   AppstoreAddOutlined,
   ApartmentOutlined,
-  TagsOutlined
+  TagsOutlined,
+  GiftOutlined
 } from '@ant-design/icons';
 
 const { Text } = Typography;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'alias' | 'cowork' | 'code' | 'marketplace' | 'space-apps' | 'workflows' | 'widgets' | 'sandbox';
+export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'alias' | 'cowork' | 'code' | 'marketplace' | 'space-apps' | 'workflows' | 'widgets' | 'sandbox' | 'kits';
 
 interface SkillSummary {
   name: string;
@@ -444,6 +445,14 @@ export function PluginsSidebar({ activeNav, onSelect }: Props) {
               label="Code Executor"
               isSelected={activeNav === 'code'}
               onClick={() => onSelect('code')}
+            />
+
+            {/* ─── Kits (1 manifest = persona + skill + workflow + hook + lịch) ─── */}
+            <StaticNavItem
+              icon={<GiftOutlined />}
+              label="Kits"
+              isSelected={activeNav === 'kits'}
+              onClick={() => onSelect('kits')}
             />
 
             {/* ─── Marketplace ─── */}

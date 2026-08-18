@@ -147,6 +147,14 @@ pub trait CoreApi: Send + Sync {
     /// Reload skills registry across all cores after disable/enable.
     fn reload_skills(&self, disabled: &[String]) {}
 
+    /// Re-read hook config across all live cores.
+    ///
+    /// Hooks load once, when an engine is built, and engines are cached per
+    /// chat — so a hook installed by a kit (or saved from the Hooks page) would
+    /// otherwise sit on disk inert for every conversation that already exists,
+    /// and only start firing after a daemon restart.
+    fn reload_hooks(&self) {}
+
     /// Runtime config used by core backend implementation.
     fn set_runtime_config(&self, _cfg: Arc<Config>) {}
 

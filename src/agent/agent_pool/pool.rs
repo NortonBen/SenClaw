@@ -3295,6 +3295,21 @@ impl AgentPool {
         }
     }
 
+    /// Re-read hook config for every live agent.
+    ///
+    /// Called after anything changes what is on disk: installing or removing a
+    /// kit, and saving the Hooks page. Without it the change reaches only
+    /// conversations started afterwards.
+    pub fn reload_all_hooks(&self) {
+        let count = self.state.lock().unwrap().cores.len();
+        if count == 0 {
+            tracing::info!("[AgentPool] hooks reload signal received (no active agents)");
+            return;
+        }
+        tracing::info!("[AgentPool] Reloading hooks for {count} active agent(s)");
+        self.core_api.reload_hooks();
+    }
+
     // ===== Feishu credentials (Phase 4) =====
 
     /// Resolve Feishu app credentials for a given bot token.

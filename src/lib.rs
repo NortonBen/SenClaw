@@ -25,6 +25,7 @@ pub mod config;
 pub mod db;
 pub mod gateway;
 pub mod kanban;
+pub mod kits;
 pub mod local_model;
 pub mod marketplace;
 pub mod mcp;
@@ -3008,6 +3009,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         impl gateway::ui_server::UiApi for RealUiApi {
             fn reload_all_skills(&self) {
                 self.agent_pool.reload_all_skills();
+            }
+            fn reload_all_hooks(&self) {
+                self.agent_pool.reload_all_hooks();
             }
             fn broadcast_event(&self, event: serde_json::Value) {
                 // `broadcast_to_admins` is async; UiApi is sync because most

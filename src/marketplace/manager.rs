@@ -857,6 +857,105 @@ impl MarketplaceManager {
         }))
     }
 
+    // ── Kits ──────────────────────────────────────────────────────────────────────────
+
+    /// A source's catalog, whatever kind of source it is.
+    ///
+    /// [`Self::get_catalog`] is hub-only because a hub *is* its catalog. A git
+    /// or local source keeps one in the tree it already cloned, so kits work
+    /// there too rather than being a hub-only feature.
+    fn catalog_of(&self, source: &MarketplaceSource) -> Option<hub::HubCatalog> {
+        if source.source_type == SourceType::Hub {
+            return self.load_catalog(source).ok();
+        }
+        let root = Path::new(&source.local_path);
+        for rel in ["marketplace.json", ".claude-plugin/marketplace.json"] {
+            let path = root.join(rel);
+            let Ok(raw) = fs::read_to_string(&path) else {
+                continue;
+            };
+            match serde_json::from_str::<hub::HubCatalog>(&raw) {
+                Ok(catalog) => return Some(catalog),
+                Err(e) => tracing::warn!("[Marketplace] {} is not a catalog: {e}", path.display()),
+            }
+        }
+        None
+    }
+
+    /// Every kit offered across all enabled sources, each tagged with where it
+    /// came from so a client can install it back through the same pair.
+    pub fn list_kits(&self) -> Vec<(MarketplaceSource, hub::HubKit)> {
+        let mut out = Vec::new();
+        for source in &self.config.sources {
+            if !source.enabled {
+                continue;
+            }
+            let Some(catalog) = self.catalog_of(source) else {
+                continue;
+            };
+            for kit in catalog.kits {
+                out.push((source.clone(), kit));
+            }
+        }
+        out
+    }
+
+    /// Fetch one kit's artifact: the bytes of a `.json` manifest or a `.zip`
+    /// bundle, plus the filename, which is what tells the installer which it is.
+    pub fn fetch_kit(&self, source_id: &str, kit_name: &str) -> Result<(String, Vec<u8>)> {
+        let source = self
+            .get_source(source_id)
+            .ok_or_else(|| anyhow::anyhow!("Source not found: {source_id}"))?;
+        let catalog = self
+            .catalog_of(&source)
+            .ok_or_else(|| anyhow::anyhow!("Source {} has no catalog", source.name))?;
+        let kit = catalog
+            .kits
+            .into_iter()
+            .find(|k| k.name == kit_name)
+            .ok_or_else(|| anyhow::anyhow!("Source {} offers no kit {kit_name}", source.name))?;
+        let target = kit
+            .url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Kit {kit_name} declares no url"))?;
+
+        if target.starts_with("http://") || target.starts_with("https://") {
+            let filename = target.rsplit('/').next().unwrap_or(kit_name).to_string();
+            let client = hub::http_client()?;
+            let res = client
+                .get(target)
+                .send()
+                .with_context(|| format!("failed to fetch kit {target}"))?;
+            if !res.status().is_success() {
+                anyhow::bail!("kit {target} returned HTTP {}", res.status());
+            }
+            let bytes = res
+                .bytes()
+                .with_context(|| format!("failed to read kit {target}"))?;
+            return Ok((filename, bytes.to_vec()));
+        }
+
+        // A path inside the source's own directory. Resolved against the source
+        // root and checked afterwards: a catalog is third-party input, and
+        // `../../..` in a `url` would otherwise read any file on the machine.
+        let root = Path::new(&source.local_path);
+        let path = root.join(target);
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("kit file not found: {}", path.display()))?;
+        if !canonical.starts_with(&canonical_root) {
+            anyhow::bail!("kit {kit_name} points outside its source directory");
+        }
+        let filename = canonical
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| kit_name.to_string());
+        let bytes =
+            fs::read(&canonical).with_context(|| format!("cannot read {}", canonical.display()))?;
+        Ok((filename, bytes))
+    }
+
     // ── Hub catalog & install ─────────────────────────────────────────────────────────
 
     /// Catalog for a hub source: cached copy if present, otherwise fetched (and

@@ -12,6 +12,7 @@ import 'widgets_panel.dart'
         widgetCatalogProvider,
         flowDefaultsProvider,
         installedAppIdsProvider;
+import 'kits_panel.dart' show KitsPanel, kitsProvider;
 import 'sandbox_panel.dart' show SandboxPanel;
 import '../kanban/kanban_templates_panel.dart' show KanbanTemplatesPanel;
 import '../settings/settings_screen.dart' show SpaceAppsSection;
@@ -389,6 +390,7 @@ const _pluginsSections = [
   ('schedules', 'Schedules', Icons.schedule_outlined),
   ('workflow', 'Workflow', Icons.account_tree_outlined),
   ('memory', 'Knowledge', Icons.hub_outlined),
+  ('kits', 'Kits', Icons.card_giftcard_outlined),
   ('marketplace', 'Marketplace', Icons.store_outlined),
 ];
 
@@ -526,6 +528,10 @@ class PluginsScreen extends ConsumerWidget {
             'schedules' => const SchedulesPanel(),
             'workflow' => const WorkflowPanel(),
             'memory' => const CognitiveScreen(),
+            'kits' => RefreshOnMount(
+                key: const ValueKey('kits'),
+                providers: [kitsProvider],
+                child: const KitsPanel()),
             'marketplace' => RefreshOnMount(
                 key: const ValueKey('marketplace'),
                 providers: [marketplaceSourcesProvider],

@@ -788,3 +788,182 @@ export interface WorkbenchState {
   /** History excludes current. */
   history: WorkbenchArtifact[];
 }
+
+// ─── Zen Kits ─────────────────────────────────────────────────────────────────
+// One manifest installs personas, skills, workflows, hooks and jobs in a single
+// call. Shapes mirror `src/kits/` verbatim; see docs/zen-kits.md.
+
+export type KitItemKind = 'agent' | 'skill' | 'workflow' | 'hook' | 'job';
+
+/** What an installed kit created — the uninstall ledger. Skipped items are
+ *  never recorded, so removing a kit cannot delete something the user made. */
+export interface KitItemRecord {
+  type: KitItemKind;
+  name: string;
+  /** Absolute path for file-backed items (persona, skill dir, workflow). */
+  path?: string;
+  /** Engine id for database-backed items (background task id). */
+  engineRef?: string;
+}
+
+export interface KitReceipt {
+  id: string;
+  version: string;
+  name: string;
+  /** Kit dùng để làm gì. Đọc từ sổ biên nhận vì đến lúc này manifest đã đi mất.
+   *  Rỗng với các sổ ghi trước khi trường này tồn tại. */
+  description?: string;
+  /** RFC3339 UTC. */
+  installedAt: string;
+  items: KitItemRecord[];
+  /** What it was installed with. Secret params are deliberately absent. */
+  params?: Record<string, string>;
+}
+
+export interface KitWarning {
+  kind: string;
+  subject: string;
+  detail: string;
+}
+
+/** `unsupported` = mcpServers/apps, which the daemon parses but never installs. */
+export type KitItemStatus = 'created' | 'skipped' | 'unsupported' | 'failed';
+
+export interface KitItemOutcome {
+  type: string;
+  name: string;
+  status: KitItemStatus;
+  detail?: string;
+}
+
+export interface KitInstallReport {
+  kitId: string;
+  version: string;
+  items: KitItemOutcome[];
+  warnings: KitWarning[];
+}
+
+export type KitRemoveStatus = 'removed' | 'missing' | 'failed';
+
+export interface KitRemoveOutcome {
+  type: string;
+  name: string;
+  status: KitRemoveStatus;
+  detail?: string;
+}
+
+export interface KitUninstallReport {
+  kitId: string;
+  items: KitRemoveOutcome[];
+}
+
+/** Which control a param renders as. `folder` is a string with a native picker. */
+export type KitParamType = 'string' | 'number' | 'boolean' | 'select' | 'folder';
+
+export interface KitParamOption {
+  value: string;
+  label: string;
+}
+
+/** A question the kit asks before install; answers fill `{{param.<key>}}`. */
+export interface KitParam {
+  key: string;
+  label: string;
+  type: KitParamType;
+  description: string;
+  placeholder: string;
+  default?: unknown;
+  required: boolean;
+  /** Render masked, and keep out of the receipt. */
+  secret: boolean;
+  /** `select` only. */
+  options: KitParamOption[];
+  /** `number` only. */
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+/** What travelled as files in a zip bundle, as opposed to being declared in
+ *  the manifest. The `apps` listed here are the ones that will be installed. */
+export interface KitBundleSummary {
+  hasFiles: boolean;
+  skills: string[];
+  workflows: string[];
+  apps: Array<{ id: string; bytes: number }>;
+}
+
+/** Một mục kit sẽ cài, đủ để dựng danh sách chi tiết trước khi cài.
+ *
+ *  Trường có cấu trúc chứ không phải câu ghép sẵn: nhãn ("agent:", "tạm dừng")
+ *  phải theo ngôn ngữ của client. */
+export interface KitPreviewItem {
+  type: 'agent' | 'skill' | 'workflow' | 'hook' | 'job' | 'app' | 'mcpServer';
+  name: string;
+  description?: string | null;
+  /** skill/workflow: `bundle` = lấy từ tệp trong .zip, thắng bản inline. */
+  source?: 'bundle' | 'manifest';
+  /** job */
+  cron?: string;
+  agentRef?: string | null;
+  /** job: false = cài ở trạng thái tạm dừng. */
+  enabled?: boolean;
+  /** hook */
+  matcher?: string | null;
+  if?: string | null;
+  blocking?: boolean;
+  /** app */
+  bytes?: number;
+  /** mcpServer: daemon đọc được nhưng không cài. */
+  unsupported?: boolean;
+}
+
+export interface KitPreview {
+  id: string;
+  name?: string;
+  description?: string;
+  version: string;
+  /** Manifest schema version the daemon read (1 = agents + jobs only). */
+  manifest: number;
+  /** Declarations to render as a form. Empty = the kit asks nothing. */
+  params: KitParam[];
+  /** Set when supplied answers would be refused — live form validation. */
+  paramError: string | null;
+  /** Counts of what would actually install: the manifest and the bundle
+   *  merged, not the manifest's own lists. A bundle whose skills live in
+   *  `skills/` would otherwise preview as installing none. */
+  counts: {
+    agents: number;
+    skills: number;
+    workflows: number;
+    hooks: number;
+    jobs: number;
+    mcpServers: number;
+    apps: number;
+  };
+  /** Absent for a plain JSON manifest. */
+  /** Từng mục sẽ cài, theo đúng thứ tự installer chạy. */
+  items?: KitPreviewItem[];
+  bundle?: KitBundleSummary;
+  /** Set when a kit with this id is already installed, so the dialog can say
+   *  so before the user finds out through a wall of `skipped` rows. */
+  installed?: { version: string; installedAt: string } | null;
+  warnings: KitWarning[];
+}
+
+/** A kit offered by a marketplace source (`kits[]` in its catalog). */
+export interface AvailableKit {
+  sourceId: string;
+  sourceName: string;
+  name: string;
+  id?: string | null;
+  description?: string | null;
+  version?: string | null;
+  author?: unknown;
+  keywords?: string[] | null;
+  category?: string | null;
+  homepage?: string | null;
+  /** False when the catalog entry declares no artifact to fetch. */
+  installable: boolean;
+  installedVersion?: string | null;
+}

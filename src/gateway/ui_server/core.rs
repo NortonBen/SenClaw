@@ -103,6 +103,8 @@ use super::wiki::{
 pub trait UiApi: Send + Sync {
     /// Signal all agents to reload their skill registries.
     fn reload_all_skills(&self) {}
+    /// Signal all agents to re-read hook config from disk.
+    fn reload_all_hooks(&self) {}
     /// Push a small event to every connected admin socket.
     ///
     /// For "something you are displaying changed, re-fetch it" signals. Send
@@ -321,6 +323,21 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             post(marketplace_mcp_use_tools),
         )
         .route("/api/marketplace/mcp-status", get(marketplace_mcp_status))
+        // Zen Kits — bundles of personas/skills/workflows/hooks/jobs the
+        // daemon installs itself, so every client behaves the same way.
+        .route("/api/kits", get(super::kits::kits_list))
+        .route("/api/kits/preview", post(super::kits::kits_preview))
+        .route("/api/kits/install", post(super::kits::kits_install))
+        .route("/api/kits/available", get(super::kits::kits_available))
+        .route(
+            "/api/kits/available/preview",
+            post(super::kits::kits_available_preview),
+        )
+        .route(
+            "/api/kits/available/install",
+            post(super::kits::kits_available_install),
+        )
+        .route("/api/kits/:id", delete(super::kits::kits_uninstall))
         .route("/api/subagents", get(subagents_list))
         .route("/api/subagents/create", post(subagents_create))
         .route(

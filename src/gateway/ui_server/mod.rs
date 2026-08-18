@@ -25,6 +25,7 @@ mod dispatch_config;
 mod embedding_config;
 mod embedding_models;
 mod hf_validate;
+mod kits;
 mod llm_config;
 mod marketplace;
 mod mcp;
