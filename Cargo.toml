@@ -70,7 +70,7 @@ realfft = "3.5"
 
 [package]
 name = "senclaw"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 description = "SenClaw provides the runtime machinery around large language models: permissions, memory, scheduling, multi-agent orchestration, channel adapters, Space Apps, local model support, and a Web UI"
 license = "MIT"
