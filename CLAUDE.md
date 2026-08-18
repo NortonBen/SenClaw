@@ -273,6 +273,18 @@ supervised by [`src/media_sidecar.rs`](src/media_sidecar.rs): fixed port 18790,
 spawned on the first transcription, adopted if already running, killed on
 daemon shutdown. `SENCLAW_MEDIA_BIN` points it at `target/` during development.
 
+**It reaches a machine two ways, and both are enforced.** A desktop install
+gets it inside the app bundle, so `swap_bundle` **refuses** any downloaded
+bundle missing the daemon, the sidecar, or (macOS) `mlx.metallib` — checked on
+the extracted `.new` copy before the live bundle moves, in *both* copies of the
+updater ([`distrib.rs`](src/cli/commands/distrib.rs) and
+[`update_desktop/src/apply.rs`](update_desktop/src/apply.rs)). A CLI install
+gets nothing from `install.sh`, so `senclaw web` downloads the standalone
+`senclaw-media-<triple>` asset into `~/.senclaw/bin` — the third and last
+candidate in `binary_path`, after `SENCLAW_MEDIA_BIN` and next-to-`current_exe`.
+The bundle copy must keep winning over the download: after a desktop update
+those are two different versions.
+
 **What stayed in `src/` stayed because it has no MLX in it.** TTS is VieNeu
 (ONNX on the CPU) plus the macOS `say` presets — the MLX voices are gone, not
 relocated: ZipVoice never synthesized anything, and MMS-VITS was the last thing

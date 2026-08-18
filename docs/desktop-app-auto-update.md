@@ -78,12 +78,29 @@ Nhìn lại bước bundle trong [`desktop.yml`](../.github/workflows/desktop.ym
 SenClaw Desktop.app/
   Contents/MacOS/senclaw_desktop     ← Flutter app
   Contents/Resources/senclaw         ← daemon Rust (app spawn nó làm child process)
-  Contents/Resources/mlx.metallib    ← MLX cần file này NẰM CẠNH binary
+  Contents/Resources/senclaw-media   ← sidecar speech-to-text (daemon tìm nó CẠNH chính nó)
+  Contents/Resources/mlx.metallib    ← MLX cần file này NẰM CẠNH binary dùng nó
 ```
 
-Ba thứ này bị ghim với nhau: daemon nằm *trong* app, `mlx.metallib` phải nằm cạnh daemon (xem `MLX metallib bundling` — thiếu nó thì mọi lệnh TTS/STT/local-LLM abort). Windows/Linux cũng vậy: `senclaw(.exe)` nằm chung thư mục bundle.
+Bốn thứ này bị ghim với nhau: daemon nằm *trong* app, `senclaw-media` phải nằm cạnh daemon ([`media_sidecar::binary_path`](../src/media_sidecar.rs)), và `mlx.metallib` phải nằm cạnh sidecar (xem `MLX metallib bundling` — thiếu nó thì mọi lệnh STT abort). Windows/Linux cũng vậy: `senclaw(.exe)` + `senclaw-media(.exe)` nằm chung thư mục bundle.
 
 ⇒ **Thay nguyên bundle. Không bao giờ vá lẻ từng binary.** Đổi lại được một lợi ích lớn: app và daemon không thể lệch version.
+
+#### Bundle thiếu file thì TỪ CHỐI cài, không cài rồi hỏng sau
+
+`swap_bundle` kiểm tra bản vừa giải nén (`<bundle>.new`) trước khi đụng vào bản
+đang chạy — đúng thời điểm duy nhất mà việc từ chối không tốn gì và người dùng
+giữ nguyên app cũ. Danh sách bắt buộc chính là bảng trên
+(`verify_bundle_payload`, có ở **cả hai** bản copy: [`distrib.rs`](../src/cli/commands/distrib.rs)
+và [`update_desktop/src/apply.rs`](../update_desktop/src/apply.rs)).
+
+Lý do phải fail chứ không warn: cả hai file đều hỏng **muộn**. Bundle thiếu
+`senclaw` là app không bao giờ khởi động được; bundle thiếu `senclaw-media`
+trông khoẻ mạnh hoàn toàn cho tới khi ai đó ghi âm một tin nhắn thoại vài tuần
+sau và nhận `binary not found` — lúc đó không ai còn nối được hai việc với nhau.
+Sidecar **không phải** Space App có quyền vắng mặt: nó ship cạnh daemon trên cả
+ba nền tảng, nên thiếu = build release hỏng, phải sửa release chứ không phải cài
+đè.
 
 ### 4.2 Sơ đồ
 
@@ -207,6 +224,30 @@ xoá <target>.old
 Nếu rename cuối thất bại → `<target>.old` → `<target>` trở lại, báo lỗi, thoát khác 0.
 
 Relaunch: `open -a <target>` (macOS) / `Start-Process` (Windows) / `exec <target>/senclaw_desktop` (Linux).
+
+### 6.1 Bản cài CLI: `senclaw web` phải tự tải sidecar
+
+Desktop lấy `senclaw-media` **miễn phí** vì nó nằm trong bundle. Bản cài bằng
+[`install.sh`](../scripts/install.sh) thì không: script đó chỉ tải asset
+`senclaw-<triple>` và đặt vào PATH của user, nên máy đó có daemon mà **không có
+sidecar nào cả** — voice chat và `/transcribe` chết ngay từ lần đầu với
+`binary not found`.
+
+`run_web` vì thế gọi `ensure_media_sidecar` trước khi start daemon:
+
+| | |
+|---|---|
+| Asset | `senclaw-media-<triple>` (Windows: `.exe`) — job `build` trong `desktop.yml` upload thêm, cạnh `senclaw-<triple>` đã có |
+| macOS thêm | `mlx-<triple>.metallib` → lưu thành `mlx.metallib` **cùng thư mục** với sidecar; MLX resolve theo vị trí executable nên để chỗ khác là vô nghĩa |
+| Đích | `~/.senclaw/bin/` — **không** phải cạnh `senclaw`: install.sh đặt binary theo PATH của user, mà `/usr/local/bin` thường cần sudo |
+| Thứ tự tìm | `SENCLAW_MEDIA_BIN` → cạnh `current_exe()` → `~/.senclaw/bin` ([`media_sidecar::binary_path`](../src/media_sidecar.rs)) — bản trong bundle **luôn** thắng bản tải về, vì sau một lần update desktop hai bản đó khác version |
+| Hỏng thì sao | In warning rồi **vẫn start daemon**. Máy sau proxy vẫn có SenClaw chạy được, chỉ mất speech-to-text |
+| `senclaw update` | Chỉ refresh bản trong `~/.senclaw/bin` nếu đã có. Bản trong bundle được thay nguyên cụm ở bước cài desktop — ghi đè riêng sẽ làm app mang hai version từ hai release |
+
+**Bẫy giống `latest.json`:** asset `senclaw-media-*` chỉ tồn tại từ tag đầu tiên
+build bằng workflow đã sửa. Máy chạy `senclaw web` trỏ vào release cũ hơn sẽ
+nhận 404 → warning → daemon vẫn lên. Không có fallback rút sidecar ra từ
+`SenClaw-<triple>.app.zip`: tải ~150 MB để lấy một binary 19 MB không đáng.
 
 ## 7. Phía Dart
 

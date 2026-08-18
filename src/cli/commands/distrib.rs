@@ -20,6 +20,18 @@ use futures::StreamExt;
 const REPO: &str = "NortonBen/SenClaw";
 const WEB_DIST_ASSET: &str = "senclaw-web-dist.tar.gz";
 
+/// The speech sidecar's file name and lookup rules, borrowed from the module
+/// that resolves it at runtime so the two cannot disagree about what to look
+/// for or where.
+use crate::media_sidecar::{self, MEDIA_BIN};
+
+/// MLX loads its kernels from a `mlx.metallib` sitting next to the executable
+/// that uses them, and the path compiled into `mlx-sys` points into the CI
+/// runner's build directory — which does not exist on a user's machine. macOS
+/// only: on Linux and Windows the sidecar contains no MLX at all.
+#[cfg(target_os = "macos")]
+const METALLIB: &str = "mlx.metallib";
+
 #[derive(Subcommand, Debug)]
 pub enum InstallCmd {
     /// Download the prebuilt SenClaw Desktop app for this platform and install it
@@ -51,9 +63,24 @@ pub async fn run_uninstall(cmd: UninstallCmd) -> Result<()> {
 /// `senclaw web` — make sure the Web UI bundle exists locally, then start the
 /// daemon with `SENCLAW_WEB_DIST` pointing at it.
 pub async fn run_web(force: bool, version: Option<String>) -> Result<()> {
-    let dist = ensure_web_dist(force, version).await?;
+    let dist = ensure_web_dist(force, version.clone()).await?;
     println!("Serving Web UI from {}", dist.display());
     std::env::set_var("SENCLAW_WEB_DIST", &dist);
+
+    // The speech sidecar ships inside the desktop bundle, so a CLI install has
+    // no copy of it at all. Fetch it now rather than at the first voice
+    // message, when the user is mid-sentence and a download failure reads as
+    // "voice chat is broken".
+    //
+    // Best-effort on purpose: a machine behind a proxy still gets a working
+    // daemon, just without speech-to-text, and `ensure_running` names the fix
+    // if anyone reaches for it.
+    if let Err(e) = ensure_media_sidecar(force, version.as_deref()).await {
+        eprintln!(
+            "Warning: speech-to-text is unavailable — could not install the \
+             senclaw-media sidecar ({e:#})"
+        );
+    }
 
     let mut cfg = crate::config::Config::from_env();
     let gcp = cfg.paths.global_config_path.clone();
@@ -80,7 +107,16 @@ pub async fn run_update(version: Option<String>) -> Result<()> {
         ensure_web_dist(true, version.clone()).await?;
     }
 
-    // 3. Update desktop app if installed
+    // 3. Update the speech sidecar if this machine has a CLI-installed copy.
+    //    A desktop bundle's copy is not touched here — it is replaced wholesale
+    //    with the bundle in step 4, and overwriting it separately would leave
+    //    the app carrying two versions from two releases.
+    if media_sidecar::cli_install_dir().join(MEDIA_BIN).is_file() {
+        println!("\nUpdating speech sidecar…");
+        ensure_media_sidecar(true, version.as_deref()).await?;
+    }
+
+    // 4. Update desktop app if installed
     if is_desktop_installed() {
         println!("\nUpdating Desktop app…");
         install_desktop(version).await?;
@@ -99,13 +135,7 @@ async fn update_binary(version: Option<&str>) -> Result<()> {
     let tmp_bin = tmp.join("senclaw-update");
 
     download(&url, &tmp_bin).await?;
-
-    // Make it executable (no-op on Windows)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp_bin, std::fs::Permissions::from_mode(0o755))?;
-    }
+    make_executable(&tmp_bin)?;
 
     // Replace the running binary
     let current_exe = std::env::current_exe().context("cannot determine current binary path")?;
@@ -311,7 +341,8 @@ pub(crate) fn swap_bundle(staged: &Path, target: &Path) -> Result<()> {
     let _ = remove_path(&new);
     let _ = remove_path(&old);
 
-    if let Err(e) = extract_bundle(staged, &new, parent) {
+    if let Err(e) = extract_bundle(staged, &new, parent).and_then(|()| verify_bundle_payload(&new))
+    {
         // Nothing has moved yet, so the install is fine — just don't leave a
         // half-written `.new` sitting next to it.
         let _ = remove_path(&new);
@@ -368,6 +399,68 @@ pub(crate) fn swap_bundle(staged: &Path, target: &Path) -> Result<()> {
         let _ = remove_path(&old);
     }
     Ok(())
+}
+
+/// Every file an extracted desktop bundle must contain, and where.
+///
+/// Kept as data rather than a chain of `if`s so the same list drives the check
+/// and the error message, and so the platform layout is stated in one place.
+fn bundle_payload(bundle: &Path) -> Vec<(&'static str, PathBuf)> {
+    #[cfg(target_os = "macos")]
+    {
+        let res = bundle.join("Contents").join("Resources");
+        vec![
+            ("senclaw", res.join("senclaw")),
+            (MEDIA_BIN, res.join(MEDIA_BIN)),
+            (METALLIB, res.join(METALLIB)),
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            ("senclaw.exe", bundle.join("senclaw.exe")),
+            (MEDIA_BIN, bundle.join(MEDIA_BIN)),
+        ]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        vec![
+            ("senclaw", bundle.join("senclaw")),
+            (MEDIA_BIN, bundle.join(MEDIA_BIN)),
+        ]
+    }
+}
+
+/// Refuse to install a bundle that is missing the daemon or the speech
+/// sidecar.
+///
+/// Called on the freshly extracted `.new` copy, BEFORE the live bundle is
+/// moved aside — the one moment where rejecting costs nothing and the user
+/// keeps a working install.
+///
+/// Why fail rather than warn: both files fail *late*. A bundle with no
+/// `senclaw` is a desktop app that never starts; one with no `senclaw-media`
+/// looks perfectly healthy until someone records a voice message weeks later
+/// and gets "binary not found". Speech-to-text is not an optional Space App
+/// that may legitimately be absent (see docs/space-app-lifecycle.md for the
+/// things that are) — it ships beside the daemon on every platform, so a
+/// missing copy is a broken build, and the release that produced it should be
+/// fixed rather than installed.
+fn verify_bundle_payload(bundle: &Path) -> Result<()> {
+    let missing: Vec<&str> = bundle_payload(bundle)
+        .into_iter()
+        .filter(|(_, path)| !path.is_file())
+        .map(|(name, _)| name)
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "the downloaded bundle is incomplete — missing {}. Nothing was installed and \
+         the existing app is untouched; this is a bad release build, so report it \
+         rather than retrying (https://github.com/{REPO}/releases)",
+        missing.join(", ")
+    )
 }
 
 /// Swap `new` into `target` one directory entry at a time, parking the old
@@ -924,7 +1017,77 @@ async fn ensure_web_dist(force: bool, version: Option<String>) -> Result<PathBuf
     Ok(dist)
 }
 
+/// Release asset holding the standalone speech sidecar for `triple`.
+/// Must match the `Bundle daemon + collect artifacts` step in desktop.yml.
+fn media_asset_name(triple: &str) -> String {
+    if cfg!(windows) {
+        format!("senclaw-media-{triple}.exe")
+    } else {
+        format!("senclaw-media-{triple}")
+    }
+}
+
+/// Make sure the `senclaw-media` speech sidecar exists somewhere the daemon
+/// will find it, downloading it if not.
+///
+/// The daemon looks in three places ([`media_sidecar::binary_path`]), and a
+/// `senclaw` installed by install.sh hits none of them: the sidecar is only
+/// ever *bundled* — inside the desktop app — so voice chat and `/transcribe`
+/// on a CLI install fail with "binary not found". This closes that gap.
+///
+/// Resolution is delegated to `binary_path` rather than repeated here, so a
+/// copy that is already beside the daemon (desktop bundle, `make app-build`, a
+/// `SENCLAW_MEDIA_BIN` dev build) always wins over a download.
+async fn ensure_media_sidecar(force: bool, version: Option<&str>) -> Result<PathBuf> {
+    if !force {
+        if let Some(existing) = media_sidecar::binary_path() {
+            return Ok(existing);
+        }
+    }
+
+    let triple = binary_target()?;
+    let dir = media_sidecar::cli_install_dir();
+    std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    let dest = dir.join(MEDIA_BIN);
+
+    // `force` refreshes the binary, but only downloads what is missing
+    // otherwise: an interrupted first run leaves the metallib absent while the
+    // binary is already there.
+    if force || !dest.is_file() {
+        download(&asset_url(&media_asset_name(triple), version), &dest).await?;
+        make_executable(&dest)?;
+    }
+
+    // MLX resolves its kernel library relative to the executable, so the copy
+    // has to sit in this directory and not merely somewhere on the machine.
+    // Without it every transcription fails inside Metal, long after install.
+    #[cfg(target_os = "macos")]
+    {
+        let lib = dir.join(METALLIB);
+        if force || !lib.is_file() {
+            download(&asset_url(&format!("mlx-{triple}.metallib"), version), &lib).await?;
+        }
+    }
+
+    println!("Speech sidecar installed at {}", dest.display());
+    Ok(dest)
+}
+
 // ===== Shared helpers =====
+
+/// Give `path` the executable bit. No-op on Windows, where the extension
+/// decides.
+fn make_executable(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("cannot mark {} executable", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
 
 fn home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
@@ -1089,6 +1252,23 @@ mod tests {
         );
     }
 
+    /// The sidecar asset name is the one thing `senclaw web` cannot discover:
+    /// a mismatch with desktop.yml is a 404 at first run, on a download the
+    /// user never asked for and will not think to check.
+    #[test]
+    fn media_asset_name_matches_desktop_yml() {
+        let name = media_asset_name("aarch64-apple-darwin");
+        if cfg!(windows) {
+            assert_eq!(name, "senclaw-media-aarch64-apple-darwin.exe");
+        } else {
+            assert_eq!(name, "senclaw-media-aarch64-apple-darwin");
+        }
+        // Lowercase stem on purpose: the release manifest builds its desktop
+        // bundle map from `SenClaw-*`, and a capitalised sidecar asset would
+        // be parsed as a bundle for a target called "media-<triple>".
+        assert!(!name.starts_with("SenClaw-"));
+    }
+
     #[test]
     fn bundle_asset_name_matches_desktop_yml() {
         let name = bundle_asset_name("aarch64-apple-darwin");
@@ -1105,11 +1285,24 @@ mod tests {
     /// `version`, matching what desktop.yml uploads for this platform.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn fake_archive(dir: &Path, version: &str) -> PathBuf {
+        fake_archive_with(dir, version, true)
+    }
+
+    /// As [`fake_archive`], but `with_media` controls whether the speech
+    /// sidecar is in the bundle — the difference between a real release
+    /// artifact and one built by a CI step that dropped the sidecar copy.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn fake_archive_with(dir: &Path, version: &str, with_media: bool) -> PathBuf {
         #[cfg(target_os = "macos")]
         {
             let app = dir.join(APP_BUNDLE_NAME);
-            std::fs::create_dir_all(app.join("Contents/Resources")).unwrap();
-            std::fs::write(app.join("Contents/Resources/senclaw"), version).unwrap();
+            let res = app.join("Contents/Resources");
+            std::fs::create_dir_all(&res).unwrap();
+            std::fs::write(res.join("senclaw"), version).unwrap();
+            std::fs::write(res.join(METALLIB), "kernels").unwrap();
+            if with_media {
+                std::fs::write(res.join(MEDIA_BIN), version).unwrap();
+            }
             let zip = dir.join("bundle.app.zip");
             run_tool(
                 "ditto",
@@ -1130,6 +1323,9 @@ mod tests {
             let stage = dir.join("stage");
             std::fs::create_dir_all(&stage).unwrap();
             std::fs::write(stage.join("senclaw"), version).unwrap();
+            if with_media {
+                std::fs::write(stage.join(MEDIA_BIN), version).unwrap();
+            }
             let tar = dir.join("bundle.tar.gz");
             run_tool(
                 "tar",
@@ -1250,6 +1446,47 @@ mod tests {
             !with_suffix(&target, "new").exists(),
             ".new debris left behind"
         );
+    }
+
+    /// The guarantee this whole check exists for: an archive that carries the
+    /// daemon but not the speech sidecar must be refused, not installed. It
+    /// would otherwise look like a perfectly successful update until the first
+    /// voice message — long after anyone would connect the two.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn swap_bundle_refuses_an_archive_without_the_speech_sidecar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = fake_archive_with(tmp.path(), "v2", false);
+
+        let target = install_dir(tmp.path());
+        seed_install(&target, "v1");
+
+        let err = swap_bundle(&staged, &target).unwrap_err().to_string();
+        assert!(
+            err.contains(MEDIA_BIN),
+            "the error must name what is missing, got: {err}"
+        );
+        assert_eq!(marker(&target), "v1", "install was replaced anyway");
+        assert!(!with_suffix(&target, "new").exists(), ".new debris");
+        assert!(!with_suffix(&target, "old").exists(), "install half-moved");
+    }
+
+    /// And the complement: a complete archive still installs, sidecar and all.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn swap_bundle_installs_the_speech_sidecar_alongside_the_daemon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = fake_archive(tmp.path(), "v2");
+        let target = install_dir(tmp.path());
+
+        swap_bundle(&staged, &target).unwrap();
+
+        let missing: Vec<&str> = bundle_payload(&target)
+            .into_iter()
+            .filter(|(_, p)| !p.is_file())
+            .map(|(n, _)| n)
+            .collect();
+        assert!(missing.is_empty(), "installed bundle is missing {missing:?}");
     }
 
     /// Debris from a previous run that died mid-swap must not block the retry.

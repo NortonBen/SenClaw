@@ -150,7 +150,8 @@ fn swap_bundle(staged: &Path, target: &Path) -> Result<()> {
     let _ = remove_path(&new);
     let _ = remove_path(&old);
 
-    if let Err(e) = extract_bundle(staged, &new, parent) {
+    if let Err(e) = extract_bundle(staged, &new, parent).and_then(|()| verify_bundle_payload(&new))
+    {
         let _ = remove_path(&new);
         return Err(e);
     }
@@ -209,6 +210,73 @@ fn swap_bundle(staged: &Path, target: &Path) -> Result<()> {
 /// failure is always recoverable: every old entry is evacuated first, and only
 /// then are the new ones moved in — so a bundle that cannot be fully replaced
 /// is fully restored instead of left half-swapped and unstartable.
+/// The speech sidecar's file name, mirroring `MEDIA_BIN` in the main repo's
+/// src/media_sidecar.rs — the module that looks for it at runtime.
+const MEDIA_BIN: &str = if cfg!(windows) {
+    "senclaw-media.exe"
+} else {
+    "senclaw-media"
+};
+
+/// MLX loads its kernels from a `mlx.metallib` next to the executable using
+/// them; the path compiled into `mlx-sys` points into the CI build directory
+/// and does not exist on a user's machine.
+#[cfg(target_os = "macos")]
+const METALLIB: &str = "mlx.metallib";
+
+/// Every file an extracted desktop bundle must contain, and where.
+fn bundle_payload(bundle: &Path) -> Vec<(&'static str, PathBuf)> {
+    #[cfg(target_os = "macos")]
+    {
+        let res = bundle.join("Contents").join("Resources");
+        vec![
+            ("senclaw", res.join("senclaw")),
+            (MEDIA_BIN, res.join(MEDIA_BIN)),
+            (METALLIB, res.join(METALLIB)),
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            ("senclaw.exe", bundle.join("senclaw.exe")),
+            (MEDIA_BIN, bundle.join(MEDIA_BIN)),
+        ]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        vec![
+            ("senclaw", bundle.join("senclaw")),
+            (MEDIA_BIN, bundle.join(MEDIA_BIN)),
+        ]
+    }
+}
+
+/// Refuse to install a bundle missing the daemon or the speech sidecar.
+///
+/// Runs on the freshly extracted `.new` copy, BEFORE the live bundle is moved
+/// aside — the one moment where rejecting costs nothing and the user keeps a
+/// working install.
+///
+/// Both files fail *late*: a bundle with no `senclaw` is a desktop app that
+/// never starts, and one with no `senclaw-media` looks healthy right up until
+/// someone records a voice message weeks later. The sidecar ships beside the
+/// daemon on every platform, so a missing copy is a broken release build.
+fn verify_bundle_payload(bundle: &Path) -> Result<()> {
+    let missing: Vec<&str> = bundle_payload(bundle)
+        .into_iter()
+        .filter(|(_, path)| !path.is_file())
+        .map(|(name, _)| name)
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "the downloaded bundle is incomplete — missing {}. Nothing was installed \
+         and the existing app is untouched; this is a bad release build",
+        missing.join(", ")
+    )
+}
+
 fn swap_entries(new: &Path, target: &Path, quarantine: &Path) -> Result<()> {
     std::fs::create_dir_all(quarantine)
         .with_context(|| format!("cannot create {}", quarantine.display()))?;
@@ -449,6 +517,40 @@ mod tests {
     fn write(path: &Path, body: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, body).unwrap();
+    }
+
+    // ── verify_bundle_payload ────────────────────────────────────────────────
+
+    /// Lay out a complete bundle for this platform, then drop `omit` from it.
+    fn staged_bundle(root: &Path, omit: Option<&str>) -> PathBuf {
+        let bundle = root.join("bundle");
+        for (name, path) in bundle_payload(&bundle) {
+            if Some(name) == omit {
+                continue;
+            }
+            write(&path, name);
+        }
+        bundle
+    }
+
+    /// The guarantee: an update carrying the daemon but not the speech sidecar
+    /// must be refused. Installed, it would look like a clean update until the
+    /// first voice message — long after anyone would connect the two.
+    #[test]
+    fn verify_bundle_payload_rejects_a_bundle_without_the_speech_sidecar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundle = staged_bundle(tmp.path(), Some(MEDIA_BIN));
+
+        let err = verify_bundle_payload(&bundle).unwrap_err().to_string();
+        assert!(err.contains(MEDIA_BIN), "must name what is missing: {err}");
+    }
+
+    #[test]
+    fn verify_bundle_payload_accepts_a_complete_bundle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundle = staged_bundle(tmp.path(), None);
+
+        verify_bundle_payload(&bundle).unwrap();
     }
 
     #[test]

@@ -182,6 +182,12 @@ pub struct PathsConfig {
     /// `~/.senclaw/workflow-runs.json`. Override with
     /// `SENCLAW_WORKFLOW_STATE_PATH`.
     pub workflow_state_path: PathBuf,
+    /// Zen Kit state: `installed.json` (what each kit created, for removal)
+    /// plus `hooks/<kit_id>.json` (hooks a kit registered — one file per kit so
+    /// uninstalling is a delete, and the user's own `hooks.json` is never
+    /// rewritten by a kit). Default: `~/.senclaw/kits`. Override with
+    /// `SENCLAW_KITS_DIR`.
+    pub kits_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -638,6 +644,7 @@ impl Config {
                     "SENCLAW_WORKFLOW_STATE_PATH",
                     senclaw_home.join("workflow-runs.json"),
                 ),
+                kits_dir: env_path("SENCLAW_KITS_DIR", senclaw_home.join("kits")),
             },
             memory: MemoryConfig {
                 embedding_provider: EmbeddingProvider::parse(&env_or(

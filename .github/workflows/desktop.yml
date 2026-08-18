@@ -281,6 +281,11 @@ jobs:
               # zip the .app for upload
               ditto -c -k --keepParent "$APP" "dist-artifacts/SenClaw-${{ matrix.target }}.app.zip"
               cp "$BIN_DIR/senclaw" "dist-artifacts/senclaw-${{ matrix.target }}"
+              # Standalone sidecar for CLI installs. install.sh ships only the
+              # daemon, so without this asset `senclaw web` has no sidecar to
+              # download and speech-to-text is dead on every non-desktop
+              # install (see ensure_media_sidecar in distrib.rs).
+              cp "$BIN_DIR/senclaw-media" "dist-artifacts/senclaw-media-${{ matrix.target }}"
               ;;
             windows)
               REL="desktop_app/build/windows/x64/runner/Release"
@@ -291,6 +296,7 @@ jobs:
               cp "$UPD_DIR/update_desktop.exe" "$REL/update_desktop.exe"
               powershell -Command "Compress-Archive -Path '$REL/*' -DestinationPath 'dist-artifacts/SenClaw-${{ matrix.target }}.zip'"
               cp "$BIN_DIR/senclaw.exe" "dist-artifacts/senclaw-${{ matrix.target }}.exe"
+              cp "$BIN_DIR/senclaw-media.exe" "dist-artifacts/senclaw-media-${{ matrix.target }}.exe"
               ;;
             linux)
               REL="desktop_app/build/linux/x64/release/bundle"
@@ -300,6 +306,7 @@ jobs:
               cp "$UPD_DIR/update_desktop" "$REL/update_desktop"
               tar -C "$REL" -czf "dist-artifacts/SenClaw-${{ matrix.target }}.tar.gz" .
               cp "$BIN_DIR/senclaw" "dist-artifacts/senclaw-${{ matrix.target }}"
+              cp "$BIN_DIR/senclaw-media" "dist-artifacts/senclaw-media-${{ matrix.target }}"
               ;;
           esac
 

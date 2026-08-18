@@ -41,6 +41,6 @@ if (($UserPath -split ";") -notcontains $InstallDir) {
 
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "  senclaw web              # download the Web UI (first run) and start the daemon"
+Write-Host "  senclaw web              # download the Web UI + speech sidecar (first run) and start the daemon"
 Write-Host "  senclaw install desktop  # install the native desktop app"
 Write-Host "  senclaw --help           # all commands"

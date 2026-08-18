@@ -1029,8 +1029,15 @@ pub async fn query(
         // Local native inference (Candle CPU/Metal, MLX native) runs in-process
         // and is much slower than cloud APIs — especially MLX with TurboQuant
         // KV (TQ4 prefill on long prompts blows past 180 s easily).
+        //
+        // Space-App providers (`provider == "app:<id>"`) are the same class:
+        // a local engine behind the daemon's own loopback proxy. A 26B
+        // SSD-streaming model's first agent turn (dozens of MCP tool schemas)
+        // exceeds the cloud budget in prefill alone, exactly like MLX above.
         let adapt = config.profile.adapt.as_deref().unwrap_or("");
-        let turn_timeout = if adapt.starts_with("local-") {
+        let turn_timeout = if adapt.starts_with("local-")
+            || config.profile.provider.starts_with("app:")
+        {
             LLM_TURN_TIMEOUT_LOCAL
         } else {
             LLM_TURN_TIMEOUT

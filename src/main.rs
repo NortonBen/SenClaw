@@ -72,12 +72,12 @@ enum Command {
         #[command(subcommand)]
         cmd: senclaw::cli::commands::distrib::UninstallCmd,
     },
-    /// Download the Web UI bundle (first run only) and start the daemon serving it
+    /// Download the Web UI and speech sidecar (first run only) and start the daemon serving them
     Web {
-        /// Re-download the Web UI bundle even if it is already present
+        /// Re-download the Web UI bundle and speech sidecar even if present
         #[arg(long)]
         force: bool,
-        /// Release tag to download the bundle from (e.g. v0.3.0). Default: latest.
+        /// Release tag to download from (e.g. v0.3.0). Default: latest.
         #[arg(long)]
         version: Option<String>,
     },

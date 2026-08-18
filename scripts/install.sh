@@ -90,7 +90,7 @@ esac
 cat <<'EOF'
 
 Next steps:
-  senclaw web              # download the Web UI (first run) and start the daemon
+  senclaw web              # download the Web UI + speech sidecar (first run) and start the daemon
   senclaw install desktop  # install the native desktop app
   senclaw --help           # all commands
 EOF
