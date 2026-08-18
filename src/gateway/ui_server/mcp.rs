@@ -353,6 +353,12 @@ pub(crate) async fn hooks_put(
     }
     fs::write(path, &body)
         .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Engines read hooks once, at construction, and are cached per chat. Saving
+    // the file is not enough: without this the edit reaches only conversations
+    // started afterwards.
+    if let Some(api) = s.agent_api.as_ref() {
+        api.reload_all_hooks();
+    }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
