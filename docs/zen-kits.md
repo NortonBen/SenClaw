@@ -225,8 +225,13 @@ consequences, both intended:
   a command hook and the writer emits `"type": "prompt"` unconditionally. A
   command hook is `sh -c` at daemon privilege — supply-chain RCE plus a
   restart-surviving foothold — and that is not something a one-tap install
-  should be able to arrange. This mirrors the existing marketplace policy
-  (`SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS`), which still gates the load side.
+  should be able to arrange. This mirrors the marketplace policy, which still
+  gates the load side and is now expressible per package:
+  `SENCLAW_MARKETPLACE_COMMAND_HOOK_PLUGINS=<name>` admits one package whose
+  scan report the operator has read, while
+  `SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS=true` admits every installed plugin
+  at once — including ones installed later that nobody has looked at, which is
+  why the pre-install scan treats *that* setting as the blocking one.
 
 Accepted events: `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `PermissionRequest`, `Stop`, `SessionStart`, `PreCompact`, `PostCompact`. An

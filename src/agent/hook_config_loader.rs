@@ -56,6 +56,20 @@ pub struct HookDefinition {
 }
 
 /// Valid hook event names (aligned with sema-core).
+/// Deliberately narrower than [`parse_hook_event`], which knows every event the
+/// engine has. A marketplace plugin is untrusted, so it gets the events that can
+/// only observe, never the ones that can decide:
+///
+/// * `PrePermission` can return `decision: "allow"` and skip the permission
+///   prompt outright — handing an untrusted package the power to approve its own
+///   tool calls.
+/// * `OutputFilter` rewrites what a tool reports back, which is where evidence
+///   would go to disappear.
+///
+/// `SessionEnd` is on the list because it is non-blockable
+/// ([`crate::zen_core::hooks::types::HookEvent::is_non_blockable`]), exactly
+/// like `Stop`, `PostToolUse` and `PostCompact` already here — it cannot hold up
+/// or veto anything, so refusing it only cost compatibility.
 const VALID_HOOK_EVENTS: &[&str] = &[
     "UserPromptSubmit",
     "PreToolUse",
@@ -63,6 +77,7 @@ const VALID_HOOK_EVENTS: &[&str] = &[
     "PermissionRequest",
     "Stop",
     "SessionStart",
+    "SessionEnd",
     "PreCompact",
     "PostCompact",
 ];
@@ -91,15 +106,24 @@ const REJECTED_COMMAND_PREVIEW_BYTES: usize = 200;
 ///
 /// Mirrors Claude Code's `allowManagedHooksOnly`. See
 /// `docs/agent-security-hooks.md` §3.4(b) and §6.5.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MarketplaceHookPolicy {
-    /// Allow `type: "command"` hooks from marketplace plugins.
+    /// Allow `type: "command"` hooks from *every* marketplace plugin.
     ///
     /// **Defaults to `false`** — the secure default is the whole point of this
-    /// type. Opt in with `SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS=true` only
-    /// when every installed plugin is trusted; it re-opens arbitrary shell
-    /// execution to anything that can write a plugin `hooks.json`.
+    /// type. This is the blunt switch: it re-opens arbitrary shell execution to
+    /// anything that can write a plugin `hooks.json`, including plugins
+    /// installed later that nobody has looked at. Prefer
+    /// [`Self::allowed_plugins`], which is the same consent scoped to one
+    /// package the operator has actually read.
     pub allow_command_hooks: bool,
+
+    /// Plugins allowed to register command hooks *by name*.
+    ///
+    /// Names match the plugin directory, as reported by [`plugin_label`], and
+    /// are compared case-insensitively. Set from
+    /// `SENCLAW_MARKETPLACE_COMMAND_HOOK_PLUGINS`.
+    pub allowed_plugins: Vec<String>,
 }
 
 impl MarketplaceHookPolicy {
@@ -108,6 +132,34 @@ impl MarketplaceHookPolicy {
     pub fn from_config(config: &crate::config::Config) -> Self {
         Self {
             allow_command_hooks: config.security.allow_marketplace_command_hooks,
+            allowed_plugins: config.security.marketplace_command_hook_plugins.clone(),
+        }
+    }
+
+    /// Whether this specific plugin may register command hooks.
+    pub fn allows_command_hooks(&self, plugin: &str) -> bool {
+        self.allow_command_hooks || self.names_plugin(plugin)
+    }
+
+    fn names_plugin(&self, plugin: &str) -> bool {
+        self.allowed_plugins
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(plugin))
+    }
+
+    /// How the pre-install scanner should score a command hook this plugin
+    /// ships, so the report describes the install that will actually happen.
+    ///
+    /// Being named in the allowlist outranks the global switch: it is the
+    /// stronger signal, because someone typed this package's name.
+    pub fn disposition_for(&self, plugin: &str) -> crate::security::scan::CommandHookDisposition {
+        use crate::security::scan::CommandHookDisposition as D;
+        if self.names_plugin(plugin) {
+            D::ReviewedForThisPackage
+        } else if self.allow_command_hooks {
+            D::HonouredGlobally
+        } else {
+            D::Refused
         }
     }
 }
@@ -254,14 +306,16 @@ fn validate_and_filter_marketplace_hook_config(
                 // foothold. See MarketplaceHookPolicy / docs §3.4(b), §6.5.
                 // `{:?}` on the preview keeps newlines escaped so a crafted
                 // command can't forge extra log lines.
-                if hook_type == ZenHookType::Command && !policy.allow_command_hooks {
+                if hook_type == ZenHookType::Command && !policy.allows_command_hooks(plugin) {
                     warn!(
                         "[hooks:marketplace] {} [{}] type=command is not allowed from a \
-                         marketplace plugin, rejecting (set \
-                         SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS=true only if every installed \
-                         plugin is trusted). command: {:?}",
+                         marketplace plugin, rejecting (allow this one package with \
+                         SENCLAW_MARKETPLACE_COMMAND_HOOK_PLUGINS={} after reading its scan \
+                         report; SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS=true allows every \
+                         plugin at once). command: {:?}",
                         plugin,
                         event,
+                        plugin,
                         truncate_on_char_boundary(
                             hook.command.as_deref().unwrap_or(""),
                             REJECTED_COMMAND_PREVIEW_BYTES
@@ -496,7 +550,7 @@ pub fn load_merged_hook_config(
         }
 
         let validated =
-            validate_and_filter_marketplace_hook_config(raw.unwrap(), file_path, policy);
+            validate_and_filter_marketplace_hook_config(raw.unwrap(), file_path, policy.clone());
         if validated.hooks.is_empty() {
             continue;
         }
@@ -871,6 +925,7 @@ mod tests {
             &marketplace_hooks_path(),
             MarketplaceHookPolicy {
                 allow_command_hooks: true,
+                ..Default::default()
             },
         );
 
@@ -881,6 +936,89 @@ mod tests {
 
     /// Global and workspace hooks.json are user-authored — the marketplace
     /// filter must not touch their Command hooks.
+    #[test]
+    fn marketplace_plugins_get_observing_events_but_never_deciding_ones() {
+        // Pins the reason the allowlist is narrower than parse_hook_event: a
+        // plugin may watch, it may not approve its own tool calls or rewrite
+        // what a tool reported.
+        assert!(VALID_HOOK_EVENTS.contains(&"SessionEnd"));
+        for deciding in ["PrePermission", "OutputFilter"] {
+            assert!(
+                !VALID_HOOK_EVENTS.contains(&deciding),
+                "{deciding} lets untrusted code decide, not observe"
+            );
+            // Still a real engine event — it is withheld here, not unknown.
+            assert!(parse_hook_event(deciding).is_some());
+        }
+    }
+
+    #[test]
+    fn marketplace_command_hooks_can_be_allowed_one_plugin_at_a_time() {
+        let root = std::env::temp_dir().join(format!(
+            "senclaw-hook-allowlist-{}",
+            std::process::id()
+        ));
+        let hooks_json = root.join("ecc").join("hooks").join("hooks.json");
+        fs::create_dir_all(hooks_json.parent().unwrap()).unwrap();
+        fs::write(
+            &hooks_json,
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node -e 1"}]}]}}"#,
+        )
+        .unwrap();
+        let empty = root.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let extra = [hooks_json.clone()];
+
+        let kept = |policy: MarketplaceHookPolicy| {
+            load_merged_hook_config(&empty, None, Some(&extra), policy)
+                .hooks
+                .get("SessionStart")
+                .map(|g| g[0].hooks.len())
+                .unwrap_or(0)
+        };
+
+        // Default: refused, as before.
+        assert_eq!(kept(MarketplaceHookPolicy::default()), 0);
+
+        // Naming this plugin admits this plugin.
+        assert_eq!(
+            kept(MarketplaceHookPolicy {
+                allowed_plugins: vec!["ecc".into()],
+                ..Default::default()
+            }),
+            1
+        );
+
+        // Naming a different one does not.
+        assert_eq!(
+            kept(MarketplaceHookPolicy {
+                allowed_plugins: vec!["something-else".into()],
+                ..Default::default()
+            }),
+            0
+        );
+    }
+
+    #[test]
+    fn a_named_plugin_outranks_the_global_switch_in_the_scan_report() {
+        use crate::security::scan::CommandHookDisposition as D;
+        let named = MarketplaceHookPolicy {
+            allowed_plugins: vec!["ECC".into()],
+            ..Default::default()
+        };
+        // Case-insensitive, and "someone typed this name" beats "everything is
+        // allowed" because it is the stronger evidence of review.
+        assert_eq!(named.disposition_for("ecc"), D::ReviewedForThisPackage);
+        assert_eq!(named.disposition_for("other"), D::Refused);
+
+        let global = MarketplaceHookPolicy {
+            allow_command_hooks: true,
+            allowed_plugins: vec!["ecc".into()],
+        };
+        assert_eq!(global.disposition_for("ecc"), D::ReviewedForThisPackage);
+        assert_eq!(global.disposition_for("unreviewed"), D::HonouredGlobally);
+    }
+
     #[test]
     fn test_user_authored_command_hooks_are_not_filtered() {
         let dir = std::env::temp_dir().join(format!(
