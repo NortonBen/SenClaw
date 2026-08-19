@@ -30,6 +30,7 @@ mod llm_config;
 mod marketplace;
 mod mcp;
 mod oauth;
+pub mod patterns;
 pub(crate) mod ocr;
 mod open_url;
 mod plugins;

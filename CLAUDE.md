@@ -455,6 +455,80 @@ Full record, including what transfers from
 [drumih/turbo-fieldfare](https://github.com/drumih/turbo-fieldfare) and what
 does not: [docs/gemma4-local-optimizations.md](docs/gemma4-local-optimizations.md).
 
+## Zen Patterns (`src/patterns/`)
+
+A **pattern** is a named system prompt for one text transform: text in, text
+out, **one LLM call, no tools, no loop**. The on-disk format is
+[Fabric](https://github.com/danielmiessler/fabric)'s (`<name>/system.md`, with
+`# IDENTITY and PURPOSE` → `# STEPS` → `# OUTPUT INSTRUCTIONS` → `# INPUT`), so
+its ~250-pattern library imports with no converter. Storage is
+`~/.senclaw/patterns/`: `sources.json` (the ledger), `user/` (local, resolved
+**first**), `sources/<id>/` (git checkouts), `strategies/` (cot/tot/reflexion —
+two-field JSON appended to the system prompt).
+
+**255 Fabric patterns + all 9 strategies are vendored into the repo** under
+`assets/patterns` / `assets/strategies` (MIT, pinned at `v1.4.470`), alongside 6
+SenClaw wrote for Vietnamese. `build.rs` walks them into `BUNDLED_PATTERNS` /
+`BUNDLED_STRATEGIES`, so a fresh install has a working library **offline on
+first launch** — `GET /api/patterns/catalog` offers it as one tap, next to git
+presets for SenClaw's own repo and Fabric upstream.
+
+Reached from chat through **one** bundled skill (`skills/pattern`) plus **four**
+MCP tools on `senclaw-patterns` (`pattern_list`, `pattern_get`, `pattern_run`,
+`pattern_sync`). Managed at **Plugins → Patterns** (browse, run, import zip,
+add git source, sync). Installable via a Zen Kit's `patterns` /
+`patternSources` blocks; the bundled **Fabric Patterns** kit
+([`assets/kits/fabric.json`](assets/kits/fabric.json), served by
+[`src/kits/builtin.rs`](src/kits/builtin.rs)) is one tap with no marketplace.
+
+Rules for Claude:
+
+- **Never turn patterns into skills.** [`src/skills/scan.rs`](src/skills/scan.rs)
+  loads every skill into one registry and each contributes `triggers` to the
+  pre-turn matcher; a few hundred entries drown `web-research` /
+  `agent-browser` and flood the slash-command namespace. The whole design is
+  N patterns behind a constant-size tool surface.
+- **A pattern lands in the system-prompt position of a real LLM call**, so a
+  source tracking a branch lets an upstream commit rewrite instructions the
+  agent obeys. `SourceSyncOutcome::pinned` reports tag/sha vs branch and the UI
+  says so; the shipped Fabric kit pins a tag, and a test enforces that.
+- **`sanitize_name` is the single choke point** for names arriving from a git
+  directory listing, a kit manifest and a UI field. The zip importer only ever
+  writes `system.md`/`user.md` under one sanitized component.
+- **The input is never sent twice.** A pattern containing `{{input}}` gets it
+  interpolated and an empty user message; one without gets it as the user
+  message. Appending unconditionally doubles the bill on a long transcript.
+- **An unknown `{{placeholder}}` stays verbatim** (same rule as
+  [`src/scaffold/`](src/scaffold/)) and comes back in `unresolved`. Blanking
+  silently deletes an instruction.
+- **Fabric patterns pin English output** in their own `# OUTPUT INSTRUCTIONS`.
+  The language rule is appended at *render* time, after them so it wins — never
+  patched into the checkout, which the next sync reverts. Pass
+  `language: "auto"` for Vietnamese input.
+- **The kit installer registers git sources but never clones.** Cloning is
+  network I/O and happens in `kits.rs::sync_kit_pattern_sources`, the same
+  split Space App installs use — it is what keeps `cargo test` offline.
+- **Never hand-edit `assets/patterns/*` that came from Fabric.** Re-vendoring
+  replaces the tree wholesale. Only the 6 SenClaw-authored ones are held to the
+  full `# IDENTITY → # STEPS → # OUTPUT INSTRUCTIONS → # INPUT` convention by
+  tests; the vendored 255 are verbatim upstream and a handful end differently.
+- **The bundled table is generated, never listed.** `build.rs`
+  `emit_bundled_patterns` walks `assets/patterns` + `assets/strategies`; adding
+  or re-vendoring is dropping files in, with nothing to update by hand.
+- **Kit patterns go to a `kit-<id>` source, never `user`.** Uninstall is then a
+  directory delete that cannot take a hand-written pattern with it.
+- **Pattern checkouts are shallow (`git_sync::clone_shallow`, depth 1) and a
+  refresh re-clones.** Measured on Fabric: **402 s** full vs **32 s** shallow,
+  identical 255 patterns. `clone_or_pull` stays full for marketplace sources —
+  a shallow repo cannot be deepened and its `pull_existing` assumes history.
+- **`/summarize` in the composer resolves as a pattern** once no skill claims
+  the token ([`src/agent/prompt_directives.rs`](src/agent/prompt_directives.rs)).
+  Skills always win a shared name, and the lookup uses `PatternRegistry::names`
+  — `list` reads every `system.md`, which is 255 file reads per slash-bearing
+  message.
+
+Full guide: [docs/zen-patterns.md](docs/zen-patterns.md).
+
 ## Scaffolding: `senclaw create`
 
 `senclaw create app|skill|sub-agent <name>` renders a working project from a

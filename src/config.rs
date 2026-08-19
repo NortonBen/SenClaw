@@ -200,6 +200,10 @@ pub struct PathsConfig {
     /// rewritten by a kit). Default: `~/.senclaw/kits`. Override with
     /// `SENCLAW_KITS_DIR`.
     pub kits_dir: PathBuf,
+    /// Zen Patterns root: `sources.json`, the `user/` source, git checkouts
+    /// under `sources/`, and shared `strategies/`. Default:
+    /// `~/.senclaw/patterns`. Override with `SENCLAW_PATTERNS_DIR`.
+    pub patterns_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -673,6 +677,10 @@ impl Config {
                     senclaw_home.join("workflow-runs.json"),
                 ),
                 kits_dir: env_path("SENCLAW_KITS_DIR", senclaw_home.join("kits")),
+                patterns_dir: env_path(
+                    "SENCLAW_PATTERNS_DIR",
+                    senclaw_home.join("patterns"),
+                ),
             },
             memory: MemoryConfig {
                 embedding_provider: EmbeddingProvider::parse(&env_or(

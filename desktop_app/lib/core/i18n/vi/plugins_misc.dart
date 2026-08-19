@@ -266,4 +266,98 @@ const Map<String, String> viPluginsMisc = {
   'running (adopted)': 'đang chạy (ngoài daemon)',
   "This process is running but was NOT launched by the current daemon — it was already alive on the app's port, usually left over from a daemon restart. Whether the sandbox confines it is therefore unknown; restart the app if you need to be sure.":
       'Tiến trình này đang chạy nhưng KHÔNG do daemon hiện tại khởi chạy — nó đã sống sẵn trên cổng của app, thường là còn sót sau khi daemon khởi động lại. Vì vậy không biết nó có bị sandbox nhốt hay không; khởi động lại app nếu cần chắc chắn.',
+
+  // ── patterns_panel.dart — Zen Patterns ────────────────────────────────────
+  "Cancel": "Huỷ",
+  "Confirm": "Xác nhận",
+  "Sources": "Nguồn",
+  "Reload": "Tải lại",
+  "Add git source": "Thêm nguồn git",
+  "last sync failed": "lần đồng bộ trước lỗi",
+  "Sync": "Đồng bộ",
+  "Remove source": "Gỡ nguồn",
+  "All sources": "Mọi nguồn",
+  "Search name or description": "Tìm tên hoặc mô tả",
+  "New pattern": "Pattern mới",
+  "No patterns yet — add a git source (Fabric, for example) or write one":
+      "Chưa có pattern nào — thêm nguồn git (ví dụ Fabric) hoặc tự viết một cái",
+  "Nothing matches the filter": "Không khớp bộ lọc",
+  "Delete pattern": "Xoá pattern",
+  "Git source — to change it, save your own copy under the same name; it takes priority":
+      "Nguồn git — sửa bằng cách lưu bản riêng cùng tên vào nguồn của bạn",
+  "Paste the text to transform (article, transcript, log, notes…)":
+      "Dán văn bản cần xử lý (bài báo, transcript, log, ghi chú…)",
+  "Strategy (optional)": "Strategy (tuỳ chọn)",
+  "No strategy": "Không strategy",
+  "Language: follow the input": "Ngôn ngữ: theo input",
+  "Language: Vietnamese": "Ngôn ngữ: tiếng Việt",
+  "Language: let the pattern decide": "Ngôn ngữ: pattern tự quyết",
+  "Run": "Chạy",
+  "Assemble the prompt only — costs no model call":
+      "Chỉ ghép prompt để xem trước — không tốn lượt gọi model",
+  "Preview prompt": "Xem prompt",
+  "the pattern keeps the placeholder rather than deleting it":
+      "pattern giữ nguyên chỗ trống thay vì xoá đi",
+  "A repository URL is required": "Cần URL repo",
+  "Add a pattern source from git": "Thêm nguồn pattern từ git",
+  "Pin a tag, do not track a branch. A pattern is placed in the system-prompt position — following a moving branch lets an upstream commit silently rewrite instructions the agent will obey.":
+      "Nên ghim tag, đừng để nhánh. Pattern được đặt vào vị trí system prompt — theo một nhánh đang chạy nghĩa là một commit phía trên có thể lặng lẽ viết lại chỉ thị mà agent sẽ tuân theo.",
+  "Source id (blank = after the repo name)":
+      "Id nguồn (bỏ trống = theo tên repo)",
+  "Folder holding the patterns": "Thư mục chứa pattern",
+  "Strategies folder (optional)": "Thư mục strategies (tuỳ chọn)",
+  "Add and download": "Thêm và tải về",
+  "A name and a system prompt are required":
+      "Cần tên và system prompt",
+  "Letters, digits, - and _ . Diacritics fold to a plain slug.":
+      "Chữ, số, - và _ . Tên có dấu sẽ được bỏ dấu thành slug.",
+  "Fabric convention: # IDENTITY and PURPOSE → # STEPS → # OUTPUT INSTRUCTIONS → # INPUT. Use {{input}} to place the text mid-prompt; without it the text becomes the user message.":
+      "Quy ước Fabric: # IDENTITY and PURPOSE → # STEPS → # OUTPUT INSTRUCTIONS → # INPUT. Dùng {{input}} để chèn văn bản vào giữa prompt; không có thì văn bản thành user message.",
+  "Save": "Lưu",
+  "A named prompt for one text transform: text in, text out, one model call, no tools. Agents reach them through pattern_run.":
+      "Prompt đặt tên sẵn cho một phép biến đổi văn bản: chữ vào → chữ ra, một lượt model, không tool. Agent gọi chúng qua pattern_run.",
+  "shadows {n} other source(s)":
+      "đè lên {n} nguồn khác",
+  "Also in: {others} — the copy in \"{winner}\" is the one used":
+      "Cũng có trong: {others} — bản ở \"{winner}\" được dùng",
+  "Remove \"{id}\" and delete its {n} pattern(s)?":
+      "Gỡ \"{id}\" và xoá {n} pattern của nó?",
+  "Delete \"{name}\"?":
+      "Xoá \"{name}\"?",
+  "{n} pattern(s) from \"{id}\"":
+      "{n} pattern từ \"{id}\"",
+  "Downloaded {n} pattern(s)":
+      "Đã tải {n} pattern",
+  "rendered only, no model call":
+      "chỉ render, chưa gọi model",
+  "Unfilled variables: {vars} — the pattern keeps the placeholder rather than deleting it":
+      "Biến chưa điền: {vars} — pattern giữ nguyên chỗ trống thay vì xoá đi",
+  "bundled":
+      "đi kèm",
+  "Installed":
+      "Đã cài",
+  "Install now":
+      "Cài ngay",
+  "Download":
+      "Tải về",
+  "Get started":
+      "Bắt đầu",
+  "From a .zip file":
+      "Từ tệp .zip",
+  "offline":
+      "ngoại tuyến",
+  "Choose a .zip":
+      "Chọn tệp .zip",
+  "Import a .zip of pattern folders":
+      "Import .zip các thư mục pattern",
+  "A zip whose sub-folders each hold a system.md. A GitHub download works too — the wrapping folder is stripped.":
+      "Một zip mà mỗi thư mục con là một pattern có system.md. Zip tải từ GitHub cũng được — thư mục bọc ngoài được bỏ tự động.",
+  "This source tracks a moving branch: an upstream commit can silently rewrite instructions the agent will obey.":
+      "Nguồn này bám một nhánh đang chạy: một commit phía trên có thể lặng lẽ viết lại chỉ thị mà agent sẽ tuân theo.",
+  "Installed {n} pattern(s) from \"{name}\"":
+      "Đã cài {n} pattern từ \"{name}\"",
+  "Imported {n}/{found} pattern(s)":
+      "Đã import {n}/{found} pattern",
+  "Hide this source": "Ẩn nguồn này",
+  "Show again": "Hiện lại",
 };

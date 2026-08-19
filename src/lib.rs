@@ -31,6 +31,7 @@ pub mod marketplace;
 pub mod mcp;
 pub mod media_sidecar;
 pub mod memory;
+pub mod patterns;
 pub mod plugins;
 pub mod providers;
 pub mod sandbox;

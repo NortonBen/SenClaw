@@ -292,6 +292,20 @@ pub fn wiki_mcp_config(wiki_dir: &str) -> McpServerConfig {
     cfg
 }
 
+// ===== Zen Patterns =====
+
+/// Build the MCP config for the Patterns subprocess. Like OCR it owns no
+/// state: the registry, the LLM config and the git checkouts all live in the
+/// daemon, and a second copy in the subprocess would race the first one.
+pub fn patterns_mcp_config(ui_port: u16) -> McpServerConfig {
+    let mut cfg = McpServerConfig::new("senclaw-patterns", "patterns-server");
+    cfg.env.insert(
+        "SENCLAW_PATTERNS_API_URL".into(),
+        format!("http://127.0.0.1:{ui_port}"),
+    );
+    cfg
+}
+
 // ===== OCR =====
 
 /// Build the MCP config for the OCR subprocess. The subprocess does not link
@@ -442,6 +456,7 @@ pub const DEFAULT_CORE_SERVERS: &[&str] = &[
     "senclaw-litho",
     "senclaw-browser",
     "senclaw-ocr",
+    "senclaw-patterns",
     "senclaw-js",
     "senclaw-sandbox",
     "senclaw-profile",
@@ -498,6 +513,7 @@ pub fn core_mcp_config(p: CoreMcpParams<'_>) -> McpServerConfig {
         ),
         browser_mcp_config(p.ws_port, p.agent_id),
         ocr_mcp_config(p.ui_port),
+        patterns_mcp_config(p.ui_port),
         js_mcp_config(p.js_timeout_ms, p.js_memory_mb),
         sandbox_mcp_config(),
         user_profile_mcp_config(p.user_profile_path, p.chat_jid),

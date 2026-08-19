@@ -42,6 +42,7 @@ fn context(s: &UiState) -> KitContext<'_> {
         managed_skills_dir: paths.managed_skills_dir.clone(),
         workflows_dir: paths.workflows_dir.clone(),
         kits_dir: paths.kits_dir.clone(),
+        patterns_dir: paths.patterns_dir.clone(),
         db: s.db.as_deref(),
     }
 }
@@ -399,6 +400,10 @@ pub(crate) async fn kits_install(
         append_receipt_items(&s, &bundle.manifest, app_records);
     }
 
+    // Pattern sources the same way and for the same reason: the installer
+    // registered them, but cloning a repo is network I/O it cannot do.
+    sync_kit_pattern_sources(&s, &bundle.manifest, &mut report).await;
+
     // Newly installed personas are only real once the registry has looked
     // again.
     refresh_after_change(&s, report.created() > 0);
@@ -407,6 +412,68 @@ pub(crate) async fn kits_install(
         "ok": !report.any_failed(),
         "report": report,
     })))
+}
+
+/// Clone every git pattern source the kit declared with `syncOnInstall`.
+///
+/// Only sources this kit actually registered are fetched: a declaration whose
+/// id was already taken was *skipped* by the installer (never-overwrite, so a
+/// user's own fork survives a kit install), and pulling it here would fetch
+/// into someone else's source.
+///
+/// A failed clone downgrades that one item rather than failing the install.
+/// The source stays registered with its error recorded, so Plugins → Patterns
+/// shows a retry button instead of the kit having to be reinstalled.
+async fn sync_kit_pattern_sources(
+    s: &Arc<UiState>,
+    kit: &KitManifest,
+    report: &mut KitInstallReport,
+) {
+    use crate::kits::installer::KitItemStatus;
+
+    for decl in kit.pattern_sources.iter().filter(|d| d.sync_on_install) {
+        let raw = if decl.id.trim().is_empty() {
+            &kit.id
+        } else {
+            &decl.id
+        };
+        let Ok(id) = crate::patterns::sanitize_name(raw) else {
+            continue;
+        };
+        let installed_here = report
+            .items
+            .iter()
+            .any(|i| i.kind == "patternSource" && i.name == id && i.status == KitItemStatus::Created);
+        if !installed_here {
+            continue;
+        }
+
+        let item = report
+            .items
+            .iter_mut()
+            .find(|i| i.kind == "patternSource" && i.name == id);
+        match super::patterns::blocking_sync(s, &id).await {
+            Ok(out) => {
+                if let Some(item) = item {
+                    let warn = if out.pinned {
+                        String::new()
+                    } else {
+                        // Worth saying out loud: a pattern is used as a system
+                        // prompt, so an unpinned source lets an upstream commit
+                        // rewrite instructions the agent will obey.
+                        " — tracking a branch, not a pinned tag".to_string()
+                    };
+                    item.detail = Some(format!("{} patterns downloaded{warn}", out.patterns));
+                }
+            }
+            Err(e) => {
+                if let Some(item) = item {
+                    item.status = KitItemStatus::Failed;
+                    item.detail = Some(format!("registered, but the download failed: {}", e.1));
+                }
+            }
+        }
+    }
 }
 
 /// Install every Space App that travelled in the bundle, appending one outcome
@@ -508,10 +575,32 @@ fn append_receipt_items(
 pub(crate) async fn kits_available(
     State(s): State<Arc<UiState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let installed_now = KitReceiptStore::new(&s.config.paths.kits_dir).list();
+    let builtin: Vec<serde_json::Value> = crate::kits::builtin::rows()
+        .into_iter()
+        .map(|row| {
+            let existing = installed_now.iter().find(|r| r.id == row.id);
+            let mut v = serde_json::to_value(&row).unwrap_or_default();
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert(
+                    "installedVersion".into(),
+                    match existing {
+                        Some(r) => serde_json::Value::String(r.version.clone()),
+                        None => serde_json::Value::Null,
+                    },
+                );
+            }
+            v
+        })
+        .collect();
+
     let Some(manager) = s.marketplace_manager.as_ref() else {
-        return Ok(Json(
-            serde_json::json!({ "kits": [], "notes": ["marketplace is not configured"] }),
-        ));
+        // A kit compiled into the binary is installable with or without a
+        // marketplace, so it must still be offered here.
+        return Ok(Json(serde_json::json!({
+            "kits": builtin,
+            "notes": ["marketplace is not configured"],
+        })));
     };
     let offered = manager
         .lock()
@@ -519,8 +608,9 @@ pub(crate) async fn kits_available(
         .list_kits();
 
     let installed = KitReceiptStore::new(&s.config.paths.kits_dir).list();
-    let kits: Vec<serde_json::Value> = offered
+    let kits: Vec<serde_json::Value> = builtin
         .into_iter()
+        .chain(offered.into_iter()
         .map(|(source, kit)| {
             // Match on the declared id when the catalog gives one, else on the
             // name — a catalog that omits `id` still gets the badge right for
@@ -541,7 +631,7 @@ pub(crate) async fn kits_available(
                 "installable": kit.url.is_some(),
                 "installedVersion": existing.map(|r| r.version.clone()),
             })
-        })
+        }))
         .collect();
 
     Ok(Json(serde_json::json!({ "kits": kits })))
@@ -561,7 +651,16 @@ pub(crate) struct SourceKitBody {
 }
 
 /// Pull a kit's artifact out of its source, whatever form it takes.
+///
+/// Built-ins are checked first and deliberately do not need the marketplace:
+/// requiring a configured source before a kit that ships in the binary can be
+/// installed would make the feature unavailable on a fresh machine.
 fn fetch_source_kit(s: &UiState, body: &SourceKitBody) -> Result<KitBundle, AppError> {
+    if body.source_id == crate::kits::builtin::BUILTIN_SOURCE {
+        let kit = crate::kits::builtin::find(&body.name)
+            .ok_or_else(|| bad(format!("no built-in kit \"{}\"", body.name)))?;
+        return bundle_from_artifact("kit.json", kit.manifest.as_bytes());
+    }
     let manager = s.marketplace_manager.as_ref().ok_or_else(|| {
         AppError(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -614,6 +713,7 @@ pub(crate) async fn kits_available_install(
     if !app_records.is_empty() {
         append_receipt_items(&s, &bundle.manifest, app_records);
     }
+    sync_kit_pattern_sources(&s, &bundle.manifest, &mut report).await;
     refresh_after_change(&s, report.created() > 0);
 
     Ok(Json(serde_json::json!({

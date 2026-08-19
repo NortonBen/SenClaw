@@ -1852,17 +1852,35 @@ impl AgentPool {
                     None => Vec::new(),
                 }
             };
+            // Names only: `PatternRegistry::list` reads every `system.md` to
+            // build descriptions, which for the Fabric library is 255 file
+            // reads on a path that runs for every message containing a slash.
+            let known_patterns = {
+                let cfg = self.config.lock().unwrap();
+                match cfg.as_ref() {
+                    Some(c) => {
+                        let store = crate::patterns::PatternStore::new(&c.paths.patterns_dir);
+                        crate::patterns::PatternRegistry::new(&store).names()
+                    }
+                    None => Vec::new(),
+                }
+            };
             let work_dir = self.effective_work_dir(jid, group);
             let expansion = crate::agent::prompt_directives::expand(
                 &full_prompt,
                 work_dir.as_deref(),
                 &known_skills,
+                &known_patterns,
             );
-            if !expansion.skills.is_empty() || !expansion.files.is_empty() {
+            if !expansion.skills.is_empty()
+                || !expansion.files.is_empty()
+                || !expansion.patterns.is_empty()
+            {
                 tracing::info!(
-                    "[AgentPool] directives jid={} skills={:?} files={:?}",
+                    "[AgentPool] directives jid={} skills={:?} patterns={:?} files={:?}",
                     jid,
                     expansion.skills,
+                    expansion.patterns,
                     expansion.files
                 );
             }

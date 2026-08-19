@@ -61,6 +61,21 @@ Code: [`src/kits/`](../src/kits/) · HTTP: [`src/gateway/ui_server/kits.rs`](../
     "enabledOnInstall": true        // false installs the task paused
   }],
 
+  "patterns": [{                    // prompt patterns — see docs/zen-patterns.md
+    "name": "tom-tat-hop",
+    "system": "# IDENTITY and PURPOSE\n…",   // `content` also accepted
+    "user": "…"                     // optional user.md template
+  }],
+
+  "patternSources": [{              // a git library of patterns, e.g. Fabric
+    "id": "fabric",
+    "url": "https://github.com/danielmiessler/fabric",
+    "ref": "v1.4.470",              // pin a TAG: a pattern becomes a system prompt
+    "subdir": "data/patterns",
+    "strategiesSubdir": "data/strategies",
+    "syncOnInstall": true           // default — clone during install
+  }],
+
   "params": [{                      // asked before install — see "Params"
     "key": "workdir",               // fills {{param.workdir}}
     "label": "Working folder",
@@ -211,6 +226,39 @@ persona at all, with nothing but a warning in the log to show for it.)
 3. **Only remove what was created.** Skipped items never enter the receipt, so
    uninstall cannot delete something the user made. If any removal fails the
    receipt is kept — it is the only record of what is still out there.
+
+## Authoring traps
+
+Two things bite kit authors, both found by installing real kits and reading
+back what the daemon actually stored.
+
+### Cron day-of-week is Quartz-style, not Unix
+
+`jobs[].cron` goes through the [`cron`](https://docs.rs/cron) crate, which
+numbers the day-of-week field **1 = Sunday … 7 = Saturday** — not the Unix
+convention where `0`/`7` is Sunday and `1` is Monday.
+
+| Day | Mon | Tue | Wed | Thu | Fri | Sat | Sun |
+|---|---|---|---|---|---|---|---|
+| value | 2 | 3 | 4 | 5 | 6 | 7 | 1 |
+
+`0 8 * * 1` fires **Sunday** 08:00. Nothing rejects a wrong value, because
+every value in range is a valid cron — the job simply runs on a different day
+than the label promised. Five-field expressions are accepted and a seconds
+field is prepended internally; times are the engine host's local timezone.
+
+### Front-matter values are quoted for you
+
+Personas and skills are Markdown with a YAML front-matter block, and the skill
+scanner parses it with a real YAML parser. A perfectly ordinary description —
+`Khung brainstorm: 5W, 6 mũ` — would open a nested mapping and take the whole
+block down with it: the skill still installs, but its description and triggers
+come back empty, so nothing ever matches it.
+
+`persona_markdown` and `skill_markdown` therefore quote any value where YAML
+would read it differently (a `: ` inside it, a leading `-`, a `#`, padding,
+newlines) and leave plain values plain. Authors do not need to know YAML's
+punctuation rules; a round-trip test covers the awkward cases.
 
 ## Hooks
 
