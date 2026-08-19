@@ -338,6 +338,41 @@ pub fn build_router(state: Arc<UiState>) -> Router {
             post(super::kits::kits_available_install),
         )
         .route("/api/kits/:id", delete(super::kits::kits_uninstall))
+        // ===== Zen Patterns =====
+        .route(
+            "/api/patterns",
+            get(super::patterns::patterns_list).post(super::patterns::patterns_save),
+        )
+        .route("/api/patterns/run", post(super::patterns::patterns_run))
+        .route("/api/patterns/import", post(super::patterns::patterns_import))
+        .route("/api/patterns/catalog", get(super::patterns::catalog_list))
+        .route(
+            "/api/patterns/catalog/:id/install",
+            post(super::patterns::catalog_install),
+        )
+        .route(
+            "/api/patterns/sources",
+            get(super::patterns::sources_list).post(super::patterns::sources_add),
+        )
+        .route(
+            "/api/patterns/sources/:id/sync",
+            post(super::patterns::sources_sync),
+        )
+        .route(
+            "/api/patterns/sources/:id/toggle",
+            post(super::patterns::sources_toggle),
+        )
+        .route(
+            "/api/patterns/sources/:id",
+            delete(super::patterns::sources_delete),
+        )
+        // Registered after every literal sibling above, so `/run`, `/import`
+        // and `/sources` are matched as themselves and never as a pattern
+        // named "run".
+        .route(
+            "/api/patterns/:name",
+            get(super::patterns::patterns_get).delete(super::patterns::patterns_delete),
+        )
         .route("/api/subagents", get(subagents_list))
         .route("/api/subagents/create", post(subagents_create))
         .route(

@@ -100,7 +100,9 @@ fn clone_fresh(url: &str, branch: &str, local_path: &Path) -> Result<()> {
             .with_context(|| format!("Failed to create parent directory {:?}", parent))?;
     }
 
-    // Clone with shallow depth
+    // Full clone. (This is deliberate for marketplace sources, which are small
+    // and whose `pull_existing` path fetches by refspec — see
+    // `clone_shallow` for the variant used where history is dead weight.)
     git2::Repository::clone(url, local_path)
         .with_context(|| format!("Failed to clone {} to {:?}", url, local_path))?;
 
@@ -119,6 +121,42 @@ fn clone_fresh(url: &str, branch: &str, local_path: &Path) -> Result<()> {
     repo.set_head(&format!("refs/heads/{}", branch))
         .context("Failed to set HEAD")?;
 
+    Ok(())
+}
+
+/// Clone one ref at `depth`, discarding history.
+///
+/// For a content repository — a pattern library, a prompt collection — the
+/// history is dead weight: cloning `danielmiessler/fabric` in full takes
+/// **~400 seconds**, against roughly a tenth of that for the working tree
+/// alone. Nothing in SenClaw reads a pattern's git log.
+///
+/// Kept separate from [`clone_or_pull`] rather than replacing it: a shallow
+/// repository cannot be deepened later, and the marketplace's `pull_existing`
+/// path assumes a normal clone.
+pub fn clone_shallow(url: &str, git_ref: &str, local_path: &Path, depth: i32) -> Result<()> {
+    if local_path.exists() {
+        std::fs::remove_dir_all(local_path)
+            .with_context(|| format!("Failed to remove existing directory {:?}", local_path))?;
+    }
+    if let Some(parent) = local_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create parent directory {:?}", parent))?;
+    }
+
+    let mut fetch = git2::FetchOptions::new();
+    fetch.depth(depth);
+
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.fetch_options(fetch);
+    // A tag and a branch both go here: libgit2 resolves either against the
+    // remote, and a sha is the one form that needs a full clone — which is
+    // why `sync_source` falls back when this fails.
+    builder.branch(git_ref);
+
+    builder
+        .clone(url, local_path)
+        .with_context(|| format!("Failed to shallow-clone {url} at {git_ref}"))?;
     Ok(())
 }
 

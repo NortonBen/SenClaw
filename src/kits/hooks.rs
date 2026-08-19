@@ -31,6 +31,7 @@ pub const KIT_HOOK_EVENTS: &[&str] = &[
     "PermissionRequest",
     "Stop",
     "SessionStart",
+    "SessionEnd",
     "PreCompact",
     "PostCompact",
 ];
@@ -336,6 +337,7 @@ mod tests {
             Some(&files),
             crate::agent::MarketplaceHookPolicy {
                 allow_command_hooks: false,
+                ..Default::default()
             },
         )
         .expect("loader must return a config built from the kit file alone");

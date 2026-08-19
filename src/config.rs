@@ -65,6 +65,17 @@ pub struct SecurityConfig {
     /// See `docs/agent-security-hooks.md` §3.4(b) and §6.5.
     pub allow_marketplace_command_hooks: bool,
 
+    /// Plugins allowed to register `type: "command"` hooks *by name*, after the
+    /// operator has read that package's scan report.
+    ///
+    /// This is the per-package form of the flag above, and the one to reach for:
+    /// `allow_marketplace_command_hooks` re-opens shell execution to every
+    /// installed plugin at once, including ones installed later that nobody has
+    /// looked at. Naming a package here consents to that package only.
+    ///
+    /// Override: `SENCLAW_MARKETPLACE_COMMAND_HOOK_PLUGINS=ecc,other-plugin`.
+    pub marketplace_command_hook_plugins: Vec<String>,
+
     /// Statically scan a marketplace plugin or Space App package before the
     /// daemon executes anything it ships (`SENCLAW_SCAN_BEFORE_INSTALL`,
     /// default **true**).
@@ -93,6 +104,7 @@ impl Default for SecurityConfig {
     fn default() -> Self {
         SecurityConfig {
             allow_marketplace_command_hooks: false,
+            marketplace_command_hook_plugins: Vec::new(),
             scan_before_install: true,
             scan_block_level: crate::security::scan::Severity::Critical,
         }
@@ -188,6 +200,10 @@ pub struct PathsConfig {
     /// rewritten by a kit). Default: `~/.senclaw/kits`. Override with
     /// `SENCLAW_KITS_DIR`.
     pub kits_dir: PathBuf,
+    /// Zen Patterns root: `sources.json`, the `user/` source, git checkouts
+    /// under `sources/`, and shared `strategies/`. Default:
+    /// `~/.senclaw/patterns`. Override with `SENCLAW_PATTERNS_DIR`.
+    pub patterns_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -484,6 +500,19 @@ fn env_bool(key: &str, fallback: bool) -> bool {
     }
 }
 
+/// Comma-separated list, trimmed, with blanks dropped. An unset or all-blank
+/// variable yields an empty list, which for a security allowlist means "nothing
+/// is allowed" — the safe reading.
+fn env_csv(key: &str) -> Vec<String> {
+    env::var(key)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn env_int<T: std::str::FromStr>(key: &str, fallback: T) -> T {
     env::var(key)
         .ok()
@@ -523,6 +552,9 @@ impl Config {
                 allow_marketplace_command_hooks: env_bool(
                     "SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS",
                     false,
+                ),
+                marketplace_command_hook_plugins: env_csv(
+                    "SENCLAW_MARKETPLACE_COMMAND_HOOK_PLUGINS",
                 ),
                 scan_before_install: env_bool("SENCLAW_SCAN_BEFORE_INSTALL", true),
                 scan_block_level: std::env::var("SENCLAW_SCAN_BLOCK_LEVEL")
@@ -645,6 +677,10 @@ impl Config {
                     senclaw_home.join("workflow-runs.json"),
                 ),
                 kits_dir: env_path("SENCLAW_KITS_DIR", senclaw_home.join("kits")),
+                patterns_dir: env_path(
+                    "SENCLAW_PATTERNS_DIR",
+                    senclaw_home.join("patterns"),
+                ),
             },
             memory: MemoryConfig {
                 embedding_provider: EmbeddingProvider::parse(&env_or(

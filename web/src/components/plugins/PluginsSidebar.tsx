@@ -18,14 +18,15 @@ import {
   AppstoreAddOutlined,
   ApartmentOutlined,
   TagsOutlined,
-  GiftOutlined
+  GiftOutlined,
+  FileTextOutlined
 } from '@ant-design/icons';
 
 const { Text } = Typography;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'alias' | 'cowork' | 'code' | 'marketplace' | 'space-apps' | 'workflows' | 'widgets' | 'sandbox' | 'kits';
+export type PluginsNavItem = 'skills' | 'subagents' | 'hooks' | 'mcp' | 'alias' | 'cowork' | 'code' | 'marketplace' | 'space-apps' | 'workflows' | 'widgets' | 'sandbox' | 'kits' | 'patterns';
 
 interface SkillSummary {
   name: string;
@@ -453,6 +454,14 @@ export function PluginsSidebar({ activeNav, onSelect }: Props) {
               label="Kits"
               isSelected={activeNav === 'kits'}
               onClick={() => onSelect('kits')}
+            />
+
+            {/* ─── Patterns (prompt đặt tên sẵn, chạy một lượt — không phải skill) ─── */}
+            <StaticNavItem
+              icon={<FileTextOutlined />}
+              label="Patterns"
+              isSelected={activeNav === 'patterns'}
+              onClick={() => onSelect('patterns')}
             />
 
             {/* ─── Marketplace ─── */}

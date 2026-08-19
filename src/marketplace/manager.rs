@@ -1056,7 +1056,16 @@ impl MarketplaceManager {
 
         // Gate: inspect the cloned tree before it becomes live.
         let scan = if policy.enabled {
-            let report = crate::security::scan_plugin_dir(&dir, plugin_name);
+            // Score command hooks against the policy that will actually load
+            // them. A package whose hooks this daemon refuses is not shipping
+            // code that runs here, and blocking on it would refuse the package
+            // over automation that never executes.
+            let disposition = crate::agent::MarketplaceHookPolicy::from_config(
+                &crate::config::Config::from_env(),
+            )
+            .disposition_for(plugin_name);
+            let report =
+                crate::security::scan::scan_plugin_dir_with(&dir, plugin_name, disposition);
             if report.verdict(&policy) == crate::security::scan::Verdict::Block && !force {
                 tracing::warn!(
                     "[marketplace] blocked install of '{plugin_name}' (risk {}/100):\n{}",

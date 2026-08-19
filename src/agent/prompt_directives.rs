@@ -5,6 +5,11 @@
 //! * `/skill-name` or `#skill-name` — pin a skill for this turn. The composer
 //!   only ever suggested them; without this pass the token reached the LLM as
 //!   plain prose and the skill fired (or didn't) on the model's whim.
+//!   A token that names no skill but **does** name a Zen Pattern
+//!   ([`crate::patterns`]) pins that pattern instead, so `/summarize` and
+//!   `/extract_wisdom` work with no new syntax to learn. Skills are checked
+//!   first: they are the curated set, and a pattern library of several hundred
+//!   names must never shadow one.
 //! * `@path/to/file.md` — attach a text file. Image references are left alone;
 //!   [`crate::agent::input_builder`] turns those into image blocks.
 //!
@@ -26,6 +31,9 @@ const MAX_TOTAL_BYTES: usize = 384 * 1024;
 const MAX_FILES: usize = 10;
 /// Upper bound on pinned skills — more than this is a typo, not intent.
 const MAX_SKILLS: usize = 3;
+/// Upper bound on pinned patterns. One is the intended use; the cap exists so
+/// a message full of slashes cannot append a wall of instructions.
+const MAX_PATTERNS: usize = 2;
 
 /// `/name` or `#name` at a word boundary. Trailing punctuation is excluded so
 /// "use #pdf, then …" resolves the skill rather than `pdf,`.
@@ -48,6 +56,8 @@ pub struct Expansion {
     pub prompt: String,
     /// Skills the user pinned, in the order typed.
     pub skills: Vec<String>,
+    /// Patterns the user pinned, in the order typed.
+    pub patterns: Vec<String>,
     /// Absolute paths successfully inlined.
     pub files: Vec<PathBuf>,
     /// Human-readable notes about mentions that could not be resolved.
@@ -62,10 +72,16 @@ pub fn has_directives(text: &str) -> bool {
 
 /// Expand `/skill`, `#skill` and `@file` directives found in `text`.
 ///
-/// `known_skills` gates skill tokens: an unknown name is left as prose, so a
-/// bare URL path or a "#1" issue reference never turns into a bogus directive.
+/// `known_skills` and `known_patterns` gate the `/`+`#` tokens: a name in
+/// neither list is left as prose, so a bare URL path or a "#1" issue reference
+/// never turns into a bogus directive. A name in both resolves as the **skill**.
 /// `work_dir` anchors relative `@` paths; mentions that escape it are refused.
-pub fn expand(text: &str, work_dir: Option<&Path>, known_skills: &[String]) -> Expansion {
+pub fn expand(
+    text: &str,
+    work_dir: Option<&Path>,
+    known_skills: &[String],
+    known_patterns: &[String],
+) -> Expansion {
     let mut out = Expansion {
         prompt: text.to_string(),
         ..Default::default()
@@ -74,6 +90,7 @@ pub fn expand(text: &str, work_dir: Option<&Path>, known_skills: &[String]) -> E
     for name in collect_skills(text, known_skills) {
         out.skills.push(name);
     }
+    out.patterns = collect_patterns(text, known_patterns, &out.skills);
 
     let root = work_dir.map(canonical_or_owned);
     let mut budget = MAX_TOTAL_BYTES;
@@ -106,6 +123,9 @@ pub fn expand(text: &str, work_dir: Option<&Path>, known_skills: &[String]) -> E
     if !out.skills.is_empty() {
         out.prompt.push_str(&render_skill_block(&out.skills));
     }
+    if !out.patterns.is_empty() {
+        out.prompt.push_str(&render_pattern_block(&out.patterns));
+    }
     for block in blocks {
         out.prompt.push_str(&block);
     }
@@ -130,6 +150,30 @@ fn collect_skills(text: &str, known: &[String]) -> Vec<String> {
             break;
         }
         let raw = cap[1].trim_end_matches(|c: char| matches!(c, '.' | ',' | ':' | ';' | '!' | '?'));
+        if let Some(name) = known.iter().find(|k| k.eq_ignore_ascii_case(raw)) {
+            if !found.contains(name) {
+                found.push(name.clone());
+            }
+        }
+    }
+    found
+}
+
+/// Tokens that name a pattern rather than a skill.
+///
+/// `already_skills` is what the skill pass claimed. A name in both lists is a
+/// skill and nothing else: the skill set is small and curated, and a library
+/// of several hundred pattern names must never take a skill's token away.
+fn collect_patterns(text: &str, known: &[String], already_skills: &[String]) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for cap in SKILL_TOKEN.captures_iter(text) {
+        if found.len() >= MAX_PATTERNS {
+            break;
+        }
+        let raw = cap[1].trim_end_matches(|c: char| matches!(c, '.' | ',' | ':' | ';' | '!' | '?'));
+        if already_skills.iter().any(|s| s.eq_ignore_ascii_case(raw)) {
+            continue;
+        }
         if let Some(name) = known.iter().find(|k| k.eq_ignore_ascii_case(raw)) {
             if !found.contains(name) {
                 found.push(name.clone());
@@ -235,6 +279,26 @@ fn render_skill_block(skills: &[String]) -> String {
     )
 }
 
+fn render_pattern_block(patterns: &[String]) -> String {
+    let list = patterns
+        .iter()
+        .map(|p| format!("- {p}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // `pattern_get` first, deliberately: the text being transformed is already
+    // in this turn's context, so following the rendered prompt here costs
+    // nothing, where `pattern_run` spends a second call to re-send it.
+    format!(
+        "\n\n<system-reminder>\nNgười dùng đã chỉ định pattern cho lượt này:\n{list}\n\
+         Hãy gọi `mcp__senclaw-patterns__pattern_get` với tên pattern ở trên để lấy prompt \
+         đã render, rồi làm theo đúng cấu trúc output mà nó quy định trên phần văn bản \
+         người dùng đưa trong tin nhắn này. Dùng `pattern_run` thay thế khi văn bản quá dài \
+         hoặc kết quả cần độc lập với hội thoại. Truyền `language: \"auto\"` nếu văn bản không \
+         phải tiếng Anh. Giữ nguyên các mục pattern quy định, đừng viết lại theo ý mình.\n\
+         </system-reminder>"
+    )
+}
+
 fn render_file_block(mention: &str, path: &Path, body: &str, truncated: bool) -> String {
     let note = if truncated {
         "\n[... nội dung bị cắt bớt do vượt giới hạn kích thước ...]"
@@ -267,7 +331,7 @@ mod tests {
     #[test]
     fn pins_known_skill_and_ignores_unknown() {
         let known = vec!["agent-browser".to_string()];
-        let out = expand("/agent-browser mở trang chủ /khong-co-that", None, &known);
+        let out = expand("/agent-browser mở trang chủ /khong-co-that", None, &known, &[]);
         assert_eq!(out.skills, vec!["agent-browser"]);
         assert!(out.prompt.contains("Hãy gọi tool `Skill`"));
         assert!(out.prompt.starts_with("/agent-browser mở trang chủ"));
@@ -276,13 +340,13 @@ mod tests {
     #[test]
     fn hash_form_pins_the_same_skill() {
         let known = vec!["pdf".to_string()];
-        assert_eq!(expand("dùng #pdf nhé", None, &known).skills, vec!["pdf"]);
+        assert_eq!(expand("dùng #pdf nhé", None, &known, &[]).skills, vec!["pdf"]);
     }
 
     #[test]
     fn bare_url_path_is_not_a_skill() {
         let known = vec!["api".to_string()];
-        let out = expand("xem https://x.dev/api thôi", None, &known);
+        let out = expand("xem https://x.dev/api thôi", None, &known, &[]);
         assert!(out.skills.is_empty(), "path segment must not pin a skill");
     }
 
@@ -292,7 +356,7 @@ mod tests {
         fs::create_dir_all(root.join("task-20")).unwrap();
         fs::write(root.join("task-20/01-nghien-cuu.md"), "# Nghiên cứu\nnội dung").unwrap();
 
-        let out = expand("@task-20/01-nghien-cuu.md check", Some(&root), &[]);
+        let out = expand("@task-20/01-nghien-cuu.md check", Some(&root), &[], &[]);
         assert_eq!(out.files.len(), 1);
         assert!(out.prompt.contains("<attached-file"));
         assert!(out.prompt.contains("# Nghiên cứu"));
@@ -306,7 +370,7 @@ mod tests {
         fs::write(root.join("secret.txt"), "nope").unwrap();
         let inner = root.join("inner");
 
-        let out = expand("@../secret.txt", Some(&inner), &[]);
+        let out = expand("@../secret.txt", Some(&inner), &[], &[]);
         assert!(out.files.is_empty());
         assert!(out.prompt.contains("nằm ngoài thư mục làm việc"));
         assert!(!out.prompt.contains("nope"));
@@ -314,7 +378,7 @@ mod tests {
 
     #[test]
     fn image_mentions_are_left_to_the_image_pipeline() {
-        let out = expand("@/tmp/shot.png xem hộ", None, &[]);
+        let out = expand("@/tmp/shot.png xem hộ", None, &[], &[]);
         assert!(out.files.is_empty());
         assert!(out.warnings.is_empty());
         assert_eq!(out.prompt, "@/tmp/shot.png xem hộ");
@@ -322,7 +386,7 @@ mod tests {
 
     #[test]
     fn agent_and_mcp_mentions_are_not_files() {
-        let out = expand("@agent:general-purpose và @mcp:senclaw-browser", None, &[]);
+        let out = expand("@agent:general-purpose và @mcp:senclaw-browser", None, &[], &[]);
         assert!(out.files.is_empty());
         assert!(out.warnings.is_empty());
     }
@@ -332,7 +396,7 @@ mod tests {
         let root = tmpdir("big");
         fs::write(root.join("big.txt"), "x".repeat(MAX_FILE_BYTES + 4096)).unwrap();
 
-        let out = expand("@big.txt", Some(&root), &[]);
+        let out = expand("@big.txt", Some(&root), &[], &[]);
         assert_eq!(out.files.len(), 1);
         assert!(out.prompt.contains("bị cắt bớt"));
     }
@@ -340,7 +404,7 @@ mod tests {
     #[test]
     fn missing_file_becomes_a_warning_not_a_silent_drop() {
         let root = tmpdir("missing");
-        let out = expand("@khong-ton-tai.md", Some(&root), &[]);
+        let out = expand("@khong-ton-tai.md", Some(&root), &[], &[]);
         assert!(out.files.is_empty());
         assert_eq!(out.warnings.len(), 1);
         assert!(out.prompt.contains("không đọc được"));
@@ -350,8 +414,76 @@ mod tests {
     fn same_file_mentioned_twice_is_inlined_once() {
         let root = tmpdir("dupe");
         fs::write(root.join("a.md"), "one").unwrap();
-        let out = expand("@a.md rồi @a.md", Some(&root), &[]);
+        let out = expand("@a.md rồi @a.md", Some(&root), &[], &[]);
         assert_eq!(out.files.len(), 1);
         assert_eq!(out.prompt.matches("<attached-file").count(), 1);
+    }
+
+    // ===== pattern tokens =====
+
+    fn pats() -> Vec<String> {
+        vec![
+            "summarize".to_string(),
+            "extract_wisdom".to_string(),
+            "pdf".to_string(),
+        ]
+    }
+
+    #[test]
+    fn a_token_naming_a_pattern_pins_it() {
+        let out = expand("/summarize bài này giúp", None, &[], &pats());
+        assert_eq!(out.patterns, vec!["summarize"]);
+        assert!(out.skills.is_empty());
+        assert!(out.prompt.contains("pattern_get"));
+        // The original sentence survives — the model still reads what was typed.
+        assert!(out.prompt.starts_with("/summarize bài này giúp"));
+    }
+
+    #[test]
+    fn a_skill_always_wins_a_shared_name() {
+        // `pdf` is both a skill and (here) a pattern. The curated set wins, or
+        // a large imported library could take a skill's token away.
+        let known = vec!["pdf".to_string()];
+        let out = expand("dùng #pdf nhé", None, &known, &pats());
+        assert_eq!(out.skills, vec!["pdf"]);
+        assert!(out.patterns.is_empty());
+        assert!(!out.prompt.contains("pattern_get"));
+    }
+
+    #[test]
+    fn an_unknown_token_stays_prose() {
+        let out = expand("xem https://x.dev/summarize thôi", None, &[], &pats());
+        // The URL path segment matches a pattern name, but there is no
+        // whitespace-anchored `/token`, so nothing fires.
+        assert!(out.patterns.is_empty());
+        let out = expand("/khong-co-that", None, &[], &pats());
+        assert!(out.patterns.is_empty());
+        assert!(out.warnings.is_empty(), "an unknown token is not an error");
+    }
+
+    #[test]
+    fn pattern_pins_are_capped() {
+        let many: Vec<String> = (0..10).map(|i| format!("p{i}")).collect();
+        let text = many
+            .iter()
+            .map(|n| format!("/{n}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(expand(&text, None, &[], &many).patterns.len(), MAX_PATTERNS);
+    }
+
+    #[test]
+    fn skills_and_patterns_can_both_appear_in_one_message() {
+        let out = expand(
+            "/agent-browser mở trang rồi /extract_wisdom",
+            None,
+            &["agent-browser".to_string()],
+            &pats(),
+        );
+        assert_eq!(out.skills, vec!["agent-browser"]);
+        assert_eq!(out.patterns, vec!["extract_wisdom"]);
+        // Skill block first, pattern block after: the skill does the work, the
+        // pattern shapes what comes out of it.
+        assert!(out.prompt.find("Skill").unwrap() < out.prompt.find("pattern_get").unwrap());
     }
 }

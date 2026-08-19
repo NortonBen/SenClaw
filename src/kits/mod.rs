@@ -13,6 +13,7 @@
 //! apps) is documented on [`installer`]; why kit hooks live in their own file
 //! and can only ever be prompt hooks is on [`hooks`].
 
+pub mod builtin;
 pub mod bundle;
 pub mod hooks;
 pub mod installer;

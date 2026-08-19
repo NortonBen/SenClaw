@@ -9,6 +9,8 @@
 //! | workflow | `<workflows_dir>/<name>.md`                          |
 //! | hook     | `<kits_dir>/hooks/<kit>.json`                        |
 //! | job      | a `background_tasks` row owned by the kit             |
+//! | pattern  | `<patterns_dir>/kit-<kit>/<name>/system.md`          |
+//! | patternSource | a row in `<patterns_dir>/sources.json`           |
 //!
 //! Three rules, carried over from the client-side installer this replaces:
 //!
@@ -131,6 +133,9 @@ pub struct KitContext<'a> {
     pub managed_skills_dir: PathBuf,
     pub workflows_dir: PathBuf,
     pub kits_dir: PathBuf,
+    /// Root of [`crate::patterns`] — where a kit's patterns and its registered
+    /// pattern sources land.
+    pub patterns_dir: PathBuf,
     /// `None` = no database available; jobs are reported as failed rather than
     /// silently dropped.
     pub db: Option<&'a Db>,
@@ -313,6 +318,8 @@ pub fn install_bundle_with_params(
             ),
         }
     }
+
+    install_patterns(kit, ctx, &mut items, &mut records);
 
     // Hooks are one file per kit, so "install" is a single write and
     // "uninstall" is a single delete — the user's own hooks.json is never
@@ -696,6 +703,8 @@ pub fn uninstall_kit_with_extra(
         let outcome = match record.kind {
             KitItemKind::Job => remove_job(ctx, record),
             KitItemKind::Skill => remove_path(record, true),
+            KitItemKind::Pattern => remove_path(record, true),
+            KitItemKind::PatternSource => remove_pattern_source(ctx, record),
             KitItemKind::App => {
                 let id = record.engine_ref.as_deref().unwrap_or(&record.name);
                 match extra.iter().find(|o| o.name == id || o.name == record.name) {
@@ -748,6 +757,180 @@ fn remove_path(record: &KitItemRecord, is_dir: bool) -> KitRemoveOutcome {
         fs::remove_file(&path)
     };
     match result {
+        Ok(()) => out(KitRemoveStatus::Removed, None),
+        Err(e) => out(KitRemoveStatus::Failed, Some(e.to_string())),
+    }
+}
+
+/// Write the kit's inline patterns and register the git sources it declares.
+///
+/// Inline patterns go into a **kit-owned source** (`kit-<id>`) rather than the
+/// user's own. Two reasons: uninstall becomes a directory delete that cannot
+/// take a hand-written pattern with it, and a kit pattern never silently wins
+/// over one the user wrote, because the user source is always resolved first
+/// ([`crate::patterns::registry`]).
+///
+/// Git sources are only **registered** here. Cloning them is network I/O and
+/// belongs in the HTTP layer, for the same reason Space App installs do — see
+/// `kits_install`.
+fn install_patterns(
+    kit: &KitManifest,
+    ctx: &KitContext<'_>,
+    items: &mut Vec<KitItemOutcome>,
+    records: &mut Vec<KitItemRecord>,
+) {
+    use crate::patterns::{PatternSource, PatternStore, SourceKind};
+
+    if kit.patterns.is_empty() && kit.pattern_sources.is_empty() {
+        return;
+    }
+    let store = PatternStore::new(&ctx.patterns_dir);
+
+    if !kit.patterns.is_empty() {
+        let owned = PatternSource::for_kit(&kit.id);
+        // Registering the source is what makes the patterns visible at all; a
+        // failure here means the writes below would land in a directory nobody
+        // scans, so say so once instead of once per pattern.
+        if let Err(e) = store.upsert_source(owned.clone()) {
+            items.push(
+                KitItemOutcome::new(KitItemKind::PatternSource, &owned.id, KitItemStatus::Failed)
+                    .with_detail(e.to_string()),
+            );
+        } else {
+            let first_install = !records
+                .iter()
+                .any(|r| r.kind == KitItemKind::PatternSource && r.name == owned.id);
+            if first_install {
+                records.push(KitItemRecord {
+                    kind: KitItemKind::PatternSource,
+                    name: owned.id.clone(),
+                    path: None,
+                    engine_ref: Some(owned.id.clone()),
+                });
+            }
+
+            for pattern in &kit.patterns {
+                match store.write(
+                    &owned,
+                    &pattern.name,
+                    &pattern.system,
+                    pattern.user.as_deref(),
+                    false,
+                ) {
+                    Ok(files) => {
+                        records.push(KitItemRecord {
+                            kind: KitItemKind::Pattern,
+                            name: files.name.clone(),
+                            path: Some(files.path.clone()),
+                            engine_ref: None,
+                        });
+                        items.push(KitItemOutcome::new(
+                            KitItemKind::Pattern,
+                            &files.name,
+                            KitItemStatus::Created,
+                        ));
+                    }
+                    Err(crate::patterns::StoreError::Exists(name)) => items.push(
+                        KitItemOutcome::new(KitItemKind::Pattern, &name, KitItemStatus::Skipped)
+                            .with_detail("a pattern with that name already exists in this kit"),
+                    ),
+                    Err(e) => items.push(
+                        KitItemOutcome::new(
+                            KitItemKind::Pattern,
+                            &pattern.name,
+                            KitItemStatus::Failed,
+                        )
+                        .with_detail(e.to_string()),
+                    ),
+                }
+            }
+        }
+    }
+
+    for decl in &kit.pattern_sources {
+        let id = match crate::patterns::sanitize_name(if decl.id.trim().is_empty() {
+            &kit.id
+        } else {
+            &decl.id
+        }) {
+            Ok(id) => id,
+            Err(e) => {
+                items.push(
+                    KitItemOutcome::new(KitItemKind::PatternSource, &decl.id, KitItemStatus::Failed)
+                        .with_detail(e.to_string()),
+                );
+                continue;
+            }
+        };
+        // Never-overwrite applies here too: a source the user already added
+        // may point at their own fork, and a reinstall must not redirect it.
+        if store.source(&id).is_ok() {
+            items.push(
+                KitItemOutcome::new(KitItemKind::PatternSource, &id, KitItemStatus::Skipped)
+                    .with_detail("a pattern source with that id already exists"),
+            );
+            continue;
+        }
+        let source = PatternSource {
+            name: if decl.name.trim().is_empty() {
+                id.clone()
+            } else {
+                decl.name.clone()
+            },
+            kind: SourceKind::Git,
+            url: Some(decl.url.clone()),
+            git_ref: if decl.git_ref.trim().is_empty() {
+                "main".to_string()
+            } else {
+                decl.git_ref.clone()
+            },
+            subdir: decl.subdir.clone(),
+            strategies_subdir: decl.strategies_subdir.clone(),
+            enabled: true,
+            installed_by: Some(format!("kit:{}", kit.id)),
+            last_synced_at: None,
+            last_error: None,
+            id: id.clone(),
+        };
+        match store.upsert_source(source) {
+            Ok(()) => {
+                records.push(KitItemRecord {
+                    kind: KitItemKind::PatternSource,
+                    name: id.clone(),
+                    path: None,
+                    engine_ref: Some(id.clone()),
+                });
+                items.push(
+                    KitItemOutcome::new(KitItemKind::PatternSource, &id, KitItemStatus::Created)
+                        .with_detail(if decl.sync_on_install {
+                            "registered — downloading patterns"
+                        } else {
+                            "registered — sync it from Plugins → Patterns to download"
+                        }),
+                );
+            }
+            Err(e) => items.push(
+                KitItemOutcome::new(KitItemKind::PatternSource, &id, KitItemStatus::Failed)
+                    .with_detail(e.to_string()),
+            ),
+        }
+    }
+}
+
+/// De-register a pattern source and delete whatever it brought down.
+fn remove_pattern_source(ctx: &KitContext<'_>, record: &KitItemRecord) -> KitRemoveOutcome {
+    let out = |status, detail: Option<String>| KitRemoveOutcome {
+        kind: record.kind.as_str().to_string(),
+        name: record.name.clone(),
+        status,
+        detail,
+    };
+    let id = record.engine_ref.as_deref().unwrap_or(&record.name);
+    let store = crate::patterns::PatternStore::new(&ctx.patterns_dir);
+    if store.source(id).is_err() {
+        return out(KitRemoveStatus::Missing, None);
+    }
+    match store.remove_source(id) {
         Ok(()) => out(KitRemoveStatus::Removed, None),
         Err(e) => out(KitRemoveStatus::Failed, Some(e.to_string())),
     }
@@ -858,6 +1041,7 @@ mod tests {
             managed_skills_dir: dir.join("skills"),
             workflows_dir: dir.join("workflows"),
             kits_dir: dir.join("kits"),
+            patterns_dir: dir.join("patterns"),
             db: None,
         }
     }
@@ -1207,4 +1391,143 @@ mod tests {
         assert_eq!(substitute_bytes(&png, &values), png.to_vec());
     }
 
+
+    // ===== patterns =====
+
+    #[test]
+    fn inline_patterns_land_in_a_kit_owned_source_not_the_users() {
+        use crate::patterns::{PatternRegistry, PatternStore, USER_SOURCE_ID};
+
+        let dir = tempfile::tempdir().unwrap();
+        let c = ctx(dir.path());
+        let mut k = kit();
+        k.patterns = vec![crate::kits::manifest::KitPattern {
+            name: "Summarize Meeting".into(),
+            description: "…".into(),
+            system: "# IDENTITY\n\nSummarise a meeting.".into(),
+            user: None,
+        }];
+
+        let report = install_kit(&k, &c);
+        assert!(!report.any_failed(), "{report:?}");
+
+        let store = PatternStore::new(&c.patterns_dir);
+        let owned = store.source(&format!("kit-{}", k.id)).unwrap();
+        // Name folded to a slug, and written to the kit's source.
+        assert_eq!(store.names_in(&owned), vec!["summarize_meeting"]);
+        // The user's own source stays empty: a kit never writes into it.
+        assert!(store.names_in(&crate::patterns::PatternSource::user()).is_empty());
+
+        // …and the pattern is still resolvable, because the kit source is
+        // registered in the ledger.
+        let reg = PatternRegistry::new(&store);
+        let (src, files) = reg.resolve("summarize_meeting").unwrap();
+        assert_ne!(src.id, USER_SOURCE_ID);
+        assert!(files.system.contains("Summarise a meeting."));
+    }
+
+    #[test]
+    fn uninstalling_takes_the_patterns_and_the_source_back_out() {
+        use crate::patterns::PatternStore;
+
+        let dir = tempfile::tempdir().unwrap();
+        let c = ctx(dir.path());
+        let mut k = kit();
+        k.patterns = vec![crate::kits::manifest::KitPattern {
+            name: "p1".into(),
+            description: String::new(),
+            system: "# H\n\nbody".into(),
+            user: None,
+        }];
+        install_kit(&k, &c);
+
+        let report = uninstall_kit(&k.id, &c).unwrap();
+        assert!(!report.any_failed(), "{report:?}");
+
+        let store = PatternStore::new(&c.patterns_dir);
+        assert!(store.source(&format!("kit-{}", k.id)).is_err());
+        assert!(!c.patterns_dir.join(format!("kit-{}", k.id)).exists());
+    }
+
+    #[test]
+    fn a_git_pattern_source_is_registered_but_never_cloned_here() {
+        use crate::patterns::{PatternStore, SourceKind};
+
+        let dir = tempfile::tempdir().unwrap();
+        let c = ctx(dir.path());
+        let mut k = kit();
+        k.pattern_sources = vec![crate::kits::manifest::KitPatternSource {
+            id: "fabric".into(),
+            name: "Fabric".into(),
+            url: "https://github.com/danielmiessler/fabric".into(),
+            git_ref: "main".into(),
+            subdir: "data/patterns".into(),
+            strategies_subdir: Some("data/strategies".into()),
+            sync_on_install: true,
+        }];
+
+        let report = install_kit(&k, &c);
+        assert!(!report.any_failed(), "{report:?}");
+
+        let store = PatternStore::new(&c.patterns_dir);
+        let src = store.source("fabric").unwrap();
+        assert_eq!(src.kind, SourceKind::Git);
+        assert_eq!(src.subdir, "data/patterns");
+        assert_eq!(src.installed_by, Some(format!("kit:{}", k.id)));
+        // The installer does no network I/O — that is the HTTP layer's job, so
+        // an offline `cargo test` stays offline.
+        assert!(!store.checkout_dir("fabric").exists());
+    }
+
+    #[test]
+    fn a_pattern_source_the_user_already_added_is_never_redirected() {
+        use crate::patterns::{PatternSource, PatternStore, SourceKind};
+
+        let dir = tempfile::tempdir().unwrap();
+        let c = ctx(dir.path());
+        let store = PatternStore::new(&c.patterns_dir);
+        store
+            .upsert_source(PatternSource {
+                id: "fabric".into(),
+                kind: SourceKind::Git,
+                url: Some("https://github.com/me/my-fork".into()),
+                ..PatternSource::for_kit("mine")
+            })
+            .unwrap();
+
+        let mut k = kit();
+        k.pattern_sources = vec![crate::kits::manifest::KitPatternSource {
+            id: "fabric".into(),
+            name: String::new(),
+            url: "https://github.com/danielmiessler/fabric".into(),
+            git_ref: "main".into(),
+            subdir: "data/patterns".into(),
+            strategies_subdir: None,
+            sync_on_install: true,
+        }];
+        install_kit(&k, &c);
+
+        assert_eq!(
+            store.source("fabric").unwrap().url.as_deref(),
+            Some("https://github.com/me/my-fork"),
+            "never-overwrite must protect a user's fork"
+        );
+    }
+
+    #[test]
+    fn a_kit_of_only_patterns_is_installable() {
+        // `item_count` gates the whole parse: patterns had to be counted or a
+        // pattern-only kit (which is exactly what the Fabric kit is) would be
+        // rejected as declaring nothing.
+        let raw = serde_json::json!({
+            "manifest": 2,
+            "id": "fabric",
+            "patternSources": [
+                { "id": "fabric", "url": "https://github.com/danielmiessler/fabric" }
+            ]
+        });
+        let parsed = KitManifest::parse(&raw).unwrap();
+        assert_eq!(parsed.pattern_sources.len(), 1);
+        assert!(parsed.pattern_sources[0].sync_on_install, "default is on");
+    }
 }

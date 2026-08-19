@@ -13,6 +13,7 @@ import 'widgets_panel.dart'
         flowDefaultsProvider,
         installedAppIdsProvider;
 import 'kits_panel.dart' show KitsPanel, kitsProvider;
+import 'patterns_panel.dart' show PatternsPanel, patternsProvider;
 import 'sandbox_panel.dart' show SandboxPanel;
 import '../kanban/kanban_templates_panel.dart' show KanbanTemplatesPanel;
 import '../settings/settings_screen.dart' show SpaceAppsSection;
@@ -391,6 +392,7 @@ const _pluginsSections = [
   ('workflow', 'Workflow', Icons.account_tree_outlined),
   ('memory', 'Knowledge', Icons.hub_outlined),
   ('kits', 'Kits', Icons.card_giftcard_outlined),
+  ('patterns', 'Patterns', Icons.article_outlined),
   ('marketplace', 'Marketplace', Icons.store_outlined),
 ];
 
@@ -532,6 +534,10 @@ class PluginsScreen extends ConsumerWidget {
                 key: const ValueKey('kits'),
                 providers: [kitsProvider],
                 child: const KitsPanel()),
+            'patterns' => RefreshOnMount(
+                key: const ValueKey('patterns'),
+                providers: [patternsProvider],
+                child: const PatternsPanel()),
             'marketplace' => RefreshOnMount(
                 key: const ValueKey('marketplace'),
                 providers: [marketplaceSourcesProvider],

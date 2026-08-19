@@ -27,6 +27,13 @@ pub enum KitItemKind {
     Workflow,
     Hook,
     Job,
+    /// One pattern written into the kit's own pattern source.
+    Pattern,
+    /// A git pattern source the kit registered in `patterns/sources.json`.
+    /// `engine_ref` is the source id, which is what removal needs — the
+    /// checkout directory is the store's to decide, not the receipt's.
+    #[serde(rename = "patternSource")]
+    PatternSource,
     /// A Space App that shipped inside a zip bundle. `engine_ref` is the id the
     /// app installer registered it under.
     App,
@@ -40,6 +47,8 @@ impl KitItemKind {
             Self::Workflow => "workflow",
             Self::Hook => "hook",
             Self::Job => "job",
+            Self::Pattern => "pattern",
+            Self::PatternSource => "patternSource",
             Self::App => "app",
         }
     }

@@ -61,6 +61,21 @@ Code: [`src/kits/`](../src/kits/) · HTTP: [`src/gateway/ui_server/kits.rs`](../
     "enabledOnInstall": true        // false installs the task paused
   }],
 
+  "patterns": [{                    // prompt patterns — see docs/zen-patterns.md
+    "name": "tom-tat-hop",
+    "system": "# IDENTITY and PURPOSE\n…",   // `content` also accepted
+    "user": "…"                     // optional user.md template
+  }],
+
+  "patternSources": [{              // a git library of patterns, e.g. Fabric
+    "id": "fabric",
+    "url": "https://github.com/danielmiessler/fabric",
+    "ref": "v1.4.470",              // pin a TAG: a pattern becomes a system prompt
+    "subdir": "data/patterns",
+    "strategiesSubdir": "data/strategies",
+    "syncOnInstall": true           // default — clone during install
+  }],
+
   "params": [{                      // asked before install — see "Params"
     "key": "workdir",               // fills {{param.workdir}}
     "label": "Working folder",
@@ -212,6 +227,39 @@ persona at all, with nothing but a warning in the log to show for it.)
    uninstall cannot delete something the user made. If any removal fails the
    receipt is kept — it is the only record of what is still out there.
 
+## Authoring traps
+
+Two things bite kit authors, both found by installing real kits and reading
+back what the daemon actually stored.
+
+### Cron day-of-week is Quartz-style, not Unix
+
+`jobs[].cron` goes through the [`cron`](https://docs.rs/cron) crate, which
+numbers the day-of-week field **1 = Sunday … 7 = Saturday** — not the Unix
+convention where `0`/`7` is Sunday and `1` is Monday.
+
+| Day | Mon | Tue | Wed | Thu | Fri | Sat | Sun |
+|---|---|---|---|---|---|---|---|
+| value | 2 | 3 | 4 | 5 | 6 | 7 | 1 |
+
+`0 8 * * 1` fires **Sunday** 08:00. Nothing rejects a wrong value, because
+every value in range is a valid cron — the job simply runs on a different day
+than the label promised. Five-field expressions are accepted and a seconds
+field is prepended internally; times are the engine host's local timezone.
+
+### Front-matter values are quoted for you
+
+Personas and skills are Markdown with a YAML front-matter block, and the skill
+scanner parses it with a real YAML parser. A perfectly ordinary description —
+`Khung brainstorm: 5W, 6 mũ` — would open a nested mapping and take the whole
+block down with it: the skill still installs, but its description and triggers
+come back empty, so nothing ever matches it.
+
+`persona_markdown` and `skill_markdown` therefore quote any value where YAML
+would read it differently (a `: ` inside it, a leading `-`, a `#`, padding,
+newlines) and leave plain values plain. Authors do not need to know YAML's
+punctuation rules; a round-trip test covers the awkward cases.
+
 ## Hooks
 
 Kit hooks live in their own file per kit, handed to the hook loader through the
@@ -225,8 +273,13 @@ consequences, both intended:
   a command hook and the writer emits `"type": "prompt"` unconditionally. A
   command hook is `sh -c` at daemon privilege — supply-chain RCE plus a
   restart-surviving foothold — and that is not something a one-tap install
-  should be able to arrange. This mirrors the existing marketplace policy
-  (`SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS`), which still gates the load side.
+  should be able to arrange. This mirrors the marketplace policy, which still
+  gates the load side and is now expressible per package:
+  `SENCLAW_MARKETPLACE_COMMAND_HOOK_PLUGINS=<name>` admits one package whose
+  scan report the operator has read, while
+  `SENCLAW_ALLOW_MARKETPLACE_COMMAND_HOOKS=true` admits every installed plugin
+  at once — including ones installed later that nobody has looked at, which is
+  why the pre-install scan treats *that* setting as the blocking one.
 
 Accepted events: `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `PermissionRequest`, `Stop`, `SessionStart`, `PreCompact`, `PostCompact`. An

@@ -34,6 +34,7 @@ use super::js_server::McpJsServer;
 use super::litho_server::McpLithoServer;
 use super::memory_server::McpMemoryServer;
 use super::ocr_server::McpOcrServer;
+use super::patterns_server::McpPatternsServer;
 use super::sandbox_server::McpSandboxServer;
 use super::user_profile_server::McpUserProfileServer;
 use super::schedule_server::McpScheduleServer;
@@ -88,6 +89,7 @@ macro_rules! for_each_child {
         if let Some($child) = &$self.send $body
         if let Some($child) = &$self.browser $body
         if let Some($child) = &$self.ocr $body
+        if let Some($child) = &$self.patterns $body
         if let Some($child) = &$self.litho $body
         if let Some($child) = &$self.js $body
         if let Some($child) = &$self.sandbox $body
@@ -172,6 +174,7 @@ pub struct CoreServer {
     send: Option<Child<McpSendServer>>,
     browser: Option<Child<McpBrowserServer>>,
     ocr: Option<Child<McpOcrServer>>,
+    patterns: Option<Child<McpPatternsServer>>,
     litho: Option<Child<McpLithoServer>>,
     js: Option<Child<McpJsServer>>,
     sandbox: Option<Child<McpSandboxServer>>,
@@ -246,6 +249,12 @@ impl CoreServer {
                 McpBrowserServer::from_env()
             ),
             ocr: build_child!(w, "senclaw-ocr", McpOcrServer, McpOcrServer::from_env()),
+            patterns: build_child!(
+                w,
+                "senclaw-patterns",
+                McpPatternsServer,
+                McpPatternsServer::from_env()
+            ),
             litho: build_child!(
                 w,
                 "senclaw-litho",

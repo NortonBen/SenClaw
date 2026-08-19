@@ -15,6 +15,7 @@ import AliasPanel from './AliasPanel';
 import WidgetsPanel from './WidgetsPanel';
 import { SandboxPanel } from './SandboxPanel';
 import KitsPanel from './KitsPanel';
+import PatternsPanel from './PatternsPanel';
 
 const { Text } = Typography;
 
@@ -36,6 +37,7 @@ const NAV_LABEL: Record<PluginsNavItem, string> = {
   widgets: 'Widget',
   sandbox: 'Sandbox',
   kits: 'Kits',
+  patterns: 'Patterns',
 };
 
 export default function PluginsView({ activeNav }: Props) {
@@ -59,6 +61,7 @@ export default function PluginsView({ activeNav }: Props) {
         {activeNav === 'widgets' && <WidgetsPanel />}
         {activeNav === 'sandbox' && <SandboxPanel />}
         {activeNav === 'kits' && <KitsPanel />}
+        {activeNav === 'patterns' && <PatternsPanel />}
       </Content>
     </Layout>
   );

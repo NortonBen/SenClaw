@@ -86,6 +86,13 @@ impl Drop for Staging {
     }
 }
 
+/// What this daemon would do with command hooks shipped by a package of this
+/// name, so a hand-run scan predicts the real install rather than a
+/// hypothetical one.
+fn hook_disposition(name: &str) -> scan::CommandHookDisposition {
+    crate::agent::MarketplaceHookPolicy::from_config(&Config::from_env()).disposition_for(name)
+}
+
 fn scan_path(path: &Path) -> Result<(ScanReport, Staging)> {
     if !path.exists() {
         anyhow::bail!("No such path: {}", path.display());
@@ -98,7 +105,10 @@ fn scan_path(path: &Path) -> Result<(ScanReport, Staging)> {
                 scan::scan_space_app(path, &manifest, &name),
                 Staging(None),
             )),
-            None => Ok((scan::scan_plugin_dir(path, &name), Staging(None))),
+            None => Ok((
+                scan::scan_plugin_dir_with(path, &name, hook_disposition(&name)),
+                Staging(None),
+            )),
         };
     }
 
@@ -123,7 +133,7 @@ fn scan_path(path: &Path) -> Result<(ScanReport, Staging)> {
     let name = package_name(path);
     let report = match read_manifest_from_dir(&staging) {
         Some(manifest) => scan::scan_space_app(&staging, &manifest, &name),
-        None => scan::scan_plugin_dir(&staging, &name),
+        None => scan::scan_plugin_dir_with(&staging, &name, hook_disposition(&name)),
     };
     Ok((report, guard))
 }

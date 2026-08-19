@@ -18,7 +18,9 @@
 //!   "skills":    [{ "name": "report-format", "content": "# …" }],
 //!   "workflows": [{ "name": "morning", "content": "---\nname: morning\n---\n…" }],
 //!   "hooks":     [{ "event": "SessionStart", "prompt": "…" }],
-//!   "jobs":      [{ "name": "09:00", "agentRef": "Zen Reporter", "cron": "0 9 * * *" }]
+//!   "jobs":      [{ "name": "09:00", "agentRef": "Zen Reporter", "cron": "0 9 * * *" }],
+//!   "patterns":  [{ "name": "summarize", "system": "# IDENTITY…" }],
+//!   "patternSources": [{ "id": "fabric", "url": "https://github.com/…", "ref": "v1.4.0" }]
 //! }
 //! ```
 //!
@@ -75,6 +77,18 @@ pub struct KitManifest {
     #[serde(default)]
     pub jobs: Vec<KitJob>,
 
+    /// Prompt patterns the kit ships inline — see [`crate::patterns`]. They
+    /// land in a source named after the kit rather than in the user's own, so
+    /// uninstalling is a directory delete that cannot take a hand-written
+    /// pattern with it.
+    #[serde(default)]
+    pub patterns: Vec<KitPattern>,
+    /// Git repositories of patterns to register. This is how a library the
+    /// size of Fabric's ships in a kit: a few hundred files do not belong
+    /// inlined in a manifest, and a checkout can be re-synced later.
+    #[serde(default)]
+    pub pattern_sources: Vec<KitPatternSource>,
+
     /// Parsed but installed by the client, not the daemon — see module docs.
     #[serde(default)]
     pub mcp_servers: Vec<serde_json::Value>,
@@ -127,6 +141,51 @@ pub struct KitWorkflow {
     /// Complete workflow `.md` (YAML front-matter + body) as the workflow
     /// registry expects it.
     pub content: String,
+}
+
+/// A pattern shipped inline in the manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KitPattern {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// `system.md` body. `content` is accepted as the spelling every other
+    /// kit item uses, so an author does not have to remember which is which.
+    #[serde(default, alias = "content")]
+    pub system: String,
+    /// Optional `user.md` template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+}
+
+/// A git repository of patterns the kit registers as a source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KitPatternSource {
+    /// Source id. Blank falls back to the kit id, which is what a kit that
+    /// ships exactly one library wants.
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    pub url: String,
+    /// Branch, tag or sha. **A tag or sha is the right answer**: a pattern is
+    /// used as a system prompt, so tracking a branch lets an upstream commit
+    /// rewrite instructions the agent obeys. See [`crate::patterns::source`].
+    #[serde(default, alias = "ref")]
+    pub git_ref: String,
+    /// Sub-path inside the repo holding the pattern directories.
+    #[serde(default)]
+    pub subdir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategies_subdir: Option<String>,
+    /// Clone immediately on install. Default true — a source nobody fetched
+    /// contributes nothing, and "install then separately sync" is a step users
+    /// forget. The clone happens in the HTTP layer, not the installer: it is
+    /// network I/O, the same reason Space Apps install there.
+    #[serde(default = "default_true")]
+    pub sync_on_install: bool,
 }
 
 /// A hook a kit registers. Kept deliberately narrow: **prompt hooks only**.
@@ -221,6 +280,8 @@ impl KitManifest {
             + self.workflows.len()
             + self.hooks.len()
             + self.jobs.len()
+            + self.patterns.len()
+            + self.pattern_sources.len()
     }
 
     /// Parse + validate. Never panics on hostile input: a broken kit rules
@@ -298,6 +359,8 @@ impl KitManifest {
             kit.hooks.clear();
             kit.mcp_servers.clear();
             kit.apps.clear();
+            kit.patterns.clear();
+            kit.pattern_sources.clear();
             kit.params.clear();
         }
 
@@ -511,12 +574,12 @@ impl KitManifest {
     /// runner only logs a warning).
     pub fn persona_markdown(agent: &KitAgent) -> String {
         let mut out = String::from("---\n");
-        out.push_str(&format!("name: {}\n", agent.name));
+        out.push_str(&format!("name: {}\n", yaml_scalar(&agent.name)));
         if let Some(desc) = agent.description.as_ref().filter(|d| !d.trim().is_empty()) {
-            out.push_str(&format!("description: {desc}\n"));
+            out.push_str(&format!("description: {}\n", yaml_scalar(desc)));
         }
         if !agent.tools.is_empty() {
-            out.push_str(&format!("tools: {}\n", agent.tools.join(",")));
+            out.push_str(&format!("tools: {}\n", yaml_scalar(&agent.tools.join(","))));
         }
         if let Some(max) = agent.max_concurrent {
             out.push_str(&format!("max_concurrent: {max}\n"));
@@ -534,18 +597,47 @@ impl KitManifest {
             return skill.content.clone();
         }
         let mut out = String::from("---\n");
-        out.push_str(&format!("name: {}\n", skill.name));
+        out.push_str(&format!("name: {}\n", yaml_scalar(&skill.name)));
         if !skill.description.trim().is_empty() {
-            out.push_str(&format!("description: {}\n", skill.description));
+            out.push_str(&format!("description: {}\n", yaml_scalar(&skill.description)));
         }
         if !skill.triggers.is_empty() {
-            out.push_str(&format!("triggers: {}\n", skill.triggers.join(", ")));
+            out.push_str(&format!(
+                "triggers: {}\n",
+                yaml_scalar(&skill.triggers.join(", "))
+            ));
         }
         out.push_str("---\n\n");
         out.push_str(skill.content.trim());
         out.push('\n');
         out
     }
+}
+
+/// Quote a front-matter value when leaving it bare would change what YAML sees.
+///
+/// The skill scanner parses this block with a real YAML parser, so a perfectly
+/// ordinary description like `Khung brainstorm: 5W, 6 mũ` breaks the mapping —
+/// and the failure is silent: the skill still installs, but its description and
+/// triggers come back empty, so nothing ever matches it. Quoting is cheaper
+/// than asking every kit author to know YAML's punctuation rules.
+fn yaml_scalar(raw: &str) -> String {
+    let needs_quotes = raw.contains(": ")
+        || raw.ends_with(':')
+        || raw.contains('#')
+        || raw.contains('\n')
+        || raw.starts_with(['-', '?', '*', '&', '!', '|', '>', '%', '@', '`', '"', '\'', '[', '{'])
+        || raw.trim() != raw;
+    if !needs_quotes {
+        return raw.to_string();
+    }
+    // Double quotes with the two escapes YAML requires inside them. Newlines
+    // become `\n` so a multi-line value can never end the block early.
+    let escaped = raw
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    format!("\"{escaped}\"")
 }
 
 /// Sanitise an id/name into something safe to use as a single path segment.
@@ -702,6 +794,79 @@ mod tests {
         let warnings = kit.warnings();
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].kind, "promptTruncated");
+    }
+
+    #[test]
+    fn a_colon_in_a_description_cannot_break_the_front_matter() {
+        // A description like "Khung brainstorm: 5W, 6 mũ" is ordinary prose,
+        // but bare in YAML it opens a nested mapping — the skill scanner then
+        // reads an empty description and drops every trigger, silently, while
+        // the skill still appears to install fine.
+        let skill = KitSkill {
+            name: "zen-brainstorm-method".into(),
+            description: "Khung một buổi brainstorm: 5W, 6 mũ".into(),
+            content: "# body".into(),
+            triggers: vec!["brainstorm".into(), "6 mũ tư duy".into()],
+        };
+
+        let md = KitManifest::skill_markdown(&skill);
+        let front = md.split("---").nth(1).expect("front matter block");
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(front).expect("front matter must be valid YAML");
+
+        assert_eq!(
+            parsed["description"].as_str(),
+            Some("Khung một buổi brainstorm: 5W, 6 mũ")
+        );
+        assert_eq!(parsed["triggers"].as_str(), Some("brainstorm, 6 mũ tư duy"));
+    }
+
+    #[test]
+    fn every_awkward_value_survives_a_yaml_round_trip() {
+        // The property that matters is not "which values get quotes" — it is
+        // that whatever a kit author writes comes back out of the parser
+        // unchanged. Asserting the quoting style instead would just encode a
+        // guess about YAML's punctuation rules.
+        for raw in [
+            "Zen Reporter",
+            "a, b, c",
+            "Khung brainstorm: 5W, 6 mũ",
+            "- starts with a dash",
+            "trailing colon:",
+            "has #hash",
+            "say \"hi\"",
+            "  padded  ",
+            "{braces}",
+            "100% done",
+        ] {
+            let skill = KitSkill {
+                name: "s".into(),
+                description: raw.into(),
+                content: "# body".into(),
+                triggers: vec![raw.into()],
+            };
+            let md = KitManifest::skill_markdown(&skill);
+            let front = md.split("---").nth(1).unwrap_or_default();
+            let parsed: serde_yaml::Value = serde_yaml::from_str(front)
+                .unwrap_or_else(|e| panic!("{raw:?} produced invalid YAML: {e}"));
+
+            // Padding is preserved too — `yaml_scalar` quotes anything whose
+            // trim differs, so what the author wrote is what comes back.
+            assert_eq!(
+                parsed["description"].as_str(),
+                Some(raw),
+                "description round-trip for {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_values_are_left_plain() {
+        // Quoting everything would work, but it makes hand-editing an
+        // installed persona file noisier than it needs to be.
+        assert_eq!(yaml_scalar("Zen Reporter"), "Zen Reporter");
+        assert_eq!(yaml_scalar("a, b, c"), "a, b, c");
+        assert_eq!(yaml_scalar("Read,Bash"), "Read,Bash");
     }
 
     #[test]
