@@ -26,6 +26,8 @@ import '../../core/update/update_service.dart' show bundlePath;
 import '../../theme/theme_mode_provider.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_markdown.dart';
+import '../space/app_install_dialog.dart'
+    show PickedZip, pickSpaceAppZip, uploadSpaceAppZip;
 import '../capture/capture_hotkey.dart';
 import '../capture/screen_capture.dart' show isCaptureSupported;
 import '../chat/agents_provider.dart';
@@ -4289,10 +4291,9 @@ class SpaceAppsSection extends ConsumerWidget {
   }
 
   Future<void> _installZip(BuildContext context, WidgetRef ref) async {
-    final FilePickerResult? res;
+    final PickedZip? picked;
     try {
-      res = await FilePicker.platform.pickFiles(
-          type: FileType.custom, allowedExtensions: ['zip'], withData: kIsWeb);
+      picked = await pickSpaceAppZip();
     } catch (e) {
       // file_picker errors before showing the panel (e.g. macOS entitlement
       // check) — surface it instead of failing silently.
@@ -4303,27 +4304,13 @@ class SpaceAppsSection extends ConsumerWidget {
       }
       return;
     }
-    final f = res?.files.firstOrNull;
-    if (f == null) return;
-    final cfg = ref.read(appConfigProvider);
-    final uri = Uri.parse('http://${cfg.host}:${cfg.uiPort}/api/space/apps/install-zip');
-    final req = http.MultipartRequest('POST', uri);
-    req.headers.addAll(cfg.authHeaders);
-    if (kIsWeb && f.bytes != null) {
-      req.files.add(http.MultipartFile.fromBytes('file', f.bytes!,
-          filename: f.name));
-    } else if (f.path != null) {
-      req.files.add(http.MultipartFile.fromBytes(
-          'file', await File(f.path!).readAsBytes(),
-          filename: f.name));
-    } else {
-      return;
-    }
+    if (picked == null) return;
     try {
-      final streamed = await req.send();
-      if (streamed.statusCode >= 300) {
-        throw Exception('HTTP ${streamed.statusCode}');
-      }
+      // The same upload the Apps screen's install dialog uses — including
+      // reading the daemon's own `{error}` out of a refusal, so a blocked
+      // install says why instead of just "HTTP 422".
+      await uploadSpaceAppZip(ref.read(appConfigProvider),
+          filename: picked.name, bytes: picked.bytes);
       ref.invalidate(spaceAppsProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

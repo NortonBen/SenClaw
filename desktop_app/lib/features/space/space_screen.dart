@@ -10,6 +10,8 @@ import '../../widgets/note_body.dart';
 import '../../widgets/embedded_web.dart';
 import '../../widgets/schedule_editor.dart';
 import '../../widgets/section_scaffold.dart';
+import 'app_install_dialog.dart';
+import 'app_search.dart';
 import 'event_link.dart';
 import 'note_inline_editor.dart';
 import 'note_tags.dart';
@@ -1493,11 +1495,19 @@ class _DateField extends StatelessWidget {
 /// The Apps launcher: a grid of installed apps (home). Tapping one launches it
 /// into [RunningAppsLayer], which the shell keeps mounted across navigation so
 /// apps keep running in the background (Android task model).
-class SpaceAppsScreen extends ConsumerWidget {
+class SpaceAppsScreen extends ConsumerStatefulWidget {
   const SpaceAppsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SpaceAppsScreen> createState() => _SpaceAppsScreenState();
+}
+
+class _SpaceAppsScreenState extends ConsumerState<SpaceAppsScreen> {
+  /// Lọc lưới launcher tại chỗ. Bỏ dấu, nên "kho" ra "Quản lý Kho".
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
     final c = context.colors;
     final apps = ref.watch(spaceAppsProvider);
     final run = ref.watch(runningAppsProvider);
@@ -1530,6 +1540,29 @@ class SpaceAppsScreen extends ConsumerWidget {
                     style: TextStyle(color: c.accent, fontSize: 11)),
               ),
             const Spacer(),
+            SizedBox(
+              width: 220,
+              height: AppTokens.controlHeight,
+              child: TextField(
+                onChanged: (v) => setState(() => _query = v),
+                style: TextStyle(color: c.textPrimary, fontSize: 13),
+                decoration: InputDecoration(
+                  isDense: true,
+                  prefixIcon: Icon(Icons.search, size: 16, color: c.textMuted),
+                  hintText: context.tr('Search apps…'),
+                  hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(AppTokens.rMd)),
+                ),
+              ),
+            ),
+            const SizedBox(width: AppTokens.s8),
+            FilledButton.icon(
+              onPressed: () => showAppInstallDialog(context),
+              icon: const Icon(Icons.add, size: 16),
+              label: Text(context.tr('Install app')),
+            ),
+            const SizedBox(width: AppTokens.s4),
             IconButton(
               tooltip: context.tr('Reload apps'),
               icon: const Icon(Icons.refresh, size: 18),
@@ -1542,24 +1575,42 @@ class SpaceAppsScreen extends ConsumerWidget {
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => Center(child: Text('$e')),
             data: (all) {
-              final list =
+              final installed =
                   all.where((a) => a.showInLauncher).toList(growable: false);
-              return list.isEmpty
-                ? Center(
-                    child: Text(context.tr('No apps installed'),
-                        style: TextStyle(color: c.textMuted)))
-                : GridView.builder(
-                    padding: const EdgeInsets.all(AppTokens.s24),
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 200,
-                      mainAxisExtent: 132,
-                      crossAxisSpacing: AppTokens.s16,
-                      mainAxisSpacing: AppTokens.s16,
+              final list = installed
+                  .where((a) =>
+                      searchMatches([a.name, a.description, a.id], _query))
+                  .toList(growable: false);
+              if (installed.isEmpty) {
+                return Center(
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text(context.tr('No apps installed'),
+                        style: TextStyle(color: c.textMuted)),
+                    const SizedBox(height: AppTokens.s12),
+                    FilledButton.icon(
+                      onPressed: () => showAppInstallDialog(context),
+                      icon: const Icon(Icons.add, size: 16),
+                      label: Text(context.tr('Install app')),
                     ),
-                    itemCount: list.length,
-                    itemBuilder: (_, i) => _AppTile(app: list[i]),
-                  );
+                  ]),
+                );
+              }
+              if (list.isEmpty) {
+                return Center(
+                    child: Text(context.tr('No app matches that search'),
+                        style: TextStyle(color: c.textMuted)));
+              }
+              return GridView.builder(
+                padding: const EdgeInsets.all(AppTokens.s24),
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 200,
+                  mainAxisExtent: 132,
+                  crossAxisSpacing: AppTokens.s16,
+                  mainAxisSpacing: AppTokens.s16,
+                ),
+                itemCount: list.length,
+                itemBuilder: (_, i) => _AppTile(app: list[i]),
+              );
             },
           ),
         ),

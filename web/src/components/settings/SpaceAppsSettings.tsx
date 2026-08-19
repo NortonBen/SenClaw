@@ -3,7 +3,7 @@ import {
   Alert,
   Button,
   Card,
-  Form,
+  Empty,
   Input,
   message,
   Modal,
@@ -11,16 +11,16 @@ import {
   Space,
   Tag,
   Typography,
-  Upload,
   theme,
 } from 'antd';
 import {
   AppstoreOutlined, CloudDownloadOutlined, DeleteOutlined, InfoCircleOutlined, SettingOutlined,
-  LinkOutlined, PlayCircleOutlined, PoweroffOutlined, SafetyCertificateOutlined,
-  SyncOutlined, UploadOutlined,
+  PlayCircleOutlined, PlusOutlined, PoweroffOutlined, SafetyCertificateOutlined,
+  SearchOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import { SpaceAppDetailModal, type DetailApp } from '../space/SpaceAppDetailModal';
-import ScanReportDialog, { readScanError, type ScanReport } from '../security/ScanReportDialog';
+import { AppInstallDialog } from '../space/AppInstallDialog';
+import { appMatches } from '../space/spaceApp';
 import SpaceAppSandboxModal from './SpaceAppSandboxModal';
 import AppTokenModeCard from './AppTokenModeCard';
 
@@ -48,13 +48,8 @@ export const SpaceAppsSettings: React.FC = () => {
   const { token } = theme.useToken();
   const [apps, setApps] = useState<SpaceAppRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [installing, setInstalling] = useState(false);
-  const [scanState, setScanState] = useState<{
-    report: ScanReport;
-    file: File;
-    blocked: boolean;
-  } | null>(null);
-  const [registering, setRegistering] = useState(false);
+  const [query, setQuery] = useState('');
+  const [showInstall, setShowInstall] = useState(false);
   const [detailApp, setDetailApp] = useState<DetailApp | null>(null);
   // App whose backend-settings page is open in the iframe modal — the way an
   // app hidden from the launcher (`integration.launcher: false`) exposes its
@@ -66,7 +61,6 @@ export const SpaceAppsSettings: React.FC = () => {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [sandboxApp, setSandboxApp] = useState<{ id: string; name: string } | null>(null);
   const [lifecycleBusy, setLifecycleBusy] = useState<string | null>(null);
-  const [form] = Form.useForm();
 
   // Stop / start an app's server process by hand. Stopping a session app just
   // does early what the idle timer would do; stopping a background one is an
@@ -143,55 +137,6 @@ export const SpaceAppsSettings: React.FC = () => {
     loadApps().then(() => checkUpdates());
   }, []);
 
-  const installZip = async (file: File, force = false) => {
-    setInstalling(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      if (force) formData.append('force', 'true');
-      const res = await fetch('/api/space/apps/install-zip', { method: 'POST', body: formData });
-      if (!res.ok) {
-        const { blocked, error, scan } = await readScanError(res);
-        if (blocked && scan) {
-          setScanState({ report: scan, file, blocked: true });
-          return;
-        }
-        throw new Error(error);
-      }
-      const row = (await res.json()) as { scan?: ScanReport };
-      if (row?.scan?.findings?.length) {
-        setScanState({ report: row.scan, file, blocked: false });
-      } else {
-        message.success('Space App installed');
-      }
-      await loadApps();
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Install failed');
-    } finally {
-      setInstalling(false);
-    }
-  };
-
-  const registerManifest = async () => {
-    const values = await form.validateFields();
-    setRegistering(true);
-    try {
-      const res = await fetch('/api/space/apps/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ manifest_url: values.manifest_url }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      message.success('Space App registered');
-      form.resetFields();
-      await loadApps();
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Register failed');
-    } finally {
-      setRegistering(false);
-    }
-  };
-
   const uninstall = async (id: string) => {
     try {
       const res = await fetch(`/api/space/apps/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -203,6 +148,16 @@ export const SpaceAppsSettings: React.FC = () => {
     }
   };
 
+  // Search filters what is rendered, never what is loaded — an app hidden by a
+  // query is still installed, still running, and still counted by the updates
+  // check.
+  const visible = apps.filter(app =>
+    appMatches(
+      { id: app.id, name: app.manifest?.name, description: app.manifest?.description },
+      query,
+    ),
+  );
+
   return (
     <div style={{ padding: '24px', maxWidth: 980, margin: '0 auto', width: '100%' }}>
       <Space style={{ width: '100%', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -211,6 +166,14 @@ export const SpaceAppsSettings: React.FC = () => {
           <Text type="secondary">Install, register, and remove embedded Space Apps.</Text>
         </div>
         <Space>
+          <Input
+            allowClear
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Tìm app…"
+            prefix={<SearchOutlined />}
+            style={{ width: 220 }}
+          />
           <Button
             icon={<SyncOutlined spin={checking} />}
             loading={checking}
@@ -218,18 +181,9 @@ export const SpaceAppsSettings: React.FC = () => {
           >
             Check updates
           </Button>
-          <Upload
-            accept=".zip"
-            showUploadList={false}
-            beforeUpload={file => {
-              installZip(file);
-              return false;
-            }}
-          >
-            <Button type="primary" icon={<UploadOutlined />} loading={installing}>
-              Install ZIP
-            </Button>
-          </Upload>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowInstall(true)}>
+            Cài app mới
+          </Button>
         </Space>
       </Space>
 
@@ -243,23 +197,8 @@ export const SpaceAppsSettings: React.FC = () => {
         description="A ZIP app must contain senclaw-manifest.json or senclaw-app.json at the archive root. Static Next.js exports are served from /api/space/apps/:id/static/index.html and appear as child items under Apps in the Space sidebar."
       />
 
-      <Card size="small" style={{ marginBottom: 16, borderColor: token.colorBorderSecondary }}>
-        <Form form={form} layout="inline" style={{ gap: 8 }}>
-          <Form.Item
-            name="manifest_url"
-            rules={[{ required: true, type: 'url', message: 'Enter a manifest URL' }]}
-            style={{ flex: 1, marginBottom: 0 }}
-          >
-            <Input prefix={<LinkOutlined />} placeholder="https://app.example.com/senclaw-manifest.json" />
-          </Form.Item>
-          <Button onClick={registerManifest} loading={registering}>
-            Register URL
-          </Button>
-        </Form>
-      </Card>
-
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
-        {apps.map(app => {
+        {visible.map(app => {
           const manifest = app.manifest ?? {};
           const integration = manifest.integration ?? {};
           const upd = updates[app.id];
@@ -385,6 +324,14 @@ export const SpaceAppsSettings: React.FC = () => {
             <Text type="secondary">No Space Apps installed.</Text>
           </Card>
         )}
+        {!loading && apps.length > 0 && visible.length === 0 && (
+          <Card style={{ borderColor: token.colorBorderSecondary }}>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={`Không có app nào khớp “${query}”`}
+            />
+          </Card>
+        )}
       </Space>
 
       <SpaceAppDetailModal
@@ -418,16 +365,11 @@ export const SpaceAppsSettings: React.FC = () => {
         onClose={() => setSandboxApp(null)}
       />
 
-      <ScanReportDialog
-        open={!!scanState}
-        report={scanState?.report}
-        blocked={!!scanState?.blocked}
-        busy={installing}
-        onCancel={() => setScanState(null)}
-        onForceInstall={() => {
-          const f = scanState?.file;
-          setScanState(null);
-          if (f) void installZip(f, true);
+      <AppInstallDialog
+        open={showInstall}
+        onClose={() => setShowInstall(false)}
+        onInstalled={() => {
+          void loadApps().then(() => checkUpdates());
         }}
       />
     </div>

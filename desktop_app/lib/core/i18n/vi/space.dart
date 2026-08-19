@@ -92,6 +92,38 @@ const Map<String, String> viSpace = {
   '{n} running': '{n} đang chạy',
   'Reload apps': 'Tải lại ứng dụng',
   'No apps installed': 'Chưa cài ứng dụng nào',
+  'Search apps…': 'Tìm ứng dụng…',
+  'No app matches that search': 'Không có ứng dụng nào khớp từ khoá',
+
+  // ── Hộp thoại cài app mới ────────────────────────────────────────────────
+  'Install app': 'Cài ứng dụng',
+  'Install a new app': 'Cài ứng dụng mới',
+  'Store': 'Cửa hàng',
+  'ZIP file': 'Tệp ZIP',
+  'Manifest URL': 'URL Manifest',
+  'Search apps in the store…': 'Tìm ứng dụng trong cửa hàng…',
+  'Reload catalog': 'Tải lại danh mục',
+  'Could not read the store catalog: {e}':
+      'Không đọc được danh mục cửa hàng: {e}',
+  'The store has no apps — add a hub source in Plugins → Marketplace, then sync':
+      'Cửa hàng chưa có ứng dụng — thêm nguồn hub ở Plugins → Marketplace rồi đồng bộ',
+  '{n} downloads': '{n} lượt tải',
+  'using {v}': 'đang dùng {v}',
+  'Installed': 'Đã cài',
+  'Install': 'Cài',
+  'Update': 'Cập nhật',
+  'Installed {name}': 'Đã cài {name}',
+  'Security scan blocked {name}': 'Quét bảo mật đã chặn {name}',
+  'Install anyway': 'Vẫn cài',
+  'The app’s runtime.start command runs as soon as it is installed — only install a ZIP from a source you trust.':
+      'Lệnh runtime.start của ứng dụng chạy ngay khi cài xong — chỉ cài ZIP từ nguồn bạn tin tưởng.',
+  'A Space App bundle has senclaw-manifest.json at its root.':
+      'Bundle Space App có senclaw-manifest.json ở thư mục gốc.',
+  'Choose a .zip file': 'Chọn tệp .zip',
+  'The app is embedded in an iframe — be sure you trust its origin before registering.':
+      'Ứng dụng được nhúng qua iframe — hãy chắc bạn tin nguồn gốc trước khi đăng ký.',
+  'The app must serve senclaw-manifest.json at this URL.':
+      'Ứng dụng phải phục vụ senclaw-manifest.json tại URL này.',
   'Restart': 'Khởi động lại',
   'Restarting…': 'Đang khởi động lại…',
   'Restarting {name}…': 'Đang khởi động lại {name}…',
