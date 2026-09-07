@@ -1508,6 +1508,72 @@ members:
 
 ---
 
+## 18. Kết thúc DAG, chờ không chặn lượt, và chạy lại việc lỗi
+
+Ba tính chất bổ sung 05/09/2026. Cả ba đều vá lỗi *im lặng* — nhìn từ chat không
+phân biệt được với "DAG đang chạy bình thường".
+
+### 18.1. DAG không thể tiến nữa thì bị đánh lỗi, không để treo
+
+Vòng quét timeout trong `process_pending` **chỉ nhìn task `processing`**. Một task
+không bao giờ *khởi động* thì không có hạn nào cả — và `can_start_task` trả
+`false` **vĩnh viễn** với task virtual có persona không tìm thấy trong registry.
+Parent nằm `active`, không gì chạy, không gì chạy được, cho tới khi restart daemon.
+
+`sweep_stalled_parents` đóng đúng ca đó. Điều kiện cố ý hẹp: **không có gì
+`processing` VÀ không có gì khởi động được**. Không phải chỉ "không có gì
+processing" — task bị chặn bởi suất đồng thời đang chờ một task khác *đang chạy*,
+giết nó là phá mọi DAG rộng hơn giới hạn của chính nó. Dạng hẹp này đúng vì thứ
+duy nhất mở khoá một task là một task khác kết thúc.
+
+Có thời gian ân hạn (`STALL_GRACE_SECONDS`): lúc boot và lúc vừa tạo parent,
+persona registry và virtual-worker pool chưa nối xong nên mọi task tạm thời
+không khởi động được — thiếu ân hạn thì DAG mới bị giết ngay nhịp đầu.
+
+### 18.2. DAG dài không nên chặn lượt agent
+
+`dispatch_all_tasks` / `create_parent_and_run` poll **ngay trong lượt**, mặc định
+900s. DAG dài hơn thì trả về lỗi trong khi daemon vẫn chạy tiếp — trước đây
+manager thấy tool lỗi liền re-dispatch **cả DAG**, sinh việc trùng.
+
+`dispatch_status` là ảnh chụp **không chặn** (đếm theo trạng thái + danh sách
+task lỗi kèm output). Ghép với `schedule_watch` (xem PHẦN D của
+[background-schedule-tasks-guide.md](background-schedule-tasks-guide.md)), DAG
+dài không tốn lượt nào trong lúc chạy: mỗi nhịp chỉ là một lời gọi tool, không
+LLM; xong mới đánh thức chat.
+
+Lưu ý: parent `done` khi **mọi** task terminal — kể cả task lỗi, vì scheduler là
+continue-on-error. Nên prompt đánh thức phải đọc `failedTasks`, đừng mặc định là
+thành công.
+
+### 18.3. Chạy lại việc lỗi
+
+| | |
+|---|---|
+| `POST /api/dispatch/tasks/:task_id/retry` | chạy lại một task |
+| `POST /api/dispatch/parents/:parent_id/retry` | chạy lại mọi task lỗi của một dispatch |
+
+Nút bấm có ở cả ba client: web (`InlineDispatchCard.tsx` — header + drawer chi
+tiết task), desktop (`message_widgets.dart::InlineDispatchCard`), mobile
+(`channel_app` màn Dispatch — header thẻ + sheet chi tiết).
+
+Hai điểm dễ sai:
+
+- **Hồi sinh task phải hồi sinh cả parent.** DAG có task cuối lỗi thì parent đã
+  `"done"`, mà scheduler bỏ qua parent không `active` — xếp lại task mà không lật
+  parent về `"active"` thì task nằm đó mãi. Có test ghim.
+- **Retry của người dùng KHÁC ngân sách `MAX_INFRA_RETRIES`.** Cái kia tự động,
+  trần 1 lần, chỉ cho lỗi hạ tầng (`is_retryable_infra_error`). Cái này là người
+  nhìn thấy lỗi và quyết định, nên không giới hạn và không xét nguyên nhân.
+
+Retry cũng xoá phán quyết của lần chạy trước (`verification_result`,
+`file_changes`, trạng thái checklist) — để lại thì bị đọc nhầm là của lần mới.
+Khi daemon từ chối, lý do ("đang chạy", "đã xong") trả về nguyên văn trong body
+`400` và cả ba client hiện đúng câu đó, vì "retry thất bại" chung chung chỉ khiến
+người dùng bấm lại.
+
+---
+
 ## Kết luận
 
 Hệ thống Dispatch & Cowork trong SenClaw cung cấp:

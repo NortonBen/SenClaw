@@ -864,6 +864,57 @@ impl DispatchServer {
         ToolResult::ok(sections.join("\n\n"))
     }
 
+    /// Non-blocking snapshot of one parent — the probe a watch polls.
+    ///
+    /// Every other wait path here blocks the agent's turn. A DAG that outlives
+    /// the tool's deadline then returns a failure while the daemon keeps
+    /// working, which historically made the manager re-dispatch the whole
+    /// graph. This returns immediately with counts, so
+    /// `schedule_watch` can poll it with no LLM in the loop and wake the chat
+    /// when `status` reaches `done`.
+    pub fn dispatch_status(&self, parent_id: &str) -> ToolResult {
+        let state = self.read_state();
+        let Some(parent) = state.parents.iter().find(|p| p.id == parent_id) else {
+            return ToolResult::err(format!("Parent not found: {parent_id}"));
+        };
+        let count = |st: DispatchTaskStatus| parent.tasks.iter().filter(|t| t.status == st).count();
+        let failed: Vec<serde_json::Value> = parent
+            .tasks
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    DispatchTaskStatus::Error | DispatchTaskStatus::Timeout
+                )
+            })
+            .map(|t| {
+                serde_json::json!({
+                    "id": t.id,
+                    "label": t.label,
+                    "status": t.status.label(),
+                    "result": t.result,
+                })
+            })
+            .collect();
+        ToolResult::ok(
+            serde_json::json!({
+                "parentId": parent.id,
+                "goal": parent.goal,
+                // "queued" | "active" | "done". A watch should match on this.
+                "status": parent.status,
+                "total": parent.tasks.len(),
+                "done": count(DispatchTaskStatus::Done),
+                "error": count(DispatchTaskStatus::Error),
+                "timeout": count(DispatchTaskStatus::Timeout),
+                "processing": count(DispatchTaskStatus::Processing),
+                "registered": count(DispatchTaskStatus::Registered),
+                "failedTasks": failed,
+                "completedAt": parent.completed_at,
+            })
+            .to_string(),
+        )
+    }
+
     // ===== Checklist management methods =====
 
     pub fn add_checklist_items(
@@ -1125,6 +1176,12 @@ pub struct CreateParentParams {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+pub struct DispatchStatusParams {
+    #[serde(rename = "parentId")]
+    pub parent_id: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 pub struct DispatchTaskParams {
     #[serde(rename = "parentId")]
     pub parent_id: String,
@@ -1269,7 +1326,19 @@ impl McpDispatchServer {
     }
 
     #[rmcp::tool(
-        description = "Run every task under a parent in dependency order and return combined results. Stops on first error. Prefer this over calling dispatch_task repeatedly."
+        description = "Non-blocking status of a dispatch parent: per-status task counts plus every failed task with its output. Returns immediately — it does NOT wait. This is the tool to poll from schedule_watch when a DAG will outlive your turn, and the tool to call when you are woken to check on one."
+    )]
+    fn dispatch_status(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            DispatchStatusParams,
+        >,
+    ) -> String {
+        self.inner().dispatch_status(&p.parent_id).content
+    }
+
+    #[rmcp::tool(
+        description = "Run every task under a parent in dependency order and return combined results. Waits for ALL tasks to reach a terminal state (continue-on-error: a failed task still unblocks its dependants), and is an error only if every task failed. Prefer this over calling dispatch_task repeatedly. For a DAG that may run longer than a few minutes, prefer arming schedule_watch on dispatch_status instead of blocking here."
     )]
     async fn dispatch_all_tasks(
         &self,

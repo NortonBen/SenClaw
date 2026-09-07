@@ -42,6 +42,7 @@ async fn serve(dir: &std::path::Path) -> (String, std::path::PathBuf) {
         wiki_manager: None,
         persona_registry: None,
         agent_api: None,
+        dispatch_bridge: None,
         mcp_manager: Some(Arc::new(senclaw::mcp::manager::McpManager::new(
             dir.to_path_buf(),
             dir.to_path_buf(),

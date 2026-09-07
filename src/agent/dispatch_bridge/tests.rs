@@ -637,3 +637,378 @@ fn cancel_parents_for_shared_workspace_only_matching_root() {
     assert!(bridge.has_active_jid_tasks("jid-b"));
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn parents_snapshot_matches_the_dispatch_update_wire_shape() {
+    // `GET /api/dispatch` exists because `dispatch:update` reaches WebSocket
+    // admin clients only. The snapshot has to be the *same* shape the event
+    // carries, or a client written against one breaks on the other.
+    let path = tmp_state_path("snapshot");
+    let bridge = DispatchBridge::new(&path);
+    bridge
+        .modify_state(|s| {
+            s.parents.push(DispatchParent {
+                id: "p1".into(),
+                goal: "ship it".into(),
+                admin_folder: "main".into(),
+                shared_workspace: None,
+                status: "active".into(),
+                created_at: "2026-08-21T00:00:00Z".into(),
+                completed_at: None,
+                tasks: vec![make_task("d1", "writer", "jid-a")],
+            });
+        })
+        .unwrap();
+
+    let snapshot = bridge.parents_snapshot();
+    let arr = snapshot.as_array().expect("parents is an array");
+    assert_eq!(arr.len(), 1);
+    // camelCase, matching `DispatchParent`'s serde rename.
+    assert_eq!(arr[0]["id"], "p1");
+    assert_eq!(arr[0]["adminFolder"], "main");
+    assert_eq!(arr[0]["tasks"][0]["agentJid"], "jid-a");
+    assert_eq!(arr[0]["tasks"][0]["status"], "processing");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn parents_snapshot_is_empty_when_no_dispatch_has_run() {
+    // No state file is the normal case on a fresh daemon, not a fault: the
+    // endpoint must answer with an empty array rather than a 500.
+    let path = tmp_state_path("snapshot-missing");
+    let _ = std::fs::remove_file(&path);
+    let bridge = DispatchBridge::new(&path);
+    assert_eq!(bridge.parents_snapshot(), serde_json::json!([]));
+}
+
+// ===== User-initiated retry =====
+
+/// Build a one-parent state whose single task already failed.
+fn failed_parent(path: &std::path::Path, status: DispatchTaskStatus) -> DispatchBridge {
+    let bridge = DispatchBridge::new(path);
+    // Without a dispatcher the relaunch `retry_task` triggers fails instantly
+    // with "callback not wired" and re-errors the task — which is correct
+    // behaviour, but it would hide whether the retry itself worked.
+    bridge.set_send_to_agent(Arc::new(|_, _, _, _| {}));
+    bridge
+        .modify_state(|s| {
+            let mut t = make_task("d1", "scout", "jid-a");
+            t.status = status;
+            t.result = Some("boom".into());
+            t.completed_at = Some("2025-01-01T00:01:00Z".into());
+            s.parents.push(DispatchParent {
+                id: "p1".into(),
+                goal: "g".into(),
+                admin_folder: "main".into(),
+                shared_workspace: None,
+                status: "done".into(),
+                created_at: "2025-01-01T00:00:00Z".into(),
+                completed_at: Some("2025-01-01T00:01:00Z".into()),
+                tasks: vec![t],
+            });
+        })
+        .unwrap();
+    bridge
+}
+
+#[test]
+fn retry_requeues_a_failed_task_and_revives_its_parent() {
+    // Reviving the parent is the load-bearing half: a DAG whose last task
+    // failed is already "done", and the scheduler skips non-active parents —
+    // so without this the task would be re-queued and never picked up.
+    let path = tmp_state_path("retry_error");
+    let bridge = failed_parent(&path, DispatchTaskStatus::Error);
+
+    assert_eq!(bridge.retry_task("d1").unwrap(), "scout");
+
+    let parents = bridge.get_parents();
+    assert_eq!(parents[0].status, "active");
+    assert!(parents[0].completed_at.is_none());
+    let t = &parents[0].tasks[0];
+    // Re-queued *and* picked straight back up — `retry_task` kicks the
+    // scheduler rather than waiting for the next 300ms tick.
+    assert_eq!(t.status, DispatchTaskStatus::Processing);
+    assert!(t.result.is_none(), "stale failure text must not survive");
+    assert!(t.completed_at.is_none());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn retry_works_for_a_timed_out_task_too() {
+    let path = tmp_state_path("retry_timeout");
+    let bridge = failed_parent(&path, DispatchTaskStatus::Timeout);
+    assert!(bridge.retry_task("d1").is_ok());
+    assert_eq!(
+        bridge.get_parents()[0].tasks[0].status,
+        DispatchTaskStatus::Processing
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn retry_clears_the_previous_attempts_verdict() {
+    // A verification result or file list left over from the failed attempt
+    // would be read as belonging to the new run.
+    let path = tmp_state_path("retry_verdict");
+    let bridge = DispatchBridge::new(&path);
+    bridge.set_send_to_agent(Arc::new(|_, _, _, _| {}));
+    bridge
+        .modify_state(|s| {
+            let mut t = make_task("d1", "scout", "jid-a");
+            t.status = DispatchTaskStatus::Error;
+            t.verification_result =
+                Some(crate::agent::dispatch_bridge::types::VerificationResult {
+                    verified: false,
+                    missing_items: vec!["x".into()],
+                    failed_items: vec![],
+                    warnings: vec![],
+                    note: None,
+                });
+            t.file_changes = vec![crate::agent::dispatch_bridge::types::FileChange {
+                path: "a.rs".into(),
+                change_type: "modified".into(),
+                lines_added: Some(1),
+                lines_removed: None,
+                summary: None,
+            }];
+            t.checklist = vec![crate::agent::dispatch_bridge::types::ChecklistItem {
+                id: "i0".into(),
+                description: "d".into(),
+                status: "failed".into(),
+                depends_on: vec![],
+                verification_note: Some("nope".into()),
+            }];
+            s.parents.push(DispatchParent {
+                id: "p1".into(),
+                goal: "g".into(),
+                admin_folder: "main".into(),
+                shared_workspace: None,
+                status: "done".into(),
+                created_at: "2025-01-01T00:00:00Z".into(),
+                completed_at: None,
+                tasks: vec![t],
+            });
+        })
+        .unwrap();
+
+    bridge.retry_task("d1").unwrap();
+    let t = &bridge.get_parents()[0].tasks[0];
+    assert!(t.verification_result.is_none());
+    assert!(t.file_changes.is_empty());
+    assert_eq!(t.checklist[0].status, "pending");
+    assert!(t.checklist[0].verification_note.is_none());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn retry_refuses_a_task_that_succeeded_or_is_still_running() {
+    let path = tmp_state_path("retry_refuse");
+    let bridge = DispatchBridge::new(&path);
+    bridge
+        .modify_state(|s| {
+            let mut done = make_task("d1", "ok", "jid-a");
+            done.status = DispatchTaskStatus::Done;
+            // make_task's default status is Processing.
+            let running = make_task("d2", "running", "jid-b");
+            s.parents.push(DispatchParent {
+                id: "p1".into(),
+                goal: "g".into(),
+                admin_folder: "main".into(),
+                shared_workspace: None,
+                status: "active".into(),
+                created_at: "2025-01-01T00:00:00Z".into(),
+                completed_at: None,
+                tasks: vec![done, running],
+            });
+        })
+        .unwrap();
+
+    // The reason reaches a person through the UI, so it must name the task.
+    let e = bridge.retry_task("d1").unwrap_err();
+    assert!(e.contains("ok"), "got: {e}");
+    let e = bridge.retry_task("d2").unwrap_err();
+    assert!(e.contains("running"), "got: {e}");
+    assert!(bridge.retry_task("nope").unwrap_err().contains("not found"));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn retry_parent_requeues_every_failed_task_and_leaves_the_rest_alone() {
+    let path = tmp_state_path("retry_parent");
+    let bridge = DispatchBridge::new(&path);
+    bridge.set_send_to_agent(Arc::new(|_, _, _, _| {}));
+    bridge
+        .modify_state(|s| {
+            let mut ok = make_task("d1", "ok", "jid-a");
+            ok.status = DispatchTaskStatus::Done;
+            ok.result = Some("kept".into());
+            let mut bad = make_task("d2", "bad", "jid-b");
+            bad.status = DispatchTaskStatus::Error;
+            let mut slow = make_task("d3", "slow", "jid-c");
+            slow.status = DispatchTaskStatus::Timeout;
+            s.parents.push(DispatchParent {
+                id: "p1".into(),
+                goal: "g".into(),
+                admin_folder: "main".into(),
+                shared_workspace: None,
+                status: "done".into(),
+                created_at: "2025-01-01T00:00:00Z".into(),
+                completed_at: None,
+                tasks: vec![ok, bad, slow],
+            });
+        })
+        .unwrap();
+
+    let labels = bridge.retry_parent_failed("p1").unwrap();
+    assert_eq!(labels.len(), 2);
+
+    let parents = bridge.get_parents();
+    assert_eq!(parents[0].tasks[0].status, DispatchTaskStatus::Done);
+    assert_eq!(
+        parents[0].tasks[0].result.as_deref(),
+        Some("kept"),
+        "a successful task's result must not be thrown away by a retry-all"
+    );
+    assert_eq!(parents[0].tasks[1].status, DispatchTaskStatus::Processing);
+    assert_eq!(parents[0].tasks[2].status, DispatchTaskStatus::Processing);
+
+    assert!(bridge
+        .retry_parent_failed("p1")
+        .unwrap_err()
+        .contains("No failed"));
+    assert!(bridge
+        .retry_parent_failed("nope")
+        .unwrap_err()
+        .contains("not found"));
+    let _ = std::fs::remove_file(path);
+}
+
+// ===== Stall sweep =====
+
+/// A virtual task whose persona cannot be resolved. `can_start_task` returns
+/// false for it forever, and the timeout sweep never looks at it because it
+/// never reaches `processing`.
+fn unstartable_virtual(id: &str, label: &str) -> DispatchTask {
+    let mut t = make_task(id, label, "");
+    t.status = DispatchTaskStatus::Registered;
+    t.is_virtual = true;
+    t.persona_name = Some("ghost".into());
+    t
+}
+
+fn parent_with(created_at: &str, tasks: Vec<DispatchTask>) -> DispatchParent {
+    DispatchParent {
+        id: "p1".into(),
+        goal: "g".into(),
+        admin_folder: "main".into(),
+        shared_workspace: None,
+        status: "active".into(),
+        created_at: created_at.into(),
+        completed_at: None,
+        tasks,
+    }
+}
+
+#[test]
+fn a_parent_whose_tasks_can_never_start_is_failed_rather_than_left_active() {
+    // The hole this closes: nothing is `processing`, so the timeout sweep has
+    // nothing to expire; nothing is startable, so no future event can change
+    // the state. Without the sweep the parent stays `active` until the daemon
+    // restarts, which from the chat looks exactly like a DAG still working.
+    let path = tmp_state_path("stall_unstartable");
+    let bridge = DispatchBridge::new(&path);
+    bridge
+        .modify_state(|s| {
+            s.parents.push(parent_with(
+                "2020-01-01T00:00:00Z",
+                vec![unstartable_virtual("d1", "ghost-task")],
+            ));
+        })
+        .unwrap();
+
+    bridge.process_pending();
+
+    let parents = bridge.get_parents();
+    assert_eq!(parents[0].status, "done");
+    assert_eq!(parents[0].tasks[0].status, DispatchTaskStatus::Error);
+    let msg = parents[0].tasks[0].result.clone().unwrap_or_default();
+    assert!(
+        msg.contains("Never started"),
+        "the reason must say the task never launched, not invent a failure: {msg}"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn a_freshly_created_parent_is_never_swept() {
+    // At creation and at boot the persona registry and worker pool are briefly
+    // unwired, so every task is legitimately un-startable for a moment.
+    let path = tmp_state_path("stall_grace");
+    let bridge = DispatchBridge::new(&path);
+    let now = chrono::Utc::now().to_rfc3339();
+    bridge
+        .modify_state(|s| {
+            s.parents.push(parent_with(
+                &now,
+                vec![unstartable_virtual("d1", "ghost-task")],
+            ));
+        })
+        .unwrap();
+
+    bridge.process_pending();
+
+    assert_eq!(bridge.get_parents()[0].status, "active");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn a_parent_with_work_in_flight_is_never_swept() {
+    // `processing` means an outcome is still coming, however old the parent is.
+    let path = tmp_state_path("stall_inflight");
+    let bridge = DispatchBridge::new(&path);
+    bridge
+        .modify_state(|s| {
+            // make_task defaults to Processing.
+            let running = make_task("d1", "running", "jid-a");
+            s.parents.push(parent_with(
+                "2020-01-01T00:00:00Z",
+                vec![running, unstartable_virtual("d2", "ghost-task")],
+            ));
+        })
+        .unwrap();
+
+    bridge.process_pending();
+
+    let parents = bridge.get_parents();
+    assert_eq!(parents[0].status, "active");
+    assert_eq!(parents[0].tasks[1].status, DispatchTaskStatus::Registered);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn a_parent_whose_tasks_all_finished_is_closed_by_the_sweep() {
+    // Belt-and-braces: if a completion path ever misses the "all terminal"
+    // check, the parent is still closed instead of hanging active forever.
+    let path = tmp_state_path("stall_allterminal");
+    let bridge = DispatchBridge::new(&path);
+    bridge
+        .modify_state(|s| {
+            let mut done = make_task("d1", "ok", "jid-a");
+            done.status = DispatchTaskStatus::Done;
+            s.parents
+                .push(parent_with("2020-01-01T00:00:00Z", vec![done]));
+        })
+        .unwrap();
+
+    bridge.process_pending();
+
+    let parents = bridge.get_parents();
+    assert_eq!(parents[0].status, "done");
+    assert!(parents[0].completed_at.is_some());
+    assert_eq!(
+        parents[0].tasks[0].status,
+        DispatchTaskStatus::Done,
+        "a task that succeeded must not be rewritten to error by the sweep"
+    );
+    let _ = std::fs::remove_file(path);
+}

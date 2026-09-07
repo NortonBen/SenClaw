@@ -63,6 +63,31 @@ In group chats the profile is read-only and shows public fields only. That is by
 design, not a fault: do not report it as an error, and never ask a group for the
 owner's private details.
 
+## Long-running work — arm a watch, never abandon it
+
+When you hand work to something that answers \"in progress\" — an AI Office task,
+a dispatch/DAG run, a Space App job, a build — the job outlives your turn. Do
+**not** `sleep` and poll once, do **not** loop polling inside the turn, and do
+**not** end with \"ask me again later for progress\": that pushes your job onto
+the user and nothing ever comes back on its own.
+
+Instead, call **schedule_watch** — it is always in your tool list — naming the
+tool that reports the job's status, then end your turn saying you will report
+back. SenClaw re-checks with no LLM involved, so waiting is nearly free, and it
+wakes you here with the result, or tells you it gave up. For a DAG, watch
+`dispatch_status`; the blocking wait tools are for short graphs only.
+
+Pass the probe tool under the **exact name your tool list shows** (built-ins are
+usually `mcp__core__<tool>`). If a tool you need is missing, search for it by
+keyword — `ToolSearch { query: \"schedule_watch\" }` — never by guessing a
+`select:` name, because the server prefix differs between bundled and
+per-server modes and a wrong guess resolves to nothing.
+
+**Never promise to notify the user unless a watch is actually armed.** A promise
+without one is never kept: your turn ends and nothing wakes it. Once armed, say
+what you are watching — the user sees it above the composer and can stop it
+there, and `schedule_watch_stop` stops it on their behalf when they ask.
+
 ## Real-time data — ALWAYS use a tool, never fabricate
 
 When the user asks about anything **time-sensitive or external** — prices, exchange rates, news, weather, schedules, today's events, search results, status of a website — you MUST use a tool to fetch fresh data:
@@ -448,6 +473,30 @@ mod tests {
         assert!(SYSTEM_PROMPT.contains("## Communication"));
         assert!(SYSTEM_PROMPT.contains("## Tools"));
         assert!(SYSTEM_PROMPT.contains("## Real-time data"));
+        assert!(SYSTEM_PROMPT.contains("## Long-running work"));
+    }
+
+    #[test]
+    fn long_running_rule_names_the_tool_it_asks_for() {
+        // The rule lives here rather than in a skill or a tool description
+        // because neither reaches the model unprompted: skill triggers are only
+        // scored inside `ToolSearch`, and `schedule_watch` is not in
+        // `ALWAYS_LOADED_MCP_TOOLS`, so it is deferred. The base prompt is the
+        // only channel present on every turn — so it must carry the exact
+        // `select:` query, or the model cannot load the tool it is told to use.
+        // Deliberately NOT a `select:` name: built-ins resolve as
+        // `mcp__core__<tool>` when bundled (the default) and
+        // `mcp__senclaw-<domain>__<tool>` when not, so a hardcoded one is wrong
+        // in whichever mode it does not describe. That exact mistake shipped
+        // once: the agent obeyed the rule, ToolSearch answered "no registered
+        // tool", and the user got a promise instead of a result.
+        assert!(!SYSTEM_PROMPT.contains("select:mcp__senclaw-schedule"));
+        assert!(SYSTEM_PROMPT.contains("schedule_watch"));
+        assert!(SYSTEM_PROMPT.contains("mcp__core__"));
+        // And it must name the anti-patterns, which are the observed failure:
+        // sleeping through it, then handing the job back to the user.
+        assert!(SYSTEM_PROMPT.contains("`sleep`"));
+        assert!(SYSTEM_PROMPT.contains("ask me again later"));
     }
 
     #[test]

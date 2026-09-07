@@ -161,6 +161,10 @@ pub struct UiState {
     pub mcp_manager: Option<Arc<McpManager>>,
     pub marketplace_manager: Option<Arc<Mutex<crate::marketplace::manager::MarketplaceManager>>>,
     pub workbench_bridge: Option<Arc<crate::agent::workbench_bridge::WorkbenchBridge>>,
+    /// DAG sub-agent dispatch. Backs the read-only `GET /api/dispatch`
+    /// snapshot — `dispatch:update` goes to WebSocket admin clients only, so a
+    /// relay client polls this instead of subscribing.
+    pub dispatch_bridge: Option<Arc<crate::agent::dispatch_bridge::DispatchBridge>>,
     pub space_mcp_launcher: Option<Arc<super::space_mcp::SpaceMcpLauncher>>,
     pub workflow_service: Option<Arc<crate::workflow::WorkflowService>>,
     /// Headless agent runtime (tools + MCP + browser). Lets Space Apps run a
@@ -240,9 +244,16 @@ pub fn build_router(state: Arc<UiState>) -> Router {
 
     // Token handshake for remote (non-loopback) clients. Routed on a plain
     // sub-router so the handlers see `Arc<ApiAuth>` state directly.
+    // `/api/auth/mode` is deliberately *not* in `OPEN_API_PATHS`: it is the
+    // gate's own switch, so an anonymous remote client must not be able to
+    // read it, let alone turn it off.
     let auth_router = Router::new()
         .route("/api/auth/login", post(super::auth::auth_login))
         .route("/api/auth/status", get(super::auth::auth_status))
+        .route(
+            "/api/auth/mode",
+            get(super::auth::auth_mode_get).put(super::auth::auth_mode_put),
+        )
         .with_state(Arc::clone(&state.api_auth));
 
     Router::new()
@@ -397,6 +408,17 @@ pub fn build_router(state: Arc<UiState>) -> Router {
         .route(
             "/api/marketplace/plugins/:name/widget-static/*path",
             get(super::marketplace::plugin_widget_static),
+        )
+        .route("/api/dispatch", get(super::dispatch::dispatch_snapshot))
+        .route("/api/watches", get(super::watches::watches_list))
+        .route("/api/watches/:id/stop", post(super::watches::watch_stop))
+        .route(
+            "/api/dispatch/tasks/:task_id/retry",
+            post(super::dispatch::dispatch_retry_task),
+        )
+        .route(
+            "/api/dispatch/parents/:parent_id/retry",
+            post(super::dispatch::dispatch_retry_parent),
         )
         .route(
             "/api/dispatch-config",

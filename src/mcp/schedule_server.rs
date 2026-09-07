@@ -29,6 +29,65 @@ struct ScheduleTaskParams {
     script_command: Option<String>,
 }
 
+/// Ownership is pinned from the chat env, never from a parameter — a watch
+/// resumes a conversation, so letting a caller name someone else's chat would
+/// let one session speak into another.
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct ScheduleWatchParams {
+    /// What the chat is told once the job finishes. Write it as an instruction
+    /// to yourself in the future: you will be woken with this and nothing else,
+    /// so restate what was being waited on. `{{result}}` is replaced with the
+    /// probe payload.
+    resume_prompt: String,
+    /// Full `mcp__<server>__<tool>` name to re-call each check, e.g.
+    /// `mcp__ai-office-mcp__office_get_task`. Omit when the job cannot be
+    /// checked with one tool call — you are then woken every interval to check
+    /// it yourself, which costs a full turn each time.
+    #[serde(default)]
+    tool: Option<String>,
+    /// Arguments for `tool`, as a JSON object — include every one the tool
+    /// requires, e.g. `{"id": 31}`. Omitting a required argument does not fail
+    /// loudly: the tool answers with a rejection each check, and the watch
+    /// cannot tell that apart from "not finished yet".
+    #[serde(default)]
+    args: Option<serde_json::Value>,
+    /// Dot path into the tool result, e.g. `task.status`. **Call the probe tool
+    /// once before arming and read the path off its actual answer** — a guessed
+    /// path resolves to nothing, which counts as "not ready", so the watch waits
+    /// out its whole deadline on a job that already finished. Empty tests the
+    /// whole payload as text.
+    #[serde(default)]
+    done_path: Option<String>,
+    /// `exists` (default), `equals`, `not_equals`, `contains`, `not_contains`,
+    /// `in`, `not_in`. Case-insensitive.
+    #[serde(default)]
+    done_op: Option<String>,
+    /// Comparison value for `equals` / `contains` and friends.
+    #[serde(default)]
+    done_value: Option<String>,
+    /// Comparison set for `in` / `not_in`, e.g. ["done","failed","cancelled"].
+    #[serde(default)]
+    done_values: Vec<String>,
+    /// Seconds between checks. Default 60, floor 15.
+    #[serde(default)]
+    interval_secs: Option<i64>,
+    /// Give up after this many seconds. Default 3600, ceiling 86400.
+    #[serde(default)]
+    timeout_secs: Option<i64>,
+    /// Short label naming what is being waited on, used in logs and in the
+    /// give-up message.
+    #[serde(default)]
+    label: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+struct WatchStopParams {
+    /// `watchId` from the `schedule_watch` result. Omit to stop every watch
+    /// this chat has running.
+    #[serde(default)]
+    watch_id: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
 struct ListTasksParams {
     group_folder: String,
@@ -97,6 +156,50 @@ impl McpScheduleServer {
             return result.content;
         }
         result.content
+    }
+
+    #[rmcp::tool(
+        description = "Wait for a long-running job and resume THIS chat when it finishes. \
+Use this instead of sleeping, instead of polling inside your turn, and instead of \
+telling the user to ask you again later — after you hand work to something slow \
+(an AI Office task, a dispatch/DAG run, a Space App job, a build), arm a watch and \
+end your turn. SenClaw re-calls `tool` every `interval_secs` with no LLM involved, so \
+waiting is nearly free, and the moment the condition holds it wakes you here with \
+`resume_prompt` so you can deliver the result or carry on. It always reports back, \
+including when it gives up at `timeout_secs`. Omit `tool` only when the job cannot be \
+checked with a single tool call."
+    )]
+    async fn schedule_watch(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            ScheduleWatchParams,
+        >,
+    ) -> String {
+        let srv = ScheduleServer::new();
+        srv.schedule_watch(&self.db, &self.group_folder, &self.chat_jid, p)
+            .content
+    }
+
+    #[rmcp::tool(
+        description = "List the watches this chat currently has running, with how many checks each has made and when it gives up. Use it when the user asks what you are waiting on, or before stopping one."
+    )]
+    fn schedule_watch_list(&self) -> String {
+        let srv = ScheduleServer::new();
+        srv.watch_list(&self.db, &self.chat_jid).content
+    }
+
+    #[rmcp::tool(
+        description = "Stop a watch this chat armed — when the user says to stop waiting, or the thing being waited on is no longer relevant. Pass watchId to stop one, or omit it to stop all of this chat's watches. A stopped watch never wakes the chat, so say so plainly instead of leaving the user expecting a report."
+    )]
+    fn schedule_watch_stop(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(p): rmcp::handler::server::wrapper::Parameters<
+            WatchStopParams,
+        >,
+    ) -> String {
+        let srv = ScheduleServer::new();
+        srv.watch_stop(&self.db, &self.chat_jid, p.watch_id.as_deref())
+            .content
     }
 
     #[rmcp::tool(description = "List all scheduled tasks for a group")]
@@ -220,6 +323,170 @@ impl ScheduleServer {
     // ===== schedule_task =====
 
     /// Create a scheduled task. Returns JSON with `{success, taskId, nextRun}`.
+    /// What this chat is waiting on.
+    fn watch_list(&self, db: &Db, chat_jid: &str) -> ToolResult {
+        use crate::scheduler::watch::WatchConfig;
+        let tasks = match db.get_active_watches(chat_jid) {
+            Ok(t) => t,
+            Err(e) => return ToolResult::err(format!("Error: {e}")),
+        };
+        let items: Vec<serde_json::Value> = tasks
+            .iter()
+            .map(|t| {
+                let cfg = t
+                    .watch_json
+                    .as_deref()
+                    .and_then(|j| WatchConfig::parse(j).ok());
+                serde_json::json!({
+                    "watchId": t.id,
+                    "label": cfg.as_ref().and_then(|c| c.label.clone()),
+                    "tool": cfg.as_ref().and_then(|c| c.tool.clone()),
+                    "checks": cfg.as_ref().map(|c| c.checks).unwrap_or(0),
+                    "maxChecks": cfg.as_ref().map(|c| c.max_checks).unwrap_or(0),
+                    "givesUpAt": cfg.as_ref().map(|c| c.deadline_at.clone()),
+                    "nextCheck": t.next_run,
+                })
+            })
+            .collect();
+        ToolResult::ok(serde_json::json!({ "count": items.len(), "watches": items }).to_string())
+    }
+
+    /// Stop one watch, or all of this chat's watches when `watch_id` is absent.
+    ///
+    /// Ownership is the chat, not the id: stopping by a caller-supplied id
+    /// alone would let one conversation cancel another's wait.
+    fn watch_stop(&self, db: &Db, chat_jid: &str, watch_id: Option<&str>) -> ToolResult {
+        let tasks = match db.get_active_watches(chat_jid) {
+            Ok(t) => t,
+            Err(e) => return ToolResult::err(format!("Error: {e}")),
+        };
+        let targets: Vec<&ScheduledTask> = match watch_id {
+            Some(id) => tasks.iter().filter(|t| t.id == id).collect(),
+            None => tasks.iter().collect(),
+        };
+        if targets.is_empty() {
+            return ToolResult::err(match watch_id {
+                Some(id) => format!("No running watch {id} in this chat"),
+                None => "This chat has no running watch".into(),
+            });
+        }
+        let mut stopped = Vec::new();
+        for t in targets {
+            // `stop_watch` reports whether a row actually changed; a plain
+            // status update returns Ok for an id that matched nothing, and the
+            // agent would then tell the user it had stopped a live watch.
+            match db.stop_watch(&t.id) {
+                Ok(true) => stopped.push(t.id.clone()),
+                Ok(false) => tracing::warn!("[schedule] watch {} was not running", t.id),
+                Err(e) => tracing::warn!("[schedule] stop watch {}: {e}", t.id),
+            }
+        }
+        if stopped.is_empty() {
+            return ToolResult::err("Could not stop any watch".into());
+        }
+        ToolResult::ok(
+            serde_json::json!({
+                "success": true,
+                "stopped": stopped.len(),
+                "watchIds": stopped,
+                "note": "These watches will not wake this chat. Tell the user plainly that you are no longer waiting.",
+            })
+            .to_string(),
+        )
+    }
+
+    /// Arm a watch on the calling chat. Bounds are clamped rather than
+    /// rejected: a model that asks for a 2-second poll or a week-long deadline
+    /// gets a sane watch, not an error it has to recover from mid-turn.
+    fn schedule_watch(
+        &self,
+        db: &Db,
+        group_folder: &str,
+        chat_jid: &str,
+        p: ScheduleWatchParams,
+    ) -> ToolResult {
+        use crate::scheduler::watch::{DoneOp, DoneWhen, WatchConfig};
+
+        if p.resume_prompt.trim().is_empty() {
+            return ToolResult::err(
+                "Error: resume_prompt is required — a watch that wakes you with nothing \
+                 to act on is the same dead end as not waiting at all"
+                    .into(),
+            );
+        }
+
+        let interval_secs = p.interval_secs.unwrap_or(60).clamp(15, 3600);
+        let timeout_secs = p.timeout_secs.unwrap_or(3600).clamp(interval_secs, 86_400);
+        let deadline = Utc::now() + chrono::Duration::seconds(timeout_secs);
+        // The check ceiling is a second, independent brake: if the poll loop
+        // ever runs hot, the deadline alone would not bound the tool calls.
+        let max_checks = (timeout_secs / interval_secs).clamp(1, 500);
+
+        let cfg = WatchConfig {
+            tool: p.tool.clone(),
+            args: p.args.clone().unwrap_or(serde_json::json!({})),
+            done_when: DoneWhen {
+                path: p.done_path.clone().unwrap_or_default(),
+                op: p
+                    .done_op
+                    .as_deref()
+                    .map(DoneOp::parse)
+                    .unwrap_or(DoneOp::Exists),
+                value: p.done_value.clone(),
+                values: p.done_values.clone(),
+            },
+            deadline_at: deadline.to_rfc3339(),
+            max_checks,
+            checks: 0,
+            error_streak: 0,
+            last_error: None,
+            resume_prompt: p.resume_prompt.clone(),
+            timeout_prompt: None,
+            label: p.label.clone(),
+        };
+        let watch_json = match cfg.to_json() {
+            Ok(j) => j,
+            Err(e) => return ToolResult::err(format!("Error: {e}")),
+        };
+
+        let next_run = (Utc::now() + chrono::Duration::seconds(interval_secs)).to_rfc3339();
+        let task = ScheduledTask {
+            id: Uuid::new_v4().to_string(),
+            group_folder: group_folder.to_owned(),
+            chat_jid: chat_jid.to_owned(),
+            prompt: p.resume_prompt.clone(),
+            schedule_type: ScheduleType::Interval,
+            schedule_value: (interval_secs * 1000).to_string(),
+            context_mode: ContextMode::Watch,
+            agent_mode: crate::types::AgentMode::Agent,
+            script_command: None,
+            watch_json: Some(watch_json),
+            next_run: Some(next_run.clone()),
+            last_run: None,
+            last_result: None,
+            status: TaskStatus::Active,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        if let Err(e) = db.insert_task(&task) {
+            return ToolResult::err(format!("Error: {e}"));
+        }
+        ToolResult::ok(
+            serde_json::json!({
+                "success": true,
+                "watchId": task.id,
+                "firstCheck": next_run,
+                "intervalSecs": interval_secs,
+                "givesUpAt": cfg.deadline_at,
+                "maxChecks": max_checks,
+                "mode": if cfg.is_agent_fallback() { "agent-turn" } else { "probe" },
+                "note": "Watch armed. End your turn now — you will be woken here with the result. \
+The user sees it above the composer with a Stop button, and you can stop it with schedule_watch_stop; \
+tell them what you are watching and that they can stop it.",
+            })
+            .to_string(),
+        )
+    }
+
     pub async fn schedule_task(
         &self,
         db: &Db,
@@ -258,6 +525,7 @@ impl ScheduleServer {
                     context_mode: resolved_mode,
                     agent_mode: crate::types::AgentMode::Agent,
                     script_command: script_command.map(|s| s.to_owned()),
+                    watch_json: None,
                     next_run: Some(next_run.clone()),
                     last_run: None,
                     last_result: None,

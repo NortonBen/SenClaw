@@ -78,9 +78,14 @@ struct RealPermissionApi {
     agent_pool: Arc<agent::agent_pool::AgentPool>,
     /// Pending virtual-agent permission responses: key = "virtual_jid::tool_name"
     virtual_perm_senders: Arc<Mutex<HashMap<String, std::sync::mpsc::SyncSender<String>>>>,
+    db: Arc<db::Db>,
 }
 
 impl agent::permission_bridge::PermissionBridgeApi for RealPermissionApi {
+    fn persist_tool_rule(&self, rule: &agent::permission_bridge::types::ToolAutoAcceptRule) {
+        persist_tool_rule(&self.db, rule);
+    }
+
     fn is_web_jid(&self, chat_jid: &str) -> bool {
         // virtual: jids are also "web-style" — they broadcast to admins and have no
         // channel buttons, so they follow the same code path as web: jids.
@@ -1784,6 +1789,27 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     }
     tracing::info!("[SenClaw] MCP manager initialized");
 
+    // Teach the manager to reach SenClaw's own MCP servers. They are otherwise
+    // launched per chat session and so are invisible to anything calling from
+    // inside the daemon — a watch probing `dispatch_status` fails with
+    // "MCP server not found: senclaw-dispatch" and gives up.
+    //
+    // Only servers whose config carries no per-chat context belong here: one
+    // process answers every caller, so a spec holding one chat's jid would
+    // answer them all as that chat.
+    mcp_manager
+        .register_builtin_spec(mcp::helper::dispatch_mcp_config(
+            &cfg.paths.dispatch_state_path.to_string_lossy(),
+            "main",
+            None,
+        ))
+        .await;
+    mcp_manager
+        .register_builtin_spec(mcp::helper::usage_mcp_config(
+            &cfg.paths.db_path.to_string_lossy(),
+        ))
+        .await;
+
     // ===== Built-in Kanban board (folded into core — src/kanban) =====
     // No separate process, port, or Space-App: the REST API is mounted on the
     // daemon UI server (/api/kanban/*, wired where the UI router is built), the
@@ -1908,6 +1934,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         Arc::new(RealPermissionApi {
             agent_pool: agent_pool.clone(),
             virtual_perm_senders: Arc::clone(&virtual_perm_senders),
+            db: Arc::clone(&db),
         }),
         None,
     )));
@@ -2133,9 +2160,16 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // matched to a chat session here. Mark them completed so they stop firing.
     if let Err(e) = db.with_conn(|c| {
         c.execute(
+            // `context_mode <> 'watch'` is load-bearing. A watch is armed
+            // against the *chat's own* folder, never a `schedule_` one, so this
+            // sweep would retire every in-flight watch on every restart — the
+            // chat would simply never hear back, with nothing logged and
+            // nothing to see.
             "UPDATE scheduled_tasks
              SET status = 'completed'
-             WHERE status = 'active' AND group_folder NOT LIKE 'schedule\\_%' ESCAPE '\\'",
+             WHERE status = 'active'
+               AND context_mode <> 'watch'
+               AND group_folder NOT LIKE 'schedule\\_%' ESCAPE '\\'",
             [],
         )?;
         Ok(())
@@ -2145,7 +2179,9 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
 
     let task_executor = Arc::new(
         scheduler::DefaultTaskExecutor::new(Arc::clone(&db))
-            .with_agent_api(Arc::clone(&agent_pool) as Arc<dyn types::AgentApi>),
+            .with_agent_api(Arc::clone(&agent_pool) as Arc<dyn types::AgentApi>)
+            // Watch mode probes an MCP tool directly, with no LLM in the loop.
+            .with_mcp_manager(Arc::clone(&mcp_manager)),
     );
     let _task_scheduler = scheduler::task_scheduler::TaskScheduler::new(
         Arc::clone(&db),
@@ -2183,6 +2219,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
         virtual_worker_pool.set_virtual_permission_fn(Arc::new(
             move |virtual_jid: String,
                   tool_name: String,
+                  permission_key: String,
                   title: String,
                   content: serde_json::Value,
                   options: HashMap<String, String>,
@@ -2192,6 +2229,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
                 pool_for_vw.handle_virtual_permission_request(
                     &virtual_jid,
                     &tool_name,
+                    &permission_key,
                     &title,
                     &content,
                     &options,
@@ -2227,7 +2265,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
     // Space Apps calling back into the daemon keep working unchanged.
     let ui_bind_host = cfg.ui_server.bind_host.clone();
     let api_auth = {
-        let required = !gateway::ui_server::auth::is_loopback_host(&ui_bind_host);
+        let bind_is_loopback = gateway::ui_server::auth::is_loopback_host(&ui_bind_host);
         let senclaw_dir = cfg
             .paths
             .global_config_path
@@ -2235,22 +2273,44 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         // Resolve the token even when auth is off: local clients may read it
-        // from disk ahead of a later LAN-exposed restart.
+        // from disk ahead of a later LAN-exposed restart, and the operator can
+        // switch the mode on at runtime without one.
         let token = gateway::ui_server::auth::resolve_token(
             cfg.ui_server.api_token.as_deref(),
             &senclaw_dir,
         );
-        if required {
+        // Every caller that reaches the daemon's own HTTP API over loopback
+        // needs this once `always` is in force, or `space_app_*`, the kanban
+        // LLM lookup and the local-model proxy all start 401-ing the moment
+        // the gate closes. In-process callers read it from here; MCP children
+        // get it in their own config env (`mcp::helper`).
+        util::internal_auth::set_daemon_token(&token);
+        let auth = gateway::ui_server::auth::ApiAuth {
+            env_mode: cfg.ui_server.auth_mode,
+            env_set: cfg.ui_server.auth_mode_from_env,
+            bind_is_loopback,
+            token: Some(token),
+            token_path: Some(senclaw_dir.join("api_token")),
+            cookie_secure: cfg.ui_server.cookie_secure,
+            db: Some(Arc::clone(&db)),
+        };
+        let (mode, _) = auth.effective_mode();
+        if auth.required() {
             tracing::warn!(
-                "[SenClaw] UI bound to non-loopback host {ui_bind_host:?} — API token \
-                 required for remote clients (token file: {}, override: SENCLAW_API_TOKEN)",
+                "[SenClaw] API token required (auth mode {:?}, bind host {ui_bind_host:?}) — \
+                 token file: {}, override: SENCLAW_API_TOKEN",
+                mode.as_str(),
                 senclaw_dir.join("api_token").display()
             );
+        } else if !bind_is_loopback {
+            // `off` on an exposed bind is a deliberate choice, but a silent one
+            // would be indistinguishable from the gate failing to engage.
+            tracing::warn!(
+                "[SenClaw] UI bound to non-loopback host {ui_bind_host:?} with auth mode \
+                 \"off\" — the API is open to the network"
+            );
         }
-        Arc::new(gateway::ui_server::auth::ApiAuth {
-            required,
-            token: Some(token),
-        })
+        Arc::new(auth)
     };
 
     let ws_gateway = {
@@ -3080,6 +3140,7 @@ pub async fn run_daemon(cfg: config::Config) -> Result<()> {
             mcp_manager: Some(Arc::clone(&mcp_manager)),
             marketplace_manager: Some(Arc::clone(&marketplace_shared)),
             workbench_bridge: Some(Arc::clone(&workbench_bridge)),
+            dispatch_bridge: Some(Arc::clone(&dispatch_bridge)),
             space_mcp_launcher: Some(Arc::clone(&space_mcp_launcher)),
             workflow_service: Some(Arc::clone(&workflow_service)),
             virtual_worker_pool: Some(Arc::clone(&virtual_worker_pool)),

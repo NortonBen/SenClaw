@@ -211,6 +211,135 @@ fn message_pagination() {
 }
 
 #[test]
+fn watch_mode_and_its_config_survive_the_round_trip() {
+    // The watch column and the `watch` context mode are both new, and both are
+    // read back by hand-written mapping code — a silent drop here would make a
+    // watch fire forever with no config to tell it when to stop.
+    let db = Db::open_in_memory(&cfg()).unwrap();
+    let task = ScheduledTask {
+        id: "w1".into(),
+        group_folder: "team-a".into(),
+        chat_jid: "tg:group:1".into(),
+        prompt: "resume".into(),
+        schedule_type: ScheduleType::Interval,
+        schedule_value: "60000".into(),
+        context_mode: ContextMode::Watch,
+        agent_mode: AgentMode::Agent,
+        script_command: None,
+        watch_json: Some(
+            r#"{"deadline_at":"2999-01-01T00:00:00Z","resume_prompt":"go","max_checks":7}"#.into(),
+        ),
+        next_run: Some("2026-04-28T00:05:00Z".into()),
+        last_run: None,
+        last_result: None,
+        status: TaskStatus::Active,
+        created_at: "2026-04-28T00:00:00Z".into(),
+    };
+    db.insert_task(&task).unwrap();
+
+    let back = db.get_due_tasks("2026-04-28T00:10:00Z").unwrap();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].context_mode, ContextMode::Watch);
+    let cfg = crate::scheduler::watch::WatchConfig::parse(back[0].watch_json.as_ref().unwrap())
+        .expect("config must survive the column");
+    assert_eq!(cfg.max_checks, 7);
+    assert!(cfg.is_agent_fallback());
+
+    // The counter is written back between ticks, not through update_task_run.
+    let bumped = crate::scheduler::watch::WatchConfig { checks: 3, ..cfg };
+    db.update_task_watch_json("w1", &bumped.to_json().unwrap())
+        .unwrap();
+    let reread = db.get_tasks_by_group("team-a").unwrap();
+    let stored =
+        crate::scheduler::watch::WatchConfig::parse(reread[0].watch_json.as_ref().unwrap())
+            .unwrap();
+    assert_eq!(stored.checks, 3);
+}
+
+#[test]
+fn active_watches_are_scoped_to_their_own_chat() {
+    // A watch belongs to the conversation that armed it: that is where its
+    // card renders and where its Stop button means anything. Listing by chat
+    // is what stops one chat cancelling another's wait.
+    let db = Db::open_in_memory(&cfg()).unwrap();
+    let mk = |id: &str, jid: &str, mode: ContextMode, status: TaskStatus| ScheduledTask {
+        id: id.into(),
+        group_folder: "main".into(),
+        chat_jid: jid.into(),
+        prompt: "resume".into(),
+        schedule_type: ScheduleType::Interval,
+        schedule_value: "60000".into(),
+        context_mode: mode,
+        agent_mode: AgentMode::Agent,
+        script_command: None,
+        watch_json: Some(
+            r#"{"deadline_at":"2999-01-01T00:00:00Z","resume_prompt":"go","label":"job"}"#.into(),
+        ),
+        next_run: Some("2026-04-28T00:05:00Z".into()),
+        last_run: None,
+        last_result: None,
+        status,
+        created_at: "2026-04-28T00:00:00Z".into(),
+    };
+    db.insert_task(&mk(
+        "w-mine",
+        "web:a",
+        ContextMode::Watch,
+        TaskStatus::Active,
+    ))
+    .unwrap();
+    db.insert_task(&mk(
+        "w-other",
+        "web:b",
+        ContextMode::Watch,
+        TaskStatus::Active,
+    ))
+    .unwrap();
+    db.insert_task(&mk(
+        "w-done",
+        "web:a",
+        ContextMode::Watch,
+        TaskStatus::Completed,
+    ))
+    .unwrap();
+    // A plain schedule on the same chat must not be offered as a watch.
+    db.insert_task(&mk(
+        "s-plain",
+        "web:a",
+        ContextMode::Group,
+        TaskStatus::Active,
+    ))
+    .unwrap();
+
+    let mine = db.get_active_watches("web:a").unwrap();
+    assert_eq!(mine.len(), 1);
+    assert_eq!(mine[0].id, "w-mine");
+
+    // Stopping is a status change, so the row survives as the record that the
+    // wait happened — and it drops out of the active list immediately.
+    assert!(db.stop_watch("w-mine").unwrap());
+    assert!(db.get_active_watches("web:a").unwrap().is_empty());
+    assert_eq!(db.get_tasks_by_group("main").unwrap().len(), 4);
+
+    // Reporting success for something that did not stop would tell the user a
+    // watch was cancelled while it in fact kept running.
+    assert!(!db.stop_watch("w-mine").unwrap(), "already stopped");
+    assert!(!db.stop_watch("khong-co").unwrap(), "unknown id");
+    assert!(
+        !db.stop_watch("s-plain").unwrap(),
+        "an ordinary schedule must not be stoppable through the watch path"
+    );
+    assert_eq!(
+        db.get_tasks_by_group("main")
+            .unwrap()
+            .iter()
+            .filter(|t| t.id == "s-plain" && t.status == TaskStatus::Active)
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn task_lifecycle_and_logs() {
     let db = Db::open_in_memory(&cfg()).unwrap();
     let task = ScheduledTask {
@@ -223,6 +352,7 @@ fn task_lifecycle_and_logs() {
         context_mode: ContextMode::Isolated,
         agent_mode: AgentMode::Agent,
         script_command: None,
+        watch_json: None,
         next_run: Some("2026-04-28T00:05:00Z".into()),
         last_run: None,
         last_result: None,

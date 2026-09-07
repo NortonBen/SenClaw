@@ -10,8 +10,10 @@ hai scheduler, hai UI). Chọn đúng công cụ:
 | Tạo ở đâu | Chat ("đặt lịch mỗi sáng…"), Web **Space → Định kỳ**, Desktop **Plugins → Schedules** | Chat, Desktop **Background**, Mobile "Tác vụ nền" — **Web UI chưa có màn hình này** |
 | Kết quả | Tin nhắn trong chat của lịch | Run record (status + result + transcript) trong màn hình Background |
 
-Phần C cuối tài liệu nói về **Reminders** (nhắc việc lịch/calendar) — hệ thứ ba,
-hay bị nhầm với hai cái trên.
+Phần C nói về **Reminders** (nhắc việc lịch/calendar) — hệ thứ ba, hay bị nhầm
+với hai cái trên. Phần D nói về **Watch**, thứ tư và khác hẳn: không phải lịch
+người dùng đặt, mà là cách **agent tự chờ** một việc chạy lâu rồi quay lại trả
+kết quả vào đúng cuộc trò chuyện đang dở.
 
 ---
 
@@ -216,6 +218,71 @@ Khác cả hai phần trên: đây là nhắc nhở cho **sự kiện lịch** (
 
 ---
 
+## PHẦN D — Watch (chờ việc dài rồi tự trả kết quả)
+
+### D1. Vấn đề nó giải quyết
+
+Agent giao việc cho thứ chạy lâu — task AI Office, một lượt dispatch/DAG, job của
+Space App, một lần build — và nhận về "đang chạy". Trước đây agent chỉ có hai
+đường, cả hai đều đứt mạch:
+
+- `sleep` rồi poll một lần trong lượt, chưa xong thì **bỏ cuộc**: *"bạn hỏi lại
+  tôi sau nhé"*. Lượt kết thúc, không có gì tự quay lại.
+- `background_*`: chạy tự trị nhưng **cố ý không trả lời chat được** — với tới
+  người dùng chỉ qua một OS notification.
+
+**Watch** là thứ còn thiếu: một dòng trong `scheduled_tasks` cứ định kỳ kiểm tra
+một điều kiện, và ngay khi điều kiện đúng thì đẩy prompt vào **đúng chat gốc** —
+cùng đường giao như `ContextMode::Group`. Cuộc trò chuyện tự chạy tiếp.
+
+### D2. Rẻ ở chỗ nào
+
+Mỗi lần kiểm tra là **một lời gọi MCP tool, không có LLM**. Watch chờ một tiếng
+chỉ tốn mấy chục lời gọi tool. Chỉ lượt cuối — lúc điều kiện đúng, hoặc lúc bỏ
+cuộc — mới tốn một lượt agent thật.
+
+Không khai báo được `tool` thì watch rơi về **đánh thức agent mỗi kỳ** để tự kiểm
+tra: vẫn chạy, nhưng mỗi kỳ tốn trọn một lượt.
+
+### D3. Dùng
+
+Agent gọi `mcp__senclaw-schedule__schedule_watch` rồi **kết thúc lượt**:
+
+```json
+{
+  "label": "AI Office #27",
+  "tool": "mcp__ai-office-mcp__office_get_task",
+  "args": { "id": 27 },
+  "done_path": "status",
+  "done_op": "in",
+  "done_values": ["done", "completed", "failed"],
+  "interval_secs": 60,
+  "timeout_secs": 3600,
+  "resume_prompt": "Task AI Office #27 đã kết thúc. Kết quả: {{result}}. Lấy báo cáo đầy đủ rồi tổng hợp trả lời user."
+}
+```
+
+`done_op`: `exists` (mặc định), `equals`, `contains`, `in` và các dạng phủ định —
+đều không phân biệt hoa thường. `interval_secs` kẹp 15–3600, `timeout_secs` ≤
+86400. Chủ sở hữu chat **lấy từ env**, không nhận qua tham số — watch nói vào một
+cuộc trò chuyện, nên không thể để bên gọi chỉ định chat của người khác.
+
+### D4. Bảo đảm
+
+- **Luôn báo lại.** Xong việc, hết hạn, hay hỏng liên tiếp — chat đều được báo.
+  Watch không bao giờ chết im lặng, vì im lặng thì y hệt cái hành vi bỏ cuộc mà
+  nó sinh ra để thay thế.
+- **Lỗi tạm thời không giết watch.** Space App kiểu `session` đang dừng là
+  *trạng thái nghỉ bình thường*, không phải hỏng; phải hỏng liên tiếp nhiều lần
+  mới dừng.
+- **Hai phanh độc lập**: hạn chót (`deadline_at`) và trần số lần kiểm tra
+  (`max_checks`).
+- **Nhớ đưa cả trạng thái thất bại vào `done_values`** (`failed`, `error`,
+  `cancelled`). Watch chỉ khớp `done` sẽ chờ hết hạn trên một job đã chết từ phút
+  đầu.
+
+---
+
 ## Tham chiếu code
 
 Scheduled tasks: [`src/scheduler/task_scheduler.rs`](../src/scheduler/task_scheduler.rs) ·
@@ -229,5 +296,9 @@ MCP: [`src/mcp/background_server.rs`](../src/mcp/background_server.rs) ·
 REST: [`src/gateway/ui_server/background.rs`](../src/gateway/ui_server/background.rs) ·
 UI desktop: [`desktop_app/lib/features/background/`](../desktop_app/lib/features/background/) ·
 cấu hình: [`src/config.rs`](../src/config.rs).
+Watch: [`src/scheduler/watch.rs`](../src/scheduler/watch.rs) (config + điều kiện) ·
+`execute_watch` trong [`src/scheduler/executor.rs`](../src/scheduler/executor.rs) ·
+tool agent: `schedule_watch` trong [`src/mcp/schedule_server.rs`](../src/mcp/schedule_server.rs) ·
+hướng dẫn: [`skills/schedule/SKILL.md`](../skills/schedule/SKILL.md).
 Reminders: [`src/scheduler/event_notifier.rs`](../src/scheduler/event_notifier.rs) ·
 [`desktop_app/lib/features/chat/reminder_interaction.dart`](../desktop_app/lib/features/chat/reminder_interaction.dart).

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/i18n/l10n.dart';
+import '../../../core/transport/api_client.dart';
 import '../../../core/transport/connection.dart';
 import '../../../models/chat_message.dart';
 import '../../../theme/tokens.dart';
@@ -1131,6 +1132,29 @@ class InlineDispatchCard extends ConsumerWidget {
         _ => AppTokens.brandAlt,
       };
 
+  static bool _failed(String s) => s == 'error' || s == 'timeout';
+
+  /// Re-queue work and report the outcome.
+  ///
+  /// No local pending flag on purpose: the card is stateless and refreshes from
+  /// the `dispatch:update` push. A double tap is harmless because the daemon
+  /// refuses a task that is already queued or running — and says why, which is
+  /// what lands in the snackbar.
+  Future<void> _retry(
+      BuildContext context, WidgetRef ref, String path, String okMsg) async {
+    String message = okMsg;
+    try {
+      await ref.read(apiClientProvider).post(path);
+    } on ApiException catch (e) {
+      message = e.message;
+    } catch (e) {
+      message = e.toString();
+    }
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.colors;
@@ -1140,6 +1164,7 @@ class InlineDispatchCard extends ConsumerWidget {
         .where((t) => t.status == 'done' || t.status == 'completed')
         .length;
     final total = parent.tasks.length;
+    final failed = parent.tasks.where((t) => _failed(t.status)).length;
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 720),
@@ -1185,6 +1210,21 @@ class InlineDispatchCard extends ConsumerWidget {
                           fontWeight: FontWeight.w600),
                     ),
                   ),
+                  if (failed > 0)
+                    IconButton(
+                      icon: const Icon(Icons.refresh, size: 16),
+                      color: AppTokens.danger,
+                      visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints(),
+                      padding: const EdgeInsets.only(left: AppTokens.s8),
+                      tooltip: context.tr('Retry failed tasks'),
+                      onPressed: () => _retry(
+                        context,
+                        ref,
+                        '/api/dispatch/parents/${parent.id}/retry',
+                        context.tr('Failed tasks re-queued'),
+                      ),
+                    ),
                 ],
               ),
               if (parent.tasks.isNotEmpty) const SizedBox(height: AppTokens.s8),
@@ -1225,6 +1265,22 @@ class InlineDispatchCard extends ConsumerWidget {
                               Text(t.agentId,
                                   style: TextStyle(
                                       color: c.textMuted, fontSize: 11)),
+                            if (_failed(t.status))
+                              IconButton(
+                                icon: const Icon(Icons.refresh, size: 14),
+                                color: AppTokens.danger,
+                                visualDensity: VisualDensity.compact,
+                                constraints: const BoxConstraints(),
+                                padding:
+                                    const EdgeInsets.only(left: AppTokens.s6),
+                                tooltip: context.tr('Re-run this task'),
+                                onPressed: () => _retry(
+                                  context,
+                                  ref,
+                                  '/api/dispatch/tasks/${t.id}/retry',
+                                  context.tr('Task re-queued'),
+                                ),
+                              ),
                           ],
                         ),
                         // Latest activity line for in-flight tasks.

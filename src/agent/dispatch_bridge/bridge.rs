@@ -50,6 +50,12 @@ const CLEANUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
 /// How long completed parents are kept before being garbage-collected.
 const CLEANUP_RETENTION_SECONDS: i64 = 60 * 60;
 
+/// How long an `active` parent must exist before the stall sweep may declare it
+/// stuck. Covers the window at boot and at parent creation where the persona
+/// registry or virtual-worker pool is not wired yet, which makes every task
+/// legitimately un-startable for a moment.
+const STALL_GRACE_SECONDS: i64 = 60;
+
 /// Concrete `DispatchBridgeApi` implementation backed by a JSON state file.
 ///
 /// Phase 1+2 scope: state persistence, parent/task tracking, WS notify, admin
@@ -636,6 +642,234 @@ impl DispatchBridge {
             || m.contains("virtual agent failed")
     }
 
+    /// Re-run one failed subtask, on the user's explicit request.
+    ///
+    /// Distinct from the `MAX_INFRA_RETRIES` budget above, which is automatic,
+    /// capped, and only fires for transient infrastructure errors. This one is
+    /// a person looking at a failure and deciding to try again, so it is not
+    /// capped and does not care why the task failed.
+    ///
+    /// Reviving a task means reviving its parent: a DAG whose last task failed
+    /// is already `done`, and leaving it that way would let the scheduler skip
+    /// the very task we just re-queued.
+    ///
+    /// `Err` carries a reason meant for a person — the UI shows it verbatim.
+    pub fn retry_task(&self, task_id: &str) -> Result<String, String> {
+        let mut outcome: Result<String, String> = Err(format!("Task not found: {task_id}"));
+        let mut task_label = String::new();
+        let mut parent_goal = String::new();
+        let mut admin: Option<String> = None;
+
+        let _ = self.modify_state(|state| {
+            for parent in &mut state.parents {
+                let Some(task) = parent.tasks.iter_mut().find(|t| t.id == task_id) else {
+                    continue;
+                };
+                match task.status {
+                    DispatchTaskStatus::Error | DispatchTaskStatus::Timeout => {}
+                    DispatchTaskStatus::Done => {
+                        outcome = Err(format!(
+                            "Task \"{}\" finished successfully — nothing to retry",
+                            task.label
+                        ));
+                        return;
+                    }
+                    DispatchTaskStatus::Registered | DispatchTaskStatus::Processing => {
+                        outcome = Err(format!(
+                            "Task \"{}\" is already {} — wait for it to finish",
+                            task.label,
+                            task.status.label()
+                        ));
+                        return;
+                    }
+                }
+
+                task_label = task.label.clone();
+                parent_goal = parent.goal.clone();
+                admin = Some(parent.admin_folder.clone());
+
+                // Same reset the infra retry performs, plus the verdict fields:
+                // a stale verification or file list from the failed attempt
+                // would be read as belonging to the new one.
+                task.status = DispatchTaskStatus::Registered;
+                task.started_at = None;
+                task.timeout_at = None;
+                task.completed_at = None;
+                task.result = None;
+                task.verification_result = None;
+                task.file_changes.clear();
+                for item in &mut task.checklist {
+                    item.status = "pending".into();
+                    item.verification_note = None;
+                }
+
+                // Revive the parent so the scheduler will look at it again.
+                if parent.status == "done" {
+                    parent.status = "active".into();
+                    parent.completed_at = None;
+                }
+                outcome = Ok(task.label.clone());
+                return;
+            }
+        });
+
+        if outcome.is_ok() {
+            tracing::info!("[DispatchBridge] Task {task_id} re-queued by user request");
+            self.fire_task_lifecycle(task_id, "registered", &task_label, &parent_goal, None);
+            if let Some(folder) = admin {
+                self.fire_admin_activity(&folder);
+            }
+            // Don't wait for the 300ms tick — the person is watching.
+            self.process_next_pending();
+        }
+        outcome
+    }
+
+    /// Re-run every failed subtask of one parent. Returns the labels re-queued.
+    ///
+    /// A DAG usually fails in a cluster — one scout dies and everything
+    /// downstream inherits the gap — so retrying them one click at a time means
+    /// re-running the same dependency chain repeatedly.
+    pub fn retry_parent_failed(&self, parent_id: &str) -> Result<Vec<String>, String> {
+        let failed: Vec<String> = {
+            let state = self
+                .read_state()
+                .map_err(|e| format!("cannot read dispatch state: {e}"))?;
+            let parent = state
+                .parents
+                .iter()
+                .find(|p| p.id == parent_id)
+                .ok_or_else(|| format!("Parent not found: {parent_id}"))?;
+            parent
+                .tasks
+                .iter()
+                .filter(|t| {
+                    matches!(
+                        t.status,
+                        DispatchTaskStatus::Error | DispatchTaskStatus::Timeout
+                    )
+                })
+                .map(|t| t.id.clone())
+                .collect()
+        };
+        if failed.is_empty() {
+            return Err("No failed tasks in this dispatch".into());
+        }
+        // Retry every one, then report. A single failure mid-loop must not
+        // abandon the tasks already re-queued.
+        let mut labels = Vec::new();
+        for id in failed {
+            match self.retry_task(&id) {
+                Ok(label) => labels.push(label),
+                Err(e) => tracing::warn!("[DispatchBridge] retry {id} skipped: {e}"),
+            }
+        }
+        if labels.is_empty() {
+            return Err("Nothing could be re-queued".into());
+        }
+        Ok(labels)
+    }
+
+    /// Push the current parents tree to admin clients.
+    ///
+    /// Also refreshes the change-detection marker the poll loop compares
+    /// against, so an explicit push here is not repeated by the next tick.
+    fn notify_ws_parents(&self) {
+        let Ok(state) = self.read_state() else { return };
+        if let Some(cb) = self.ws_notify.lock().unwrap().as_ref() {
+            let v = serde_json::to_value(&state.parents).unwrap_or(serde_json::Value::Null);
+            cb(&v);
+        }
+        *self.last_notified_parents_json.lock().unwrap() =
+            serde_json::to_string(&state.parents).unwrap_or_default();
+    }
+
+    /// Fail parents that can no longer make progress.
+    ///
+    /// The timeout sweep only watches `processing` tasks, so a task that never
+    /// *starts* has no deadline at all. `can_start_task` returns false forever
+    /// for a virtual task whose persona is missing from the registry — the
+    /// parent then sits `active` with nothing running and nothing runnable, and
+    /// only a daemon restart clears it. From the chat's point of view that is
+    /// indistinguishable from a DAG still working.
+    ///
+    /// The condition is deliberately narrow: nothing `processing` **and**
+    /// nothing startable means no future event can change the state, because
+    /// the only thing that unblocks a task is another task finishing.
+    fn sweep_stalled_parents(&self) {
+        let Ok(state) = self.read_state() else { return };
+        let now = chrono::Utc::now();
+        let paused = self.inner.lock().unwrap().paused_admins.clone();
+
+        let mut stalled: Vec<(String, Vec<String>)> = Vec::new();
+        for parent in &state.parents {
+            if parent.status != "active" || paused.contains(&parent.admin_folder) {
+                continue;
+            }
+            // Grace period: at creation and at boot every task is briefly
+            // un-startable while wiring completes.
+            let age_ok = chrono::DateTime::parse_from_rfc3339(&parent.created_at)
+                .map(|c| (now - c.with_timezone(&chrono::Utc)).num_seconds() >= STALL_GRACE_SECONDS)
+                .unwrap_or(false);
+            if !age_ok {
+                continue;
+            }
+            if parent
+                .tasks
+                .iter()
+                .any(|t| t.status == DispatchTaskStatus::Processing)
+            {
+                continue;
+            }
+            let blocked: Vec<String> = parent
+                .tasks
+                .iter()
+                .filter(|t| t.status == DispatchTaskStatus::Registered)
+                .map(|t| t.id.clone())
+                .collect();
+            if blocked.is_empty() {
+                // Every task terminal but the parent never closed — close it.
+                stalled.push((parent.id.clone(), Vec::new()));
+                continue;
+            }
+            if blocked
+                .iter()
+                .filter_map(|id| parent.tasks.iter().find(|t| &t.id == id))
+                .any(|t| self.can_start_task(t, &parent.tasks))
+            {
+                continue;
+            }
+            stalled.push((parent.id.clone(), blocked));
+        }
+
+        for (parent_id, blocked) in stalled {
+            tracing::warn!(
+                "[DispatchBridge] Parent {parent_id} stalled — {} task(s) can never start",
+                blocked.len()
+            );
+            let now_s = now.to_rfc3339();
+            let _ = self.modify_state(|state| {
+                let Some(parent) = state.parents.iter_mut().find(|p| p.id == parent_id) else {
+                    return;
+                };
+                for task in parent.tasks.iter_mut() {
+                    if blocked.contains(&task.id) {
+                        task.status = DispatchTaskStatus::Error;
+                        task.completed_at = Some(now_s.clone());
+                        task.result = Some(
+                            "Never started: its agent or persona could not be resolved, so the \
+                             scheduler had nothing to launch. Fix the agent/persona and retry."
+                                .into(),
+                        );
+                    }
+                }
+                parent.status = "done".into();
+                parent.completed_at = Some(now_s.clone());
+            });
+            self.notify_ws_parents();
+        }
+    }
+
     /// Mark `task_id` as `error` with `error_message`. Same caveats as
     /// `mark_task_done`. Infra errors (timeout / loop limit / engine crash)
     /// get one automatic in-place retry: the task is reset to `registered`
@@ -943,6 +1177,10 @@ impl DispatchBridge {
                 }
             }
         }
+
+        // 3. Stall sweep — runs last, so a task launched above is already
+        //    `processing` and cannot be mistaken for one that never starts.
+        self.sweep_stalled_parents();
     }
 
     /// After a task completes, scan all active parents for newly-unblocked
@@ -1201,6 +1439,27 @@ impl DispatchBridge {
                 completed.with_timezone(&chrono::Utc) >= cutoff
             });
         });
+    }
+
+    /// The parents array as the WS `dispatch:update` event carries it.
+    ///
+    /// `dispatch:update` reaches WebSocket admin clients only; a mobile relay
+    /// client has no way to receive it, and even a forwarded copy would be
+    /// lossy across the relay's reconnect cycle. So the read path is a
+    /// snapshot the caller polls, not a stream it subscribes to.
+    ///
+    /// An unreadable or absent state file yields an empty array rather than an
+    /// error: no dispatch has run yet is the normal case, not a fault.
+    pub fn parents_snapshot(&self) -> serde_json::Value {
+        match self.read_state() {
+            Ok(state) => {
+                serde_json::to_value(&state.parents).unwrap_or_else(|_| serde_json::json!([]))
+            }
+            Err(e) => {
+                tracing::warn!("[DispatchBridge] parents_snapshot: {e}");
+                serde_json::json!([])
+            }
+        }
     }
 
     // ---- File I/O ----

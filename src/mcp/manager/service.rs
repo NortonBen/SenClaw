@@ -33,6 +33,17 @@ pub struct McpManager {
 
     /// Working directory for project-scope config.
     working_dir: PathBuf,
+
+    /// How to spawn SenClaw's own MCP servers on demand.
+    ///
+    /// Built-in servers are normally launched *per chat session* by
+    /// `AgentPool`, so they never appear in `external` and the daemon itself
+    /// cannot call them. That gap is invisible until something in-process tries
+    /// — a watch probing `dispatch_status` got "MCP server not found:
+    /// senclaw-dispatch" and gave up. Populated at boot from the same
+    /// `helper::*_mcp_config` builders the session path uses, so the env a
+    /// server needs is described in exactly one place.
+    builtin_specs: RwLock<HashMap<String, crate::mcp::helper::McpServerConfig>>,
 }
 
 impl McpManager {
@@ -43,6 +54,7 @@ impl McpManager {
         Self {
             config_mgr,
             builtin_registry: SharedMcpRegistry::new(),
+            builtin_specs: RwLock::new(HashMap::new()),
             external: RwLock::new(HashMap::new()),
             working_dir,
         }
@@ -51,6 +63,18 @@ impl McpManager {
     /// Access the built-in registry for senclaw subprocess servers.
     pub fn builtin_registry(&self) -> &SharedMcpRegistry {
         &self.builtin_registry
+    }
+
+    /// Teach the manager how to spawn a built-in server on demand.
+    ///
+    /// Only register servers whose config needs no per-chat context: this
+    /// instance is shared by the whole daemon, so a spec carrying one chat's
+    /// jid would answer every caller as that chat.
+    pub async fn register_builtin_spec(&self, cfg: crate::mcp::helper::McpServerConfig) {
+        self.builtin_specs
+            .write()
+            .await
+            .insert(cfg.name.clone(), cfg);
     }
 
     // ---- init ----
@@ -822,7 +846,13 @@ impl McpManager {
             let external = self.external.read().await;
             match external.get(&server_name) {
                 Some(s) => s.client.is_some(),
-                None => return Err(anyhow::anyhow!("MCP server not found: {server_name}")),
+                // Not an external server — it may be one of SenClaw's own,
+                // which lives in `builtin_registry` rather than `external`.
+                None => {
+                    return self
+                        .call_builtin_tool(&server_name, &tool_name, arguments)
+                        .await
+                }
             }
         };
         if !connected {
@@ -842,6 +872,59 @@ impl McpManager {
             .ok_or_else(|| anyhow::anyhow!("MCP server not connected: {server_name}"))?;
 
         client.call_tool(&tool_name, arguments).await
+    }
+
+    /// Call a tool on one of SenClaw's own MCP servers, spawning it on first use.
+    ///
+    /// The process is cached in `builtin_registry` for the daemon's lifetime, so
+    /// a watch polling every 15 s pays the spawn once rather than per check.
+    async fn call_builtin_tool(
+        &self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        // Built-ins normally arrive bundled: one `senclaw-core` process hosts
+        // them all, and the engine renames every tool to `mcp__core__<tool>`.
+        // So an agent naturally hands us `core` as the server, while the specs
+        // are keyed by the owning server (`senclaw-dispatch`, …). Recover the
+        // owner from the tool's prefix, which CLAUDE.md pins as the naming
+        // convention for exactly this reason.
+        let resolved = if matches!(server_name, "core" | "senclaw-core") {
+            tool_name
+                .split_once('_')
+                .map(|(domain, _)| format!("senclaw-{domain}"))
+                .unwrap_or_else(|| server_name.to_string())
+        } else {
+            server_name.to_string()
+        };
+        let spec = {
+            let specs = self.builtin_specs.read().await;
+            specs.get(resolved.as_str()).cloned()
+        };
+        let Some(spec) = spec else {
+            // Keep the original wording: for a genuinely unknown server this is
+            // still the right message, and it is what callers match on.
+            return Err(anyhow::anyhow!("MCP server not found: {server_name}"));
+        };
+
+        if !self.builtin_registry.has_server(&resolved) {
+            self.builtin_registry
+                .spawn(
+                    &resolved,
+                    &spec.command,
+                    &spec.args,
+                    &spec.env,
+                    std::time::Duration::from_secs(60),
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("could not start {resolved}: {e}"))?;
+            info!("MCP manager: spawned built-in server {resolved} on demand");
+        }
+
+        self.builtin_registry
+            .call_tool(&resolved, tool_name, arguments)
+            .await
     }
 
     /// Test a tool by calling it on a connected external server.

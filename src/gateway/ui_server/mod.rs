@@ -21,6 +21,8 @@ mod config_handler;
 pub mod core;
 mod cowork;
 pub mod cowork_runtime;
+mod dispatch;
+mod watches;
 mod dispatch_config;
 mod embedding_config;
 mod embedding_models;

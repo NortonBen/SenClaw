@@ -131,6 +131,16 @@ pub const ALWAYS_LOADED_MCP_TOOLS: &[&str] = &[
     "mcp__senclaw-memory__memory_search",
     "mcp__schedule__list_schedules",
     "mcp__senclaw-schedule__list_schedules",
+    // `schedule_watch` is how an agent keeps a promise to report back on a long
+    // job. Deferring it means the agent must *discover* it mid-turn, and that
+    // discovery failed in the field: told to load
+    // `mcp__senclaw-schedule__schedule_watch`, ToolSearch answered "no
+    // registered tool" — under the default bundled core server the real name is
+    // `mcp__core__schedule_watch`. The agent then promised a notification it
+    // had no way to deliver. Always-loading it removes the discovery step, and
+    // both spellings are listed because either bridge may be the live one.
+    "mcp__core__schedule_watch",
+    "mcp__senclaw-schedule__schedule_watch",
     "mcp__workspace__workspace_info",
     "mcp__senclaw-workspace__workspace_info",
 ];
@@ -192,5 +202,23 @@ mod tests {
     fn search_hint_falls_back_to_display_name_when_desc_empty() {
         let t = mk("mcp__senclaw-x__foo", "");
         assert_eq!(t.search_hint(), "foo");
+    }
+}
+
+#[cfg(test)]
+mod always_loaded_tests {
+    use super::ALWAYS_LOADED_MCP_TOOLS;
+
+    #[test]
+    fn schedule_watch_is_never_deferred_under_either_naming_scheme() {
+        // How this broke in the field: the agent was told to arm a watch,
+        // searched for `mcp__senclaw-schedule__schedule_watch`, and ToolSearch
+        // answered "no registered tool" — under the default bundled core server
+        // the live name is `mcp__core__schedule_watch`. Having promised to
+        // report back, it then had no way to. Always-loading the tool removes
+        // the discovery step entirely; listing both spellings covers bundled
+        // and per-server modes, since either bridge may be the live one.
+        assert!(ALWAYS_LOADED_MCP_TOOLS.contains(&"mcp__core__schedule_watch"));
+        assert!(ALWAYS_LOADED_MCP_TOOLS.contains(&"mcp__senclaw-schedule__schedule_watch"));
     }
 }

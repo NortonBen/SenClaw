@@ -37,6 +37,7 @@ fn temp_state() -> Arc<UiState> {
         persona_registry: None,
         agent_api: None,
         mcp_manager: None,
+        dispatch_bridge: None,
         marketplace_manager: None,
         workbench_bridge: None,
         space_mcp_launcher: None,

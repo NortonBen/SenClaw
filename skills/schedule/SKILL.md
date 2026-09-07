@@ -44,6 +44,22 @@ triggers:
   - lần chạy
   - lỗi lịch
   - kết quả chạy
+  # --- Waiting on a long-running job (Vietnamese) ---
+  - chờ kết quả
+  - đợi kết quả
+  - chờ xong
+  - đợi xong
+  - khi nào xong
+  - bao giờ xong
+  - theo dõi tiến độ
+  - kiểm tra lại sau
+  # --- Waiting on a long-running job (English) ---
+  - wait for result
+  - wait until done
+  - check back later
+  - poll until
+  - watch the job
+  - long-running task
   # --- English keywords ---
   - recurring
   - schedule
@@ -364,3 +380,103 @@ Agent thinking:
 | "xoá lịch X" / "delete schedule X" | Confirm first → `space_recurring_delete(id)` |
 | "bỏ lịch này" / "remove this schedule" | Confirm first → `space_recurring_delete(id)` |
 | "không cần nữa" / "don't need it anymore" | Find by context → confirm → `space_recurring_delete(id)` |
+
+
+---
+
+## Waiting on a long-running job — `schedule_watch`
+
+Recurring schedules above are the **user's** automation. This section is a
+different thing: what to do when **you** hand work to something slow and the
+answer is not ready before your turn ends.
+
+`schedule_watch` re-checks a condition on an interval and
+wakes **this chat** the moment it holds.
+
+### When to use it
+
+The moment you delegate to anything that returns "in progress":
+
+- an AI Office task (`office_*`), a dispatch/DAG run, a cowork task board
+- a Space App job — build, import, render, scrape, ETL
+- anything whose tool answer is a job id plus a status
+
+**For a DAG specifically:** `dispatch_all_tasks` and `create_parent_and_run`
+block your turn until every subtask is terminal (900s default). That is fine for
+a short graph. For anything longer, call `create_parent` (which returns
+immediately), then watch `dispatch_status`:
+
+```json
+{
+  "label": "DAG p-20260905-1130",
+  "tool": "mcp__core__dispatch_status",
+  "args": { "parentId": "p-20260905-1130" },
+  "done_path": "status",
+  "done_op": "equals",
+  "done_value": "done",
+  "interval_secs": 60,
+  "timeout_secs": 7200,
+  "resume_prompt": "DAG p-20260905-1130 đã chạy xong. Tóm tắt: {{result}}. Gọi dispatch_status để lấy kết quả từng task, tổng hợp rồi trả lời user. Nếu có task lỗi, nói rõ task nào lỗi và vì sao — đừng bịa kết quả cho nó."
+}
+```
+
+A DAG parent reaches `"done"` when every subtask is terminal — including the
+failed ones, because the scheduler is continue-on-error. So the resume prompt
+must check `failedTasks`, not assume success.
+
+### What NOT to do
+
+| Anti-pattern | Why it fails |
+|---|---|
+| `sleep 30` then poll once | Burns the turn, and a job slower than the sleep is still unfinished. Then you give up. |
+| "Ask me again later for progress" | Pushes your job onto the user. The whole point is that it comes back on its own. |
+| Polling in a loop inside one turn | Blocks the session and hits the turn ceiling. |
+| `background_*` tools | They **cannot reply to a chat** by design — an OS notification is their only reach. |
+
+### How
+
+```json
+{
+  "label": "AI Office #27",
+  "tool": "mcp__ai-office-mcp__office_get_task",
+  "args": { "id": 27 },
+  "done_path": "status",
+  "done_op": "in",
+  "done_values": ["done", "completed", "failed"],
+  "interval_secs": 60,
+  "timeout_secs": 3600,
+  "resume_prompt": "Nhiệm vụ AI Office #27 (nghiên cứu thị trường cafe Hà Nội) đã kết thúc. Trạng thái/kết quả: {{result}}. Lấy báo cáo đầy đủ bằng office_get_task rồi tổng hợp và trả lời user."
+}
+```
+
+Then **end your turn** and tell the user you will report back — do not keep polling.
+
+| Parameter | Notes |
+|---|---|
+| `resume_prompt` | Required. You are woken with this **and nothing else** — restate what was being waited on. `{{result}}` = the probe payload |
+| `tool` + `args` | Re-called each check with **no LLM**, so waiting is nearly free. Use the **exact name your tool list shows** — built-ins are `mcp__core__<tool>` under the default bundled server, not `mcp__senclaw-<domain>__<tool>`. Omit only when the job cannot be checked in one call — you are then woken every interval to check by hand, costing a full turn each time |
+| `done_path` | Dot path into the result. **Call the probe tool once first and read the path off its real answer** — a guessed path resolves to nothing, counts as "not ready", and the watch waits out its full deadline on a finished job. AI Office's `office_get_task` answers `{events, steps, task}`, so the path is `task.status` — not `status`, not `data.task.status` |
+| `done_op` | `exists` (default), `equals`, `contains`, `in`, and their negations. Case-insensitive |
+| `interval_secs` | Default 60, clamped to 15–3600 |
+| `timeout_secs` | Default 3600, clamped to ≤ 86400 |
+
+### Two mistakes that waste the whole deadline
+
+Both are silent — the watch keeps running and reports nothing:
+
+- **Missing a required argument.** The tool answers with a rejection every
+  check. Pass every argument it needs.
+- **A guessed `done_path`.** A path that resolves to nothing counts as "not
+  reported yet", so the watch never finishes.
+
+Call the probe tool once before arming. Its answer gives you both.
+
+### Guarantees
+
+- **It always reports back.** On success, on deadline, and after repeated probe
+  errors — the chat is told either way. It never ends silently.
+- **Transient errors do not kill it.** A stopped session Space App is its resting
+  state; the watch tolerates several consecutive failures before giving up.
+- **Include terminal failure states in `done_values`** (`failed`, `error`,
+  `cancelled`). A watch that only matches `done` waits out its full deadline on a
+  job that died in the first minute.

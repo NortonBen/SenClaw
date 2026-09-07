@@ -7,6 +7,7 @@ import {
   ClockCircleOutlined,
   DownOutlined,
   RightOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import type { DispatchParent, DispatchTask, SubAgentActivityEntry } from '../types';
 import { DispatchTree } from './DispatchTree';
@@ -52,7 +53,36 @@ function taskStatusIcon(t: DispatchTask) {
  * surfacing of orchestration progress so the user sees the DAG growing
  * alongside their own messages without flipping panels.
  */
+/** A task the user can re-run: it reached a terminal failure. */
+function isRetryable(t: DispatchTask): boolean {
+  return t.status === 'error' || t.status === 'timeout';
+}
+
 export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps) {
+  // Re-queueing is a write, so it needs its own pending/error state. The tree
+  // itself refreshes from the `dispatch:update` push — we deliberately do not
+  // mutate `parent` here, or the card would disagree with the daemon.
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
+
+  const postRetry = async (key: string, url: string) => {
+    setRetrying(key);
+    setRetryError(null);
+    try {
+      const r = await fetch(url, { method: 'POST' });
+      if (!r.ok) {
+        // The daemon refuses with a reason meant for a person ("already
+        // running", "finished successfully"); showing a generic failure would
+        // just make them click again.
+        const body = await r.json().catch(() => null);
+        setRetryError(body?.error ?? body?.message ?? `Retry failed (${r.status})`);
+      }
+    } catch (e) {
+      setRetryError(e instanceof Error ? e.message : 'Retry failed');
+    } finally {
+      setRetrying(null);
+    }
+  };
   const { token } = theme.useToken();
   const [expanded, setExpanded] = useState(parent.status !== 'done');
   /** Label of the task whose details panel is open. `null` = none. */
@@ -154,6 +184,24 @@ export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps
           {done}/{total}
           {failed > 0 && <span style={{ color: '#ef4444', marginLeft: 6 }}>· {failed} failed</span>}
         </Text>
+        {failed > 0 && (
+          <Button
+            size="small"
+            type="text"
+            danger
+            icon={<ReloadOutlined spin={retrying === 'parent'} />}
+            loading={retrying === 'parent'}
+            // The header row toggles the card; without this, retrying collapses it.
+            onClick={e => {
+              e.stopPropagation();
+              void postRetry('parent', `/api/dispatch/parents/${parent.id}/retry`);
+            }}
+            style={{ fontSize: 11, padding: '0 6px' }}
+            title={`Chạy lại ${failed} công việc lỗi`}
+          >
+            Thử lại {failed}
+          </Button>
+        )}
         {/* Timestamp on the right — matches the per-message time displayed
             by MessageBubble / TextMessage so the DAG card slots cleanly into
             the chronological timeline of the conversation. Shows creation
@@ -165,6 +213,12 @@ export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps
             : ''}
         </Text>
       </div>
+
+      {retryError && (
+        <div style={{ padding: '4px 12px' }}>
+          <Text style={{ fontSize: 11, color: '#ef4444' }}>{retryError}</Text>
+        </div>
+      )}
 
       {/* Body — DAG tree + per-task status list */}
       {expanded && (
@@ -370,6 +424,22 @@ export function InlineDispatchCard({ parent, activity }: InlineDispatchCardProps
                   >
                     {previewText(openTask.result, 1500) || '(no output)'}
                   </pre>
+                  {isRetryable(openTask) && (
+                    <div style={{ marginTop: 8 }}>
+                      <Button
+                        size="small"
+                        danger
+                        icon={<ReloadOutlined spin={retrying === openTask.id} />}
+                        loading={retrying === openTask.id}
+                        onClick={() => void postRetry(openTask.id, `/api/dispatch/tasks/${openTask.id}/retry`)}
+                      >
+                        Chạy lại công việc này
+                      </Button>
+                      <Text style={{ fontSize: 11, color: token.colorTextTertiary, marginLeft: 8 }}>
+                        Tác vụ sẽ được xếp lại hàng đợi và chạy ngay.
+                      </Text>
+                    </div>
+                  )}
                 </div>
               )}
 

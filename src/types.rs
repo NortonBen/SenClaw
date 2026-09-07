@@ -337,6 +337,9 @@ pub enum ContextMode {
     Notify,
     Script,
     ScriptAgent,
+    /// Re-check a condition on an interval and dispatch into the chat only once
+    /// it holds. See [`crate::scheduler::watch`].
+    Watch,
 }
 
 impl ContextMode {
@@ -347,6 +350,7 @@ impl ContextMode {
             Self::Notify => "notify",
             Self::Script => "script",
             Self::ScriptAgent => "script-agent",
+            Self::Watch => "watch",
         }
     }
     pub fn parse(raw: &str) -> Self {
@@ -355,6 +359,7 @@ impl ContextMode {
             "notify" => Self::Notify,
             "script" => Self::Script,
             "script-agent" => Self::ScriptAgent,
+            "watch" => Self::Watch,
             _ => Self::Isolated,
         }
     }
@@ -419,6 +424,10 @@ pub struct ScheduledTask {
     pub agent_mode: AgentMode,
     /// Bash command for `Script` / `ScriptAgent` modes.
     pub script_command: Option<String>,
+    /// Serialised [`crate::scheduler::watch::WatchConfig`] for `Watch` mode.
+    /// One JSON column because every field in it is meaningless in any other
+    /// mode, and only the watch module reads or writes it.
+    pub watch_json: Option<String>,
     pub next_run: Option<String>,
     pub last_run: Option<String>,
     pub last_result: Option<String>,

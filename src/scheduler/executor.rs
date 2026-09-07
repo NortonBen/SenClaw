@@ -19,6 +19,10 @@ pub struct DefaultTaskExecutor {
     /// Used by `ContextMode::Group` to dispatch the scheduled prompt into the
     /// owning chat session. `None` falls back to a stub log (useful in tests).
     agent_api: Option<Arc<dyn AgentApi>>,
+    /// Used by `ContextMode::Watch` to re-invoke the probe tool without an LLM.
+    /// `None` degrades every watch to its agent-turn fallback, which is correct
+    /// rather than fatal: the watch still fires, it just costs a turn.
+    mcp_manager: Option<Arc<crate::mcp::manager::McpManager>>,
 }
 
 impl DefaultTaskExecutor {
@@ -26,11 +30,17 @@ impl DefaultTaskExecutor {
         Self {
             db,
             agent_api: None,
+            mcp_manager: None,
         }
     }
 
     pub fn with_agent_api(mut self, api: Arc<dyn AgentApi>) -> Self {
         self.agent_api = Some(api);
+        self
+    }
+
+    pub fn with_mcp_manager(mut self, mgr: Arc<crate::mcp::manager::McpManager>) -> Self {
+        self.mcp_manager = Some(mgr);
         self
     }
 }
@@ -96,6 +106,7 @@ impl TaskExecutor for DefaultTaskExecutor {
                 Ok(format!("[isolated] task queued: {}", task.prompt))
             }
             ContextMode::Group => self.execute_group(&task).await,
+            ContextMode::Watch => self.execute_watch(&task).await,
         };
 
         let now = chrono::Utc::now().to_rfc3339();
@@ -199,11 +210,190 @@ impl DefaultTaskExecutor {
         Ok(result)
     }
 
+    /// Watch mode: re-check a condition, and resume the chat only once it holds.
+    ///
+    /// The tick is deliberately cheap — one MCP tool call, no LLM — so a watch
+    /// polling for an hour costs the tool calls and nothing else. An agent turn
+    /// is spent only on the tick that resolves, or on the one that gives up.
+    ///
+    /// Retiring the row is this function's job. The poll loop advances
+    /// `next_run` *before* handing over, so a watch that just returns `Ok` is
+    /// automatically re-armed; ending one means marking it completed here.
+    async fn execute_watch(&self, task: &ScheduledTask) -> anyhow::Result<String> {
+        let Some(raw) = task.watch_json.as_deref() else {
+            self.retire_watch(task);
+            anyhow::bail!("watch task has no watch config");
+        };
+        let mut cfg = match crate::scheduler::watch::WatchConfig::parse(raw) {
+            Ok(c) => c,
+            Err(e) => {
+                // An unparseable config cannot be fixed by polling it again.
+                self.retire_watch(task);
+                anyhow::bail!("watch config unreadable: {e}");
+            }
+        };
+
+        // Deadline first: an expired watch must not spend a tool call.
+        if let Some(reason) = cfg.exhausted(chrono::Utc::now()) {
+            return self
+                .finish_watch(task, &cfg.render_timeout(&reason), &reason)
+                .await;
+        }
+
+        // No probe declared → the agent-turn fallback. Wake the chat and let the
+        // agent check by whatever means the job actually needs, and decide for
+        // itself whether to keep waiting.
+        if cfg.is_agent_fallback() || self.mcp_manager.is_none() {
+            cfg.checks += 1;
+            self.persist_watch(task, &cfg);
+            info!(
+                task_id = %task.id,
+                checks = cfg.checks,
+                "[TaskScheduler] watch: agent fallback, waking chat"
+            );
+            return self.dispatch_into_chat(task, &cfg.resume_prompt).await;
+        }
+
+        let tool = cfg.tool.clone().unwrap_or_default();
+        let manager = self.mcp_manager.as_ref().expect("checked above");
+        let probe = manager.call_external_tool(&tool, cfg.args.clone()).await;
+
+        match probe {
+            Err(e) => {
+                let err = e.to_string();
+                match cfg.record_error(&err) {
+                    Some(reason) => {
+                        self.finish_watch(task, &cfg.render_timeout(&reason), &reason)
+                            .await
+                    }
+                    None => {
+                        // Transient: a stopped session Space App is the resting
+                        // state, not a fault. Keep the watch alive.
+                        self.persist_watch(task, &cfg);
+                        warn!(
+                            task_id = %task.id,
+                            streak = cfg.error_streak,
+                            error = %err,
+                            "[TaskScheduler] watch: probe failed, retrying"
+                        );
+                        Ok(format!("watch probe error ({}): {err}", cfg.error_streak))
+                    }
+                }
+            }
+            Ok(raw_result) => {
+                // A JSON-RPC call can succeed while the tool itself refuses.
+                // Without this the refusal unwraps to a plain string, no path
+                // resolves on it, and the watch reads "not finished yet" —
+                // re-asking a question already answered "no" until the deadline.
+                if let Some(msg) = crate::scheduler::watch::tool_error_text(&raw_result) {
+                    let full = format!("{tool} rejected the call: {msg}");
+                    return match cfg.record_error_kind(&full, true) {
+                        Some(reason) => {
+                            warn!(
+                                task_id = %task.id,
+                                error = %full,
+                                "[TaskScheduler] watch: tool rejected the probe, giving up"
+                            );
+                            self.persist_watch(task, &cfg);
+                            self.finish_watch(task, &cfg.render_timeout(&reason), &reason)
+                                .await
+                        }
+                        None => {
+                            self.persist_watch(task, &cfg);
+                            Ok(format!("watch probe rejected: {full}"))
+                        }
+                    };
+                }
+                let value = crate::scheduler::watch::normalize_tool_result(&raw_result);
+                match cfg.record_probe(&value) {
+                    crate::scheduler::watch::WatchOutcome::Done { prompt } => {
+                        info!(
+                            task_id = %task.id,
+                            checks = cfg.checks,
+                            "[TaskScheduler] watch: condition met, resuming chat"
+                        );
+                        // Persist the final counters before retiring. Without
+                        // this the resolving probe is never written back, and a
+                        // watch that answered on its first check is recorded as
+                        // having made zero — which is exactly what made a
+                        // premature match look like it had never run at all.
+                        self.persist_watch(task, &cfg);
+                        self.finish_watch(task, &prompt, "condition met").await
+                    }
+                    crate::scheduler::watch::WatchOutcome::Pending { checks } => {
+                        self.persist_watch(task, &cfg);
+                        debug!(
+                            task_id = %task.id,
+                            checks,
+                            "[TaskScheduler] watch: not ready yet"
+                        );
+                        Ok(format!("watch pending (check {checks})"))
+                    }
+                    crate::scheduler::watch::WatchOutcome::GaveUp { prompt, reason } => {
+                        self.persist_watch(task, &cfg);
+                        self.finish_watch(task, &prompt, &reason).await
+                    }
+                }
+            }
+        }
+    }
+
+    /// Retire the watch, then say `prompt` into its chat. Retiring first means a
+    /// slow agent turn cannot let the next poll pick the same watch up again.
+    async fn finish_watch(
+        &self,
+        task: &ScheduledTask,
+        prompt: &str,
+        reason: &str,
+    ) -> anyhow::Result<String> {
+        self.retire_watch(task);
+        let reply = self.dispatch_into_chat(task, prompt).await?;
+        Ok(format!("watch finished ({reason}): {reply}"))
+    }
+
+    fn retire_watch(&self, task: &ScheduledTask) {
+        if let Err(e) = self
+            .db
+            .update_task_status(&task.id, crate::types::TaskStatus::Completed)
+        {
+            warn!(task_id = %task.id, error = %e, "[TaskScheduler] watch: retire failed");
+        }
+    }
+
+    /// Persist the mutated counters. A failure here is logged, not fatal: the
+    /// watch simply re-checks from a stale count, which is far better than
+    /// dropping the watch entirely.
+    fn persist_watch(&self, task: &ScheduledTask, cfg: &crate::scheduler::watch::WatchConfig) {
+        match cfg.to_json() {
+            Ok(json) => {
+                if let Err(e) = self.db.update_task_watch_json(&task.id, &json) {
+                    warn!(task_id = %task.id, error = %e, "[TaskScheduler] watch: persist failed");
+                }
+            }
+            Err(e) => {
+                warn!(task_id = %task.id, error = %e, "[TaskScheduler] watch: serialise failed")
+            }
+        }
+    }
+
     /// Group mode: dispatch the prompt as an agent run on the schedule's chat
     /// session. Agent replies stream through `broadcast_reply` and land in the
     /// existing chat history (channel_messages + WS push), so the recurring
     /// schedule's chat view shows live output.
     async fn execute_group(&self, task: &ScheduledTask) -> anyhow::Result<String> {
+        self.dispatch_into_chat(task, &task.prompt).await
+    }
+
+    /// Wake the task's chat session with `prompt` and return the agent's reply.
+    ///
+    /// Shared by `group` and `watch`: both mean "say this into that chat as an
+    /// agent turn", and a watch that resolved is exactly a group run whose
+    /// prompt was written by the probe rather than by the user.
+    async fn dispatch_into_chat(
+        &self,
+        task: &ScheduledTask,
+        prompt: &str,
+    ) -> anyhow::Result<String> {
         let api = match &self.agent_api {
             Some(a) => a,
             None => {
@@ -212,7 +402,7 @@ impl DefaultTaskExecutor {
                     chat_jid = %task.chat_jid,
                     "[TaskScheduler] group task: agent api not wired, logging only"
                 );
-                return Ok(format!("[group:stub] {}", task.prompt));
+                return Ok(format!("[group:stub] {prompt}"));
             }
         };
         let group = match self.db.get_group(&task.chat_jid) {
@@ -231,7 +421,7 @@ impl DefaultTaskExecutor {
                 let binding = crate::types::GroupBinding {
                     jid: task.chat_jid.clone(),
                     folder: task.group_folder.clone(),
-                    name: task.prompt.chars().take(60).collect::<String>(),
+                    name: prompt.chars().take(60).collect::<String>(),
                     channel: String::new(),
                     group_type: "chat".into(),
                     requires_trigger: false,
@@ -254,8 +444,7 @@ impl DefaultTaskExecutor {
             chat_jid = %task.chat_jid,
             "[TaskScheduler] group task: dispatching to agent"
         );
-        api.process_and_wait(&task.chat_jid, &group, &task.prompt)
-            .await?;
+        api.process_and_wait(&task.chat_jid, &group, prompt).await?;
         let reply = api
             .get_last_reply_text(&task.chat_jid)
             .unwrap_or_else(|| "(no reply)".into());

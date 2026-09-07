@@ -36,6 +36,7 @@ fn temp_state() -> (Arc<UiState>, Arc<Db>, std::path::PathBuf) {
         persona_registry: None,
         agent_api: None,
         mcp_manager: None,
+        dispatch_bridge: None,
         marketplace_manager: None,
         workbench_bridge: None,
         // A real launcher, not None: the interesting rows are the ones that ask

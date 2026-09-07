@@ -325,6 +325,12 @@ impl SharedMcpRegistry {
         Ok(tools)
     }
 
+    /// True when a server of this name is already spawned. Lets callers skip a
+    /// respawn — [`Self::spawn`] deliberately kills and replaces.
+    pub fn has_server(&self, name: &str) -> bool {
+        self.inner.lock().unwrap().clients.contains_key(name)
+    }
+
     pub fn kill(&self, name: &str) {
         let mut reg = self.inner.lock().unwrap();
         reg.kill(name);

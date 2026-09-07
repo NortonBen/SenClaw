@@ -4,6 +4,7 @@ import type { GroupInfo, ChatMessage, ToolMessage, AgentState, UsageData, ImageA
 import type { AgentMode } from '../hooks/useWebSocket';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { MessageBubble, TypingIndicator } from './MessageBubble';
+import { WatchStrip } from './WatchStrip';
 import { ToolGroupCard } from './ToolGroupCard';
 import { Progress, Tooltip, Typography, Drawer, message } from 'antd';
 import { AudioMutedOutlined, AudioOutlined, LoadingOutlined, ThunderboltOutlined } from '@ant-design/icons';
@@ -731,6 +732,7 @@ export function ChatView({ group, messages, agentState, usage, isCompacting, onS
           ))}
         </div>
       )}
+      <WatchStrip jid={group.jid} />
       <CommonChatInput
         className="px-6 py-4 backdrop-blur-xl flex-shrink-0"
         helperText={isPaused

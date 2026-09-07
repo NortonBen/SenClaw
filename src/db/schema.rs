@@ -532,6 +532,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    if !task_cols.iter().any(|c| c == "watch_json") {
+        conn.execute("ALTER TABLE scheduled_tasks ADD COLUMN watch_json TEXT", [])?;
+    }
     let bg_cols = column_names(conn, "background_tasks")?;
     if !bg_cols.is_empty() && !bg_cols.iter().any(|c| c == "notify") {
         conn.execute(

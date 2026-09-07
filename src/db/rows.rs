@@ -139,6 +139,7 @@ pub(crate) fn row_to_task(row: &Row<'_>) -> Result<ScheduledTask> {
                 .unwrap_or_default(),
         ),
         script_command: row.get("script_path")?,
+        watch_json: row.get("watch_json")?,
         next_run: row.get("next_run")?,
         last_run: row.get("last_run")?,
         last_result: row.get("last_result")?,

@@ -183,6 +183,7 @@ mod tests {
             context_mode: ContextMode::Isolated,
             agent_mode: AgentMode::Agent,
             script_command: None,
+            watch_json: None,
             next_run: next_run.map(String::from),
             last_run: None,
             last_result: None,

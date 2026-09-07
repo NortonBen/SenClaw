@@ -33,6 +33,7 @@ fn temp_state(with_mcp: bool) -> (Arc<UiState>, std::path::PathBuf) {
         wiki_manager: None,
         persona_registry: None,
         agent_api: None,
+        dispatch_bridge: None,
         mcp_manager: with_mcp.then(|| {
             Arc::new(senclaw::mcp::manager::McpManager::new(
                 dir.clone(),

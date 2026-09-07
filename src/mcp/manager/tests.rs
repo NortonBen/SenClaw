@@ -163,3 +163,61 @@ async fn manager_builtin_servers_listed() {
         assert!(!s.tools.is_empty(), "no tools for {}", s.name);
     }
 }
+
+
+// ===== Built-in server fallback =====
+//
+// SenClaw's own MCP servers are launched per chat session, so they never enter
+// `external`. Anything calling from inside the daemon therefore could not reach
+// them: a watch probing `dispatch_status` failed with "MCP server not found:
+// senclaw-dispatch" every tick and gave up after its error streak. Found by
+// running it against a live daemon, not by any unit test — these pin the seam
+// that closed it.
+
+#[tokio::test]
+async fn an_unregistered_server_still_reports_not_found() {
+    // The wording matters: `call_external_tool`'s error is what the watch logs
+    // and what a person reads when a tool name is simply wrong.
+    let dir = tempfile::TempDir::new().unwrap();
+    let work = dir.path().join("project");
+    std::fs::create_dir_all(&work).unwrap();
+    let mgr = McpManager::new(work, dir.path().to_path_buf());
+
+    let err = mgr
+        .call_external_tool("mcp__no-such-server__thing", serde_json::json!({}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("MCP server not found"), "got: {err}");
+}
+
+#[tokio::test]
+async fn a_registered_builtin_spec_is_reachable_by_name() {
+    // Registering the spec is what makes a built-in resolvable at all; without
+    // it the call short-circuits to "not found" before any spawn is attempted.
+    let dir = tempfile::TempDir::new().unwrap();
+    let work = dir.path().join("project");
+    std::fs::create_dir_all(&work).unwrap();
+    let mgr = McpManager::new(work, dir.path().to_path_buf());
+
+    mgr.register_builtin_spec(crate::mcp::helper::dispatch_mcp_config(
+        &dir.path().join("dispatch-state.json").to_string_lossy(),
+        "main",
+        None,
+    ))
+    .await;
+
+    // The spawn itself needs a real senclaw binary, which a unit test has no
+    // business launching — so assert on the failure *mode*: it must no longer
+    // be "server not found", i.e. the name resolved and the spawn was tried.
+    let err = mgr
+        .call_external_tool("mcp__senclaw-dispatch__dispatch_status", serde_json::json!({}))
+        .await
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(
+        !err.contains("MCP server not found"),
+        "senclaw-dispatch must resolve once its spec is registered; got: {err}"
+    );
+}

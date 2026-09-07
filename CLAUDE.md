@@ -227,7 +227,9 @@ Links in a Space App UI must open in the **system browser**, never navigate the 
 
 ### Rules for Claude
 
-- **Never invent a "short" tool name.** There is no `mcp__browser__*` resolver in plain Claude Code. The form `mcp__senclaw-<domain>__<prefix>_<verb>` is the only one that resolves.
+- **Never invent a "short" tool name.** There is no `mcp__browser__*` resolver in plain Claude Code. The form `mcp__senclaw-<domain>__<prefix>_<verb>` is the only one that resolves **for an externally-registered server** — see the next bullet for what a SenClaw agent actually sees.
+- **Inside a SenClaw agent the bundled names differ, and this registry is not what resolves.** With `mcp.bundled = true` (the default) one `senclaw-core` process hosts every built-in, and
+  [`engine.rs`](src/zen_core/engine.rs) strips the `senclaw-` prefix from the *server* — so every built-in tool reaches the model as **`mcp__core__<tool>`**: `mcp__core__schedule_watch`, `mcp__core__dispatch_status`, `mcp__core__browser_click`. Only with `SENCLAW_MCP_BUNDLED=false` do the per-domain names in the table above appear. Writing `mcp__senclaw-schedule__schedule_watch` into a prompt or skill therefore names a tool that does not exist on a default install — that shipped once, and `ToolSearch` answered "no registered tool" while the agent, having been told to arm a watch, promised the user a notification it had no way to send. **Never hardcode a `select:` name in guidance**: name the bare tool (`schedule_watch`) and, if it must be discovered, search by keyword.
 - **Never substitute another MCP server** (e.g. Playwright plugin, `Claude_in_Chrome`) when a SenClaw skill references a SenClaw server. SenClaw skills assume their own server semantics, return shapes, and side effects — substituting a different browser MCP silently breaks the skill's contract.
 - **Verify the server is registered before suggesting the user run it.** Check `.mcp.json` at project root and the Claude Code MCP list. If absent, the fix is to register the server in `.mcp.json` (stdio command pointing to the `senclaw` binary with the matching `<domain>-server` subcommand), not to rewrite the skill.
 - **Match the registry above when writing or updating a SKILL.md.** When in doubt, run `grep -n '#\[rmcp::tool' src/mcp/<domain>_server.rs -A 2` to confirm the exact `async fn <name>` and use that verbatim.
@@ -529,6 +531,167 @@ Rules for Claude:
 
 Full guide: [docs/zen-patterns.md](docs/zen-patterns.md).
 
+## Waiting on long jobs: watch mode (`src/scheduler/watch.rs`)
+
+An agent that delegated to something slow had no way to come back on its own. It
+`sleep`ed, polled once, and told the user to ask again later — and
+`background_*` cannot close that loop because a background run **has no chat by
+design** ("no reply to anybody"; its only reach is an OS notification).
+
+A **watch** is the third thing: `ContextMode::Watch` on a `scheduled_tasks` row
+that re-checks a condition every interval and, the moment it holds, dispatches a
+prompt into the *originating chat* — the same `dispatch_into_chat` seam
+`ContextMode::Group` uses. The agent arms it with `schedule_watch` and ends its
+turn.
+
+**The tick is one MCP tool call, no LLM.** `WatchConfig` names the tool, its
+args, and a declarative `DoneWhen` evaluated in Rust, so an hour of waiting costs
+tool calls and nothing else; an agent turn is spent only when the condition
+resolves or the watch gives up.
+
+Rules for Claude:
+
+- **Unwrap the MCP envelope before testing the condition.** A tool answers
+  `{"content":[{"type":"text","text":"…"}]}` and that text is usually itself
+  JSON. Test `done_when` against the envelope and every sane path (`status`,
+  `data.state`) resolves to nothing — so the watch polls to its deadline against
+  a job that finished on the first tick. `normalize_tool_result` is that step.
+- **A string compares as its text, not as quoted JSON.** `render_value` exists
+  so a `"done"` status does not compare against `"\"done\""` and never match.
+- **A single probe error must not end a watch.** A stopped `session` Space App is
+  the resting state, not a fault; tolerance is `MAX_ERROR_STREAK`, and a success
+  clears the streak.
+- **A watch must never end silently.** Deadline, check ceiling and error streak
+  all terminate it *by dispatching into the chat* — `render_timeout` has no empty
+  branch. Ending quietly is indistinguishable to the user from the giving-up
+  behaviour watch mode replaces, and its default text tells the model not to
+  invent a result.
+- **Retire the row before the resume turn, not after.** The poll loop advances
+  `next_run` *before* handing to the executor, so a watch that merely returns
+  `Ok` is re-armed; `finish_watch` marks it completed first so a slow agent turn
+  cannot let the next tick pick the same watch up again.
+- **An unreadable `deadline_at` or `watch_json` ends the watch.** Neither is
+  fixable by polling again, and the alternative is a row that polls forever.
+- **Ownership comes from the chat env, never a tool parameter** — unlike the
+  older `schedule_task` beside it. A watch speaks into a conversation; a
+  caller-supplied jid would let one session speak into another.
+- **`interval_secs` and `timeout_secs` are clamped, not rejected** (15–3600 and
+  ≤86400). A model that asks for a 2-second poll should get a sane watch, not an
+  error it has to recover from mid-turn.
+- Omitting `tool` is the **agent-turn fallback**, for jobs no single call can
+  check — it still works, it just costs a turn per interval. `mcp_manager: None`
+  degrades every watch to it rather than failing.
+
+A watch is **visible and stoppable**: `GET /api/watches?chatJid=…` backs a strip
+above the composer in all three clients (`WatchStrip` in web / desktop /
+channel_app) showing what is being watched and its check count, with a Stop
+button (`POST /api/watches/:id/stop`). `schedule_watch_list` / `schedule_watch_stop`
+give the agent the same two operations.
+
+More rules for Claude:
+
+- **A path that resolves to nothing is "not reported yet", never "done".**
+  Without that guard the negated operators invert an absent value into a match,
+  so a mistyped path finishes the watch on its first probe. That shipped: a
+  watch on `status` (the real field being `task.status`) woke the chat every
+  60 s, each wake spending an agent turn to say "still running" and arm another
+  identically-wrong watch. `Exists` is the deliberate exception — absence *is*
+  its answer.
+- **A watch is armed against the chat's own folder, never a `schedule_` one.**
+  `run_daemon`'s legacy-schedule sweep retires every active row whose folder
+  does not match `schedule\_%`, so it must exclude `context_mode = 'watch'` or
+  each restart silently kills every in-flight watch — nothing logged, nothing
+  to see, the chat simply never hears back.
+- **Persist the counters on the resolving tick too.** `Done` and `GaveUp` retire
+  the row, and without a `persist_watch` first the probe that answered is never
+  written back — a watch that resolved on check 1 is recorded as having made
+  zero, which is exactly what made a premature match look like it never ran.
+- **Stopping is silent.** The user just cancelled it; waking the chat to
+  announce that is noise. The row is completed, not deleted, because it is the
+  only record the wait happened.
+- **`watch_stop` is scoped by chat, not by id alone** — an id-only lookup would
+  let one conversation cancel another's wait.
+- **Stopping must report whether a row actually changed.** `update_task_status`
+  returns `Ok` for an id that matched nothing, so both the endpoint and the MCP
+  tool once confirmed a stop that never happened. `Db::stop_watch` narrows to
+  `context_mode = 'watch' AND status = 'active'` and returns the row count —
+  which also stops this path retiring an ordinary schedule.
+- **A `Query<T>` field name is the wire name.** `#[serde(alias = "chat_jid")]`
+  on a field already called `chat_jid` renames nothing: every client's
+  `?chatJid=` was rejected with a 400 and the strip silently never loaded. It
+  needs `rename = "chatJid"` with the snake_case spelling kept as the alias.
+  Neither this nor the stop bug above is visible to `cargo check` or to a unit
+  test — both were found by calling the running daemon.
+
+Guide (Vietnamese, PHẦN D):
+[docs/background-schedule-tasks-guide.md](docs/background-schedule-tasks-guide.md).
+Agent-facing instructions live in [`skills/schedule/SKILL.md`](skills/schedule/SKILL.md)
+and in the `schedule_watch` tool description — the description is what actually
+reaches a model mid-turn, so it carries the anti-patterns (`sleep`, "ask me
+later", in-turn polling loops) explicitly.
+
+## DAG dispatch: finishing, and retrying what failed
+
+Three properties the dispatch bridge must keep, all of which failed silently
+before:
+
+**A DAG that cannot progress is failed, not left running.** The timeout sweep in
+`process_pending` only watches `processing` tasks, so a task that never *starts*
+has no deadline at all — and `can_start_task` returns false forever for a
+virtual task whose persona is missing from the registry. The parent then sits
+`active` with nothing running and nothing runnable until the daemon restarts,
+which from the chat is indistinguishable from a DAG still working.
+`sweep_stalled_parents` closes exactly that case.
+
+**Waiting for a DAG should not block the turn.** `dispatch_all_tasks` and
+`create_parent_and_run` poll in-turn until every task is terminal, with a 900 s
+default. A DAG that outlives the deadline returns a failure while the daemon
+keeps working — historically the manager then re-dispatched the whole graph.
+`dispatch_status` is the non-blocking snapshot; combined with `schedule_watch`
+(see the watch-mode section above) a long DAG costs no turn while it runs.
+
+**A person looking at a failure can re-run it.** `retry_task` /
+`retry_parent_failed`, reached at `POST /api/dispatch/tasks/:task_id/retry` and
+`POST /api/dispatch/parents/:parent_id/retry`, surfaced in all three clients
+(`web/src/components/InlineDispatchCard.tsx`, desktop
+`message_widgets.dart::InlineDispatchCard`, `channel_app` dispatch screen).
+
+Rules for Claude:
+
+- **Reviving a task means reviving its parent.** A DAG whose last task failed is
+  already `"done"`, and the scheduler skips non-active parents — so re-queueing
+  a task without flipping the parent back to `"active"` produces a task that is
+  never picked up. A test pins this.
+- **The stall condition is "nothing `processing` **and** nothing startable".**
+  Not "nothing processing": a task blocked only by a concurrency slot is waiting
+  on a peer that *is* running, and killing it would break every DAG wider than
+  its own limit. The narrow form is sound because the only thing that unblocks a
+  task is another task finishing.
+- **The stall sweep needs its grace period.** At boot and at parent creation the
+  persona registry and virtual-worker pool are briefly unwired, so every task is
+  legitimately un-startable for a moment. `STALL_GRACE_SECONDS` covers it;
+  without it a fresh DAG is killed on the first tick.
+- **User retry is not the infra-retry budget.** `MAX_INFRA_RETRIES` is automatic,
+  capped at 1, and gated on `is_retryable_infra_error`. `retry_task` is a person
+  deciding, so it is uncapped and does not inspect the cause. Do not fold them
+  together.
+- **Clear the previous attempt's verdict on retry** — `verification_result`,
+  `file_changes`, and checklist item statuses. Left behind, they are read as
+  belonging to the new run.
+- **A retry refusal is a message for a person.** "already running", "finished
+  successfully" — the endpoints return it as a `400` body and all three clients
+  show it verbatim. A generic "retry failed" just makes the user click again.
+- **`retry_task` kicks `process_next_pending` itself** rather than waiting for
+  the 300 ms tick, because someone is watching the button.
+- **Route params in this crate are axum 0.7 `:name`, never `{name}`.** Braces
+  compile fine and are matched as a *literal* segment, so the route silently
+  never fires. Every one of the ~112 param routes in
+  [`core.rs`](src/gateway/ui_server/core.rs) uses the colon form.
+- **`dispatch_all_tasks` waits for all tasks, and its description used to say
+  "stops on first error".** It was changed to wait-all in July 2026 and the
+  description was not; a model reading the stale text plans around a failure
+  mode that no longer exists.
+
 ## Scaffolding: `senclaw create`
 
 `senclaw create app|skill|sub-agent <name>` renders a working project from a
@@ -829,12 +992,62 @@ the Space-App `SENCLAW_BIND_HOST` (apps have no auth; the env would propagate
 to them). Desktop users flip it at **Settings → General → Network access**
 (Private `127.0.0.1` / Public `0.0.0.0`); the choice is persisted in prefs and
 handed to the daemon at spawn time, so it needs a daemon restart to take
-effect. Binding the daemon to a non-loopback host auto-enables token auth
-(`src/gateway/ui_server/auth.rs`): every non-loopback peer must present the
-API token (`SENCLAW_API_TOKEN` env, else auto-generated `~/.senclaw/api_token`,
-0600) via `Authorization: Bearer`, `X-SenClaw-Token`, `?token=`, or the
-`senclaw_token` cookie minted by `POST /api/auth/login`. Loopback peers are
-always exempt — local desktop/apps need zero config. `/api/auth/status` and
-`/api/auth/login` are the only open API paths; CORS is loopback-origin-only
-(never reintroduce `CorsLayer::permissive()` — it leaked `/api/llm-config`
-keys to any website). Full guide: [docs/remote-access-security.md](docs/remote-access-security.md).
+effect. The token itself is `SENCLAW_API_TOKEN`, else auto-generated
+`~/.senclaw/api_token` (0600), presented via `Authorization: Bearer`,
+`X-SenClaw-Token`, `?token=`, or the `senclaw_token` cookie minted by
+`POST /api/auth/login`. `/api/auth/status` and `/api/auth/login` are the only
+open API paths; CORS is loopback-origin-only (never reintroduce
+`CorsLayer::permissive()` — it leaked `/api/llm-config` keys to any website).
+
+**Whether the token is demanded is `SENCLAW_AUTH_MODE`, a tri-state** — not a
+boolean derived from the bind host:
+
+| | required when | for |
+|---|---|---|
+| `auto` (default) | bind host non-loopback, peer non-loopback | laptop, desktop install |
+| `always` | every peer, loopback included | cloud, Docker, behind a reverse proxy |
+| `off` | never | an ingress that already authenticates |
+
+Live override at `GET`/`PUT /api/auth/mode` (stored in `router_state`
+`auth:mode`, wins over the env, no restart), surfaced at Settings → General →
+Access token in both web and desktop.
+
+Rules for Claude:
+
+- **`always` is not a hardened `auto`, it is the only correct setting behind a
+  same-host reverse proxy.** nginx/Caddy terminating TLS on the daemon's box
+  makes every Internet client arrive from `127.0.0.1`, and `auto` exempts
+  exactly those. Chosen over trusting `X-Forwarded-For` because it needs no
+  trusted-proxy list and has no spoofable surface.
+- **The loopback exemption in `authorize()` must stay *after* the mode check.**
+  An early return on a loopback peer makes `always` indistinguishable from
+  `auto` — and it looks like it works. `tests/daemon_auth_guard.rs` pins the
+  order.
+- **An unrecognised `SENCLAW_AUTH_MODE` falls back to `auto`, never `off`.**
+- **`/api/auth/mode` is gated.** It is the switch that turns the gate off;
+  putting it in `OPEN_API_PATHS` hands it to anonymous remote clients.
+- **`always` means the daemon's own loopback callers need the token too.**
+  `run_daemon` publishes it into its own env (children inherit it) and
+  in-process callers attach it through
+  [`util::internal_auth::header_for`](src/util/internal_auth.rs) — MCP
+  `space`/`patterns`/`ocr`, kanban's `llm_info`, and the Space-App LLM proxy,
+  whose OpenAI endpoint *is* a daemon route (`/api/space/apps/<id>/proxy/v1`)
+  and whose `api_key` is empty by design.
+- **The session cookie's `Secure` flag is conditional** (`X-Forwarded-Proto`,
+  or `SENCLAW_AUTH_COOKIE_SECURE`). Both mistakes are silent: `Secure` on plain
+  HTTP makes the browser discard a cookie the login just minted.
+
+**Docker** — `Dockerfile` + `docker-compose.yml` at the repo root. The image
+sets `SENCLAW_UI_BIND_HOST=0.0.0.0` (the container's own namespace; `-p`
+decides reachability) and `SENCLAW_AUTH_MODE=always` (with `--network host` or
+a sidecar proxy, `auto` would exempt everyone). Traps, all enforced or
+documented: the healthcheck must hit `/api/auth/status` — every other route
+401s under `always` and flaps the container unhealthy forever; `~/.senclaw`
+**must** be a volume or the token regenerates each restart and every saved
+login breaks; never set `SENCLAW_BIND_HOST=0.0.0.0` in the image (that is the
+Space-App knob — apps have no auth); publish both 18788 and 18789 because the
+web UI dials the WS gateway at the same hostname. A Linux container compiles
+**no** MLX/Metal, so it has no local models, no Whisper ASR and unaccelerated
+OCR — same as the Linux CI target.
+
+Full guide: [docs/remote-access-security.md](docs/remote-access-security.md).

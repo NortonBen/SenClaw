@@ -16,8 +16,8 @@ impl super::Db {
                 r#"
                 INSERT INTO scheduled_tasks
                   (id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
-                   context_mode, agent_mode, script_path, next_run, last_run, last_result, status, created_at)
-                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                   context_mode, agent_mode, script_path, watch_json, next_run, last_run, last_result, status, created_at)
+                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
                 "#,
                 params![
                     task.id,
@@ -29,6 +29,7 @@ impl super::Db {
                     task.context_mode.as_str(),
                     task.agent_mode.as_str(),
                     task.script_command,
+                    task.watch_json,
                     task.next_run,
                     task.last_run,
                     task.last_result,
@@ -112,6 +113,54 @@ impl super::Db {
             c.execute(
                 "UPDATE scheduled_tasks SET next_run = ?1, status = ?2 WHERE id = ?3",
                 params![next_run, status.as_str(), id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Stop one running watch. `false` when no active watch has that id.
+    ///
+    /// Narrowed to `context_mode = 'watch'` and `status = 'active'` on purpose:
+    /// a plain status update reports success for an id that matched nothing, so
+    /// the UI would confirm a stop that never happened — and it would also let
+    /// this endpoint retire an ordinary schedule.
+    pub fn stop_watch(&self, id: &str) -> Result<bool> {
+        self.with_conn(|c| {
+            let n = c.execute(
+                "UPDATE scheduled_tasks SET status = 'completed'
+                 WHERE id = ?1 AND context_mode = 'watch' AND status = 'active'",
+                params![id],
+            )?;
+            Ok(n > 0)
+        })
+    }
+
+    /// Active watches for one chat, newest first.
+    ///
+    /// Scoped by `chat_jid` rather than group folder: a watch belongs to the
+    /// conversation that armed it, and that is also the only place its Stop
+    /// button can meaningfully appear.
+    pub fn get_active_watches(&self, chat_jid: &str) -> Result<Vec<ScheduledTask>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT * FROM scheduled_tasks
+                 WHERE context_mode = 'watch' AND status = 'active' AND chat_jid = ?1
+                 ORDER BY created_at DESC",
+            )?;
+            let rows = stmt
+                .query_map(params![chat_jid], |r| Ok(row_to_task(r)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows.into_iter().collect()
+        })
+    }
+
+    /// Persist a watch's mutated config (check counter, error streak) without
+    /// touching the scheduling columns the poll loop owns.
+    pub fn update_task_watch_json(&self, id: &str, watch_json: &str) -> Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "UPDATE scheduled_tasks SET watch_json = ?1 WHERE id = ?2",
+                params![watch_json, id],
             )?;
             Ok(())
         })
