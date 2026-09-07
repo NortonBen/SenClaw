@@ -7,6 +7,24 @@
 //! peers stay exempt — the bundled desktop app, Space Apps calling back into
 //! the daemon, and same-machine tooling keep working with zero configuration.
 //!
+//! That exemption is *wrong* for one common deployment: a TLS-terminating
+//! reverse proxy on the same host. Every Internet client then arrives from
+//! `127.0.0.1` and the peer address stops being evidence of anything, so the
+//! policy is a tri-state [`AuthMode`] rather than a boolean derived from the
+//! bind host:
+//!
+//! - `auto` (default) — required exactly when the bind host is not loopback;
+//!   loopback peers exempt. The historical behaviour.
+//! - `always` — every peer presents the token, loopback included. This is the
+//!   cloud / reverse-proxy / Docker answer, and it needs no trust in a
+//!   forwarded-for header.
+//! - `off` — never required (an already-authenticated ingress in front).
+//!
+//! `SENCLAW_AUTH_MODE` sets it at startup; the operator can change it live at
+//! `PUT /api/auth/mode`, which stores the choice in `router_state` and wins
+//! over the environment. An unrecognised value falls back to `auto`, never to
+//! `off` — a typo must not silently disable the gate.
+//!
 //! The token is resolved once at startup: `SENCLAW_API_TOKEN` env override,
 //! else `~/.senclaw/api_token` (auto-generated on first use, chmod 0600).
 //!
@@ -20,7 +38,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use axum::{
     extract::{ConnectInfo, Request, State},
@@ -39,21 +57,201 @@ pub const AUTH_COOKIE: &str = "senclaw_token";
 /// whether to even show a token prompt.
 const OPEN_API_PATHS: &[&str] = &["/api/auth/login", "/api/auth/status"];
 
+// ===== Policy =====
+
+/// When the daemon demands its API token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMode {
+    /// Required exactly when the bind host is not loopback; loopback peers
+    /// exempt. What the daemon did before the mode existed.
+    Auto,
+    /// Required from every peer, loopback included. The only correct setting
+    /// behind a same-host reverse proxy, because the proxy makes every remote
+    /// client look local.
+    Always,
+    /// Never required. For an ingress that already authenticates, or a
+    /// container network the operator trusts end to end.
+    Off,
+}
+
+/// The mode a daemon with no configuration runs in.
+pub const DEFAULT_AUTH_MODE: AuthMode = AuthMode::Auto;
+
+impl AuthMode {
+    /// Parse an explicitly written mode; `None` for anything unrecognised so
+    /// the caller decides what a typo means.
+    pub fn parse_opt(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "always" | "on" | "require" | "required" | "strict" => Some(Self::Always),
+            "off" | "none" | "disabled" => Some(Self::Off),
+            _ => None,
+        }
+    }
+
+    /// Parse an environment value. An unrecognised spelling falls back to
+    /// [`DEFAULT_AUTH_MODE`] — **never** to `Off`: a typo in
+    /// `SENCLAW_AUTH_MODE` must not silently open the daemon up.
+    pub fn from_env_value(raw: &str) -> Self {
+        match Self::parse_opt(raw) {
+            Some(m) => m,
+            None => {
+                tracing::warn!(
+                    "[Auth] unknown SENCLAW_AUTH_MODE {raw:?} — falling back to \"auto\" \
+                     (expected auto, always or off)"
+                );
+                DEFAULT_AUTH_MODE
+            }
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Off => "off",
+        }
+    }
+}
+
+/// Where the mode in force came from — the three sources behave differently
+/// when the operator tries to change it, so the UI has to say which one won.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeSource {
+    /// Chosen in the UI; stored in the database and wins over the environment.
+    Ui,
+    /// `SENCLAW_AUTH_MODE` in the daemon's environment.
+    Env,
+    /// Neither — [`DEFAULT_AUTH_MODE`].
+    Default,
+}
+
+impl ModeSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ui => "ui",
+            Self::Env => "env",
+            Self::Default => "default",
+        }
+    }
+}
+
+/// KV key holding the operator's chosen mode. `router_state` rather than a
+/// table of its own: one scalar does not justify a migration to maintain
+/// forever (same call as `space:appTokenMode`).
+const MODE_KEY: &str = "auth:mode";
+
+/// The chosen mode, cached. `None` = not read yet; `Some(None)` = read, and
+/// nothing was chosen, so the environment decides. Cached because every single
+/// request asks, and the answer changes only when someone clicks a button.
+fn mode_cache() -> &'static RwLock<Option<Option<AuthMode>>> {
+    static C: OnceLock<RwLock<Option<Option<AuthMode>>>> = OnceLock::new();
+    C.get_or_init(|| RwLock::new(None))
+}
+
+/// The mode the operator chose, or `None` to follow the environment.
+pub fn mode_override(db: &crate::db::Db) -> Option<AuthMode> {
+    if let Ok(c) = mode_cache().read() {
+        if let Some(cached) = *c {
+            return cached;
+        }
+    }
+    let found = db
+        .get_router_state(MODE_KEY)
+        .ok()
+        .flatten()
+        .and_then(|raw| AuthMode::parse_opt(&raw));
+    if let Ok(mut c) = mode_cache().write() {
+        *c = Some(found);
+    }
+    found
+}
+
+/// Choose a mode, or pass `None` to hand the decision back to the environment.
+pub fn set_mode_override(db: &crate::db::Db, mode: Option<AuthMode>) -> anyhow::Result<()> {
+    match mode {
+        Some(m) => db.set_router_state(MODE_KEY, m.as_str())?,
+        None => db.delete_router_state(MODE_KEY)?,
+    }
+    if let Ok(mut c) = mode_cache().write() {
+        *c = Some(mode);
+    }
+    Ok(())
+}
+
+/// Forget the cached choice. Tests only — the daemon has one database.
+#[cfg(test)]
+fn mode_cache_clear() {
+    if let Ok(mut c) = mode_cache().write() {
+        *c = None;
+    }
+}
+
 #[derive(Clone)]
 pub struct ApiAuth {
-    /// True when the daemon is bound to a non-loopback host — remote peers
-    /// must then present [`ApiAuth::token`].
-    pub required: bool,
-    /// The accepted token. Always `Some` when [`ApiAuth::required`].
+    /// Policy read from `SENCLAW_AUTH_MODE` at startup.
+    pub env_mode: AuthMode,
+    /// Whether that variable was actually set. A value that merely *equals*
+    /// the default must not be reported to the UI as configured.
+    pub env_set: bool,
+    /// True when the daemon's bind host only ever resolves to this machine —
+    /// exactly what [`AuthMode::Auto`] keys off.
+    pub bind_is_loopback: bool,
+    /// The accepted token. Always `Some` outside bare test setups.
     pub token: Option<String>,
+    /// Where the token is persisted, so the operator can be told where to look.
+    /// Never the value itself.
+    pub token_path: Option<PathBuf>,
+    /// `Secure` on the session cookie. `None` = infer per request from
+    /// `X-Forwarded-Proto`, which is what a TLS-terminating proxy sets. Getting
+    /// this wrong in either direction breaks login silently: `Secure` on plain
+    /// HTTP makes the browser drop the cookie, and its absence over HTTPS
+    /// leaks the token to a downgrade.
+    pub cookie_secure: Option<bool>,
+    /// Backs the live override in `router_state`. `None` (tests, the relay
+    /// bridge) means the environment alone decides.
+    pub db: Option<Arc<crate::db::Db>>,
 }
 
 impl ApiAuth {
-    /// Auth disabled — the default loopback-bind posture.
+    /// Auth disabled — for bare test setups and the relay bridge, which
+    /// authenticates by relay pairing instead.
     pub fn disabled() -> Self {
         Self {
-            required: false,
+            env_mode: AuthMode::Off,
+            env_set: false,
+            bind_is_loopback: true,
             token: None,
+            token_path: None,
+            cookie_secure: None,
+            db: None,
+        }
+    }
+
+    /// The mode in force, and where it came from.
+    pub fn effective_mode(&self) -> (AuthMode, ModeSource) {
+        if let Some(db) = self.db.as_deref() {
+            if let Some(m) = mode_override(db) {
+                return (m, ModeSource::Ui);
+            }
+        }
+        if self.env_set {
+            (self.env_mode, ModeSource::Env)
+        } else {
+            (self.env_mode, ModeSource::Default)
+        }
+    }
+
+    /// Whether a token is demanded at all right now.
+    pub fn required(&self) -> bool {
+        Self::mode_requires(self.effective_mode().0, self.bind_is_loopback)
+    }
+
+    fn mode_requires(mode: AuthMode, bind_is_loopback: bool) -> bool {
+        match mode {
+            AuthMode::Off => false,
+            AuthMode::Always => true,
+            AuthMode::Auto => !bind_is_loopback,
         }
     }
 }
@@ -193,17 +391,24 @@ fn token_from_cookies(headers: &HeaderMap) -> Option<String> {
     None
 }
 
-/// Whether this request may pass. Loopback peers are always trusted; remote
-/// peers must carry the token in a header, the query string, or the cookie.
-/// `peer == None` (no `ConnectInfo`, e.g. unit tests without a real socket)
-/// is treated as remote — fail closed.
+/// Whether this request may pass. Under [`AuthMode::Auto`] loopback peers are
+/// trusted and remote peers must carry the token in a header, the query string,
+/// or the cookie; under [`AuthMode::Always`] nobody is trusted on address
+/// alone. `peer == None` (no `ConnectInfo`, e.g. unit tests without a real
+/// socket) is treated as remote — fail closed.
 pub fn authorize(auth: &ApiAuth, peer: Option<SocketAddr>, req: &Request) -> bool {
-    if !auth.required {
+    let mode = auth.effective_mode().0;
+    if !ApiAuth::mode_requires(mode, auth.bind_is_loopback) {
         return true;
     }
-    if let Some(p) = peer {
-        if p.ip().is_loopback() {
-            return true;
+    // The peer address is only evidence while nothing rewrites it. A
+    // TLS-terminating proxy on this host makes every Internet client arrive
+    // from 127.0.0.1, which is precisely what `Always` exists to survive.
+    if mode != AuthMode::Always {
+        if let Some(p) = peer {
+            if p.ip().is_loopback() {
+                return true;
+            }
         }
     }
     let Some(expected) = auth.token.as_deref() else {
@@ -277,9 +482,10 @@ pub struct LoginBody {
 /// session cookie. Open (unauthenticated) by design; it *is* the login.
 pub async fn auth_login(
     State(auth): State<Arc<ApiAuth>>,
+    headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> Response {
-    if !auth.required {
+    if !auth.required() {
         return Json(serde_json::json!({ "ok": true, "authRequired": false })).into_response();
     }
     let ok = auth
@@ -290,11 +496,18 @@ pub async fn auth_login(
     if !ok {
         return unauthorized();
     }
-    // No `Secure` attribute: the LAN deployment this protects is plain HTTP.
     // HttpOnly keeps page JS away from it; SameSite=Lax blocks cross-site use.
+    // `Secure` is conditional, and both mistakes are silent: setting it on the
+    // plain-HTTP LAN deployment makes the browser discard a cookie the login
+    // just "succeeded" in minting, and omitting it behind TLS lets a downgrade
+    // carry the token in clear.
+    let secure = auth
+        .cookie_secure
+        .unwrap_or_else(|| forwarded_proto_is_https(&headers));
     let cookie = format!(
-        "{AUTH_COOKIE}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000",
-        body.token.trim()
+        "{AUTH_COOKIE}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000{}",
+        body.token.trim(),
+        if secure { "; Secure" } else { "" }
     );
     (
         [(header::SET_COOKIE, cookie)],
@@ -312,10 +525,111 @@ pub async fn auth_status(
     req: Request,
 ) -> Json<serde_json::Value> {
     let authorized = authorize(&auth, peer.map(|c| c.0), &req);
+    let (mode, source) = auth.effective_mode();
     Json(serde_json::json!({
-        "authRequired": auth.required,
+        "authRequired": auth.required(),
         "authorized": authorized,
+        "mode": mode.as_str(),
+        "modeSource": source.as_str(),
     }))
+}
+
+/// True when a TLS-terminating proxy in front says the client leg was HTTPS.
+/// Only ever *adds* protection (the `Secure` cookie flag), so a spoofed header
+/// cannot weaken anything — it can at worst make a plain-HTTP client's cookie
+/// undeliverable.
+fn forwarded_proto_is_https(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            v.split(',')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("https")
+        })
+        .unwrap_or(false)
+}
+
+// ===== /api/auth/mode =====
+
+/// `GET /api/auth/mode` — the switch itself, for the settings UI.
+///
+/// Gated like every other `/api/` route on purpose: an anonymous remote client
+/// must not be able to read, let alone flip, the daemon's own gate.
+pub async fn auth_mode_get(State(auth): State<Arc<ApiAuth>>) -> Json<serde_json::Value> {
+    let (mode, source) = auth.effective_mode();
+    Json(serde_json::json!({
+        "mode": mode.as_str(),
+        "source": source.as_str(),
+        // What the daemon falls back to if the UI choice is cleared — the
+        // label the "follow the environment" option needs to show.
+        "envMode": auth.env_mode.as_str(),
+        "envSet": auth.env_set,
+        "defaultMode": DEFAULT_AUTH_MODE.as_str(),
+        "required": auth.required(),
+        "bindIsLoopback": auth.bind_is_loopback,
+        // The path, never the value: the operator has to be told where to read
+        // the token they are about to need.
+        "tokenPath": auth.token_path.as_ref().map(|p| p.display().to_string()),
+        // No database ⇒ no live override is possible; the UI must not offer a
+        // switch that silently does nothing.
+        "canOverride": auth.db.is_some(),
+    }))
+}
+
+#[derive(serde::Deserialize)]
+pub struct AuthModeBody {
+    /// `auto` | `always` | `off`, or absent/null to follow the environment.
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+/// `PUT /api/auth/mode` — change it live, no restart: the middleware reads the
+/// override on every request.
+///
+/// Switching to `always` from a loopback session locks that session out on its
+/// very next call — by design, and the reason the response repeats where the
+/// token file lives so the client can log straight back in.
+pub async fn auth_mode_put(
+    State(auth): State<Arc<ApiAuth>>,
+    Json(body): Json<AuthModeBody>,
+) -> Response {
+    let Some(db) = auth.db.as_deref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "no database — this daemon cannot store an auth-mode override"
+            })),
+        )
+            .into_response();
+    };
+    let chosen = match body.mode.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        None => None,
+        Some(raw) => match AuthMode::parse_opt(raw) {
+            Some(m) => Some(m),
+            // Never coerce: a typo would set a gate the operator did not ask
+            // for while they believe they did.
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("Unknown mode {raw:?} — expected auto, always or off")
+                    })),
+                )
+                    .into_response()
+            }
+        },
+    };
+    if let Err(e) = set_mode_override(db, chosen) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    auth_mode_get(State(auth)).await.into_response()
 }
 
 // ===== CORS =====
@@ -356,10 +670,30 @@ mod tests {
             .unwrap()
     }
 
+    /// `auto` mode on a LAN-exposed daemon — the historical posture.
     fn auth_on(token: &str) -> ApiAuth {
         ApiAuth {
-            required: true,
+            env_mode: AuthMode::Auto,
+            env_set: false,
+            bind_is_loopback: false,
             token: Some(token.to_string()),
+            token_path: None,
+            cookie_secure: None,
+            db: None,
+        }
+    }
+
+    /// `always` mode: nobody is trusted on address alone.
+    fn auth_always(token: &str) -> ApiAuth {
+        ApiAuth {
+            env_mode: AuthMode::Always,
+            env_set: true,
+            // Loopback bind *and* still required — the reverse-proxy shape.
+            bind_is_loopback: true,
+            token: Some(token.to_string()),
+            token_path: None,
+            cookie_secure: None,
+            db: None,
         }
     }
 
@@ -562,6 +896,125 @@ mod tests {
 
         let res = reqwest::get(format!("http://{addr}/api/data")).await.unwrap();
         assert_eq!(res.status(), reqwest::StatusCode::OK, "loopback peer must not need a token");
+    }
+
+    #[test]
+    fn mode_parsing_never_falls_back_to_off() {
+        assert_eq!(AuthMode::parse_opt("always"), Some(AuthMode::Always));
+        assert_eq!(AuthMode::parse_opt(" OFF "), Some(AuthMode::Off));
+        assert_eq!(AuthMode::parse_opt("auto"), Some(AuthMode::Auto));
+        assert_eq!(AuthMode::parse_opt("alwyas"), None);
+        // A typo in the environment must land on `auto`, never on `off`.
+        assert_eq!(AuthMode::from_env_value("alwyas"), AuthMode::Auto);
+        assert_eq!(AuthMode::from_env_value(""), AuthMode::Auto);
+        assert_eq!(AuthMode::from_env_value("off"), AuthMode::Off);
+    }
+
+    #[test]
+    fn auto_mode_keys_off_the_bind_host() {
+        let mut a = auth_on("secret");
+        assert!(a.required(), "non-loopback bind ⇒ token required");
+        a.bind_is_loopback = true;
+        assert!(!a.required(), "loopback bind ⇒ no token");
+    }
+
+    #[test]
+    fn always_mode_gates_loopback_too() {
+        let auth = auth_always("secret");
+        assert!(auth.required());
+        // This is the whole point: a same-host reverse proxy makes every
+        // remote client look like 127.0.0.1.
+        assert!(!authorize(&auth, local_peer(), &req("/api/llm-config")));
+        assert!(!authorize(&auth, remote_peer(), &req("/api/llm-config")));
+        let ok = req_with_header("/api/llm-config", "x-senclaw-token", "secret");
+        assert!(authorize(&auth, local_peer(), &ok));
+    }
+
+    #[test]
+    fn off_mode_never_gates_even_when_exposed() {
+        let mut auth = auth_on("secret");
+        auth.env_mode = AuthMode::Off;
+        auth.env_set = true;
+        assert!(!auth.required());
+        assert!(authorize(&auth, remote_peer(), &req("/api/llm-config")));
+    }
+
+    #[test]
+    fn ui_override_wins_over_env_and_is_cached() {
+        let cfg = crate::config::Config::from_env();
+        let db = Arc::new(crate::db::Db::open_in_memory(&cfg).expect("db"));
+        mode_cache_clear();
+        let auth = ApiAuth {
+            env_mode: AuthMode::Auto,
+            env_set: true,
+            bind_is_loopback: true,
+            token: Some("secret".into()),
+            token_path: None,
+            cookie_secure: None,
+            db: Some(Arc::clone(&db)),
+        };
+        assert_eq!(auth.effective_mode(), (AuthMode::Auto, ModeSource::Env));
+        assert!(!auth.required());
+
+        set_mode_override(&db, Some(AuthMode::Always)).unwrap();
+        assert_eq!(auth.effective_mode(), (AuthMode::Always, ModeSource::Ui));
+        assert!(auth.required());
+        assert!(!authorize(&auth, local_peer(), &req("/api/x")));
+
+        // Clearing hands the decision back to the environment.
+        set_mode_override(&db, None).unwrap();
+        assert_eq!(auth.effective_mode(), (AuthMode::Auto, ModeSource::Env));
+        mode_cache_clear();
+    }
+
+    #[test]
+    fn forwarded_proto_detection() {
+        let mut h = HeaderMap::new();
+        assert!(!forwarded_proto_is_https(&h));
+        h.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert!(forwarded_proto_is_https(&h));
+        // A chained proxy list: the client leg is the first entry.
+        h.insert("x-forwarded-proto", "https, http".parse().unwrap());
+        assert!(forwarded_proto_is_https(&h));
+        h.insert("x-forwarded-proto", "http".parse().unwrap());
+        assert!(!forwarded_proto_is_https(&h));
+    }
+
+    #[tokio::test]
+    async fn login_cookie_is_secure_only_behind_tls() {
+        use axum::{routing::post, Router};
+        use tower::ServiceExt;
+
+        let call = |auth: ApiAuth, proto: Option<&str>| {
+            let app = Router::new()
+                .route("/api/auth/login", post(auth_login))
+                .with_state(Arc::new(auth));
+            let mut b = Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json");
+            if let Some(p) = proto {
+                b = b.header("x-forwarded-proto", p);
+            }
+            app.oneshot(b.body(Body::from("{\"token\":\"secret\"}")).unwrap())
+        };
+
+        // Plain LAN HTTP: no `Secure`, or the browser drops the cookie.
+        let res = call(auth_on("secret"), None).await.unwrap();
+        let c = res.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+        assert!(!c.contains("Secure"), "got {c}");
+
+        // Behind a TLS terminator: `Secure`.
+        let res = call(auth_on("secret"), Some("https")).await.unwrap();
+        let c = res.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+        assert!(c.contains("Secure"), "got {c}");
+
+        // Explicit override beats the header in both directions.
+        let mut forced = auth_on("secret");
+        forced.cookie_secure = Some(true);
+        let res = call(forced, None).await.unwrap();
+        let c = res.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+        assert!(c.contains("Secure"), "got {c}");
     }
 
     #[tokio::test]

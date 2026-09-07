@@ -733,9 +733,9 @@ class _ApiTokenFieldState extends ConsumerState<_ApiTokenField> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(
         context.tr(
-            'API access token — only needed when the daemon is exposed beyond '
-            'localhost (SENCLAW_UI_BIND_HOST=0.0.0.0). The daemon machine keeps '
-            'it in ~/.senclaw/api_token.'),
+            'API access token — needed when the daemon asks for one (see '
+            'Network access above). Leave it empty for a daemon on this '
+            'machine: the app reads ~/.senclaw/api_token itself.'),
         style: TextStyle(color: c.textSecondary, fontSize: 12),
       ),
       const SizedBox(height: AppTokens.s8),
@@ -998,6 +998,191 @@ class _NoticeBox extends StatelessWidget {
   }
 }
 
+/// The daemon's own access gate (`/api/auth/mode`) — who has to present the
+/// API token before SenClaw answers at all.
+///
+/// Distinct from the app-isolation switch further down: that one keeps Space
+/// Apps out of each other's data, this one is the front door.
+///
+/// `Always` is not a stricter flavour of `Automatic`, it is the only correct
+/// setting behind a same-host reverse proxy — which is how nearly every cloud
+/// deployment terminates TLS. There, `Automatic` sees 127.0.0.1 for every
+/// visitor on the Internet and waves them all through. Live like the app-token
+/// switch: no daemon restart, unlike the bind host above it.
+class ApiAuthModeField extends ConsumerStatefulWidget {
+  const ApiAuthModeField({super.key});
+  @override
+  ConsumerState<ApiAuthModeField> createState() => _ApiAuthModeFieldState();
+}
+
+class _ApiAuthModeFieldState extends ConsumerState<ApiAuthModeField> {
+  Map<String, dynamic>? _state;
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final r = await ref.read(apiClientProvider).get('/api/auth/mode')
+          as Map<String, dynamic>;
+      if (mounted) setState(() { _state = r; _error = null; });
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    }
+  }
+
+  Future<void> _choose(String mode) async {
+    setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final r = await ref
+          .read(apiClientProvider)
+          .put('/api/auth/mode', body: {'mode': mode}) as Map<String, dynamic>;
+      if (!mounted) return;
+      setState(() => _state = r);
+      // This app keeps working either way — it reads the token off disk on the
+      // same machine — but a browser pointed at the daemon will be asked now.
+      messenger.showSnackBar(SnackBar(
+          content: Text(mode == 'always'
+              ? context.tr('Every client now needs the access token.')
+              : context.tr('In force now — no daemon restart needed.'))));
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('$e')));
+      await _load();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    if (_error != null) {
+      return Text('$_error', style: TextStyle(color: c.textMuted, fontSize: 12));
+    }
+    if (_state == null) return const LinearProgressIndicator();
+
+    final mode = _state!['mode'] as String? ?? 'auto';
+    final source = _state!['source'] as String? ?? 'default';
+    final envMode = _state!['envMode'] as String? ?? 'auto';
+    final envSet = _state!['envSet'] == true;
+    final bindLoopback = _state!['bindIsLoopback'] == true;
+    final tokenPath = _state!['tokenPath'] as String?;
+    final canOverride = _state!['canOverride'] != false;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(
+        context.tr(
+            'Who must present the access token before SenClaw answers. The '
+            'token stays on the machine running SenClaw'),
+        style: TextStyle(color: c.textSecondary, fontSize: 12),
+      ),
+      if (tokenPath != null) ...[
+        const SizedBox(height: AppTokens.s4),
+        SelectableText(tokenPath,
+            style: TextStyle(
+                color: c.textMuted, fontSize: 11, fontFamily: 'monospace')),
+      ],
+      const SizedBox(height: AppTokens.s12),
+      Wrap(spacing: AppTokens.s12, runSpacing: AppTokens.s12, children: [
+        _BindCard(
+          icon: Icons.tune_rounded,
+          label: context.tr('Automatic'),
+          detail: 'auto',
+          selected: mode == 'auto',
+          onTap: _saving || !canOverride ? () {} : () => _choose('auto'),
+        ),
+        _BindCard(
+          icon: Icons.lock_rounded,
+          label: context.tr('Always require'),
+          detail: 'always',
+          selected: mode == 'always',
+          onTap: _saving || !canOverride ? () {} : () => _choose('always'),
+        ),
+        _BindCard(
+          icon: Icons.lock_open_rounded,
+          label: context.tr('Never'),
+          detail: 'off',
+          selected: mode == 'off',
+          onTap: _saving || !canOverride ? () {} : () => _choose('off'),
+        ),
+      ]),
+      const SizedBox(height: AppTokens.s12),
+      if (mode == 'auto') ...[
+        Text(
+          bindLoopback
+              ? context.tr(
+                  'Only this machine can reach SenClaw, so nothing is asked '
+                  'for. Devices on your network would be.')
+              : context.tr(
+                  'Devices on your network are asked for the token. This '
+                  'machine is not.'),
+          style: TextStyle(color: c.textMuted, fontSize: 12),
+        ),
+        const SizedBox(height: AppTokens.s8),
+        _NoticeBox(
+          tone: _NoticeTone.warning,
+          child: Text(
+            context.tr(
+                'Running behind a reverse proxy? If nginx, Caddy or a load '
+                'balancer terminates HTTPS on this same machine, every '
+                'visitor arrives looking like this machine and Automatic lets '
+                'them all in with no token. Choose Always require there.'),
+            style: TextStyle(color: c.textPrimary, fontSize: 12),
+          ),
+        ),
+      ] else if (mode == 'always')
+        Text(
+          context.tr(
+              'Every request needs the token, including ones that appear to '
+              'come from this machine. This is the setting for a cloud or '
+              'Docker install behind a proxy.'),
+          style: TextStyle(color: c.textMuted, fontSize: 12),
+        )
+      else
+        _NoticeBox(
+          tone: _NoticeTone.warning,
+          child: Text(
+            bindLoopback
+                ? context.tr(
+                    'No token is asked for. Only this machine can reach '
+                    'SenClaw right now, but changing the bind host above '
+                    'would not turn the gate back on.')
+                : context.tr(
+                    'No token is asked for and SenClaw is reachable beyond '
+                    'this machine — it is answering everyone. Leave this off '
+                    'only when something in front of it already '
+                    'authenticates every request.'),
+            style: TextStyle(color: c.textPrimary, fontSize: 12),
+          ),
+        ),
+      if (source == 'ui' && envSet) ...[
+        const SizedBox(height: AppTokens.s8),
+        Text(
+          context.tr('This overrides SENCLAW_AUTH_MODE=') + envMode +
+              context.tr(' from the daemon’s environment.'),
+          style: TextStyle(color: c.textMuted, fontSize: 11),
+        ),
+      ],
+      if (!canOverride) ...[
+        const SizedBox(height: AppTokens.s8),
+        Text(
+          context.tr(
+              'This daemon cannot store a choice — set SENCLAW_AUTH_MODE in '
+              'its environment instead.'),
+          style: TextStyle(color: c.textMuted, fontSize: 11),
+        ),
+      ],
+    ]);
+  }
+}
+
 /// The fleet-wide app-isolation switch (`/api/space/app-token-mode`).
 ///
 /// Deliberately three choices rather than an on/off toggle: the middle one is
@@ -1162,6 +1347,8 @@ class _GeneralSection extends ConsumerWidget {
                 fontWeight: FontWeight.w700)),
         const SizedBox(height: AppTokens.s8),
         const NetworkBindField(),
+        const SizedBox(height: AppTokens.s16),
+        const ApiAuthModeField(),
         const SizedBox(height: AppTokens.s24),
         Text(context.tr('Connection'),
             style: TextStyle(

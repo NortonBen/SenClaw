@@ -5,8 +5,8 @@ type GateState = 'checking' | 'open' | 'locked';
 
 /**
  * Blocks the whole app behind a token prompt when the daemon requires API
- * auth (non-loopback bind) and this browser is not yet authorized. Local
- * setups (loopback bind, or loopback-exempt peers) pass straight through.
+ * auth and this browser is not yet authorized. A default local setup — the
+ * daemon on loopback in `auto` mode — passes straight through.
  *
  * Mounted around <App/> — App opens the WebSocket and fires /api fetches
  * immediately on mount, so it must not render until auth is settled.
@@ -16,12 +16,17 @@ export function TokenGate({ children }: { children: ReactNode }) {
   const [token, setToken] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // `always` reaches browsers that look local to the daemon (anything behind a
+  // same-host reverse proxy), where "exposed beyond localhost" would read as a
+  // bug rather than as the setting it is.
+  const [mode, setMode] = useState<'auto' | 'always' | 'off' | undefined>();
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const status = await fetchAuthStatus();
       if (cancelled) return;
+      setMode(status?.mode);
       // Unreachable daemon → let App render its own "connecting" states
       // rather than trapping the user on a token prompt that can't succeed.
       if (!status || !status.authRequired || status.authorized) setState('open');
@@ -66,8 +71,10 @@ export function TokenGate({ children }: { children: ReactNode }) {
       >
         <div className="text-lg font-semibold mb-1">SenClaw</div>
         <div className="text-sm text-neutral-400 mb-4">
-          This daemon is exposed beyond localhost and requires an access
-          token. Find it in <code className="text-neutral-300">~/.senclaw/api_token</code> on
+          {mode === 'always'
+            ? 'This SenClaw requires an access token from every client.'
+            : 'This SenClaw is reachable beyond its own machine and requires an access token.'}{' '}
+          Find it in <code className="text-neutral-300">~/.senclaw/api_token</code> on
           the machine running SenClaw.
         </div>
         <input

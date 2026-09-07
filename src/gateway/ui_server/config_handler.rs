@@ -26,7 +26,7 @@ pub(crate) async fn config_handler(State(s): State<Arc<UiState>>) -> Json<serde_
         // the WS ports behind the API token. This endpoint itself is only
         // reachable pre-auth from loopback, so the flag (and ws token above)
         // never leak to unauthenticated remote peers.
-        "authRequired": s.api_auth.required,
+        "authRequired": s.api_auth.required(),
         // Where the desktop tray must write screen captures. Sent rather than
         // assumed client-side: `SENCLAW_SCREENSHOTS_DIR` can move it, and a
         // tray writing elsewhere would 404 on every shot it serves back.

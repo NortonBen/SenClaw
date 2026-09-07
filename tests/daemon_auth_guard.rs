@@ -153,3 +153,121 @@ fn auth_defaults_to_loopback_and_open_paths_are_minimal() {
          {open_count} open paths in: {decl}"
     );
 }
+
+// ===== Auth mode (auto | always | off) =====
+
+/// `always` exists for one reason: a reverse proxy on the daemon's own host
+/// makes every Internet client arrive from 127.0.0.1. An `authorize` that
+/// returns early on a loopback peer before consulting the mode would hand that
+/// entire deployment a free pass, and it would look like it was working.
+#[test]
+fn loopback_exemption_is_conditional_on_the_mode() {
+    let auth = read("src/gateway/ui_server/auth.rs");
+    let start = auth
+        .find("pub fn authorize(")
+        .expect("authorize present");
+    let body = &auth[start..];
+    let end = start + body.find("\nfn unauthorized(").unwrap_or(body.len());
+    let body = &auth[start..end];
+
+    let exempt = body
+        .find("is_loopback()")
+        .expect("authorize still has a loopback exemption");
+    let guard = body
+        .find("mode != AuthMode::Always")
+        .expect(
+            "the loopback exemption must be guarded by the mode — without it, \
+             `always` is indistinguishable from `auto` behind a same-host proxy",
+        );
+    assert!(
+        guard < exempt,
+        "the mode check must come *before* the loopback exemption in authorize()"
+    );
+}
+
+/// A typo in `SENCLAW_AUTH_MODE` must not open the daemon. Same call as
+/// `SENCLAW_APP_TOKEN_MODE`: fall back to the safe default, never to `off`.
+#[test]
+fn unknown_auth_mode_falls_back_to_auto_not_off() {
+    let auth = read("src/gateway/ui_server/auth.rs");
+    let start = auth
+        .find("pub fn from_env_value(")
+        .expect("from_env_value present");
+    let end = start + auth[start..].find("\n    pub fn as_str").unwrap_or(0);
+    let body = &auth[start..end.max(start)];
+    assert!(
+        body.contains("DEFAULT_AUTH_MODE"),
+        "from_env_value must fall back to DEFAULT_AUTH_MODE"
+    );
+    assert!(
+        !body.contains("Self::Off"),
+        "an unrecognised SENCLAW_AUTH_MODE must never resolve to Off"
+    );
+    assert!(
+        auth.contains("pub const DEFAULT_AUTH_MODE: AuthMode = AuthMode::Auto;"),
+        "the default posture stays `auto` — a daemon on loopback must not start \
+         demanding a token after an upgrade"
+    );
+}
+
+/// The switch is the gate's own control. Putting it in `OPEN_API_PATHS` would
+/// let an anonymous remote client turn the gate off.
+#[test]
+fn auth_mode_route_is_gated() {
+    let core = read("src/gateway/ui_server/core.rs");
+    assert!(
+        core.contains("\"/api/auth/mode\""),
+        "the auth-mode route must be mounted"
+    );
+    let auth = read("src/gateway/ui_server/auth.rs");
+    let start = auth.find("OPEN_API_PATHS").expect("OPEN_API_PATHS present");
+    let end = start + auth[start..].find(';').expect("declaration ends");
+    assert!(
+        !auth[start..end].contains("/api/auth/mode"),
+        "/api/auth/mode must stay gated — it is the switch that turns the gate off"
+    );
+}
+
+// ===== Container image =====
+
+/// The daemon's bind host and the Space-App bind host are different knobs on
+/// purpose: apps have no authentication of their own. Setting the app one to
+/// a wildcard in the image would publish every installed app's REST and MCP
+/// surface to whatever can reach the container.
+#[test]
+fn dockerfile_does_not_expose_space_apps() {
+    let df = read("Dockerfile");
+    for line in df.lines() {
+        let code = line.trim();
+        if code.starts_with('#') {
+            continue;
+        }
+        assert!(
+            !code.contains("SENCLAW_BIND_HOST=0.0.0.0"),
+            "the image must not bind Space Apps beyond loopback: {code}"
+        );
+    }
+    assert!(
+        df.contains("SENCLAW_UI_BIND_HOST=0.0.0.0"),
+        "the daemon itself must bind the container's interfaces, or `-p` reaches nothing"
+    );
+}
+
+/// Under `always` every route but the two handshake ones answers 401, so a
+/// healthcheck pointed anywhere else marks a perfectly healthy container
+/// unhealthy forever.
+#[test]
+fn dockerfile_healthcheck_uses_an_open_route() {
+    let df = read("Dockerfile");
+    let start = df.find("HEALTHCHECK").expect("image has a healthcheck");
+    let block = &df[start..(start + 400).min(df.len())];
+    assert!(
+        block.contains("/api/auth/status"),
+        "the healthcheck must hit an unauthenticated route; found: {block}"
+    );
+    assert!(
+        df.contains("SENCLAW_AUTH_MODE=always"),
+        "the image defaults to `always` — with --network host or a sidecar proxy, \
+         `auto` would exempt every caller"
+    );
+}

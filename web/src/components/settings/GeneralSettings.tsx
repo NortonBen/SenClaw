@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Typography, Switch, Card, Space, message, Spin, theme } from 'antd';
 import { SafetyCertificateOutlined, AlertOutlined } from '@ant-design/icons';
+import ApiAuthModeCard from './ApiAuthModeCard';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -74,6 +75,7 @@ export const GeneralSettings: React.FC = () => {
       <Title level={4} style={{ marginBottom: 24 }}>General Settings</Title>
       
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
+        <ApiAuthModeCard />
         <Card 
           hoverable 
           style={{ 

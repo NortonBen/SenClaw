@@ -248,9 +248,21 @@ pub struct UiServerConfig {
     /// this is not a loopback host.
     pub bind_host: String,
     /// Optional API-token override. When unset the daemon uses (or creates)
-    /// `~/.senclaw/api_token`. Enforced only for non-loopback peers, and only
-    /// when `bind_host` is non-loopback.
+    /// `~/.senclaw/api_token`. Whether it is *enforced* is
+    /// [`UiServerConfig::auth_mode`].
     pub api_token: Option<String>,
+    /// When the API token is demanded: `auto` (default — only when
+    /// `bind_host` is non-loopback, and only from non-loopback peers),
+    /// `always` (every peer, the only correct setting behind a same-host
+    /// reverse proxy), or `off`. `SENCLAW_AUTH_MODE`; the operator can
+    /// override it live from the UI.
+    pub auth_mode: crate::gateway::ui_server::auth::AuthMode,
+    /// Whether `SENCLAW_AUTH_MODE` was actually set — a value that merely
+    /// equals the default must not be reported as configured.
+    pub auth_mode_from_env: bool,
+    /// `Secure` on the session cookie. `None` = infer from
+    /// `X-Forwarded-Proto`. `SENCLAW_AUTH_COOKIE_SECURE`.
+    pub cookie_secure: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -741,6 +753,22 @@ impl Config {
                 },
                 api_token: match env::var("SENCLAW_API_TOKEN") {
                     Ok(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
+                    _ => None,
+                },
+                auth_mode: match env::var("SENCLAW_AUTH_MODE") {
+                    Ok(v) if !v.trim().is_empty() => {
+                        crate::gateway::ui_server::auth::AuthMode::from_env_value(&v)
+                    }
+                    _ => crate::gateway::ui_server::auth::DEFAULT_AUTH_MODE,
+                },
+                auth_mode_from_env: env::var("SENCLAW_AUTH_MODE")
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false),
+                cookie_secure: match env::var("SENCLAW_AUTH_COOKIE_SECURE") {
+                    Ok(v) if !v.trim().is_empty() => Some(matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )),
                     _ => None,
                 },
             },

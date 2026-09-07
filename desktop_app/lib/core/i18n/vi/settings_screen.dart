@@ -138,12 +138,51 @@ const Map<String, String> viSettingsScreen = {
 
   // General — connection
   'Connection': 'Kết nối',
-  'API access token — only needed when the daemon is exposed beyond '
-          'localhost (SENCLAW_UI_BIND_HOST=0.0.0.0). The daemon machine keeps '
-          'it in ~/.senclaw/api_token.':
-      'Token truy cập API — chỉ cần khi daemon được mở ra ngoài localhost '
-          '(SENCLAW_UI_BIND_HOST=0.0.0.0). Máy chạy daemon giữ token trong '
+  'API access token — needed when the daemon asks for one (see '
+          'Network access above). Leave it empty for a daemon on this '
+          'machine: the app reads ~/.senclaw/api_token itself.':
+      'Token truy cập API — cần khi daemon có đòi (xem Truy cập mạng ở trên). '
+          'Để trống nếu daemon nằm trên máy này: app tự đọc '
           '~/.senclaw/api_token.',
+
+  // General — network access → the daemon's own auth gate
+  'Who has to prove they are allowed in before SenClaw answers. The '
+          'token lives on the machine running SenClaw.':
+      'Ai phải chứng minh được phép trước khi SenClaw trả lời. Token nằm trên '
+          'máy đang chạy SenClaw.',
+  'Automatic': 'Tự động',
+  'Always require': 'Luôn bắt buộc',
+  'Never': 'Không bao giờ',
+  'Ask for the token only when SenClaw is reachable beyond this '
+          'machine, and only from other devices. Right for a laptop or a '
+          'desktop install.':
+      'Chỉ đòi token khi SenClaw mở ra ngoài máy này, và chỉ đòi ở thiết bị '
+          'khác. Hợp cho laptop hoặc bản cài desktop.',
+  'Running behind a reverse proxy? If nginx, Caddy or a load '
+          'balancer terminates HTTPS on the same machine, every visitor '
+          'arrives looking local and Automatic lets them all in without '
+          'a token. Choose Always require for that setup.':
+      'Có đang chạy sau reverse proxy? Nếu nginx, Caddy hay load balancer kết '
+          'thúc HTTPS ngay trên máy này thì mọi khách đều hiện ra như máy nội '
+          'bộ, và Tự động sẽ cho vào hết mà không đòi token. Kiểu triển khai '
+          'đó phải chọn Luôn bắt buộc.',
+  'Every request needs the token, including ones that look local. '
+          'This is the setting for a cloud or Docker deployment.':
+      'Mọi yêu cầu đều cần token, kể cả yêu cầu trông như nội bộ. Đây là thiết '
+          'lập cho triển khai cloud hoặc Docker.',
+  'No token is being asked for. Only this machine can reach '
+          'SenClaw right now, but changing the bind host above would '
+          'not turn the gate back on.':
+      'Không đòi token. Hiện chỉ máy này tới được SenClaw, nhưng đổi bind host '
+          'ở trên cũng không bật lại cổng kiểm soát.',
+  'No token is being asked for and SenClaw is reachable '
+          'beyond this machine — it is answering everyone. Turn this '
+          'back on unless something in front of it already '
+          'authenticates every request.':
+      'Không đòi token trong khi SenClaw mở ra ngoài máy này — nó đang trả lời '
+          'tất cả mọi người. Hãy bật lại, trừ khi đã có lớp phía trước xác thực '
+          'mọi yêu cầu.',
+  'This overrides SENCLAW_AUTH_MODE=': 'Thiết lập này đè lên SENCLAW_AUTH_MODE=',
   'Empty for the local daemon': 'Để trống nếu dùng daemon cục bộ',
   'API token saved — applies to new requests.':
       'Đã lưu token API — áp dụng cho các yêu cầu mới.',

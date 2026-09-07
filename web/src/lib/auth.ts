@@ -81,6 +81,9 @@ export function installAuthFetch(): void {
 export interface AuthStatus {
   authRequired: boolean;
   authorized: boolean;
+  /** Why a token is being asked for — the gate's wording depends on it. */
+  mode?: 'auto' | 'always' | 'off';
+  modeSource?: 'ui' | 'env' | 'default';
 }
 
 /** Probe the daemon's auth posture. Null when the daemon is unreachable. */
@@ -92,6 +95,8 @@ export async function fetchAuthStatus(): Promise<AuthStatus | null> {
     return {
       authRequired: !!body.authRequired,
       authorized: !!body.authorized,
+      mode: body.mode,
+      modeSource: body.modeSource,
     };
   } catch {
     return null;
