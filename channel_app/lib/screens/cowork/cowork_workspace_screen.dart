@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+
 import '../../models/cowork_models.dart';
+import '../../services/chat_api.dart';
 import '../../services/cowork_api.dart';
 import '../../services/language_service.dart';
 import '../../theme/tokens.dart';
+import '../../util/format.dart';
+import '../../widgets/markdown_text.dart';
 import '../../widgets/states.dart';
 
 /// Detail view for one Cowork team: kanban Tasks, Members, and Settings
@@ -19,7 +24,7 @@ class CoworkTeamScreen extends StatefulWidget {
 class _CoworkTeamScreenState extends State<CoworkTeamScreen>
     with SingleTickerProviderStateMixin {
   final _api = CoworkApi();
-  late final TabController _tabs = TabController(length: 3, vsync: this);
+  late final TabController _tabs = TabController(length: 4, vsync: this);
   late CoworkTeam _team = widget.team;
 
   @override
@@ -113,6 +118,7 @@ class _CoworkTeamScreenState extends State<CoworkTeamScreen>
           unselectedLabelColor: c.textMuted,
           tabs: [
             Tab(text: tr('Công việc', 'Tasks')),
+            Tab(text: tr('Trao đổi', 'Chat')),
             Tab(text: tr('Thành viên', 'Members')),
             Tab(text: tr('Cài đặt', 'Settings')),
           ],
@@ -124,6 +130,7 @@ class _CoworkTeamScreenState extends State<CoworkTeamScreen>
           controller: _tabs,
           children: [
             _TasksTab(api: _api, teamId: _team.id),
+            _TeamChatTab(teamId: _team.id),
             _MembersTab(
               api: _api,
               team: _team,
@@ -711,6 +718,142 @@ class _SettingsTabState extends State<_SettingsTab> {
           borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide(color: col.border),
         ),
+      ),
+    );
+  }
+}
+
+/// The team's own conversation, read-only.
+///
+/// A team materialises as chat group `cowork:<id>`, and `GET /api/chat/history`
+/// takes any jid, so the transcript is readable over the relay with no daemon
+/// change. **Sending is not offered**, and deliberately so: an outbound message
+/// is routed by `Channel::owns_jid`, which for the app channel matches only
+/// `app:<channelId>:user:<sender>`. Making it claim `cowork:*` would change
+/// channel ownership daemon-wide — every outbound loop in `lib.rs` picks the
+/// first channel that answers `owns_jid`, so the app would start intercepting
+/// team messages meant for Telegram and the rest. Team chat is sent from the
+/// desktop/web UI.
+class _TeamChatTab extends StatefulWidget {
+  final String teamId;
+  const _TeamChatTab({required this.teamId});
+
+  @override
+  State<_TeamChatTab> createState() => _TeamChatTabState();
+}
+
+class _TeamChatTabState extends State<_TeamChatTab> {
+  final _chat = ChatApi();
+  final _scroll = ScrollController();
+
+  List<ChatHistoryEntry> _messages = const [];
+  String? _error;
+  bool _loading = true;
+  Timer? _poll;
+
+  String get _jid => 'cowork:${widget.teamId}';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      // A full (capped) fetch each time rather than a delta: the tab is not
+      // the app's main chat surface, and a team transcript is short enough
+      // that reconciling a cursor costs more than it saves.
+      final rows = await _chat.fetchHistoryAfter(_jid, 0);
+      if (!mounted) return;
+      setState(() {
+        _messages = rows;
+        _error = null;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
+    _poll?.cancel();
+    // `cowork:*` groups emit no relay event either — the app-channel event
+    // sink only forwards jids the channel owns — so this polls while open.
+    _poll = Timer(const Duration(seconds: 15), _load);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    if (_loading) return const LoadingState();
+    if (_error != null && _messages.isEmpty) {
+      return ErrorState(message: _error!, onRetry: _load);
+    }
+    if (_messages.isEmpty) {
+      return EmptyState(
+        icon: Icons.forum_outlined,
+        message: tr('Đội chưa trao đổi gì', 'No team messages yet'),
+        hint: tr(
+          'Đây là bản chỉ đọc. Nhắn cho đội từ giao diện web hoặc máy tính.',
+          'This view is read-only. Message the team from the web or desktop UI.',
+        ),
+      );
+    }
+    return RefreshIndicator(
+      color: c.accent,
+      onRefresh: _load,
+      child: ListView.builder(
+        controller: _scroll,
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+        itemCount: _messages.length,
+        itemBuilder: (_, i) {
+          final m = _messages[i];
+          final agent = m.role == 'agent';
+          return Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(11),
+            decoration: BoxDecoration(
+              color: agent ? c.bubbleAgent : c.bubbleUser,
+              borderRadius: BorderRadius.circular(AppTokens.rMd),
+              border: Border.all(color: c.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      m.sender.isEmpty
+                          ? (agent ? tr('Agent', 'Agent') : tr('Bạn', 'You'))
+                          : m.sender,
+                      style: TextStyle(
+                        color: agent ? c.accent : c.textSecondary,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      timeAgoEpochMs(m.ts),
+                      style: TextStyle(color: c.textMuted, fontSize: 10.5),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                MarkdownText(m.content),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

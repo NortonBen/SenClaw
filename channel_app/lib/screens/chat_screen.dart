@@ -17,6 +17,7 @@ import '../services/local_cache.dart';
 import '../services/llm_api.dart';
 import '../services/logger_service.dart';
 import '../services/sessions_provider.dart';
+import '../services/workbench_store.dart';
 import '../theme/tokens.dart';
 import '../widgets/app_drawer.dart';
 import '../widgets/interaction_cards.dart';
@@ -24,6 +25,8 @@ import '../widgets/markdown_text.dart';
 import '../widgets/widget_card.dart';
 import 'agent_select_screen.dart';
 import 'new_chat_screen.dart';
+import 'workbench/workbench_screen.dart';
+import '../widgets/watch_strip.dart';
 
 class ChatMessage {
   final String text;
@@ -162,6 +165,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final cid = await _config.channelId;
     _chatJid = cid == null ? null : 'app:$cid:user:${RelayManager.senderId}';
 
+    // Workbench artifacts arrive only as `workbench:new` events — the daemon
+    // has no endpoint that lists them — so the store has to be listening
+    // before the agent builds anything, and the cache is what survives a
+    // backgrounded app.
+    WorkbenchStore().start();
+    if (_chatJid != null) {
+      unawaited(WorkbenchStore().loadCached(_chatJid!));
+    }
+
     _subs.add(relay.incomingMessages.listen((text) {
       if (!mounted) return;
       Log.d(
@@ -202,6 +214,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // are lost — on every (re)connect reconcile agent state + message delta.
     _subs.add(relay.connectionUpdates.listen((connected) {
       if (!mounted || !connected) return;
+      // A reconnect can hand the manager a new RelayService, whose event
+      // stream the store is not subscribed to yet.
+      WorkbenchStore().restart();
       unawaited(_onRelayConnected());
     }));
 
@@ -1285,6 +1300,53 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       centerTitle: true,
       // Reload button
       actions: [
+        // Only shown once this device has actually received a workbench
+        // event: there is no list endpoint, so an empty store means an empty
+        // screen, and an always-on button would open one.
+        if (_chatJid != null)
+          AnimatedBuilder(
+            animation: WorkbenchStore(),
+            builder: (_, _) {
+              final jid = _chatJid!;
+              final total = WorkbenchStore().artifactsFor(jid).length;
+              if (total == 0) return const SizedBox.shrink();
+              final unseen = WorkbenchStore().unseenCount(jid);
+              return Stack(
+                alignment: Alignment.center,
+                children: [
+                  IconButton(
+                    icon: Icon(Icons.build_outlined, color: c.textSecondary),
+                    tooltip: tr('Sản phẩm', 'Workbench'),
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => WorkbenchScreen(jid: jid),
+                      ),
+                    ),
+                  ),
+                  if (unseen > 0)
+                    Positioned(
+                      right: 8,
+                      top: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: c.accent,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '$unseen',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
         IconButton(
           icon: Icon(Icons.add_comment_outlined, color: c.textSecondary),
           tooltip: tr('Tạo mới', 'New'),
@@ -1812,6 +1874,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Widget _buildInputArea() {
+    // The strip belongs directly above the composer: it is about the wait the
+    // agent started, and Stop must sit where the user is already looking.
+    final jid = _selectedAgent?.jid ?? '';
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (jid.isNotEmpty) WatchStrip(jid: jid),
+        _buildInputAreaInner(),
+      ],
+    );
+  }
+
+  Widget _buildInputAreaInner() {
     final c = context.colors;
     final enabled = _selectedAgent != null;
     final canSend = enabled &&

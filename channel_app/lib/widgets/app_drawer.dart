@@ -11,6 +11,10 @@ import '../screens/background/background_screen.dart';
 import '../screens/code/code_screen.dart';
 import '../screens/cognitive/cognitive_screen.dart';
 import '../screens/cowork/cowork_screen.dart';
+import '../screens/dispatch/dispatch_screen.dart';
+import '../screens/kits/kits_screen.dart';
+import '../screens/patterns/patterns_screen.dart';
+import '../screens/usage/usage_screen.dart';
 import '../screens/workflow/workflow_screen.dart';
 import '../screens/more/more_screen.dart';
 import '../screens/plugins/plugins_screen.dart';
@@ -160,6 +164,16 @@ class AppDrawer extends ConsumerWidget {
                   _navTile(c, Icons.extension_outlined,
                       tr('Plugins', 'Plugins'),
                       onTap: () => open(const PluginsScreen())),
+                  _navTile(c, Icons.auto_awesome_outlined,
+                      tr('Pattern', 'Patterns'),
+                      onTap: () => open(const PatternsScreen())),
+                  _navTile(c, Icons.inventory_2_outlined, tr('Kit', 'Kits'),
+                      onTap: () => open(const KitsScreen())),
+                  _navTile(c, Icons.device_hub, tr('Điều phối', 'Dispatch'),
+                      onTap: () => open(const DispatchScreen())),
+                  _navTile(c, Icons.pie_chart_outline,
+                      tr('Mức dùng', 'Usage'),
+                      onTap: () => open(const UsageScreen())),
                 ],
               ),
             ),
