@@ -185,7 +185,20 @@ pub fn space_mcp_config(
         "SENCLAW_SPACE_API_URL".into(),
         format!("http://127.0.0.1:{ui_port}"),
     );
+    with_daemon_token(&mut cfg);
     cfg
+}
+
+/// Hand a subprocess the daemon's API token.
+///
+/// Loopback stops being a credential under auth mode `always`, and these
+/// servers reach the daemon over loopback HTTP. The child cannot inherit the
+/// token — the daemon deliberately does not `setenv` it — so it travels in the
+/// config's own env map.
+fn with_daemon_token(cfg: &mut McpServerConfig) {
+    if let Some(t) = crate::util::internal_auth::daemon_token() {
+        cfg.env.insert("SENCLAW_API_TOKEN".into(), t);
+    }
 }
 
 // ===== MemoryTool =====
@@ -303,6 +316,7 @@ pub fn patterns_mcp_config(ui_port: u16) -> McpServerConfig {
         "SENCLAW_PATTERNS_API_URL".into(),
         format!("http://127.0.0.1:{ui_port}"),
     );
+    with_daemon_token(&mut cfg);
     cfg
 }
 
@@ -316,6 +330,7 @@ pub fn ocr_mcp_config(ui_port: u16) -> McpServerConfig {
         "SENCLAW_OCR_BRIDGE_URL".into(),
         format!("http://127.0.0.1:{ui_port}"),
     );
+    with_daemon_token(&mut cfg);
     cfg
 }
 

@@ -894,11 +894,14 @@ async fn llm_info() -> Json<Value> {
     let base =
         std::env::var("SENCLAW_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:18788".into());
     let url = format!("{}/api/llm-config", base.trim_end_matches('/'));
-    let fetch = reqwest::Client::new()
+    let mut req = reqwest::Client::new()
         .get(&url)
-        .timeout(std::time::Duration::from_secs(6))
-        .send()
-        .await;
+        .timeout(std::time::Duration::from_secs(6));
+    // Loopback is not a credential under auth mode `always`.
+    if let Some((name, value)) = crate::util::internal_auth::header_for(&url) {
+        req = req.header(name, value);
+    }
+    let fetch = req.send().await;
     match fetch {
         Ok(r) => match r.json::<Value>().await {
             Ok(v) => {

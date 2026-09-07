@@ -238,6 +238,12 @@ impl LlmClient for OpenAiCompatLlm {
         if !self.api_key.is_empty() {
             req = req.bearer_auth(&self.api_key);
         }
+        // An app-provided config carries an empty `api_key` on purpose — the
+        // app proxy needs no credential of its own. The *daemon* route it goes
+        // through does, once auth mode `always` is in force.
+        if let Some((name, value)) = crate::util::internal_auth::header_for(&url) {
+            req = req.header(name, value);
+        }
 
         let resp = req.send().await.context("send chat request")?;
         let status = resp.status();
@@ -252,6 +258,9 @@ impl LlmClient for OpenAiCompatLlm {
                 let mut retry = self.client.post(&url).json(&body);
                 if !self.api_key.is_empty() {
                     retry = retry.bearer_auth(&self.api_key);
+                }
+                if let Some((name, value)) = crate::util::internal_auth::header_for(&url) {
+                    retry = retry.header(name, value);
                 }
                 let resp = retry.send().await.context("retry chat request")?;
                 let status = resp.status();

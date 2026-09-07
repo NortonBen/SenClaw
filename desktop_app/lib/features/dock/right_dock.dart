@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:xterm/xterm.dart';
@@ -10,6 +11,7 @@ import '../../core/prefs.dart';
 import '../../core/transport/connection.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/app_markdown.dart';
 import '../../widgets/embedded_web.dart';
 import '../chat/groups_provider.dart';
 import '../space/space_providers.dart';
@@ -20,6 +22,13 @@ import 'workbench_provider.dart';
 /// Whether the right dock is shown, and which tab is active.
 final dockVisibleProvider = StateProvider<bool>((ref) => false);
 final dockTabProvider = StateProvider<int>((ref) => 0); // 0=Console 1=Workbench
+
+/// Console ACTIVITY rendering mode: markdown (default) or raw mono text.
+/// Sub-agent activity is markdown — headings, bullets, `code` — and reading it
+/// as one unbroken monospace paragraph is what made the feed unusable.
+/// Persisted, so the choice survives a restart.
+final consoleMarkdownProvider = StateProvider<bool>((ref) =>
+    ref.read(prefsHelperProvider).string('chat:consoleMarkdown', '1') == '1');
 
 /// Persisted, drag-resizable dock width (web ResizeGrips).
 final dockWidthProvider = StateProvider<double>((ref) {
@@ -170,6 +179,11 @@ class _ConsoleTab extends ConsumerWidget {
     final c = context.colors;
     final d = ref.watch(dispatchProvider);
     final todos = ref.watch(agentTodosProvider);
+    final markdown = ref.watch(consoleMarkdownProvider);
+    // Chronological feed (oldest → newest), capped to the most recent 80.
+    final shown = d.activity.length > 80
+        ? d.activity.sublist(d.activity.length - 80)
+        : d.activity;
     if (d.parents.isEmpty && d.activity.isEmpty && todos.isEmpty) {
       return Center(
         child: Text(context.tr('No sub-agent activity'),
@@ -224,28 +238,136 @@ class _ConsoleTab extends ConsumerWidget {
             ),
           const Divider(height: AppTokens.s24),
         ],
-        if (d.activity.isNotEmpty)
-          Text(context.tr('ACTIVITY'),
-              style: TextStyle(
-                color: c.textMuted,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1,
-              )),
-        // Chronological feed (oldest → newest), capped to the most recent 80.
-        for (final a in (d.activity.length > 80
-            ? d.activity.sublist(d.activity.length - 80)
-            : d.activity))
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Text('• ${a.text}',
+        if (d.activity.isNotEmpty) ...[
+          Row(children: [
+            Text(context.tr('ACTIVITY'),
                 style: TextStyle(
-                  color: c.textSecondary,
-                  fontSize: 12,
-                  fontFamily: AppTokens.fontMono,
+                  color: c.textMuted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1,
                 )),
-          ),
+            const Spacer(),
+            _DockIcon(
+              icon: markdown ? Icons.notes_rounded : Icons.data_object_rounded,
+              tooltip: markdown
+                  ? context.tr('View as plain text')
+                  : context.tr('View as markdown'),
+              onTap: () {
+                ref.read(consoleMarkdownProvider.notifier).state = !markdown;
+                ref
+                    .read(prefsHelperProvider)
+                    .setString('chat:consoleMarkdown', markdown ? '0' : '1');
+              },
+            ),
+            _DockIcon(
+              icon: Icons.copy_all_rounded,
+              tooltip: context.tr('Copy all activity'),
+              onTap: () => _copyToClipboard(
+                  context, shown.map((a) => a.text).join('\n\n')),
+            ),
+          ]),
+          const SizedBox(height: AppTokens.s4),
+          // Chronological feed (oldest → newest), capped to the most recent 80.
+          for (final a in shown)
+            _ActivityLine(text: a.text, markdown: markdown),
+        ],
       ],
+    );
+  }
+}
+
+/// Small square icon button sized for the dock's header rows (the stock
+/// `IconButton` reserves 48px and wraps the ACTIVITY row on a narrow dock).
+class _DockIcon extends StatelessWidget {
+  const _DockIcon(
+      {required this.icon, required this.tooltip, required this.onTap});
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppTokens.rSm),
+        child: Padding(
+          padding: const EdgeInsets.all(AppTokens.s4),
+          child: Icon(icon, size: 14, color: context.colors.textMuted),
+        ),
+      ),
+    );
+  }
+}
+
+/// Copy [text] and confirm it — the button gives no other feedback, and a
+/// silent copy is indistinguishable from a dead button.
+Future<void> _copyToClipboard(BuildContext context, String text) async {
+  if (text.trim().isEmpty) return;
+  final copied = context.tr('Copied');
+  final messenger = ScaffoldMessenger.of(context);
+  await Clipboard.setData(ClipboardData(text: text));
+  messenger.showSnackBar(SnackBar(
+      content: Text(copied), duration: const Duration(seconds: 1)));
+}
+
+/// One ACTIVITY entry: rendered markdown or raw mono text, with a copy button
+/// that appears on hover. Raw mode uses `SelectableText` so a single line can
+/// be part-selected; markdown mode keeps link taps working.
+class _ActivityLine extends StatefulWidget {
+  const _ActivityLine({required this.text, required this.markdown});
+  final String text;
+  final bool markdown;
+
+  @override
+  State<_ActivityLine> createState() => _ActivityLineState();
+}
+
+class _ActivityLineState extends State<_ActivityLine> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.colors;
+    final style = TextStyle(
+      color: c.textSecondary,
+      fontSize: 12,
+      fontFamily: widget.markdown ? null : AppTokens.fontMono,
+    );
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: Padding(
+        // Markdown entries have no "• " prefix to separate them, so they get
+        // more breathing room or a run of short entries reads as one block.
+        padding: EdgeInsets.symmetric(vertical: widget.markdown ? 6 : 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: widget.markdown
+                  ? AppMarkdown(widget.text, style: style)
+                  : SelectableText('• ${widget.text}', style: style),
+            ),
+            // Space is reserved whether or not the button shows, so hovering
+            // never reflows the line under the cursor.
+            SizedBox(
+              width: 22,
+              child: AnimatedOpacity(
+                opacity: _hover ? 1 : 0,
+                duration: const Duration(milliseconds: 120),
+                child: _DockIcon(
+                  icon: Icons.copy_outlined,
+                  tooltip: context.tr('Copy'),
+                  onTap: () => _copyToClipboard(context, widget.text),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

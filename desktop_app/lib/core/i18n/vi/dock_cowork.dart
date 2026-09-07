@@ -20,6 +20,9 @@ const Map<String, String> viDockCowork = {
   'Remove this DAG card?': 'Gỡ thẻ DAG này?',
   'Remove task "{label}"?': 'Gỡ tác vụ "{label}"?',
   'ACTIVITY': 'HOẠT ĐỘNG',
+  'View as markdown': 'Xem dạng markdown',
+  'View as plain text': 'Xem dạng văn bản thô',
+  'Copy all activity': 'Sao chép toàn bộ hoạt động',
 
   // ── Workbench tab (artifacts) ──────────────────────────────────────────
   'No artifacts yet': 'Chưa có artifact nào',
