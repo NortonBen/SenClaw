@@ -118,6 +118,10 @@ pub struct FormPayload {
 
 pub(crate) struct PendingPermission {
     pub tool_name: String,
+    /// What an "allow" answer gets persisted as. `tool_name` routes the
+    /// response back to the waiting engine; this routes the approval into
+    /// storage, and for Skill/Bash the two differ.
+    pub permission_key: String,
     pub chat_jid: String,
     /// Identifies which group/core to respond to (typically the group JID).
     pub group_jid: String,

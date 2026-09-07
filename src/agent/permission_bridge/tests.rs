@@ -16,6 +16,7 @@ fn stub_api() -> Arc<dyn PermissionBridgeApi> {
 #[derive(Default)]
 struct RecordingApi {
     responses: Mutex<Vec<(String, String, String)>>,
+    persisted_rules: Mutex<Vec<String>>,
 }
 
 impl PermissionBridgeApi for RecordingApi {
@@ -25,6 +26,10 @@ impl PermissionBridgeApi for RecordingApi {
             tool_name.to_string(),
             selected.to_string(),
         ));
+    }
+
+    fn persist_tool_rule(&self, rule: &ToolAutoAcceptRule) {
+        self.persisted_rules.lock().unwrap().push(rule.id.clone());
     }
 }
 
@@ -121,6 +126,7 @@ fn test_resolve_permission_first_responder_wins() {
     .into();
     bridge.handle_permission_request(
         "Bash",
+        "Bash(rm -rf /)",
         "Run command?",
         &serde_json::json!("rm -rf /"),
         &options,
@@ -152,6 +158,7 @@ fn test_default_rules_do_not_auto_accept_skill_or_task() {
 
     bridge.handle_permission_request(
         "Skill",
+        "Skill(agent-browser)",
         "Load skill?",
         &serde_json::json!({"skill": "agent-browser"}),
         &options,
@@ -160,6 +167,7 @@ fn test_default_rules_do_not_auto_accept_skill_or_task() {
         None,
     );
     bridge.handle_permission_request(
+        "Task",
         "Task",
         "Launch agent?",
         &serde_json::json!({"subagent_type": "general-purpose"}),
@@ -201,6 +209,7 @@ fn test_skill_exact_rule_auto_accepts_only_selected_skill() {
 
     bridge.handle_permission_request(
         "Skill",
+        "Skill(agent-browser)",
         "Load skill?",
         &serde_json::json!({"skill": "agent-browser"}),
         &options,
@@ -210,6 +219,7 @@ fn test_skill_exact_rule_auto_accepts_only_selected_skill() {
     );
     bridge.handle_permission_request(
         "Skill",
+        "Skill(web-research)",
         "Load skill?",
         &serde_json::json!({"skill": "web-research"}),
         &options,
@@ -257,6 +267,7 @@ fn test_mcp_server_rule_auto_accepts_hyphenated_server() {
 
     bridge.handle_permission_request(
         "mcp__ssh-manager-mcp__ssh_list_hosts",
+        "mcp__ssh-manager-mcp__ssh_list_hosts",
         "Run tool?",
         &serde_json::json!(null),
         &options,
@@ -266,6 +277,7 @@ fn test_mcp_server_rule_auto_accepts_hyphenated_server() {
     );
     // A tool from a different server must NOT auto-accept.
     bridge.handle_permission_request(
+        "mcp__other-server__do_thing",
         "mcp__other-server__do_thing",
         "Run tool?",
         &serde_json::json!(null),
@@ -434,4 +446,335 @@ fn test_form_request_degraded_channel_auto_submits_defaults() {
 
     // Pending entry must be consumed — resolving later returns false.
     assert!(!bridge.resolve_form("anything", HashMap::new(), true));
+}
+
+#[test]
+fn allow_persists_the_scoped_permission_key_not_the_tool_name() {
+    // Regression: the bridge used to hand `pending.tool_name` ("Skill") to the
+    // persistence callback while `PermissionManager` looks the grant up under
+    // `Skill(<name>)`. The saved value could never match, so "never ask for
+    // <skill> Skill in this project" was silently a one-shot approval and the
+    // card came back on the next engine.
+    let api = Arc::new(RecordingApi::default());
+    let bridge = PermissionBridge::new(api.clone(), None);
+
+    let captured_id = Arc::new(Mutex::new(String::new()));
+    {
+        let captured_id = Arc::clone(&captured_id);
+        bridge.set_permission_request_callback(move |_chat_jid, request_id, _payload| {
+            *captured_id.lock().unwrap() = request_id.to_string();
+        });
+    }
+    let persisted: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    {
+        let persisted = Arc::clone(&persisted);
+        bridge.set_tool_allowed_callback(move |group_jid: &str, key: &str| {
+            persisted
+                .lock()
+                .unwrap()
+                .push((group_jid.to_string(), key.to_string()));
+        });
+    }
+
+    let options: HashMap<String, String> = [
+        ("allow".into(), "Confirm, never ask for ai-office-run Skill".into()),
+        ("refuse".into(), "Reject".into()),
+    ]
+    .into();
+    bridge.handle_permission_request(
+        "Skill",
+        "Skill(ai-office-run)",
+        "Load skill?",
+        &serde_json::json!({"skill": "ai-office-run"}),
+        &options,
+        "group-1",
+        "chat-1",
+        None,
+    );
+
+    let request_id = captured_id.lock().unwrap().clone();
+    assert!(bridge.resolve_permission(&request_id, "allow"));
+
+    assert_eq!(
+        *persisted.lock().unwrap(),
+        vec![("group-1".to_string(), "Skill(ai-office-run)".to_string())]
+    );
+    // The response back to the engine still routes on the tool name — that is
+    // the ResponseRegistry key and must not become the scoped one.
+    assert_eq!(
+        *api.responses.lock().unwrap(),
+        vec![(
+            "group-1".to_string(),
+            "Skill".to_string(),
+            "allow".to_string()
+        )]
+    );
+}
+
+#[test]
+fn allow_falls_back_to_tool_name_when_no_key_supplied() {
+    // Older/foreign emitters may send an empty key; persisting nothing would
+    // lose the approval outright, so the tool name remains the fallback.
+    let api = Arc::new(RecordingApi::default());
+    let bridge = PermissionBridge::new(api.clone(), None);
+    let captured_id = Arc::new(Mutex::new(String::new()));
+    {
+        let captured_id = Arc::clone(&captured_id);
+        bridge.set_permission_request_callback(move |_c, request_id, _p| {
+            *captured_id.lock().unwrap() = request_id.to_string();
+        });
+    }
+    let persisted: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    {
+        let persisted = Arc::clone(&persisted);
+        bridge.set_tool_allowed_callback(move |_g: &str, key: &str| {
+            persisted.lock().unwrap().push(key.to_string());
+        });
+    }
+    let options: HashMap<String, String> =
+        [("allow".into(), "Allow".into())].into();
+    bridge.handle_permission_request(
+        "mcp__ai-office-mcp__office_status",
+        "",
+        "Run tool?",
+        &serde_json::json!(null),
+        &options,
+        "group-1",
+        "chat-1",
+        None,
+    );
+    let request_id = captured_id.lock().unwrap().clone();
+    assert!(bridge.resolve_permission(&request_id, "allow"));
+    assert_eq!(
+        *persisted.lock().unwrap(),
+        vec!["mcp__ai-office-mcp__office_status".to_string()]
+    );
+}
+
+// ===== "allow" installs a globally-scoped rule =====
+
+fn approve(bridge: &PermissionBridge, tool: &str, key: &str, content: serde_json::Value) {
+    let captured = Arc::new(Mutex::new(String::new()));
+    {
+        let captured = Arc::clone(&captured);
+        bridge.set_permission_request_callback(move |_c, id, _p| {
+            *captured.lock().unwrap() = id.to_string();
+        });
+    }
+    let options: HashMap<String, String> = [("allow".into(), "Allow".into())].into();
+    bridge.handle_permission_request(
+        tool, key, "?", &content, &options, "group-1", "chat-1", None,
+    );
+    let id = captured.lock().unwrap().clone();
+    assert!(
+        bridge.resolve_permission(&id, "allow"),
+        "request {key} should resolve"
+    );
+}
+
+#[test]
+fn allowing_a_skill_stops_the_next_chat_asking_again() {
+    // The whole point of the option: approving once must silence the prompt
+    // everywhere, not just in the chat it was clicked in. The rule is what
+    // carries it across chats, so it has to exist and to short-circuit
+    // `handle_permission_request` before a second card is ever built.
+    let api = Arc::new(RecordingApi::default());
+    let bridge = PermissionBridge::new(api.clone(), None);
+
+    approve(
+        &bridge,
+        "Skill",
+        "Skill(ai-office-run)",
+        serde_json::json!({"skill": "ai-office-run"}),
+    );
+    assert_eq!(
+        *api.persisted_rules.lock().unwrap(),
+        vec!["skill-auto-access:ai-office-run".to_string()],
+        "id must match the one the Skills panel uses, so the rule is revocable there"
+    );
+
+    // A different chat asks for the same skill: auto-accepted, no card.
+    let seen = Arc::new(Mutex::new(0usize));
+    {
+        let seen = Arc::clone(&seen);
+        bridge.set_permission_request_callback(move |_c, _id, _p| {
+            *seen.lock().unwrap() += 1;
+        });
+    }
+    let options: HashMap<String, String> = [("allow".into(), "Allow".into())].into();
+    bridge.handle_permission_request(
+        "Skill",
+        "Skill(ai-office-run)",
+        "?",
+        &serde_json::json!({"skill": "ai-office-run"}),
+        &options,
+        "group-2",
+        "chat-2",
+        None,
+    );
+    assert_eq!(*seen.lock().unwrap(), 0, "second chat must not be prompted");
+
+    // A different skill is untouched — the grant is scoped to what was shown.
+    bridge.handle_permission_request(
+        "Skill",
+        "Skill(other-skill)",
+        "?",
+        &serde_json::json!({"skill": "other-skill"}),
+        &options,
+        "group-2",
+        "chat-2",
+        None,
+    );
+    assert_eq!(*seen.lock().unwrap(), 1, "an unapproved skill still asks");
+}
+
+#[test]
+fn approval_rules_stay_as_narrow_as_the_option_label() {
+    use RuleMatcherType as M;
+    let cases: Vec<(&str, &str, &str, M)> = vec![
+        (
+            "Skill",
+            "Skill(ai-office-run)",
+            "skill-auto-access:ai-office-run",
+            M::SkillExact,
+        ),
+        (
+            "mcp__ai-office-mcp__office_status",
+            "mcp__ai-office-mcp__office_status",
+            "mcp:ai-office-mcp:office_status",
+            M::McpServer,
+        ),
+        (
+            "Bash",
+            "Bash(git status)",
+            "bash-auto-access:git status",
+            M::BashRegex,
+        ),
+        (
+            "Write",
+            "Write",
+            "tool-category:file-edit",
+            M::ToolCategory,
+        ),
+        ("Task", "Task", "tool-exact:Task", M::ToolExact),
+    ];
+    for (tool, key, want_id, want_type) in cases {
+        let rule = PermissionBridge::rule_for_approval(tool, key)
+            .unwrap_or_else(|| panic!("no rule for {key}"));
+        assert_eq!(rule.id, want_id, "id for {key}");
+        assert_eq!(
+            std::mem::discriminant(&rule.matcher.matcher_type),
+            std::mem::discriminant(&want_type),
+            "matcher for {key}"
+        );
+        assert!(rule.enabled);
+    }
+
+    // An MCP approval grants the one tool, never the whole server.
+    let rule = PermissionBridge::rule_for_approval(
+        "mcp__ai-office-mcp__office_status",
+        "mcp__ai-office-mcp__office_status",
+    )
+    .unwrap();
+    assert_eq!(rule.matcher.tool.as_deref(), Some("office_status"));
+
+    // An empty key yields nothing rather than a rule matching everything.
+    assert!(PermissionBridge::rule_for_approval("Skill", "").is_none());
+}
+
+#[test]
+fn bash_prefix_approval_does_not_leak_to_a_similarly_named_command() {
+    let api = Arc::new(RecordingApi::default());
+    let bridge = PermissionBridge::new(api.clone(), None);
+    approve(
+        &bridge,
+        "Bash",
+        "Bash(git:*)",
+        serde_json::json!({"command": "git status"}),
+    );
+
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    {
+        let seen = Arc::clone(&seen);
+        bridge.set_permission_request_callback(move |_c, _id, payload| {
+            seen.lock().unwrap().push(payload.tool_name.clone());
+        });
+    }
+    let options: HashMap<String, String> = [("allow".into(), "Allow".into())].into();
+    let ask = |cmd: &str| {
+        bridge.handle_permission_request(
+            "Bash",
+            &format!("Bash({cmd})"),
+            "?",
+            &serde_json::json!({"command": cmd}),
+            &options,
+            "group-2",
+            "chat-2",
+            None,
+        );
+    };
+    ask("git push --force"); // covered by the prefix
+    assert!(seen.lock().unwrap().is_empty(), "`git …` must be silent");
+
+    ask("github-cli auth"); // shares the letters, not the prefix
+    ask("rm -rf /");
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        2,
+        "prefix must not swallow `github-cli` or unrelated commands"
+    );
+}
+
+#[test]
+fn bash_pattern_rules_match_the_command_not_the_tool_name() {
+    // Regression: BashGlob/BashRegex were tested against `tool_name`, which is
+    // always the literal "Bash", so every Bash rule written in the Tool Rules
+    // panel was inert.
+    let api = Arc::new(RecordingApi::default());
+    let bridge = PermissionBridge::new(api.clone(), None);
+    bridge.add_rule(ToolAutoAcceptRule {
+        id: "bash-glob:npm".into(),
+        matcher: RuleMatcher {
+            matcher_type: RuleMatcherType::BashGlob,
+            pattern: Some("npm *".into()),
+            tool_name: None,
+            skill_name: None,
+            server: None,
+            tool: None,
+            category: None,
+        },
+        action: RuleAction::AutoAccept,
+        enabled: true,
+        description: None,
+    });
+    bridge.set_permission_request_callback(|_, _, _| {});
+    let options: HashMap<String, String> = [("allow".into(), "Allow".into())].into();
+
+    bridge.handle_permission_request(
+        "Bash",
+        "Bash(npm test)",
+        "?",
+        &serde_json::json!({"command": "npm test"}),
+        &options,
+        "g",
+        "c",
+        None,
+    );
+    // A non-Bash tool must never be matched by a Bash pattern.
+    bridge.handle_permission_request(
+        "mcp__x__y",
+        "mcp__x__y",
+        "?",
+        &serde_json::json!(null),
+        &options,
+        "g",
+        "c",
+        None,
+    );
+
+    assert_eq!(
+        *api.responses.lock().unwrap(),
+        vec![("g".into(), "Bash".into(), "allow".into())],
+        "only the Bash command should auto-accept"
+    );
 }

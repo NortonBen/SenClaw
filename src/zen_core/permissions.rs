@@ -182,6 +182,11 @@ impl PermissionManager {
         })
     }
 
+    /// Labels for the three answers. The "allow" wording says "all chats"
+    /// because that is now what it does: the bridge turns the answer into a
+    /// global auto-accept rule alongside the per-chat grant. It previously read
+    /// "in this project" while covering only the chat it was clicked in, so the
+    /// same card came back in every new conversation.
     fn build_options(
         tool: &dyn Tool,
         input: &serde_json::Value,
@@ -199,15 +204,15 @@ impl PermissionManager {
                 opts.insert("agree".into(), "Confirm".into());
                 opts.insert(
                     "allow".into(),
-                    format!("Confirm, never ask for `{p}` commands in this project"),
+                    format!("Confirm, never ask for `{p}` commands again (all chats)"),
                 );
                 opts.insert("refuse".into(), "Reject".into());
                 return opts;
             }
             let allow_text = if command.is_empty() {
-                "Confirm, never ask for this command in this project".into()
+                "Confirm, never ask for this command again (all chats)".into()
             } else {
-                format!("Confirm, never ask for `{command}` in this project")
+                format!("Confirm, never ask for `{command}` again (all chats)")
             };
             let mut opts = HashMap::new();
             opts.insert("agree".into(), "Confirm".into());
@@ -221,7 +226,7 @@ impl PermissionManager {
             opts.insert("agree".into(), "Confirm".into());
             opts.insert(
                 "allow".into(),
-                "Confirm, never ask for file editing in this project".into(),
+                "Confirm, never ask for file editing again (all chats)".into(),
             );
             opts.insert("refuse".into(), "Reject".into());
             return opts;
@@ -233,7 +238,7 @@ impl PermissionManager {
             opts.insert("agree".into(), "Confirm".into());
             opts.insert(
                 "allow".into(),
-                format!("Confirm, never ask for {skill_name} Skill in this project"),
+                format!("Confirm, never ask for {skill_name} Skill again (all chats)"),
             );
             opts.insert("refuse".into(), "Reject".into());
             return opts;
@@ -244,7 +249,7 @@ impl PermissionManager {
             opts.insert("agree".into(), "Confirm".into());
             opts.insert(
                 "allow".into(),
-                format!("Confirm, never ask for {name} in this project"),
+                format!("Confirm, never ask for {name} again (all chats)"),
             );
             opts.insert("refuse".into(), "Reject".into());
             return opts;
@@ -254,7 +259,7 @@ impl PermissionManager {
         opts.insert("agree".into(), "Allow".into());
         opts.insert(
             "allow".into(),
-            format!("Allow, never ask for {name} in this project"),
+            format!("Allow, never ask for {name} again (all chats)"),
         );
         opts.insert("refuse".into(), "Reject".into());
         opts
@@ -289,10 +294,14 @@ impl PermissionManager {
         let name = tool.name().to_string();
         let permission_info = tool.gen_tool_permission(input);
         let options = Self::build_options(tool, input, prefix);
+        // Derived once and carried through the request so the UI persists the
+        // exact key `is_allowed` will look up later.
+        let permission_key = Self::get_permission_key(tool, input, prefix);
 
         let request = ToolPermissionRequestData {
             agent_id: agent_id.to_string(),
             tool_name: name.clone(),
+            permission_key: permission_key.clone(),
             title: permission_info
                 .as_ref()
                 .map_or(name.clone(), |p| p.title.clone()),
@@ -337,8 +346,7 @@ impl PermissionManager {
                         match response.selected.as_str() {
                             "agree" => Ok(true),
                             "allow" => {
-                                let key = Self::get_permission_key(tool, input, prefix.as_deref());
-                                self.add_allowed_tool(&key);
+                                self.add_allowed_tool(&permission_key);
                                 if Self::is_file_edit_tool(tool.name()) {
                                     self.grant_global_edit();
                                 }
@@ -389,6 +397,17 @@ impl PermissionChecker for PermissionManager {
             }
             if *self.global_edit_granted.lock().unwrap() {
                 debug!("[{name}] global edit permission active");
+                return Ok(true);
+            }
+            // A "never ask for file editing in this project" choice made in an
+            // earlier session comes back as a saved `Edit`/`Write`/`NotebookEdit`
+            // key. `global_edit_granted` is per-engine, so without this the
+            // stored grant was dead weight and the prompt returned every time a
+            // new engine was built. Any one of them re-grants the whole
+            // category because that is what the option's label promised.
+            if FILE_EDIT_TOOLS.iter().any(|t| self.is_allowed(t)) {
+                debug!("[{name}] file edit permission restored from saved approval");
+                self.grant_global_edit();
                 return Ok(true);
             }
             return self
@@ -491,6 +510,44 @@ mod tests {
         }
         fn get_display_title(&self, _input: &serde_json::Value) -> String {
             "Bash".into()
+        }
+    }
+
+    struct TestSkillTool;
+    #[async_trait::async_trait]
+    impl Tool for TestSkillTool {
+        fn name(&self) -> &str {
+            "Skill"
+        }
+        fn description(&self) -> &str {
+            "Run a skill"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+        fn is_read_only(&self) -> bool {
+            false
+        }
+        async fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &ToolContext<'_>,
+        ) -> Result<Vec<ToolOutput>> {
+            Ok(vec![])
+        }
+        fn gen_tool_result_message(
+            &self,
+            _data: &serde_json::Value,
+            _input: &serde_json::Value,
+        ) -> ToolResultMessage {
+            ToolResultMessage {
+                title: "Skill".into(),
+                summary: "".into(),
+                content: serde_json::json!({}),
+            }
+        }
+        fn get_display_title(&self, _input: &serde_json::Value) -> String {
+            "Skill".into()
         }
     }
 
@@ -712,5 +769,82 @@ mod tests {
         };
         let content = PermissionManager::resolve_permission_content(Some(info), &input);
         assert_eq!(content, serde_json::json!({ "command": "ls" }));
+    }
+
+    #[tokio::test]
+    async fn saved_skill_approval_bypasses_prompt() {
+        // Regression: "never ask for <skill> Skill in this project" used to be
+        // persisted as the bare tool name "Skill", while the gate looks the
+        // grant up under `Skill(<name>)`. The two never matched, so every new
+        // engine re-prompted for a skill the user had already approved — the
+        // symptom being the same permission card returning again and again.
+        let bus = EventBus::new();
+        let reg = Arc::new(ResponseRegistry::new());
+        let pm = PermissionManager::new(bus, reg);
+        pm.add_allowed_tool("Skill(ai-office-run)");
+
+        let tool = TestSkillTool;
+        let cancel = CancellationToken::new();
+        assert!(pm
+            .check(
+                &tool,
+                &serde_json::json!({"skill": "ai-office-run"}),
+                &cancel,
+                "main"
+            )
+            .await
+            .unwrap());
+
+        // The grant stays scoped to the approved skill: a different one still
+        // has to ask. `check` would block on a response, so assert on the key
+        // instead of driving the request.
+        assert_ne!(
+            PermissionManager::get_permission_key(
+                &tool,
+                &serde_json::json!({"skill": "other-skill"}),
+                None
+            ),
+            "Skill(ai-office-run)"
+        );
+    }
+
+    #[tokio::test]
+    async fn saved_file_edit_approval_bypasses_prompt() {
+        // "never ask for file editing in this project" persists as the tool
+        // name; `global_edit_granted` is per-engine, so without honouring the
+        // saved key the prompt returned on every restart.
+        let bus = EventBus::new();
+        let reg = Arc::new(ResponseRegistry::new());
+        let pm = PermissionManager::new(bus, reg);
+        pm.add_allowed_tool("Write");
+
+        let tool = TestEditTool; // a different file-edit tool than the one saved
+        let cancel = CancellationToken::new();
+        assert!(pm
+            .check(&tool, &serde_json::json!({}), &cancel, "main")
+            .await
+            .unwrap());
+    }
+
+    #[test]
+    fn permission_key_is_scoped_not_the_bare_tool_name() {
+        let skill = TestSkillTool;
+        assert_eq!(
+            PermissionManager::get_permission_key(
+                &skill,
+                &serde_json::json!({"skill": "ai-office-run"}),
+                None
+            ),
+            "Skill(ai-office-run)"
+        );
+        let bash = TestBashTool;
+        assert_eq!(
+            PermissionManager::get_permission_key(
+                &bash,
+                &serde_json::json!({"command": "git status"}),
+                Some("git status")
+            ),
+            "Bash(git status:*)"
+        );
     }
 }

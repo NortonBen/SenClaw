@@ -1,8 +1,59 @@
 # Auto Accept Tool Request — Thiết kế tính năng
 
-> **Trạng thái:** Nghiên cứu & thiết kế  
+> **Trạng thái:** Thiết kế gốc — phần lớn đã triển khai, xem §0 trước khi đọc tiếp  
 > **Phạm vi:** `src/zen_core/permissions.rs`, `src/agent/permission_bridge/bridge.rs`, `src/mcp/`, Web UI  
 > **Mục tiêu:** Cho phép cấu hình linh hoạt việc tự động chấp nhận / từ chối yêu cầu tool mà không cần tương tác thủ công mỗi lần.
+
+---
+
+## 0. Thực tế đã triển khai
+
+Tài liệu từ §1 trở đi là **thiết kế gốc**; một số chi tiết không khớp code đang chạy.
+Khác biệt cần biết trước:
+
+| Thiết kế gốc | Thực tế |
+|---|---|
+| `tool-rules.json` tại `Config::data_dir()` | Bảng SQLite **`tool_rules`** (`id`, `rule_json`, `updated_at`) — xem [`src/db/tool_rules.rs`](../src/db/tool_rules.rs) |
+| `src/zen_core/permission_rules.rs` (module mới) | Không tồn tại. Rule sống trong [`permission_bridge`](../src/agent/permission_bridge/) (`types.rs` + `bridge.rs::rule_matches`) |
+| `RuleEngine` gọi trong `PermissionManager` | Rule được đánh giá ở **`PermissionBridge::should_auto_accept`**, tức *trước khi* thẻ permission được tạo — sớm hơn `PermissionManager` |
+
+### 0.1 Hai kho quyền song song
+
+Có **hai** nơi lưu "đã duyệt", phạm vi khác nhau, và cả hai đều còn hiệu lực:
+
+| | `tool_rules` (toàn cục) | `groups.approved_tools` (theo chat) |
+|---|---|---|
+| Chặn ở | `PermissionBridge::should_auto_accept` | `PermissionManager::is_allowed` |
+| Phạm vi | mọi chat | đúng một `group_jid` |
+| Đặt từ | Plugins → Skills (*Auto Access*), Tool Rules panel, **và nút "never ask again"** | nút "never ask again" |
+
+### 0.2 Nút "Confirm, never ask again" làm gì
+
+Một lần bấm ghi **cả hai**: grant theo chat *và* một rule toàn cục. Rule được suy ra từ
+`permission_key` nên chỉ cấp đúng thứ người dùng nhìn thấy trên thẻ, không rộng hơn nhãn nút:
+
+| Tool | `permission_key` | Rule sinh ra |
+|---|---|---|
+| Skill | `Skill(<tên>)` | `skill-auto-access:<tên>` — `SkillExact` |
+| Bash (lệnh) | `Bash(<lệnh>)` | `bash-auto-access:<lệnh>` — `BashRegex` `^<lệnh>$` |
+| Bash (prefix) | `Bash(<prefix>:*)` | `BashRegex` `^<prefix>(\s\|$)` — `git` không nuốt `github-cli` |
+| MCP | `mcp__<server>__<tool>` | `mcp:<server>:<tool>` — `McpServer` scope đúng 1 tool, không phải cả server |
+| Edit/Write/NotebookEdit | tên tool | `tool-category:file-edit` — `ToolCategory::FileEdit` |
+| Khác | tên tool | `tool-exact:<tên>` — `ToolExact` |
+
+Id trùng convention của Web UI nên rule sinh ra **hiện và gỡ được** ở Plugins → Skills /
+Tool Rules — khác `approved_tools` vốn vô hình.
+
+### 0.3 Ba bẫy đã sửa, đừng tái lập
+
+- **`permission_key` ≠ `tool_name`.** `tool_name` route response về engine (khoá của
+  `ResponseRegistry`); `permission_key` là thứ đem đi lưu. Lưu nhầm `tool_name` khiến mọi
+  duyệt Skill/Bash không bao giờ khớp lại khi engine mới dựng — thẻ permission quay lại mãi.
+- **Pattern Bash khớp *câu lệnh*, không phải tên tool.** `BashGlob`/`BashRegex` từng
+  `glob_match(pattern, tool_name)` với `tool_name` luôn là `"Bash"`, nên mọi rule Bash là code
+  chết. Lệnh nằm ở `content["command"]`. `McpGlob` thì vẫn khớp tên tool — đừng gộp lại.
+- **Nhánh file-edit phải đọc `allowed_tools`.** `global_edit_granted` sống theo engine, nên
+  nếu không đọc grant đã lưu thì "never ask for file editing" chết sau mỗi lần restart.
 
 ---
 
@@ -616,14 +667,14 @@ Startup:
 - [ ] Implement `RuleEngine` với `evaluate()`, `add_rule()`, `load_from_file()`, `save_to_file()`
 - [ ] Tích hợp `RuleEngine` vào `PermissionManager` (thêm field, gọi trước skip flags)
 - [ ] Thêm `tool_rules_path` + `dangerously_accept_all` vào `ZenCoreOptions`
-- [ ] Test unit: glob matching, rule priority, ForceRequest override
+- [x] Test unit: glob matching (khớp câu lệnh, xem §0.3) — rule priority / ForceRequest chưa làm
 
 ### Phase 2 — Persistence & commands
 
 - [ ] Load/save `tool-rules.json` tại `Config::data_dir()`
 - [ ] Parse slash commands `/rules *` trong `MessageRouter`
 - [ ] MCP tool `tool_rules_add`, `tool_rules_list`, `tool_rules_remove` (optional, dùng trong dispatch)
-- [ ] Khi user chọn "Allow, never ask again" → lưu rule vào file thay vì chỉ in-memory
+- [x] Khi user chọn "Allow, never ask again" → lưu rule (vào bảng `tool_rules`, không phải file) — xem §0.2
 
 ### Phase 3 — Web UI & WS events
 

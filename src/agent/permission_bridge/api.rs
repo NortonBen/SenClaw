@@ -58,6 +58,12 @@ pub trait PermissionBridgeApi: Send + Sync {
     ) {
     }
 
+    /// Persist a globally-scoped auto-accept rule created by an "allow /
+    /// never ask again" answer, so it survives a daemon restart and shows up
+    /// in the Tool Rules UI where the user can revoke it. The bridge keeps the
+    /// in-memory copy itself; this is only the durable half.
+    fn persist_tool_rule(&self, _rule: &super::types::ToolAutoAcceptRule) {}
+
     /// Route a FormUI response to the correct sema-core instance.
     fn respond_to_form(
         &self,

@@ -8,8 +8,8 @@ use crate::types::InlineButton;
 use super::api::{PermissionBridgeApi, PREFIX_ASK, PREFIX_PERM};
 use super::types::{
     AskQuestionData, AskQuestionPayload, FormPayload, PendingAskQuestion, PendingForm,
-    PendingPermission, PermissionOption, PermissionPayload, RuleAction, RuleMatcherType,
-    ToolAutoAcceptRule, ToolCategory,
+    PendingPermission, PermissionOption, PermissionPayload, RuleAction, RuleMatcher,
+    RuleMatcherType, ToolAutoAcceptRule, ToolCategory,
 };
 use super::utils::{capitalize_first, format_content, short_id, truncate_content};
 
@@ -127,6 +127,169 @@ impl PermissionBridge {
         })
     }
 
+    /// The shell command a Bash permission request is about, or `None` for any
+    /// other tool. Normal requests carry `{"command": …}` from Bash's
+    /// `gen_tool_permission`; a bare string is accepted too so a hand-built
+    /// request body still resolves.
+    fn bash_command<'a>(tool_name: &str, content: &'a serde_json::Value) -> Option<&'a str> {
+        if tool_name != "Bash" {
+            return None;
+        }
+        content
+            .get("command")
+            .and_then(|v| v.as_str())
+            .or_else(|| content.as_str())
+    }
+
+    /// The globally-scoped rule an "allow / never ask again" answer installs.
+    ///
+    /// The per-chat grant alone made the option a lie: it read "in this
+    /// project" but only ever covered the one chat it was clicked in, so a new
+    /// conversation asked all over again. The rule is derived from the
+    /// permission key so it grants exactly what the user was shown — this
+    /// skill, this command, this MCP tool — never a category broader than the
+    /// button's own label. Ids match the ones the Tool Rules / Skills panels
+    /// use, so a rule created here is visible and revocable there.
+    pub(crate) fn rule_for_approval(
+        tool_name: &str,
+        permission_key: &str,
+    ) -> Option<ToolAutoAcceptRule> {
+        let build = |id: String, matcher: RuleMatcher, description: String| {
+            Some(ToolAutoAcceptRule {
+                id,
+                matcher,
+                action: RuleAction::AutoAccept,
+                enabled: true,
+                description: Some(description),
+            })
+        };
+        let empty = RuleMatcher {
+            matcher_type: RuleMatcherType::Always,
+            pattern: None,
+            tool_name: None,
+            skill_name: None,
+            server: None,
+            tool: None,
+            category: None,
+        };
+
+        // Skill(<name>)
+        if let Some(skill) = permission_key
+            .strip_prefix("Skill(")
+            .and_then(|r| r.strip_suffix(')'))
+            .filter(|s| !s.is_empty())
+        {
+            return build(
+                format!("skill-auto-access:{skill}"),
+                RuleMatcher {
+                    matcher_type: RuleMatcherType::SkillExact,
+                    skill_name: Some(skill.to_string()),
+                    ..empty
+                },
+                format!("Auto accept Skill {skill}"),
+            );
+        }
+
+        // Bash(<cmd>) or Bash(<prefix>:*) — anchored regex mirrors the
+        // per-chat prefix semantics exactly (the prefix alone, or the prefix
+        // followed by whitespace), so `git` never covers `github-cli`.
+        if let Some(inner) = permission_key
+            .strip_prefix("Bash(")
+            .and_then(|r| r.strip_suffix(')'))
+            .filter(|s| !s.is_empty())
+        {
+            let (pattern, description) = match inner.strip_suffix(":*") {
+                Some(prefix) if !prefix.is_empty() => (
+                    format!("^{}(\\s|$)", regex::escape(prefix)),
+                    format!("Auto accept `{prefix}` commands"),
+                ),
+                _ => (
+                    format!("^{}$", regex::escape(inner)),
+                    format!("Auto accept `{inner}`"),
+                ),
+            };
+            return build(
+                format!("bash-auto-access:{inner}"),
+                RuleMatcher {
+                    matcher_type: RuleMatcherType::BashRegex,
+                    pattern: Some(pattern),
+                    ..empty
+                },
+                description,
+            );
+        }
+
+        // mcp__<server>__<tool> — scoped to the one tool, never the whole
+        // server, because that is all the prompt asked about.
+        if let Some((server, tool)) = permission_key
+            .strip_prefix("mcp__")
+            .and_then(|rest| rest.split_once("__"))
+            .filter(|(s, t)| !s.is_empty() && !t.is_empty())
+        {
+            return build(
+                format!("mcp:{server}:{tool}"),
+                RuleMatcher {
+                    matcher_type: RuleMatcherType::McpServer,
+                    server: Some(server.to_string()),
+                    tool: Some(tool.to_string()),
+                    ..empty
+                },
+                format!("Auto accept {permission_key}"),
+            );
+        }
+
+        // Edit / Write / NotebookEdit — the option reads "never ask for file
+        // editing", so the rule covers the category rather than the one tool
+        // that happened to trigger the prompt.
+        if matches!(permission_key, "Edit" | "Write" | "NotebookEdit") {
+            return build(
+                "tool-category:file-edit".to_string(),
+                RuleMatcher {
+                    matcher_type: RuleMatcherType::ToolCategory,
+                    category: Some(ToolCategory::FileEdit),
+                    ..empty
+                },
+                "Auto accept file editing".to_string(),
+            );
+        }
+
+        // Any other tool, keyed by its plain name.
+        if permission_key.is_empty() || permission_key != tool_name {
+            return None;
+        }
+        build(
+            format!("tool-exact:{tool_name}"),
+            RuleMatcher {
+                matcher_type: RuleMatcherType::ToolExact,
+                tool_name: Some(tool_name.to_string()),
+                ..empty
+            },
+            format!("Auto accept {tool_name}"),
+        )
+    }
+
+    /// Install + persist the global rule for an approved request. In-memory
+    /// first so the very next request in this session short-circuits before a
+    /// prompt is built.
+    fn install_approval_rule(&self, pending: &PendingPermission) {
+        let Some(rule) = Self::rule_for_approval(&pending.tool_name, &pending.permission_key)
+        else {
+            tracing::info!(
+                "[PermissionBridge] no global rule derived for tool={} key={}",
+                pending.tool_name,
+                pending.permission_key
+            );
+            return;
+        };
+        tracing::info!(
+            "[PermissionBridge] installing global auto-accept rule id={} from approval of {}",
+            rule.id,
+            pending.permission_key
+        );
+        self.api.persist_tool_rule(&rule);
+        self.add_rule(rule);
+    }
+
     fn rule_matches(
         rule: &ToolAutoAcceptRule,
         tool_name: &str,
@@ -177,18 +340,34 @@ impl PermissionBridge {
                     }
                 }
             }
-            RuleMatcherType::McpGlob | RuleMatcherType::BashGlob => {
+            RuleMatcherType::McpGlob => {
                 let Some(pattern) = rule.matcher.pattern.as_deref() else {
                     return false;
                 };
                 glob_match(pattern, tool_name)
             }
+            // Bash patterns describe the COMMAND. Testing them against
+            // `tool_name` — always the literal "Bash" — meant no Bash rule
+            // written in the Tool Rules panel could ever fire; `git *` was
+            // matched against "Bash" and silently did nothing.
+            RuleMatcherType::BashGlob => {
+                let Some(pattern) = rule.matcher.pattern.as_deref() else {
+                    return false;
+                };
+                let Some(command) = Self::bash_command(tool_name, content) else {
+                    return false;
+                };
+                glob_match(pattern, command)
+            }
             RuleMatcherType::BashRegex => {
                 let Some(pattern) = rule.matcher.pattern.as_deref() else {
                     return false;
                 };
+                let Some(command) = Self::bash_command(tool_name, content) else {
+                    return false;
+                };
                 regex::Regex::new(pattern)
-                    .map(|re| re.is_match(tool_name))
+                    .map(|re| re.is_match(command))
                     .unwrap_or(false)
             }
             RuleMatcherType::ToolCategory => match rule.matcher.category {
@@ -307,8 +486,9 @@ impl PermissionBridge {
 
         if option_key == "allow" {
             if let Some(cb) = self.on_tool_allowed.lock().unwrap().as_ref() {
-                cb(&pending.group_jid, &pending.tool_name);
+                cb(&pending.group_jid, &pending.permission_key);
             }
+            self.install_approval_rule(&pending);
         }
 
         let label = capitalize_first(option_key);
@@ -443,9 +623,11 @@ impl PermissionBridge {
 
     /// Handle a `tool:permission:request` event from sema-core.
     /// Sends inline keyboard to channel (if supported) and notifies Web UI via callback.
+    #[allow(clippy::too_many_arguments)]
     pub fn handle_permission_request(
         &self,
         tool_name: &str,
+        permission_key: &str,
         title: &str,
         content: &serde_json::Value,
         options: &HashMap<String, String>,
@@ -472,6 +654,11 @@ impl PermissionBridge {
                 request_id.clone(),
                 PendingPermission {
                     tool_name: tool_name.to_string(),
+                    permission_key: if permission_key.is_empty() {
+                        tool_name.to_string()
+                    } else {
+                        permission_key.to_string()
+                    },
                     chat_jid: chat_jid.to_string(),
                     group_jid: group_jid.to_string(),
                 },
@@ -750,8 +937,9 @@ impl PermissionBridge {
 
         if option_key == "allow" {
             if let Some(cb) = self.on_tool_allowed.lock().unwrap().as_ref() {
-                cb(&pending.group_jid, &pending.tool_name);
+                cb(&pending.group_jid, &pending.permission_key);
             }
+            self.install_approval_rule(&pending);
         }
 
         let label = capitalize_first(option_key);
