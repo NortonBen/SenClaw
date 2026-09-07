@@ -121,6 +121,10 @@ pub struct SessionErrorData {
 #[derive(Debug, Clone)]
 pub struct ToolPermissionRequestData {
     pub tool_name: String,
+    /// Key an "allow / never ask again" answer must be persisted under
+    /// (`Skill(<name>)`, `Bash(<cmd>)`, …). Never `tool_name` — see the
+    /// zen_core struct of the same name.
+    pub permission_key: String,
     pub title: String,
     pub content: serde_json::Value,
     pub options: HashMap<String, String>,

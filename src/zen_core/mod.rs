@@ -387,6 +387,15 @@ pub struct UsageData {
 pub struct ToolPermissionRequestData {
     pub agent_id: String,
     pub tool_name: String,
+    /// Key the "allow / never ask again" choice must be stored under, as
+    /// computed by `PermissionManager::get_permission_key` — `Skill(<name>)`,
+    /// `Bash(<cmd>)`, `Bash(<prefix>:*)`, or the plain tool name. Distinct from
+    /// `tool_name`, which stays the response-routing key. Persisting
+    /// `tool_name` instead made every Skill and Bash approval unmatchable on
+    /// reload (a saved `"Skill"` never equals `Skill(ai-office-run)`), so the
+    /// prompt fired again on every new engine.
+    #[serde(default)]
+    pub permission_key: String,
     pub title: String,
     pub content: serde_json::Value,
     pub options: HashMap<String, String>,

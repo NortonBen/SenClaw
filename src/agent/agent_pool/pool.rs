@@ -493,10 +493,12 @@ impl AgentPool {
     /// Surface a permission request from a virtual agent (no persistent core).
     /// Calls `PermissionBridge::handle_permission_request` with the virtual_jid so the
     /// request shows up in the admin Web UI.
+    #[allow(clippy::too_many_arguments)]
     pub fn handle_virtual_permission_request(
         &self,
         virtual_jid: &str,
         tool_name: &str,
+        permission_key: &str,
         title: &str,
         content: &serde_json::Value,
         options: &HashMap<String, String>,
@@ -504,6 +506,7 @@ impl AgentPool {
         if let Some(bridge) = self.permission_bridge.lock().unwrap().as_ref() {
             bridge.handle_permission_request(
                 tool_name,
+                permission_key,
                 title,
                 content,
                 options,
@@ -3035,6 +3038,7 @@ impl AgentPool {
                     if let Some(pb) = pool.permission_bridge.lock().unwrap().as_ref() {
                         pb.handle_permission_request(
                             &data.tool_name,
+                            &data.permission_key,
                             &data.title,
                             &data.content,
                             &data.options,

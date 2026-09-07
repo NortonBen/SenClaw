@@ -92,6 +92,7 @@ pub type VirtualPermissionFn = Arc<
     dyn Fn(
             String,                              // virtual_jid
             String,                              // tool_name
+            String,                              // permission_key
             String,                              // title
             serde_json::Value,                   // content
             HashMap<String, String>,             // options
@@ -876,6 +877,7 @@ impl VirtualCoreApi for ZenVirtualCoreApi {
                             perm_fn(
                                 virtual_jid.to_string(),
                                 data.tool_name.clone(),
+                                data.permission_key.clone(),
                                 data.title.clone(),
                                 data.content.clone(),
                                 data.options.clone(),

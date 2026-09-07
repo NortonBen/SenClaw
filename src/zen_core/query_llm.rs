@@ -187,6 +187,13 @@ pub(crate) async fn post_authed(
         if let Some(d) = deadline {
             builder = builder.timeout(d);
         }
+        // A model served by a Space App is reached through a *daemon* route
+        // (`/api/space/apps/<id>/proxy/v1`), whose gate stops exempting
+        // loopback under auth mode `always`. The profile's own credential is
+        // empty there by design, so the daemon token has to come from here.
+        if let Some((name, value)) = crate::util::internal_auth::header_for(url) {
+            builder = builder.header(name, value);
+        }
         let request = apply_auth(builder, profile, &token);
         let response = request.send().await.context("LLM request failed")?;
 

@@ -336,6 +336,7 @@ impl ZenCoreApi {
                                 if let Some(ref cb) = h.tool_permission_request {
                                     cb(ToolPermissionRequestData {
                                         tool_name: data.tool_name,
+                                        permission_key: data.permission_key,
                                         title: data.title,
                                         content: data.content,
                                         options: data.options,
