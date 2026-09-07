@@ -41,17 +41,39 @@ pub struct MarketplaceSourceDef {
     pub source_name: String,
 }
 
+/// Where the skills that ship with this build actually live.
+///
+/// [`Config::paths::bundled_skills_dir`] is a *compile-time* path — an env
+/// override, or else `CARGO_MANIFEST_DIR/skills`. The second resolves on the
+/// machine that built the binary and nowhere else, so a downloaded release
+/// found no directory, pushed no `bundled` source, and served zero builtin
+/// skills without logging a thing. Fall back to unpacking the copy compiled
+/// into the binary, which cannot go missing.
+///
+/// The compile-time path still wins when it exists: a developer running out of
+/// the checkout edits `skills/` and expects the next scan to see it, not a
+/// snapshot taken when the binary was built.
+fn bundled_skills_dir(config: &Config) -> Option<PathBuf> {
+    match config.paths.bundled_skills_dir {
+        Some(ref dir) if !dir.as_os_str().is_empty() && dir.is_dir() => Some(dir.clone()),
+        // Beside the clawhub-managed skills rather than inside them: the
+        // scanner reads both, and mixing binary-owned files into a directory it
+        // rewrites would make `senclaw skills remove` look broken.
+        _ => super::bundled::ensure(
+            &config.paths.managed_skills_dir.with_file_name("bundled-skills"),
+        ),
+    }
+}
+
 /// Build the set of source directories to scan (excluding marketplace).
 pub fn get_source_defs(config: &Config) -> Vec<SourceDef> {
     let mut defs: Vec<SourceDef> = Vec::new();
 
-    if let Some(ref bundled) = config.paths.bundled_skills_dir {
-        if !bundled.as_os_str().is_empty() {
-            defs.push(SourceDef {
-                dir: bundled.clone(),
-                source: "bundled".to_string(),
-            });
-        }
+    if let Some(dir) = bundled_skills_dir(config) {
+        defs.push(SourceDef {
+            dir,
+            source: "bundled".to_string(),
+        });
     }
 
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));

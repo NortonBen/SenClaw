@@ -27,9 +27,12 @@ ClawHub là marketplace quản lý cả hai. Một skill/plugin có thể:
 
 ```
 ~/.senclaw/
-├── skills/                     ← bundled (built vào binary)
+├── skills/                     ← global-compat (người dùng tự đặt)
 │   └── <slug>/SKILL.md
 ├── managed/
+│   ├── bundled-skills/         ← nhúng trong binary, tự giải nén ra đây
+│   │   ├── .build              ← mốc SENCLAW_BUILD_EPOCH đã ghi thư mục này
+│   │   └── <slug>/SKILL.md
 │   └── skills/
 │       ├── .clawhub/
 │       │   └── lock.json       ← lockfile (version, installedAt)
@@ -41,11 +44,37 @@ ClawHub là marketplace quản lý cả hai. Một skill/plugin có thể:
 ```
 
 **Scan priority** (cao → thấp):
-1. Bundled (`assets/builtin-personas/`, `skills/`)
+1. Bundled (`~/.senclaw/managed/bundled-skills/`, xem 2.1b)
 2. ClawHub-managed (`~/.senclaw/managed/skills/`)
 3. Global-sema (`~/.sema/skills/`)
 4. Global-compat (`~/.senclaw/skills/`)
 5. Workspace-local (`.senclaw/skills/` trong working dir)
+
+### 2.1b Skill builtin đi trong binary
+
+18 skill trong `skills/` của repo (`pattern`, `web-research`, `agent-browser`,
+`code`, `wiki`, `workflow`…) được build script gói thẳng vào binary bằng
+`include_bytes!`, cùng cách `assets/patterns/` đã làm. Lúc chạy,
+`skills::bundled::unpack` giải chúng ra `~/.senclaw/managed/bundled-skills/`
+rồi scanner đọc như mọi nguồn thư mục khác.
+
+**Vì sao không đọc thẳng từ `skills/` của repo.** `Paths::bundled_skills_dir`
+phân giải theo `SENCLAW_BUNDLED_SKILLS_DIR`, nếu không thì
+`CARGO_MANIFEST_DIR/skills` — một đường dẫn **nướng lúc biên dịch**, tức cây
+nguồn của máy build. Nó đúng với người chạy từ checkout và sai với tất cả những
+người còn lại: binary tải từ release đi tìm một thư mục không tồn tại trên đĩa
+người dùng, không tìm thấy gì, và phục vụ **0 skill builtin** — im lặng, không
+log một dòng nào.
+
+Thư mục giải nén thuộc về binary chứ không thuộc người dùng: nó bị thay trọn
+gói mỗi khi mốc `.build` khác `SENCLAW_BUILD_EPOCH` hiện hành, để một skill bị
+bỏ ở bản mới không sống sót qua lần nâng cấp. Sửa tay thì sửa ở nguồn ghi được
+(`~/.claude/skills`, clawhub-managed) — scanner đọc riêng và không bao giờ đụng
+tới chúng.
+
+`SENCLAW_BUNDLED_SKILLS_DIR` (hoặc `CARGO_MANIFEST_DIR/skills` khi tồn tại) vẫn
+thắng: người phát triển sửa `skills/` trong checkout và muốn lần quét kế tiếp
+thấy ngay, không phải ảnh chụp lúc build binary.
 
 ### 2.2 SKILL.md schema
 
