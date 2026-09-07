@@ -89,7 +89,16 @@ app-install:
 	@test -d "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app" \
 	    || (echo "no .app — run 'make app-build' first" && exit 1)
 	@pkill -f "SenClaw Desktop.app/Contents/MacOS/SenClaw Desktop" 2>/dev/null || true
-	@sleep 1
+	@# The daemon is a CHILD of the app, not the app — killing only the app
+	@# orphans it, and it keeps holding port 18788. The freshly installed app
+	@# then finds a healthy port, adopts the orphan, and runs the OLD binary:
+	@# the install looks like it worked and silently changes nothing. Observed
+	@# twice before this line existed.
+	@pkill -f "SenClaw Desktop.app/Contents/Resources/senclaw" 2>/dev/null || true
+	@sleep 2
+	@lsof -nP -iTCP:18788 -sTCP:LISTEN >/dev/null 2>&1 \
+	    && echo "[app-install] WARNING: something still holds port 18788 — the new app may adopt it" \
+	    || true
 	rm -rf "/Applications/SenClaw Desktop.app"
 	cp -R "$(DESKTOP_DIR)/build/macos/Build/Products/Release/SenClaw Desktop.app" "/Applications/SenClaw Desktop.app"
 	open "/Applications/SenClaw Desktop.app"

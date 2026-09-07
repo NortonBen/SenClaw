@@ -34,8 +34,13 @@ openssl req -x509 -newkey rsa:2048 -nodes \
   -addext "keyUsage=critical,digitalSignature" \
   -addext "extendedKeyUsage=critical,codeSigning"
 
+# OpenSSL 3 defaults the PKCS#12 MAC to PBMAC1/SHA-256, which macOS's
+# `security import` cannot verify — it fails with "MAC verification failed
+# during PKCS12 import (wrong password?)", pointing at the password rather than
+# the algorithm. Pin the legacy SHA-1/3DES trio that Keychain understands.
 openssl pkcs12 -export -out "$TMP/cert.p12" \
-  -inkey "$TMP/key.pem" -in "$TMP/cert.pem" -passout pass:senclaw
+  -inkey "$TMP/key.pem" -in "$TMP/cert.pem" -passout pass:senclaw \
+  -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
 
 echo "==> importing into login keychain"
 security import "$TMP/cert.p12" -k "$KEYCHAIN" -P senclaw -T /usr/bin/codesign
